@@ -123,6 +123,7 @@ fn __golem_tool_def_raw_Messages() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -215,7 +216,8 @@ async fn __golem_tool_invoke_Messages(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
@@ -250,6 +252,15 @@ async fn __golem_tool_invoke_Messages(
         __golem_stdin,
         @types.ToolError::InvalidInput(
           "command does not accept a stdout stream",
+        ),
+      )
+    }
+    if __golem_stderr is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stderr stream",
         ),
       )
     }
@@ -344,6 +355,7 @@ fn __golem_tool_def_raw_PublicFiles() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -436,7 +448,8 @@ async fn __golem_tool_invoke_PublicFiles(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
@@ -471,6 +484,15 @@ async fn __golem_tool_invoke_PublicFiles(
         __golem_stdin,
         @types.ToolError::InvalidInput(
           "command does not accept a stdout stream",
+        ),
+      )
+    }
+    if __golem_stderr is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stderr stream",
         ),
       )
     }
@@ -565,6 +587,7 @@ fn __golem_tool_def_raw_Storage() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -657,7 +680,8 @@ async fn __golem_tool_invoke_Storage(
   __golem_command_path : Array[String],
   __golem_input : @types.TypedSchemaValue,
   __golem_stdin : @asyncCore.Stream[Byte]?,
-  __golem_stdout : @tool.ProviderStdout?,
+  __golem_stdout : @tool.ProviderOutput?,
+  __golem_stderr : @tool.ProviderOutput?,
   __golem_principal : @tool.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if __golem_command_path.length() == 1 &&
@@ -692,6 +716,15 @@ async fn __golem_tool_invoke_Storage(
         __golem_stdin,
         @types.ToolError::InvalidInput(
           "command does not accept a stdout stream",
+        ),
+      )
+    }
+    if __golem_stderr is Some(_) {
+      __golem_reader.abort()
+      return @tool.reject_undecoded_invocation(
+        __golem_stdin,
+        @types.ToolError::InvalidInput(
+          "command does not accept a stderr stream",
         ),
       )
     }
@@ -785,6 +818,7 @@ fn __golem_tool_wire_Messages() -> @toolCommon.Tool {
           constraints: [],
           stdin: None,
           stdout: None,
+          stderr: None,
           result: Some({
             type_: @tool.wire_tool_type(
               __golem_schema,
@@ -872,6 +906,7 @@ fn __golem_tool_wire_PublicFiles() -> @toolCommon.Tool {
           constraints: [],
           stdin: None,
           stdout: None,
+          stderr: None,
           result: Some({
             type_: @tool.wire_tool_type(
               __golem_schema,
@@ -959,6 +994,7 @@ fn __golem_tool_wire_Storage() -> @toolCommon.Tool {
           constraints: [],
           stdin: None,
           stdout: None,
+          stderr: None,
           result: Some({
             type_: @tool.wire_tool_type(
               __golem_schema,

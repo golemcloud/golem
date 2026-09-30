@@ -101,6 +101,7 @@ object ToolReflection {
           b.constraints.map(constraint),
           b.stdin,
           b.stdout,
+          b.stderr,
           b.result.map(r => ExtendedResultSpec(graph(r.tpe), r.doc, r.formatters, r.defaultFormatter)),
           b.errors.map(e => ExtendedErrorCase(e.name, e.doc, e.kind, e.exitCode, e.payload.map(graph))),
           b.annotations

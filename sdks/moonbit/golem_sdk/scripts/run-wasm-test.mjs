@@ -343,6 +343,7 @@ for (const imported of WebAssembly.Module.imports(module)) {
             memory.setUint8(resultPtr, 0)
             memory.setUint8(resultPtr + 4, 0)
             memory.setUint8(resultPtr + 40, 0)
+            memory.setUint8(resultPtr + 48, 0)
           }
           return 2
         }

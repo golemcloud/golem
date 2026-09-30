@@ -280,6 +280,7 @@ pub(all) struct CommandBody {
   constraints : Array[Constraint]
   stdin : StreamSpec?
   stdout : StreamSpec?
+  stderr : StreamSpec?
   result : ResultSpec?
   errors : Array[ErrorCase]
   annotations : CommandAnnotations?
@@ -336,8 +337,10 @@ pub(all) struct ToolMiddleware {
 } derive(Debug, Eq)
 
 ///|
-/// Invocation contract — shared between guest and host.
+/// Invocation contract — shared between guest and host. Both attachment
+/// fields must be absent: output bytes use the writers supplied to the guest.
 pub(all) struct InvocationResult {
   result : @types.TypedSchemaValue?
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
 }

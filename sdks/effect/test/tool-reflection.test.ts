@@ -135,7 +135,7 @@ describe("native tool reflection", () => {
       getTool: () => optionalRegistered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
@@ -203,7 +203,7 @@ describe("native tool reflection", () => {
       getTool: () => optionalRegistered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
@@ -290,7 +290,7 @@ describe("native tool reflection", () => {
       getTool: () => registered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
@@ -334,7 +334,7 @@ describe("native tool reflection", () => {
       getTool: () => registration,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
@@ -368,7 +368,7 @@ describe("native tool reflection", () => {
       getTool: () => registered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: rpc as never,
       createRpc: createRpc as never,
     })
@@ -412,7 +412,7 @@ describe("native tool reflection", () => {
       getTool: () => registered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })

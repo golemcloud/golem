@@ -26,7 +26,8 @@
 use crate::tool::helpers::{StreamKind, is_stream_type, stream_type, to_kebab_case};
 use crate::tool::ir::{
     ArgIr, ArgPlacement, ArgSubKind, CommandAnnotationsIr, CommandIr, ConstraintIr, DocIr,
-    PathDirectionIr, PathKindIr, QuantifierIr, RefIr, RepeatableMode, ResultIr, ToolDefinitionIr,
+    OutputChannelIr, PathDirectionIr, PathKindIr, QuantifierIr, RefIr, RepeatableMode, ResultIr,
+    ToolDefinitionIr,
 };
 use crate::tool::synthesis::doc_tokens;
 use proc_macro2::TokenStream;
@@ -687,6 +688,7 @@ fn build_command_node(
     let mut body_flags = Vec::new();
     let mut stdin: Option<TokenStream> = None;
     let mut stdout: Option<TokenStream> = None;
+    let mut stderr: Option<TokenStream> = None;
     // (declaration index, long name) of every body option, in declaration order.
     // Used to anchor a demoted tail's reconstructed option in declaration order at
     // runtime (see `build_positional_plan` / `reinfer_body_tail`).
@@ -804,6 +806,15 @@ fn build_command_node(
                 }
                 stdout = Some(spec);
             }
+            Projection::Stderr(spec) => {
+                if stderr.is_some() {
+                    return Err(Error::new(
+                        param.ident.span(),
+                        "duplicate stderr stream parameter",
+                    ));
+                }
+                stderr = Some(spec);
+            }
             Projection::Option(spec) => {
                 if is_global {
                     global_options.push(spec);
@@ -913,6 +924,10 @@ fn build_command_node(
         Some(s) => quote! { ::std::option::Option::Some(#s) },
         None => quote! { ::std::option::Option::None },
     };
+    let stderr_tokens = match stderr {
+        Some(s) => quote! { ::std::option::Option::Some(#s) },
+        None => quote! { ::std::option::Option::None },
+    };
 
     let body = quote! {
         golem_rust::agentic::ExtendedCommandBody {
@@ -925,6 +940,7 @@ fn build_command_node(
             constraints: ::std::vec![ #(#constraints),* ],
             stdin: #stdin_tokens,
             stdout: #stdout_tokens,
+            stderr: #stderr_tokens,
             result: #result_spec,
             errors: #errors,
             annotations: #annotations,
@@ -1127,6 +1143,7 @@ enum Projection {
     Flag(TokenStream),
     Stdin(TokenStream),
     Stdout(TokenStream),
+    Stderr(TokenStream),
 }
 
 pub(crate) fn client_surface_order(
@@ -1172,7 +1189,7 @@ pub(crate) fn client_surface_order(
             Projection::Tail(_) => 3,
             Projection::Option(_) => 4,
             Projection::Flag(_) => 5,
-            Projection::Stdin(_) | Projection::Stdout(_) => 6,
+            Projection::Stdin(_) | Projection::Stdout(_) | Projection::Stderr(_) => 6,
         },
     )
 }
@@ -1228,7 +1245,8 @@ pub(crate) fn canonical_field_has_option_carrier(
         Projection::Tail(_)
         | Projection::Flag(_)
         | Projection::Stdin(_)
-        | Projection::Stdout(_) => false,
+        | Projection::Stdout(_)
+        | Projection::Stderr(_) => false,
     })
 }
 
@@ -1449,9 +1467,31 @@ fn classify(
             reject_stream_attrs(arg)?;
         }
         return Ok(match kind {
-            StreamKind::Input => Projection::Stdin(stream_spec_tokens(arg, required)),
-            StreamKind::Output => Projection::Stdout(stream_spec_tokens(arg, required)),
+            StreamKind::Input => {
+                if arg.is_some_and(|arg| arg.output_channel.is_some()) {
+                    return Err(Error::new(
+                        ident.span(),
+                        "channel selectors are only valid on output stream parameters",
+                    ));
+                }
+                Projection::Stdin(stream_spec_tokens(arg, required))
+            }
+            StreamKind::Output => match arg.and_then(|arg| arg.output_channel) {
+                Some(OutputChannelIr::Stderr) => {
+                    Projection::Stderr(stream_spec_tokens(arg, required))
+                }
+                Some(OutputChannelIr::Stdout) | None => {
+                    Projection::Stdout(stream_spec_tokens(arg, required))
+                }
+            },
         });
+    }
+
+    if arg.is_some_and(|arg| arg.output_channel.is_some()) {
+        return Err(Error::new(
+            ident.span(),
+            "channel selectors are only valid on output stream parameters",
+        ));
     }
 
     // Unwrap a single `Option<T>` layer: it only makes the argument not-required.

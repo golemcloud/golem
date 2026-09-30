@@ -675,6 +675,276 @@ fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLow
 }
 
 ///|
+#warnings("-unused_value")
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2DropReadable(
+  handle : Int,
+) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-readable-1]invoke-tool-middleware"
+
+///|
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2New() -> UInt64 = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-new-1]invoke-tool-middleware"
+
+///|
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Write(
+  handle : Int,
+  buffer_ptr : Int,
+  length : Int,
+) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[async-lower][stream-write-1]invoke-tool-middleware"
+
+///|
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2CancelWrite(
+  handle : Int,
+) -> Int = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-cancel-write-1]invoke-tool-middleware"
+
+///|
+fn wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2DropWritable(
+  handle : Int,
+) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[stream-drop-writable-1]invoke-tool-middleware"
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Malloc(
+  length : Int,
+) -> Int {
+  let ptr = mbt_ffi_malloc(1 * length)
+  ptr
+}
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Commit(
+  ptr : Int,
+  start : Int,
+  length : Int,
+) -> Unit {
+  ignore((ptr, start, length))
+}
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Reject(
+  ptr : Int,
+  start : Int,
+  length : Int,
+) -> Unit {
+  ignore((ptr, start, length))
+}
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Lower(
+  value : Byte,
+  ptr : Int,
+) -> Unit {
+  mbt_ffi_store8(ptr + 0, value.to_int())
+}
+
+///|
+priv struct WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamProducer {
+  stream : @async-core.Stream[Byte]
+  writer : Int
+}
+
+///|
+let wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamProducers : Map[
+  Int,
+  WasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamProducer,
+] = Map([])
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamCommit(
+  handle : Int,
+) -> Unit {
+  guard wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamProducers.get(
+      handle,
+    )
+    is Some(prepared) else {
+    return
+  }
+  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamProducers.remove(
+    handle,
+  )
+  let stream = prepared.stream
+  let writer = prepared.writer
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let producer = stream.take_producer()
+  @async-core.spawn_component_task_current(async fn() {
+    let writer_closed = Ref(false)
+    let writer_lock = @async-core.Mutex()
+    let close_writer = fn() -> Unit {
+      if !writer_closed.val {
+        writer_closed.val = true
+        wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2DropWritable(
+          writer,
+        )
+      }
+    }
+    let close_writer_serialized = async fn() -> Unit {
+      writer_lock.acquire()
+      defer writer_lock.release()
+      close_writer()
+    }
+    let cleanup_value = fn(value : Byte) -> Unit {
+      let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Malloc(
+        1,
+      )
+      wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Lower(
+        value, ptr,
+      )
+      wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Reject(
+        ptr, 0, 1,
+      )
+      mbt_ffi_free(ptr)
+    }
+    let sink = @async-core.Sink::from_callbacks(
+      (data : ArrayView[Byte]) => {
+        writer_lock.acquire()
+        defer writer_lock.release()
+        if writer_closed.val || data.length() == 0 {
+          return 0
+        }
+        let data_len = if data.length() < 65536 { data.length() } else { 65536 }
+        let ptr = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Malloc(
+          data_len,
+        )
+        for i in 0..<data_len {
+          let value : Byte = data[i]
+          wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Lower(
+            value,
+            ptr + i * 1,
+          )
+        }
+        let settle_staging = fn(transferred : Int) -> Unit {
+          wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Commit(
+            ptr, 0, transferred,
+          )
+          if transferred < data_len {
+            wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Reject(
+              ptr,
+              transferred,
+              data_len - transferred,
+            )
+          }
+          mbt_ffi_free(ptr)
+        }
+        let mut total = 0
+        let mut dropped = false
+        while total < data_len {
+          let (progress, end) = @async-core.suspend_for_stream_write(
+            writer,
+            wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2Write(
+              writer,
+              ptr + total * 1,
+              data_len - total,
+            ),
+          ) catch {
+            _ => {
+              total = total +
+                @async-core.cancel_stream_write(writer, () => {
+                  wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2CancelWrite(
+                    writer,
+                  )
+                })
+              settle_staging(total)
+              close_writer()
+              return data_len
+            }
+          }
+          total = total + progress
+          if end {
+            dropped = true
+            break
+          }
+        }
+        settle_staging(total)
+        if dropped {
+          close_writer()
+        }
+        // The canonical writer accepted `total`; generated cleanup
+        // consumed the rest of this staging window.
+        data_len
+      },
+      () => close_writer_serialized(),
+      () => !writer_closed.val,
+      Some(cleanup_value),
+      write_window_size=65536,
+    )
+    let relay_source = producer is None
+    let run_producer = async fn() -> Unit {
+      match producer {
+        Some(producer) => {
+          producer(sink)
+          sink.close()
+        }
+        None =>
+          for ;; {
+            match stream.read(65536) {
+              Some(data) =>
+                if !sink.write_all(data[:]) {
+                  stream.reject(cleanup_value)
+                  return
+                }
+              None => {
+                sink.close()
+                return
+              }
+            }
+          }
+      }
+    }
+    errdefer {
+      if relay_source {
+        @async-core.protect_from_cancel(
+          () => stream.reject(cleanup_value),
+          resume_on_cancel=true,
+        ) catch {
+          _ => ()
+        }
+      }
+      @async-core.protect_from_cancel(
+        () => close_writer_serialized(),
+        resume_on_cancel=true,
+      )
+    }
+    run_producer()
+    // A retained Sink may still own an in-flight canonical write after its
+    // producer returns. Do not drop the writable endpoint until that write
+    // has reached a terminal event and released its staging buffer.
+    @async-core.protect_from_cancel(
+      () => close_writer_serialized(),
+      resume_on_cancel=true,
+    )
+  })
+}
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamLower(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let pair = wasmImportExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2New()
+  let reader = pair.to_int()
+  let writer = (pair >> 32).to_int()
+  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamProducers.set(
+    reader,
+    { stream, writer, },
+  )
+  reader
+}
+
+///|
+fn wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamLowerCommitted(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  let reader = wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamLower(
+    stream,
+  )
+  wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamCommit(
+    reader,
+  )
+  reader
+}
+
+///|
 #doc(hidden)
 pub fn wasmExportGetToolMiddlewarePostReturn(p0 : Int) -> Unit {
   match mbt_ffi_load8_u(p0 + 0) {
@@ -698,6 +968,8 @@ fn wasmExportAsyncInvokeToolMiddlewareTaskReturn(
   p9 : Int,
   p10 : Int,
   p11 : Int,
+  p12 : Int,
+  p13 : Int,
 ) = "[export]golem:tool/tool-middleware-guest@0.1.0" "[task-return]invoke-tool-middleware"
 
 ///|
@@ -709,11 +981,6 @@ fn invoke_tool_middleware_task_return(
       let cleanup_list : Array[Int] = []
 
       let (
-        lowered54,
-        lowered55,
-        lowered56,
-        lowered57,
-        lowered58,
         lowered59,
         lowered60,
         lowered61,
@@ -721,11 +988,17 @@ fn invoke_tool_middleware_task_return(
         lowered63,
         lowered64,
         lowered65,
+        lowered66,
+        lowered67,
+        lowered68,
+        lowered69,
+        lowered70,
+        lowered71,
+        lowered72,
       ) = match return_value {
         Ok(payload) => {
           let (
             lowered,
-            lowered11,
             lowered12,
             lowered13,
             lowered14,
@@ -733,17 +1006,18 @@ fn invoke_tool_middleware_task_return(
             lowered16,
             lowered17,
             lowered18,
+            lowered19,
           ) = match payload.result {
             None => (0, 0, 0, 0, 0, 0, 0, 0, 0)
-            Some(payload5) => {
+            Some(payload6) => {
               let address = mbt_ffi_malloc(
-                payload5.graph.type_nodes.length() * 144,
+                payload6.graph.type_nodes.length() * 144,
               )
-              for index6 = 0
-                  index6 < payload5.graph.type_nodes.length()
-                  index6 = index6 + 1 {
-                let iter_elem : @types.SchemaTypeNode = payload5.graph.type_nodes[index6]
-                let iter_base = address + index6 * 144
+              for index7 = 0
+                  index7 < payload6.graph.type_nodes.length()
+                  index7 = index7 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload6.graph.type_nodes[index7]
+                let iter_base = address + index7 * 144
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56(
                   iter_base + 0,
                   iter_elem,
@@ -751,12 +1025,12 @@ fn invoke_tool_middleware_task_return(
                 )
               }
 
-              let address7 = mbt_ffi_malloc(payload5.graph.defs.length() * 24)
-              for index8 = 0
-                  index8 < payload5.graph.defs.length()
-                  index8 = index8 + 1 {
-                let iter_elem : @types.SchemaTypeDef = payload5.graph.defs[index8]
-                let iter_base = address7 + index8 * 24
+              let address8 = mbt_ffi_malloc(payload6.graph.defs.length() * 24)
+              for index9 = 0
+                  index9 < payload6.graph.defs.length()
+                  index9 = index9 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload6.graph.defs[index9]
+                let iter_base = address8 + index9 * 24
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18(
                   iter_base + 0,
                   iter_elem,
@@ -764,14 +1038,14 @@ fn invoke_tool_middleware_task_return(
                 )
               }
 
-              let address9 = mbt_ffi_malloc(
-                payload5.value.value_nodes.length() * 32,
+              let address10 = mbt_ffi_malloc(
+                payload6.value.value_nodes.length() * 32,
               )
-              for index10 = 0
-                  index10 < payload5.value.value_nodes.length()
-                  index10 = index10 + 1 {
-                let iter_elem : @types.SchemaValueNode = payload5.value.value_nodes[index10]
-                let iter_base = address9 + index10 * 32
+              for index11 = 0
+                  index11 < payload6.value.value_nodes.length()
+                  index11 = index11 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload6.value.value_nodes[index11]
+                let iter_base = address10 + index11 * 32
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76(
                   iter_base + 0,
                   iter_elem,
@@ -779,105 +1053,116 @@ fn invoke_tool_middleware_task_return(
                 )
               }
               cleanup_list.push(address)
-              cleanup_list.push(address7)
-              cleanup_list.push(address9)
+              cleanup_list.push(address8)
+              cleanup_list.push(address10)
 
               (
                 1,
                 address,
-                payload5.graph.type_nodes.length(),
-                address7,
-                payload5.graph.defs.length(),
-                payload5.graph.root,
-                address9,
-                payload5.value.value_nodes.length(),
-                payload5.value.root,
+                payload6.graph.type_nodes.length(),
+                address8,
+                payload6.graph.defs.length(),
+                payload6.graph.root,
+                address10,
+                payload6.value.value_nodes.length(),
+                payload6.value.root,
               )
             }
           }
 
-          let (lowered21, lowered22) = match payload.stdout {
+          let (lowered22, lowered23) = match payload.stdout {
             None => (0, 0)
-            Some(payload20) =>
+            Some(payload21) =>
               (
                 1,
                 wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream1StreamLowerCommitted(
-                  payload20,
+                  payload21,
+                ),
+              )
+          }
+
+          let (lowered26, lowered27) = match payload.stderr {
+            None => (0, 0)
+            Some(payload25) =>
+              (
+                1,
+                wasmExportGolemToolToolMiddlewareGuest010InvokeToolMiddlewareStream2StreamLowerCommitted(
+                  payload25,
                 ),
               )
           }
 
           (
-            0, lowered, lowered11, lowered12, lowered13, lowered14, lowered15, lowered16,
-            lowered17, lowered18, lowered21, lowered22,
+            0, lowered, lowered12, lowered13, lowered14, lowered15, lowered16, lowered17,
+            lowered18, lowered19, lowered22, lowered23, lowered26, lowered27,
           )
         }
-        Err(payload23) => {
+        Err(payload28) => {
           let (
-            lowered43,
-            lowered44,
-            lowered45,
-            lowered46,
-            lowered47,
             lowered48,
             lowered49,
             lowered50,
             lowered51,
             lowered52,
             lowered53,
-          ) = match payload23 {
-            InvalidToolName(payload24) => {
-              let ptr = mbt_ffi_str2ptr(payload24)
+            lowered54,
+            lowered55,
+            lowered56,
+            lowered57,
+            lowered58,
+          ) = match payload28 {
+            InvalidToolName(payload29) => {
+              let ptr = mbt_ffi_str2ptr(payload29)
               cleanup_list.push(ptr)
 
-              (0, ptr, payload24.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (0, ptr, payload29.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidCommandPath(payload25) => {
-              let address27 = mbt_ffi_malloc(payload25.length() * 8)
-              for index28 = 0
-                  index28 < payload25.length()
-                  index28 = index28 + 1 {
-                let iter_elem : String = payload25[index28]
-                let iter_base = address27 + index28 * 8
+            InvalidCommandPath(payload30) => {
+              let address32 = mbt_ffi_malloc(payload30.length() * 8)
+              for index33 = 0
+                  index33 < payload30.length()
+                  index33 = index33 + 1 {
+                let iter_elem : String = payload30[index33]
+                let iter_base = address32 + index33 * 8
 
-                let ptr26 = mbt_ffi_str2ptr(iter_elem)
+                let ptr31 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr26)
-                cleanup_list.push(ptr26)
+                mbt_ffi_store32(iter_base + 0, ptr31)
+                cleanup_list.push(ptr31)
               }
-              cleanup_list.push(address27)
+              cleanup_list.push(address32)
 
-              (1, address27, payload25.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (1, address32, payload30.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidInput(payload29) => {
-              let ptr30 = mbt_ffi_str2ptr(payload29)
-              cleanup_list.push(ptr30)
+            InvalidInput(payload34) => {
+              let ptr35 = mbt_ffi_str2ptr(payload34)
+              cleanup_list.push(ptr35)
 
-              (2, ptr30, payload29.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (2, ptr35, payload34.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            ConstraintViolation(payload31) => {
-              let ptr32 = mbt_ffi_str2ptr(payload31)
-              cleanup_list.push(ptr32)
+            ConstraintViolation(payload36) => {
+              let ptr37 = mbt_ffi_str2ptr(payload36)
+              cleanup_list.push(ptr37)
 
-              (3, ptr32, payload31.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (3, ptr37, payload36.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidResult(payload33) => {
-              let ptr34 = mbt_ffi_str2ptr(payload33)
-              cleanup_list.push(ptr34)
+            InvalidResult(payload38) => {
+              let ptr39 = mbt_ffi_str2ptr(payload38)
+              cleanup_list.push(ptr39)
 
-              (4, ptr34, payload33.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (4, ptr39, payload38.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            CustomError(payload35) => {
-              let ptr36 = mbt_ffi_str2ptr(payload35.name)
+            CustomError(payload40) => {
+              let ptr41 = mbt_ffi_str2ptr(payload40.name)
 
-              let address37 = mbt_ffi_malloc(
-                payload35.payload.graph.type_nodes.length() * 144,
+              let address42 = mbt_ffi_malloc(
+                payload40.payload.graph.type_nodes.length() * 144,
               )
-              for index38 = 0
-                  index38 < payload35.payload.graph.type_nodes.length()
-                  index38 = index38 + 1 {
-                let iter_elem : @types.SchemaTypeNode = payload35.payload.graph.type_nodes[index38]
-                let iter_base = address37 + index38 * 144
+              for index43 = 0
+                  index43 < payload40.payload.graph.type_nodes.length()
+                  index43 = index43 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload40.payload.graph.type_nodes[index43]
+                let iter_base = address42 + index43 * 144
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56(
                   iter_base + 0,
                   iter_elem,
@@ -885,14 +1170,14 @@ fn invoke_tool_middleware_task_return(
                 )
               }
 
-              let address39 = mbt_ffi_malloc(
-                payload35.payload.graph.defs.length() * 24,
+              let address44 = mbt_ffi_malloc(
+                payload40.payload.graph.defs.length() * 24,
               )
-              for index40 = 0
-                  index40 < payload35.payload.graph.defs.length()
-                  index40 = index40 + 1 {
-                let iter_elem : @types.SchemaTypeDef = payload35.payload.graph.defs[index40]
-                let iter_base = address39 + index40 * 24
+              for index45 = 0
+                  index45 < payload40.payload.graph.defs.length()
+                  index45 = index45 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload40.payload.graph.defs[index45]
+                let iter_base = address44 + index45 * 24
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18(
                   iter_base + 0,
                   iter_elem,
@@ -900,51 +1185,51 @@ fn invoke_tool_middleware_task_return(
                 )
               }
 
-              let address41 = mbt_ffi_malloc(
-                payload35.payload.value.value_nodes.length() * 32,
+              let address46 = mbt_ffi_malloc(
+                payload40.payload.value.value_nodes.length() * 32,
               )
-              for index42 = 0
-                  index42 < payload35.payload.value.value_nodes.length()
-                  index42 = index42 + 1 {
-                let iter_elem : @types.SchemaValueNode = payload35.payload.value.value_nodes[index42]
-                let iter_base = address41 + index42 * 32
+              for index47 = 0
+                  index47 < payload40.payload.value.value_nodes.length()
+                  index47 = index47 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload40.payload.value.value_nodes[index47]
+                let iter_base = address46 + index47 * 32
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76(
                   iter_base + 0,
                   iter_elem,
                   cleanup_list,
                 )
               }
-              cleanup_list.push(ptr36)
-              cleanup_list.push(address37)
-              cleanup_list.push(address39)
-              cleanup_list.push(address41)
+              cleanup_list.push(ptr41)
+              cleanup_list.push(address42)
+              cleanup_list.push(address44)
+              cleanup_list.push(address46)
 
               (
                 5,
-                ptr36,
-                payload35.name.length(),
-                address37,
-                payload35.payload.graph.type_nodes.length(),
-                address39,
-                payload35.payload.graph.defs.length(),
-                payload35.payload.graph.root,
-                address41,
-                payload35.payload.value.value_nodes.length(),
-                payload35.payload.value.root,
+                ptr41,
+                payload40.name.length(),
+                address42,
+                payload40.payload.graph.type_nodes.length(),
+                address44,
+                payload40.payload.graph.defs.length(),
+                payload40.payload.graph.root,
+                address46,
+                payload40.payload.value.value_nodes.length(),
+                payload40.payload.value.root,
               )
             }
           }
 
           (
-            1, lowered43, lowered44, lowered45, lowered46, lowered47, lowered48,
-            lowered49, lowered50, lowered51, lowered52, lowered53,
+            1, lowered48, lowered49, lowered50, lowered51, lowered52, lowered53,
+            lowered54, lowered55, lowered56, lowered57, lowered58, 0, 0,
           )
         }
       }
 
       wasmExportAsyncInvokeToolMiddlewareTaskReturn(
-        lowered54, lowered55, lowered56, lowered57, lowered58, lowered59, lowered60,
-        lowered61, lowered62, lowered63, lowered64, lowered65,
+        lowered59, lowered60, lowered61, lowered62, lowered63, lowered64, lowered65,
+        lowered66, lowered67, lowered68, lowered69, lowered70, lowered71, lowered72,
       )
 
       cleanup_list.each(mbt_ffi_free)
@@ -997,13 +1282,25 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
         _ => panic()
       }
 
-      let lifted3 : @streams.ToolStdoutWriter? = match
+      let lifted3 : @streams.ToolOutputWriter? = match
         mbt_ffi_load8_u(p0 + 136) {
         0 => Option::None
         1 =>
           Option::Some(
-            @streams.ToolStdoutWriter::ToolStdoutWriter(
+            @streams.ToolOutputWriter::ToolOutputWriter(
               mbt_ffi_load32(p0 + 140),
+            ),
+          )
+        _ => panic()
+      }
+
+      let lifted4 : @streams.ToolOutputWriter? = match
+        mbt_ffi_load8_u(p0 + 144) {
+        0 => Option::None
+        1 =>
+          Option::Some(
+            @streams.ToolOutputWriter::ToolOutputWriter(
+              mbt_ffi_load32(p0 + 148),
             ),
           )
         _ => panic()
@@ -1022,8 +1319,9 @@ pub fn wasmExportInvokeToolMiddleware(p0 : Int) -> Int {
           @wit_bindgen_export_lower.wit_bindgen_lift_t79(p0 + 96),
           lifted,
           lifted3,
-          @wit_bindgen_export_lower.wit_bindgen_lift_t440(p0 + 144),
-          @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32(p0 + 256)),
+          lifted4,
+          @wit_bindgen_export_lower.wit_bindgen_lift_t440(p0 + 152),
+          @underlying.UnderlyingTool::UnderlyingTool(mbt_ffi_load32(p0 + 264)),
           background_group,
         ),
       )

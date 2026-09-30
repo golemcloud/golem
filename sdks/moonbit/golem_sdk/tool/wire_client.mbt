@@ -7,7 +7,13 @@ pub async fn[E] ToolClient::invoke_and_await_wire(
   decode_error : (String, @types.TypedSchemaValue) -> Result[E, String]?,
 ) -> Result[@toolCommon.InvocationResult, ToolError[E]] {
   match
-    self.rpc.invoke_and_await(command_path, input, prepare_stdin(stdin), None) {
+    self.rpc.invoke_and_await(
+      command_path,
+      input,
+      prepare_stdin(stdin),
+      None,
+      None,
+    ) {
     Ok(result) => Ok(result)
     Err(error) => Err(map_wire_rpc_error(error, decode_error))
   }

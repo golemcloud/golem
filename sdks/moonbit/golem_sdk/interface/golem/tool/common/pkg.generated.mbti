@@ -37,6 +37,7 @@ pub(all) struct CommandBody {
   constraints : Array[Constraint]
   stdin : StreamSpec?
   stdout : StreamSpec?
+  stderr : StreamSpec?
   result : ResultSpec?
   errors : Array[ErrorCase]
   annotations : CommandAnnotations?
@@ -130,6 +131,7 @@ pub(all) struct ImpliesC {
 pub(all) struct InvocationResult {
   result : @types.TypedSchemaValue?
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
 }
 
 pub(all) struct MonomorphicScope {

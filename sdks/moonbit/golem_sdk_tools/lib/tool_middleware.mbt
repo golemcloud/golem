@@ -12,6 +12,7 @@ pub(all) struct ToolMiddlewareCommandInfo {
   success_type : ParamType
   error_type : ParamType
   has_stdout : Bool
+  has_stderr : Bool
 } derive(Debug, Eq)
 
 ///|
@@ -378,7 +379,8 @@ fn projected_middleware_param(
       }
     Hidden(InputStream) | LabelledHidden(InputStream) =>
       Some(Simple("@toolMiddleware.MiddlewareStdin"))
-    Hidden(OutputStream) | LabelledHidden(OutputStream) => None
+    Hidden(OutputStream | ErrorStream)
+    | LabelledHidden(OutputStream | ErrorStream) => None
   }
 }
 
@@ -440,7 +442,8 @@ fn append_projected_params(
             ToolMiddlewareParamSource::Stdin
           Hidden(Principal) | LabelledHidden(Principal) =>
             ToolMiddlewareParamSource::Principal
-          Hidden(OutputStream) | LabelledHidden(OutputStream) =>
+          Hidden(OutputStream | ErrorStream)
+          | LabelledHidden(OutputStream | ErrorStream) =>
             abort("output streams are not middleware handler parameters")
         }
         result.push({ source_name: pair.0, type_, identities, source, })
@@ -507,11 +510,19 @@ fn middleware_success_type(command : ToolCommandInfo) -> ParamType {
   let has_stdout = command.params.any(pair => {
     pair.1 == Hidden(OutputStream) || pair.1 == LabelledHidden(OutputStream)
   })
-  if has_stdout {
+  let has_stderr = command.params.any(pair => {
+    pair.1 == Hidden(ErrorStream) || pair.1 == LabelledHidden(ErrorStream)
+  })
+  let output_type = if has_stdout && has_stderr {
+    Simple("@toolMiddleware.ToolOutputStreams")
+  } else {
+    middleware_output_stream_type()
+  }
+  if has_stdout || has_stderr {
     if value == Simple("Unit") {
-      middleware_output_stream_type()
+      output_type
     } else {
-      Tuple([value, middleware_output_stream_type()])
+      Tuple([value, output_type])
     }
   } else {
     value
@@ -557,6 +568,9 @@ fn add_middleware_surface(
   let has_stdout = command.params.any(pair => {
     pair.1 == Hidden(OutputStream) || pair.1 == LabelledHidden(OutputStream)
   })
+  let has_stderr = command.params.any(pair => {
+    pair.1 == Hidden(ErrorStream) || pair.1 == LabelledHidden(ErrorStream)
+  })
   surfaces.push({
     command_path,
     handler_name,
@@ -565,6 +579,7 @@ fn add_middleware_surface(
     success_type: middleware_success_type(command),
     error_type: middleware_error_type(command),
     has_stdout,
+    has_stderr,
   })
 }
 

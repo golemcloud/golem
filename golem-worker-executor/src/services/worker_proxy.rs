@@ -1704,6 +1704,7 @@ mod tests {
             }),
             high_water: None,
             role: StreamMappingRole::Input as i32,
+            tool_byte_stream_role: None,
         };
 
         let origin = StreamInvocationIdentity {

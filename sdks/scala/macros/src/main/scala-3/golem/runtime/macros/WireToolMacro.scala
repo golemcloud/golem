@@ -103,7 +103,14 @@ private[macros] final class WireToolAssembler(val core: ToolMacroCore) {
                     $input.stdin.getOrElse(throw SchemaDecodeError("missing tool stdin"))
                   }
                   else if (core.isStdout(p.tpe)) '{
-                    $input.stdout.getOrElse(throw SchemaDecodeError("missing tool stdout"))
+                    ${
+                      p.arg.flatMap(_.channel) match {
+                        case Some("stderr") =>
+                          '{ $input.stderr.getOrElse(throw SchemaDecodeError("missing tool stderr")) }
+                        case _ =>
+                          '{ $input.stdout.getOrElse(throw SchemaDecodeError("missing tool stdout")) }
+                      }
+                    }
                   }
                   else {
                     val names    = p.kebab :: p.arg.map(_.aliases).getOrElse(Nil)
@@ -150,6 +157,7 @@ private[macros] final class WireToolAssembler(val core: ToolMacroCore) {
                 WireToolBinding(
                   $accepted,
                   ${ metadata.literal(tool.commands(index).body.get.stdout) },
+                  ${ metadata.literal(tool.commands(index).body.get.stderr) },
                   input => {
                     val arguments =
                       WireToolImplementation.arguments(input, ${ Expr(fields.length) }) { (reader, indices) =>

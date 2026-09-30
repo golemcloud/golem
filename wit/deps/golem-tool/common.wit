@@ -149,6 +149,7 @@ interface common {
     constraints: list<constraint>,
     stdin:       option<stream-spec>,
     stdout:      option<stream-spec>,
+    stderr:      option<stream-spec>,
     %result:     option<result-spec>,
     errors:      list<error-case>,
     annotations: option<command-annotations>,
@@ -376,9 +377,11 @@ interface common {
     body:  string,
   }
 
-  // Invocation contract — shared between guest and host.
+  // Invocation contract — shared between guest and host. Both attachment
+  // fields must be absent: output bytes use the writers supplied to the guest.
   record invocation-result {
     %result: option<typed-schema-value>,
     stdout:  option<stream<u8>>,
+    stderr:  option<stream<u8>>,
   }
 }

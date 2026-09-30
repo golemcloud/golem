@@ -19,6 +19,7 @@ use golem_common::tracing::directive;
 use golem_common::tracing::directive::{debug, warn};
 use shadow_rs::shadow;
 use std::future::Future;
+use std::io::Write;
 use std::process::ExitCode;
 use tracing_log::LogTracer;
 use tracing_subscriber::filter::Directive;
@@ -111,9 +112,12 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
             for directive in extra.split(',').map(str::trim).filter(|d| !d.is_empty()) {
                 match directive.parse::<Directive>() {
                     Ok(directive) => filter = filter.add_directive(directive),
-                    Err(err) => eprintln!(
-                        "Ignoring invalid {LOG_FILTER_ENV_VAR} directive '{directive}': {err}"
-                    ),
+                    Err(err) => {
+                        let _ = writeln!(
+                            log::tracing_writer(),
+                            "Ignoring invalid {LOG_FILTER_ENV_VAR} directive '{directive}': {err}"
+                        );
+                    }
                 }
             }
         }
@@ -122,7 +126,7 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
             let subscriber = subscriber
                 .pretty()
                 .with_max_level(level)
-                .with_writer(std::io::stderr)
+                .with_writer(log::tracing_writer)
                 .with_env_filter(filter)
                 .finish();
 
@@ -131,7 +135,7 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
         } else {
             let subscriber = subscriber
                 .with_max_level(level)
-                .with_writer(std::io::stderr)
+                .with_writer(log::tracing_writer)
                 .with_env_filter(filter)
                 .finish();
 

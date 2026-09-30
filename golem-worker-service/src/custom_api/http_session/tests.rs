@@ -228,6 +228,7 @@ fn mapping(high_water: Option<u64>) -> DurableStreamMapping {
             terminal: false,
         }),
         role: StreamMappingRole::Input as i32,
+        tool_byte_stream_role: None,
     }
 }
 

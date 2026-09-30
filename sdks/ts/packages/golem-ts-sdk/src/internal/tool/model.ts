@@ -106,6 +106,7 @@ export interface ExtendedCommandBody {
   readonly constraints: readonly ExtendedConstraint[];
   readonly stdin?: StreamSpec;
   readonly stdout?: StreamSpec;
+  readonly stderr?: StreamSpec;
   readonly result?: ExtendedResultSpec;
   readonly errors: readonly ExtendedErrorCase[];
   readonly annotations?: CommandAnnotations;

@@ -626,6 +626,245 @@ fn wasmExportGolemToolGuest010InvokeStream1StreamLowerCommitted(
 }
 
 ///|
+#warnings("-unused_value")
+fn wasmImportExportGolemToolGuest010InvokeStream2DropReadable(handle : Int) = "[export]golem:tool/guest@0.1.0" "[stream-drop-readable-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2New() -> UInt64 = "[export]golem:tool/guest@0.1.0" "[stream-new-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2Write(
+  handle : Int,
+  buffer_ptr : Int,
+  length : Int,
+) -> Int = "[export]golem:tool/guest@0.1.0" "[async-lower][stream-write-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2CancelWrite(
+  handle : Int,
+) -> Int = "[export]golem:tool/guest@0.1.0" "[stream-cancel-write-1]invoke"
+
+///|
+fn wasmImportExportGolemToolGuest010InvokeStream2DropWritable(handle : Int) = "[export]golem:tool/guest@0.1.0" "[stream-drop-writable-1]invoke"
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Malloc(length : Int) -> Int {
+  let ptr = mbt_ffi_malloc(1 * length)
+  ptr
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Commit(
+  ptr : Int,
+  start : Int,
+  length : Int,
+) -> Unit {
+  ignore((ptr, start, length))
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Reject(
+  ptr : Int,
+  start : Int,
+  length : Int,
+) -> Unit {
+  ignore((ptr, start, length))
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2Lower(
+  value : Byte,
+  ptr : Int,
+) -> Unit {
+  mbt_ffi_store8(ptr + 0, value.to_int())
+}
+
+///|
+priv struct WasmExportGolemToolGuest010InvokeStream2StreamProducer {
+  stream : @async-core.Stream[Byte]
+  writer : Int
+}
+
+///|
+let wasmExportGolemToolGuest010InvokeStream2StreamProducers : Map[
+  Int,
+  WasmExportGolemToolGuest010InvokeStream2StreamProducer,
+] = Map([])
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2StreamCommit(handle : Int) -> Unit {
+  guard wasmExportGolemToolGuest010InvokeStream2StreamProducers.get(handle)
+    is Some(prepared) else {
+    return
+  }
+  wasmExportGolemToolGuest010InvokeStream2StreamProducers.remove(handle)
+  let stream = prepared.stream
+  let writer = prepared.writer
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let producer = stream.take_producer()
+  @async-core.spawn_component_task_current(async fn() {
+    let writer_closed = Ref(false)
+    let writer_lock = @async-core.Mutex()
+    let close_writer = fn() -> Unit {
+      if !writer_closed.val {
+        writer_closed.val = true
+        wasmImportExportGolemToolGuest010InvokeStream2DropWritable(writer)
+      }
+    }
+    let close_writer_serialized = async fn() -> Unit {
+      writer_lock.acquire()
+      defer writer_lock.release()
+      close_writer()
+    }
+    let cleanup_value = fn(value : Byte) -> Unit {
+      let ptr = wasmExportGolemToolGuest010InvokeStream2Malloc(1)
+      wasmExportGolemToolGuest010InvokeStream2Lower(value, ptr)
+      wasmExportGolemToolGuest010InvokeStream2Reject(ptr, 0, 1)
+      mbt_ffi_free(ptr)
+    }
+    let sink = @async-core.Sink::from_callbacks(
+      (data : ArrayView[Byte]) => {
+        writer_lock.acquire()
+        defer writer_lock.release()
+        if writer_closed.val || data.length() == 0 {
+          return 0
+        }
+        let data_len = if data.length() < 65536 { data.length() } else { 65536 }
+        let ptr = wasmExportGolemToolGuest010InvokeStream2Malloc(data_len)
+        for i in 0..<data_len {
+          let value : Byte = data[i]
+          wasmExportGolemToolGuest010InvokeStream2Lower(value, ptr + i * 1)
+        }
+        let settle_staging = fn(transferred : Int) -> Unit {
+          wasmExportGolemToolGuest010InvokeStream2Commit(ptr, 0, transferred)
+          if transferred < data_len {
+            wasmExportGolemToolGuest010InvokeStream2Reject(
+              ptr,
+              transferred,
+              data_len - transferred,
+            )
+          }
+          mbt_ffi_free(ptr)
+        }
+        let mut total = 0
+        let mut dropped = false
+        while total < data_len {
+          let (progress, end) = @async-core.suspend_for_stream_write(
+            writer,
+            wasmImportExportGolemToolGuest010InvokeStream2Write(
+              writer,
+              ptr + total * 1,
+              data_len - total,
+            ),
+          ) catch {
+            _ => {
+              total = total +
+                @async-core.cancel_stream_write(writer, () => {
+                  wasmImportExportGolemToolGuest010InvokeStream2CancelWrite(
+                    writer,
+                  )
+                })
+              settle_staging(total)
+              close_writer()
+              return data_len
+            }
+          }
+          total = total + progress
+          if end {
+            dropped = true
+            break
+          }
+        }
+        settle_staging(total)
+        if dropped {
+          close_writer()
+        }
+        // The canonical writer accepted `total`; generated cleanup
+        // consumed the rest of this staging window.
+        data_len
+      },
+      () => close_writer_serialized(),
+      () => !writer_closed.val,
+      Some(cleanup_value),
+      write_window_size=65536,
+    )
+    let relay_source = producer is None
+    let run_producer = async fn() -> Unit {
+      match producer {
+        Some(producer) => {
+          producer(sink)
+          sink.close()
+        }
+        None =>
+          for ;; {
+            match stream.read(65536) {
+              Some(data) =>
+                if !sink.write_all(data[:]) {
+                  stream.reject(cleanup_value)
+                  return
+                }
+              None => {
+                sink.close()
+                return
+              }
+            }
+          }
+      }
+    }
+    errdefer {
+      if relay_source {
+        @async-core.protect_from_cancel(
+          () => stream.reject(cleanup_value),
+          resume_on_cancel=true,
+        ) catch {
+          _ => ()
+        }
+      }
+      @async-core.protect_from_cancel(
+        () => close_writer_serialized(),
+        resume_on_cancel=true,
+      )
+    }
+    run_producer()
+    // A retained Sink may still own an in-flight canonical write after its
+    // producer returns. Do not drop the writable endpoint until that write
+    // has reached a terminal event and released its staging buffer.
+    @async-core.protect_from_cancel(
+      () => close_writer_serialized(),
+      resume_on_cancel=true,
+    )
+  })
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2StreamLower(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  if !@async-core.has_component_task_scope() {
+    abort("component stream producer requires an async task scope")
+  }
+  let pair = wasmImportExportGolemToolGuest010InvokeStream2New()
+  let reader = pair.to_int()
+  let writer = (pair >> 32).to_int()
+  wasmExportGolemToolGuest010InvokeStream2StreamProducers.set(reader, {
+    stream,
+    writer,
+  })
+  reader
+}
+
+///|
+fn wasmExportGolemToolGuest010InvokeStream2StreamLowerCommitted(
+  stream : @async-core.Stream[Byte],
+) -> Int {
+  let reader = wasmExportGolemToolGuest010InvokeStream2StreamLower(stream)
+  wasmExportGolemToolGuest010InvokeStream2StreamCommit(reader)
+  reader
+}
+
+///|
 #doc(hidden)
 pub fn wasmExportGetToolPostReturn(p0 : Int) -> Unit {
   match mbt_ffi_load8_u(p0 + 0) {
@@ -649,6 +888,8 @@ fn wasmExportAsyncInvokeGolemToolGuestTaskReturn(
   p9 : Int,
   p10 : Int,
   p11 : Int,
+  p12 : Int,
+  p13 : Int,
 ) = "[export]golem:tool/guest@0.1.0" "[task-return]invoke"
 
 ///|
@@ -660,11 +901,6 @@ fn invoke_task_return(
       let cleanup_list : Array[Int] = []
 
       let (
-        lowered53,
-        lowered54,
-        lowered55,
-        lowered56,
-        lowered57,
         lowered58,
         lowered59,
         lowered60,
@@ -672,11 +908,17 @@ fn invoke_task_return(
         lowered62,
         lowered63,
         lowered64,
+        lowered65,
+        lowered66,
+        lowered67,
+        lowered68,
+        lowered69,
+        lowered70,
+        lowered71,
       ) = match return_value {
         Ok(payload) => {
           let (
             lowered,
-            lowered10,
             lowered11,
             lowered12,
             lowered13,
@@ -684,17 +926,18 @@ fn invoke_task_return(
             lowered15,
             lowered16,
             lowered17,
+            lowered18,
           ) = match payload.result {
             None => (0, 0, 0, 0, 0, 0, 0, 0, 0)
-            Some(payload4) => {
+            Some(payload5) => {
               let address = mbt_ffi_malloc(
-                payload4.graph.type_nodes.length() * 144,
+                payload5.graph.type_nodes.length() * 144,
               )
-              for index5 = 0
-                  index5 < payload4.graph.type_nodes.length()
-                  index5 = index5 + 1 {
-                let iter_elem : @types.SchemaTypeNode = payload4.graph.type_nodes[index5]
-                let iter_base = address + index5 * 144
+              for index6 = 0
+                  index6 < payload5.graph.type_nodes.length()
+                  index6 = index6 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload5.graph.type_nodes[index6]
+                let iter_base = address + index6 * 144
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56(
                   iter_base + 0,
                   iter_elem,
@@ -702,12 +945,12 @@ fn invoke_task_return(
                 )
               }
 
-              let address6 = mbt_ffi_malloc(payload4.graph.defs.length() * 24)
-              for index7 = 0
-                  index7 < payload4.graph.defs.length()
-                  index7 = index7 + 1 {
-                let iter_elem : @types.SchemaTypeDef = payload4.graph.defs[index7]
-                let iter_base = address6 + index7 * 24
+              let address7 = mbt_ffi_malloc(payload5.graph.defs.length() * 24)
+              for index8 = 0
+                  index8 < payload5.graph.defs.length()
+                  index8 = index8 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload5.graph.defs[index8]
+                let iter_base = address7 + index8 * 24
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18(
                   iter_base + 0,
                   iter_elem,
@@ -715,14 +958,14 @@ fn invoke_task_return(
                 )
               }
 
-              let address8 = mbt_ffi_malloc(
-                payload4.value.value_nodes.length() * 32,
+              let address9 = mbt_ffi_malloc(
+                payload5.value.value_nodes.length() * 32,
               )
-              for index9 = 0
-                  index9 < payload4.value.value_nodes.length()
-                  index9 = index9 + 1 {
-                let iter_elem : @types.SchemaValueNode = payload4.value.value_nodes[index9]
-                let iter_base = address8 + index9 * 32
+              for index10 = 0
+                  index10 < payload5.value.value_nodes.length()
+                  index10 = index10 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload5.value.value_nodes[index10]
+                let iter_base = address9 + index10 * 32
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76(
                   iter_base + 0,
                   iter_elem,
@@ -730,105 +973,116 @@ fn invoke_task_return(
                 )
               }
               cleanup_list.push(address)
-              cleanup_list.push(address6)
-              cleanup_list.push(address8)
+              cleanup_list.push(address7)
+              cleanup_list.push(address9)
 
               (
                 1,
                 address,
-                payload4.graph.type_nodes.length(),
-                address6,
-                payload4.graph.defs.length(),
-                payload4.graph.root,
-                address8,
-                payload4.value.value_nodes.length(),
-                payload4.value.root,
+                payload5.graph.type_nodes.length(),
+                address7,
+                payload5.graph.defs.length(),
+                payload5.graph.root,
+                address9,
+                payload5.value.value_nodes.length(),
+                payload5.value.root,
               )
             }
           }
 
-          let (lowered20, lowered21) = match payload.stdout {
+          let (lowered21, lowered22) = match payload.stdout {
             None => (0, 0)
-            Some(payload19) =>
+            Some(payload20) =>
               (
                 1,
                 wasmExportGolemToolGuest010InvokeStream1StreamLowerCommitted(
-                  payload19,
+                  payload20,
+                ),
+              )
+          }
+
+          let (lowered25, lowered26) = match payload.stderr {
+            None => (0, 0)
+            Some(payload24) =>
+              (
+                1,
+                wasmExportGolemToolGuest010InvokeStream2StreamLowerCommitted(
+                  payload24,
                 ),
               )
           }
 
           (
-            0, lowered, lowered10, lowered11, lowered12, lowered13, lowered14, lowered15,
-            lowered16, lowered17, lowered20, lowered21,
+            0, lowered, lowered11, lowered12, lowered13, lowered14, lowered15, lowered16,
+            lowered17, lowered18, lowered21, lowered22, lowered25, lowered26,
           )
         }
-        Err(payload22) => {
+        Err(payload27) => {
           let (
-            lowered42,
-            lowered43,
-            lowered44,
-            lowered45,
-            lowered46,
             lowered47,
             lowered48,
             lowered49,
             lowered50,
             lowered51,
             lowered52,
-          ) = match payload22 {
-            InvalidToolName(payload23) => {
-              let ptr = mbt_ffi_str2ptr(payload23)
+            lowered53,
+            lowered54,
+            lowered55,
+            lowered56,
+            lowered57,
+          ) = match payload27 {
+            InvalidToolName(payload28) => {
+              let ptr = mbt_ffi_str2ptr(payload28)
               cleanup_list.push(ptr)
 
-              (0, ptr, payload23.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (0, ptr, payload28.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidCommandPath(payload24) => {
-              let address26 = mbt_ffi_malloc(payload24.length() * 8)
-              for index27 = 0
-                  index27 < payload24.length()
-                  index27 = index27 + 1 {
-                let iter_elem : String = payload24[index27]
-                let iter_base = address26 + index27 * 8
+            InvalidCommandPath(payload29) => {
+              let address31 = mbt_ffi_malloc(payload29.length() * 8)
+              for index32 = 0
+                  index32 < payload29.length()
+                  index32 = index32 + 1 {
+                let iter_elem : String = payload29[index32]
+                let iter_base = address31 + index32 * 8
 
-                let ptr25 = mbt_ffi_str2ptr(iter_elem)
+                let ptr30 = mbt_ffi_str2ptr(iter_elem)
                 mbt_ffi_store32(iter_base + 4, iter_elem.length())
-                mbt_ffi_store32(iter_base + 0, ptr25)
-                cleanup_list.push(ptr25)
+                mbt_ffi_store32(iter_base + 0, ptr30)
+                cleanup_list.push(ptr30)
               }
-              cleanup_list.push(address26)
+              cleanup_list.push(address31)
 
-              (1, address26, payload24.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (1, address31, payload29.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidInput(payload28) => {
-              let ptr29 = mbt_ffi_str2ptr(payload28)
-              cleanup_list.push(ptr29)
+            InvalidInput(payload33) => {
+              let ptr34 = mbt_ffi_str2ptr(payload33)
+              cleanup_list.push(ptr34)
 
-              (2, ptr29, payload28.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (2, ptr34, payload33.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            ConstraintViolation(payload30) => {
-              let ptr31 = mbt_ffi_str2ptr(payload30)
-              cleanup_list.push(ptr31)
+            ConstraintViolation(payload35) => {
+              let ptr36 = mbt_ffi_str2ptr(payload35)
+              cleanup_list.push(ptr36)
 
-              (3, ptr31, payload30.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (3, ptr36, payload35.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            InvalidResult(payload32) => {
-              let ptr33 = mbt_ffi_str2ptr(payload32)
-              cleanup_list.push(ptr33)
+            InvalidResult(payload37) => {
+              let ptr38 = mbt_ffi_str2ptr(payload37)
+              cleanup_list.push(ptr38)
 
-              (4, ptr33, payload32.length(), 0, 0, 0, 0, 0, 0, 0, 0)
+              (4, ptr38, payload37.length(), 0, 0, 0, 0, 0, 0, 0, 0)
             }
-            CustomError(payload34) => {
-              let ptr35 = mbt_ffi_str2ptr(payload34.name)
+            CustomError(payload39) => {
+              let ptr40 = mbt_ffi_str2ptr(payload39.name)
 
-              let address36 = mbt_ffi_malloc(
-                payload34.payload.graph.type_nodes.length() * 144,
+              let address41 = mbt_ffi_malloc(
+                payload39.payload.graph.type_nodes.length() * 144,
               )
-              for index37 = 0
-                  index37 < payload34.payload.graph.type_nodes.length()
-                  index37 = index37 + 1 {
-                let iter_elem : @types.SchemaTypeNode = payload34.payload.graph.type_nodes[index37]
-                let iter_base = address36 + index37 * 144
+              for index42 = 0
+                  index42 < payload39.payload.graph.type_nodes.length()
+                  index42 = index42 + 1 {
+                let iter_elem : @types.SchemaTypeNode = payload39.payload.graph.type_nodes[index42]
+                let iter_base = address41 + index42 * 144
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t56(
                   iter_base + 0,
                   iter_elem,
@@ -836,14 +1090,14 @@ fn invoke_task_return(
                 )
               }
 
-              let address38 = mbt_ffi_malloc(
-                payload34.payload.graph.defs.length() * 24,
+              let address43 = mbt_ffi_malloc(
+                payload39.payload.graph.defs.length() * 24,
               )
-              for index39 = 0
-                  index39 < payload34.payload.graph.defs.length()
-                  index39 = index39 + 1 {
-                let iter_elem : @types.SchemaTypeDef = payload34.payload.graph.defs[index39]
-                let iter_base = address38 + index39 * 24
+              for index44 = 0
+                  index44 < payload39.payload.graph.defs.length()
+                  index44 = index44 + 1 {
+                let iter_elem : @types.SchemaTypeDef = payload39.payload.graph.defs[index44]
+                let iter_base = address43 + index44 * 24
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t18(
                   iter_base + 0,
                   iter_elem,
@@ -851,51 +1105,51 @@ fn invoke_task_return(
                 )
               }
 
-              let address40 = mbt_ffi_malloc(
-                payload34.payload.value.value_nodes.length() * 32,
+              let address45 = mbt_ffi_malloc(
+                payload39.payload.value.value_nodes.length() * 32,
               )
-              for index41 = 0
-                  index41 < payload34.payload.value.value_nodes.length()
-                  index41 = index41 + 1 {
-                let iter_elem : @types.SchemaValueNode = payload34.payload.value.value_nodes[index41]
-                let iter_base = address40 + index41 * 32
+              for index46 = 0
+                  index46 < payload39.payload.value.value_nodes.length()
+                  index46 = index46 + 1 {
+                let iter_elem : @types.SchemaValueNode = payload39.payload.value.value_nodes[index46]
+                let iter_base = address45 + index46 * 32
                 @wit_bindgen_export_lower.wit_bindgen_borrow_lower_t76(
                   iter_base + 0,
                   iter_elem,
                   cleanup_list,
                 )
               }
-              cleanup_list.push(ptr35)
-              cleanup_list.push(address36)
-              cleanup_list.push(address38)
-              cleanup_list.push(address40)
+              cleanup_list.push(ptr40)
+              cleanup_list.push(address41)
+              cleanup_list.push(address43)
+              cleanup_list.push(address45)
 
               (
                 5,
-                ptr35,
-                payload34.name.length(),
-                address36,
-                payload34.payload.graph.type_nodes.length(),
-                address38,
-                payload34.payload.graph.defs.length(),
-                payload34.payload.graph.root,
-                address40,
-                payload34.payload.value.value_nodes.length(),
-                payload34.payload.value.root,
+                ptr40,
+                payload39.name.length(),
+                address41,
+                payload39.payload.graph.type_nodes.length(),
+                address43,
+                payload39.payload.graph.defs.length(),
+                payload39.payload.graph.root,
+                address45,
+                payload39.payload.value.value_nodes.length(),
+                payload39.payload.value.root,
               )
             }
           }
 
           (
-            1, lowered42, lowered43, lowered44, lowered45, lowered46, lowered47,
-            lowered48, lowered49, lowered50, lowered51, lowered52,
+            1, lowered47, lowered48, lowered49, lowered50, lowered51, lowered52,
+            lowered53, lowered54, lowered55, lowered56, lowered57, 0, 0,
           )
         }
       }
 
       wasmExportAsyncInvokeGolemToolGuestTaskReturn(
-        lowered53, lowered54, lowered55, lowered56, lowered57, lowered58, lowered59,
-        lowered60, lowered61, lowered62, lowered63, lowered64,
+        lowered58, lowered59, lowered60, lowered61, lowered62, lowered63, lowered64,
+        lowered65, lowered66, lowered67, lowered68, lowered69, lowered70, lowered71,
       )
 
       cleanup_list.each(mbt_ffi_free)
@@ -943,12 +1197,22 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
         _ => panic()
       }
 
-      let lifted2 : @streams.ToolStdoutWriter? = match
+      let lifted2 : @streams.ToolOutputWriter? = match
         mbt_ffi_load8_u(p0 + 56) {
         0 => Option::None
         1 =>
           Option::Some(
-            @streams.ToolStdoutWriter::ToolStdoutWriter(mbt_ffi_load32(p0 + 60)),
+            @streams.ToolOutputWriter::ToolOutputWriter(mbt_ffi_load32(p0 + 60)),
+          )
+        _ => panic()
+      }
+
+      let lifted3 : @streams.ToolOutputWriter? = match
+        mbt_ffi_load8_u(p0 + 64) {
+        0 => Option::None
+        1 =>
+          Option::Some(
+            @streams.ToolOutputWriter::ToolOutputWriter(mbt_ffi_load32(p0 + 68)),
           )
         _ => panic()
       }
@@ -963,7 +1227,8 @@ pub fn wasmExportInvokeGolemToolGuest(p0 : Int) -> Int {
           @wit_bindgen_export_lower.wit_bindgen_lift_t79(p0 + 16),
           lifted,
           lifted2,
-          @wit_bindgen_export_lower.wit_bindgen_lift_t440(p0 + 64),
+          lifted3,
+          @wit_bindgen_export_lower.wit_bindgen_lift_t440(p0 + 72),
           background_group,
         ),
       )

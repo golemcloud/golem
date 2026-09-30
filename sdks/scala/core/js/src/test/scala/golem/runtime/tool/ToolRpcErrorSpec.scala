@@ -120,7 +120,7 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
           "finish" -> js.Any.fromFunction0(() => js.Promise.resolve[Unit](())),
           "fail"   -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
         )
-        .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
+        .asInstanceOf[ToolHostApi.RawToolOutputWriter]
       ZIO.fromFuture(_ => new JsToolOutputStream(writer).write(Array[Byte](1))).map { result =>
         assertTrue(result == Left(StreamWriteError.Closed(ByteStreamCloseCause.ConsumerCancelled)))
       }
@@ -136,7 +136,7 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
           "finish" -> js.Any.fromFunction0(() => js.Promise.resolve[Unit](())),
           "fail"   -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
         )
-        .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
+        .asInstanceOf[ToolHostApi.RawToolOutputWriter]
       ZIO.fromFuture(_ => new JsToolOutputStream(writer).write(Array.emptyByteArray)).map { result =>
         assertTrue(result == Right(()), writes == 0)
       }
@@ -158,10 +158,10 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
       val transport = new JsWireToolRpcTransport(
         null.asInstanceOf[ToolHostApi.RawToolRpc],
         _ => Future.failed(new RuntimeException("codec failed")),
-        () => (null.asInstanceOf[ToolHostApi.RawToolStdout], stream)
+        () => (null.asInstanceOf[ToolHostApi.RawToolOutput], stream)
       )
       val started = transport
-        .start(Nil, null.asInstanceOf[WitTypedSchemaValue], None, stdout = true)
+        .start(Nil, null.asInstanceOf[WitTypedSchemaValue], None, stdout = true, stderr = false)
         .toOption
         .get
 
@@ -186,7 +186,7 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
           },
           "fail" -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
         )
-        .asInstanceOf[ToolHostApi.RawToolStdoutWriter]
+        .asInstanceOf[ToolHostApi.RawToolOutputWriter]
       val stream = new JsToolOutputStream(writer)
 
       for {
@@ -216,7 +216,7 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
       )
       js.Dynamic.global.Reflect
         .set(writer, js.Dynamic.global.Symbol.selectDynamic("dispose"), js.Any.fromFunction0(() => disposals += 1))
-      val stream  = new JsToolOutputStream(writer.asInstanceOf[ToolHostApi.RawToolStdoutWriter])
+      val stream  = new JsToolOutputStream(writer.asInstanceOf[ToolHostApi.RawToolOutputWriter])
       val write   = stream.write(Array[Byte](0, 127, -128, -1))
       val closed  = stream.close()
       val between = write.flatMap(_ => stream.write(Array[Byte](42)))(scala.concurrent.ExecutionContext.parasitic)
@@ -258,7 +258,7 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
       )
       js.Dynamic.global.Reflect
         .set(writer, js.Dynamic.global.Symbol.selectDynamic("dispose"), js.Any.fromFunction0(() => disposals += 1))
-      val stream = new JsToolOutputStream(writer.asInstanceOf[ToolHostApi.RawToolStdoutWriter])
+      val stream = new JsToolOutputStream(writer.asInstanceOf[ToolHostApi.RawToolOutputWriter])
       for {
         failed    <- ZIO.fromFuture(_ => stream.fail(ByteStreamFailure.ResourceExhausted))
         repeated  <- ZIO.fromFuture(_ => stream.fail(ByteStreamFailure.ResourceExhausted))
@@ -292,7 +292,7 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
           )
           js.Dynamic.global.Reflect
             .set(writer, js.Dynamic.global.Symbol.selectDynamic("dispose"), js.Any.fromFunction0(() => disposals += 1))
-          val stream = new JsToolOutputStream(writer.asInstanceOf[ToolHostApi.RawToolStdoutWriter])
+          val stream = new JsToolOutputStream(writer.asInstanceOf[ToolHostApi.RawToolOutputWriter])
           for {
             closed <- ZIO.fromFuture(_ => stream.close()).either
             again  <- ZIO.fromFuture(_ => stream.close()).either

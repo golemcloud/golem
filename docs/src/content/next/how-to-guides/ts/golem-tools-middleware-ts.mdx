@@ -32,5 +32,5 @@ raw typed values. Prefer typed middleware whenever the surface is known. The exa
 and result shape follows the command's arguments, declared errors, and streams; let TypeScript
 infer it rather than casting. Use `underlying` only during the middleware handler; it may make
 multiple calls before the handler settles. Do not retain it for later invocations. Do not reuse
-transferred streams or permission-card handles. Returned stdout may be consumed lazily after the
-handler returns.
+transferred streams or permission-card handles. Returned stdout and stderr may be consumed lazily
+after the handler returns; forward, consume, or cancel each channel independently.

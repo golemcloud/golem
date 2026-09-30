@@ -390,6 +390,7 @@ mod tests {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -435,6 +436,7 @@ mod tests {
         let result = AliasedOptionDirectRoundTripImpl::__tool_invoke(
             vec!["echo".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -498,6 +500,7 @@ mod tests {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -506,6 +509,68 @@ mod tests {
             &result.result.expect("stream presence mask is returned"),
         )
         .expect("stream presence mask decodes");
+        assert_eq!(u32::from_value(result.value()).unwrap(), 0);
+    }
+
+    #[tool_definition]
+    trait DualOutputRoundTrip {
+        #[arg(diagnostics, channel = "stderr")]
+        async fn outputs(
+            &self,
+            stdout: Option<golem_rust::agentic::OutputStream>,
+            diagnostics: Option<golem_rust::agentic::OutputStream>,
+        ) -> u32;
+    }
+
+    struct DualOutputRoundTripImpl;
+
+    #[tool_implementation]
+    impl DualOutputRoundTrip for DualOutputRoundTripImpl {
+        async fn outputs(
+            &self,
+            stdout: Option<golem_rust::agentic::OutputStream>,
+            diagnostics: Option<golem_rust::agentic::OutputStream>,
+        ) -> u32 {
+            (u32::from(stdout.is_some()) << 1) | (u32::from(diagnostics.is_some()) << 2)
+        }
+    }
+
+    #[test]
+    async fn output_channel_selector_projects_and_dispatches_independently() {
+        let tool = <DualOutputRoundTripImpl as DualOutputRoundTrip>::__tool_descriptor();
+        let command_index = tool
+            .command_index_by_path(&["outputs".to_string()])
+            .expect("outputs command exists");
+        let body = tool.commands[command_index]
+            .body
+            .as_ref()
+            .expect("outputs has a body");
+        assert_eq!(
+            body.stdout.as_ref().map(|stream| stream.required),
+            Some(false)
+        );
+        assert_eq!(
+            body.stderr.as_ref().map(|stream| stream.required),
+            Some(false)
+        );
+
+        let input = encoded_input(&tool, &["outputs"], Vec::new());
+        let invoker = get_tool_invoker_by_name("dual-output-round-trip")
+            .expect("dual output implementation registers an invoker");
+        let result = invoker(
+            vec!["outputs".to_string()],
+            input,
+            None,
+            None,
+            None,
+            anonymous_principal(),
+        )
+        .await
+        .expect("optional outputs may both be absent");
+        let result = golem_rust::decode_typed_schema_value(
+            &result.result.expect("output presence mask is returned"),
+        )
+        .expect("output presence mask decodes");
         assert_eq!(u32::from_value(result.value()).unwrap(), 0);
     }
 
@@ -1126,8 +1191,8 @@ mod tests {
             input: golem_rust::tool::InputStream,
             _output: golem_rust::tool::OutputStream,
         ) -> Result<String, golem_rust::tool::ToolInvokeError<RemoteError>> {
-            let (result, _stdout) = underlying.copy(input).await?;
-            Ok(result)
+            let invocation = underlying.start_copy(input).await?;
+            invocation.get().await
         }
 
         fn __golem_tool_middleware_annotation() {}
@@ -1204,11 +1269,12 @@ async fn audit(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     underlying
-        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
         .await
 }
 "#,
@@ -1434,6 +1500,7 @@ async fn audit(
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -1461,6 +1528,7 @@ async fn audit(
         let err = invoker(
             vec!["fail".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -1514,6 +1582,7 @@ async fn audit(
         let err = invoker(
             vec!["fail".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -1571,6 +1640,7 @@ async fn audit(
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -1623,6 +1693,7 @@ async fn audit(
         let err = invoker(
             vec!["fail".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -1678,6 +1749,7 @@ async fn audit(
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -1722,7 +1794,7 @@ async fn audit(
             vec![golem_rust::SchemaValue::String("alice".to_string())],
         );
 
-        let result = invoker(vec![], input, None, None, anonymous_principal())
+        let result = invoker(vec![], input, None, None, None, anonymous_principal())
             .await
             .expect("guest invocation dispatches the trait default method body");
         let result = result.result.expect("plain return is encoded as a result");
@@ -1761,7 +1833,7 @@ async fn audit(
         };
 
         let result = instance
-            .__tool_invoke_on(vec![], input, None, None, anonymous_principal())
+            .__tool_invoke_on(vec![], input, None, None, None, anonymous_principal())
             .await
             .expect("instance invocation succeeds");
         let result = result.result.expect("plain return is encoded as a result");
@@ -1771,23 +1843,24 @@ async fn audit(
     }
 
     #[test]
-    fn stdout_tool_result_shape_compiles() {
+    fn tool_output_result_shape_compiles() {
         let output = cargo_check_tool_crate(
-            "stdout-tool-result-shape",
+            "tool-output-result-shape",
             r#"
-use golem_rust::agentic::{ToolInvocation, ToolInvocationStdout};
+use golem_rust::agentic::{ToolInvocation, ToolInvocationOutput};
 use std::convert::Infallible;
 
-fn stdout(invocation: ToolInvocation<(), Infallible>) -> ToolInvocationStdout {
+fn stdout(invocation: ToolInvocation<(), Infallible>) -> Option<ToolInvocationOutput> {
     invocation.stdout
 }
 
-async fn consume(_stdout: ToolInvocationStdout) {}
+async fn consume(_output: ToolInvocationOutput) {}
 
-fn consume_result_and_stdout_concurrently(invocation: ToolInvocation<(), Infallible>) {
+fn consume_result_and_outputs_concurrently(invocation: ToolInvocation<(), Infallible>) {
     let result = invocation.result();
-    let output = consume(invocation.stdout);
-    let _ = (result, output);
+    let stdout = invocation.stdout.map(consume);
+    let stderr = invocation.stderr.map(consume);
+    let _ = (result, stdout, stderr);
 }
 "#,
         );
@@ -2596,7 +2669,8 @@ mod golem_rust {
             _command_path: &[String],
             input: crate::golem_rust::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
-            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdout>,
+            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
+            _stderr: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
         ) -> Result<DirectInvocationResult, ToolError<std::convert::Infallible>> {
             crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(crate::golem_rust::decode_typed_schema_value_owned(input).unwrap()));
             let tree = crate::golem_rust::schema::wit::direct::encode("ok").unwrap();
@@ -2725,7 +2799,8 @@ mod golem_rust {
             _command_path: &[String],
             input: crate::golem_rust::schema::wit::wire::TypedSchemaValue,
             _stdin: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdin>,
-            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolStdout>,
+            _stdout: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
+            _stderr: Option<golem_rust_actual::golem_agentic::golem::tool::host::ToolOutput>,
         ) -> Result<DirectInvocationResult, ToolError<std::convert::Infallible>> {
             crate::LAST_INPUT.with(|slot| *slot.borrow_mut() = Some(crate::golem_rust::decode_typed_schema_value_owned(input).unwrap()));
             let tree = crate::golem_rust::schema::wit::direct::encode("ok").unwrap();
@@ -3011,6 +3086,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3038,6 +3114,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["k".to_string(), "leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -3101,6 +3178,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3151,6 +3229,7 @@ fn check_sparse_nested_capture_set() {
         let result = SubtreeAliasSiblingIsolationImpl::__tool_invoke(
             vec!["sibling".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -3213,6 +3292,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["alias-child".to_string(), "leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -3282,6 +3362,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3324,6 +3405,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -3386,6 +3468,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3445,6 +3528,7 @@ fn check_sparse_nested_capture_set() {
             input,
             None,
             None,
+            None,
             anonymous_principal(),
         )
         .await
@@ -3499,6 +3583,7 @@ fn check_sparse_nested_capture_set() {
         let result = invoker(
             vec!["leaf".to_string()],
             input,
+            None,
             None,
             None,
             anonymous_principal(),
@@ -6827,7 +6912,7 @@ use golem_rust::agentic::{InputStream, invoke_and_await_infallible, pump_tool_st
 use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
 
 fn forward_stdin(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue, stdin: InputStream) {
-    let _ = invoke_and_await_infallible(rpc, &[], input, Some(pump_tool_stdin(stdin)), None);
+    let _ = invoke_and_await_infallible(rpc, &[], input, Some(pump_tool_stdin(stdin)), None, None);
 }
 "#,
         );
@@ -7178,7 +7263,7 @@ use golem_rust::agentic::invoke_and_await_infallible;
 use golem_rust::golem_agentic::golem::tool::host::ToolRpc;
 
 fn call_tool(rpc: &ToolRpc, input: &golem_rust::TypedSchemaValue) {
-    let _ = invoke_and_await_infallible(rpc, &[], input, None, None);
+    let _ = invoke_and_await_infallible(rpc, &[], input, None, None, None);
 }
 "#,
         );
@@ -7216,7 +7301,8 @@ impl Guest for Component {
         _command_path: Vec<String>,
         _input: TypedSchemaValue,
         _stdin: Option<InputStream>,
-        _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
+        _stdout: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+        _stderr: Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
         _principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
         unimplemented!()

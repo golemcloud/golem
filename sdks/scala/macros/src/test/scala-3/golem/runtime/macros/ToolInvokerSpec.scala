@@ -126,7 +126,8 @@ object ToolInvokerSpec extends ZIOSpecDefault {
 
   private final class FakeEnv(
     tools: Map[String, (ExtendedToolType, ToolInvokeHandler)] = Map.empty,
-    val stdout: Option[ToolOutputStream] = None
+    val stdout: Option[ToolOutputStream] = None,
+    val stderr: Option[ToolOutputStream] = None
   ) extends ToolInvokeEnv {
     def invokerFor(toolName: String): Option[ToolInvokeHandler]     = tools.get(toolName).map(_._2)
     def extendedToolFor(toolName: String): Option[ExtendedToolType] = tools.get(toolName).map(_._1)

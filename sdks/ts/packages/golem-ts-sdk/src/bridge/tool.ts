@@ -4,7 +4,7 @@
 import {
   ToolRpc,
   createStdin,
-  createStdout,
+  createOutput,
   type ByteStreamFailure,
   type ByteStreamItem,
   type FutureInvokeResult,
@@ -42,6 +42,7 @@ export interface ToolInvocationResult {
 
 export interface RawToolInvocation {
   readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly stderr?: AsyncIterable<ByteStreamItem>;
   readonly settledResult: Promise<
     SettledToolResult<Awaited<ReturnType<FutureInvokeResult['get']>>>
   >;
@@ -54,6 +55,7 @@ export interface ToolClientTransport {
     input: Parameters<ToolRpc['asyncInvokeAndAwait']>[1],
     stdin: ToolInputStream | undefined,
     stdout: boolean,
+    stderr: boolean,
   ): RawToolInvocation;
 }
 
@@ -63,20 +65,23 @@ export function createToolClientTransport(
 ): ToolClientTransport {
   let rpc: ToolRpc | undefined;
   return {
-    start(commandPath, input, stdin, withStdout) {
+    start(commandPath, input, stdin, withStdout, withStderr) {
       rpc ??= reflected ? ToolRpc.create(toolName) : new ToolRpc(toolName);
       const inputEndpoints = stdin === undefined ? undefined : createStdin();
-      const outputEndpoints = withStdout ? createStdout() : undefined;
+      const stdoutEndpoints = withStdout ? createOutput() : undefined;
+      const stderrEndpoints = withStderr ? createOutput() : undefined;
       const future = rpc.asyncInvokeAndAwait(
         [...commandPath],
         input,
         inputEndpoints?.[1],
-        outputEndpoints?.[0],
+        stdoutEndpoints?.[0],
+        stderrEndpoints?.[0],
       );
       if (inputEndpoints) void pumpToolStdin(stdin!, inputEndpoints[0], inputEndpoints[2]);
       const settledResult = settleToolResult(future.get());
       return {
-        stdout: outputEndpoints?.[1],
+        stdout: stdoutEndpoints?.[1],
+        stderr: stderrEndpoints?.[1],
         settledResult,
         cancel: () => future.cancel(),
       };
@@ -137,8 +142,10 @@ export interface ToolClientRuntime {
     input: TypedSchemaValue,
     stdin: ToolInputStream | undefined,
     stdout: boolean,
+    stderr: boolean,
   ): {
     stdout?: AsyncIterable<ByteStreamItem>;
+    stderr?: AsyncIterable<ByteStreamItem>;
     settledResult: Promise<SettledToolResult<ToolInvocationResult>>;
     cancel(): void;
   };
@@ -149,10 +156,16 @@ export function createToolClientRuntime(
   transport: ToolClientTransport = createToolClientTransport(toolName),
 ): ToolClientRuntime {
   return {
-    start(commandPath, input, stdin, stdout) {
+    start(commandPath, input, stdin, stdout, stderr) {
       let invocation: RawToolInvocation;
       try {
-        invocation = transport.start(commandPath, typedSchemaValueToWit(input), stdin, stdout);
+        invocation = transport.start(
+          commandPath,
+          typedSchemaValueToWit(input),
+          stdin,
+          stdout,
+          stderr,
+        );
       } catch (reason) {
         return {
           settledResult: Promise.resolve({ status: 'rejected', reason }),
@@ -161,6 +174,7 @@ export function createToolClientRuntime(
       }
       return {
         stdout: invocation.stdout,
+        stderr: invocation.stderr,
         settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
           result: value.result === undefined ? undefined : typedSchemaValueFromWit(value.result),
         })),

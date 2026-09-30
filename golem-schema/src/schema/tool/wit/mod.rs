@@ -525,6 +525,7 @@ fn encode_command_body(
             .collect::<Result<Vec<_>, _>>()?,
         stdin: b.stdin.as_ref().map(wire::StreamSpec::from),
         stdout: b.stdout.as_ref().map(wire::StreamSpec::from),
+        stderr: b.stderr.as_ref().map(wire::StreamSpec::from),
         result: b
             .result
             .as_ref()
@@ -738,6 +739,7 @@ fn decode_command_body(
             .collect::<Result<Vec<_>, _>>()?,
         stdin: b.stdin.as_ref().map(StreamSpec::from),
         stdout: b.stdout.as_ref().map(StreamSpec::from),
+        stderr: b.stderr.as_ref().map(StreamSpec::from),
         result: b
             .result
             .as_ref()

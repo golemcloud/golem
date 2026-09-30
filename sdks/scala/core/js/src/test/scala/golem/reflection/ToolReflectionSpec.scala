@@ -41,6 +41,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       Nil,
       None,
       None,
+      None,
       Some(WitResultSpec(schema.root, doc, Nil, "")),
       errorName.toList.map(name => WitErrorCase(name, doc, ErrorKind.RuntimeError, 1, Some(schema.root))),
       None
@@ -309,7 +310,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
           Future.successful(Left(ByteStreamFailure.Failed("broken")))
       }
       val terminal: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = Future.successful(Right(None))
-      val invocation                                                               = ReflectedToolInvocation(Some(broken), terminal, () => ())
+      val invocation                                                               = ReflectedToolInvocation(Some(broken), None, terminal, () => ())
       ZIO.fromFuture(_ => invocation.collect()(using ExecutionContext.global)).map { result =>
         assertTrue(result.left.toOption.exists(_.isInstanceOf[ToolError.Rpc]))
       }
@@ -320,7 +321,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
           Future.successful(Left(ByteStreamFailure.Failed("broken")))
       }
       val terminal   = Promise[Either[ToolError[NamedToolError], Option[SchemaValue]]]()
-      val invocation = ReflectedToolInvocation(Some(broken), terminal.future, () => ())
+      val invocation = ReflectedToolInvocation(Some(broken), None, terminal.future, () => ())
       val collected  = invocation.collect()(using ExecutionContext.global)
       val payload    = TypedSchemaValue(stringGraph, StringValue("details"))
       terminal.success(Left(ToolError.Tool(NamedToolError("declared", payload))))

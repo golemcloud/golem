@@ -133,6 +133,7 @@ fn tool_body() -> CommandBody {
         constraints: vec![],
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: vec![],
         annotations: None,
@@ -2371,7 +2372,8 @@ def start(
   commandPath: _root_.scala.List[_root_.scala.Predef.String],
   input: _root_.golem.schema.TypedSchemaValue,
   stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream],
-  stdout: _root_.scala.Boolean
+  stdout: _root_.scala.Boolean,
+  stderr: _root_.scala.Boolean
 ): _root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolRpcStarted] =
   _root_.scala.Left(_root_.golem.tool.ToolRpcFailure.Cancelled)
   }
@@ -2383,7 +2385,7 @@ def start(
   ] = client.grep()
 
   started.foreach { invocation =>
-    val stdout: _root_.golem.tool.ToolInputStream = invocation.stdout
+    val stdout: _root_.scala.Option[_root_.golem.tool.ToolInputStream] = invocation.stdout
     val result: _root_.scala.concurrent.Future[
       _root_.scala.Either[_root_.golem.tool.ToolError[GrepError], _root_.scala.Predef.String]
     ] = invocation.result
@@ -2391,7 +2393,7 @@ def start(
     val collected: _root_.scala.concurrent.Future[
       _root_.scala.Either[
         _root_.golem.tool.ToolError[GrepError],
-        (_root_.scala.Predef.String, _root_.scala.Array[_root_.scala.Byte])
+        _root_.golem.tool.CollectedToolInvocation[_root_.scala.Predef.String]
       ]
     ] = invocation.collect()(_root_.scala.concurrent.ExecutionContext.parasitic)
   }
@@ -2466,10 +2468,12 @@ def start(
   commandPath: _root_.scala.List[_root_.scala.Predef.String],
   input: _root_.golem.schema.TypedSchemaValue,
   stdin: _root_.scala.Option[_root_.golem.tool.ToolInputStream],
-  stdout: _root_.scala.Boolean
+  stdout: _root_.scala.Boolean,
+  stderr: _root_.scala.Boolean
 ): _root_.scala.Either[_root_.golem.tool.ToolRpcFailure, _root_.golem.tool.ToolRpcStarted] =
   _root_.scala.Right(
     _root_.golem.tool.ToolRpcStarted(
+      _root_.scala.None,
       _root_.scala.None,
       _root_.scala.concurrent.Future.successful(
         _root_.scala.Right(_root_.golem.tool.ToolInvokeResult(_root_.scala.None))
@@ -2538,7 +2542,7 @@ object Consumer {{
   def consume(client: {client})(using ExecutionContext): Unit = {{
     client.{name}Lookup(Some(3L), "query", Map("region" -> "west"))
     client.{name}Lookup(None, "query", Map.empty).foreach {{ invocation =>
-      val stdout: golem.tool.ToolInputStream = invocation.stdout
+      val stdout: Option[golem.tool.ToolInputStream] = invocation.stdout
       invocation.result.foreach(_.foreach {{ result =>
         {fields}
         val content = result.content

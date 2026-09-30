@@ -68,6 +68,7 @@ object ToolTestFixtures {
               None,
               None,
               None,
+              None,
               Nil,
               None
             )
@@ -262,6 +263,7 @@ object ToolTestFixtures {
               ),
               Some(StreamSpec(doc("stdin"), List("text/plain"), required = false)),
               Some(StreamSpec(doc("stdout"), List("application/json"), required = true)),
+              None,
               Some(
                 ExtendedResultSpec(
                   strGraph,

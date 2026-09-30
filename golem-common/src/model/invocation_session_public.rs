@@ -273,6 +273,7 @@ pub struct PublicTypedValue {
 pub enum PublicByteStreamRole {
     Stdin,
     Stdout,
+    Stderr,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -374,6 +375,7 @@ pub enum PublicClientMessage {
         input: Box<PublicTypedValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         version: u8,
     },
     #[serde(rename = "resumeAttach")]
@@ -1020,6 +1022,7 @@ fn validate_mappings(mappings: &[PublicStreamMapping]) -> Result<(), PublicProto
     let mut channels = BTreeSet::new();
     let mut tokens = BTreeSet::new();
     let mut provisional_refs = BTreeSet::new();
+    let mut byte_roles = Vec::new();
     for mapping in mappings {
         validate_channel(mapping.channel)?;
         validate_token_text(&mapping.stream_token)?;
@@ -1035,6 +1038,27 @@ fn validate_mappings(mappings: &[PublicStreamMapping]) -> Result<(), PublicProto
                 return Err(PublicProtocolError::new(
                     PublicErrorCode::StreamConflict,
                     "stream mappings must have distinct provisional references",
+                ));
+            }
+        }
+        if let Some(role) = mapping.byte_role {
+            if byte_roles.contains(&role) {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::StreamConflict,
+                    "tool byte stream roles must be distinct",
+                ));
+            }
+            byte_roles.push(role);
+            let expected_direction = match role {
+                PublicByteStreamRole::Stdin => PublicStreamDirection::Input,
+                PublicByteStreamRole::Stdout | PublicByteStreamRole::Stderr => {
+                    PublicStreamDirection::Output
+                }
+            };
+            if mapping.direction != expected_direction {
+                return Err(PublicProtocolError::new(
+                    PublicErrorCode::StreamConflict,
+                    "tool byte stream role does not match its direction",
                 ));
             }
         }
@@ -1333,10 +1357,10 @@ mod tests {
     #[cfg(feature = "full")]
     use super::new_durable_stream_session_id;
     use super::{
-        BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicClientMessage, PublicErrorCode,
-        PublicInvocationResult, PublicNativeToolTarget, PublicServerMessage, PublicTypedValue,
-        decode_binary_message, decode_client_text, decode_server_text, encode_text,
-        validate_durable_stream_session_id, validate_message_size,
+        BinaryMessageKind, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole, PublicClientMessage,
+        PublicErrorCode, PublicInvocationResult, PublicNativeToolTarget, PublicServerMessage,
+        PublicTypedValue, decode_binary_message, decode_client_text, decode_server_text,
+        encode_text, validate_durable_stream_session_id, validate_message_size,
     };
     use crate::schema::{SchemaGraph, SchemaType};
     use serde::Deserialize;
@@ -1503,6 +1527,7 @@ mod tests {
             }),
             stdin: true,
             stdout: true,
+            stderr: true,
             version: 1,
         };
         let encoded = encode_text(&message).unwrap();
@@ -1531,6 +1556,62 @@ mod tests {
         assert!(encoded.contains("\"graph\""));
         assert!(!encoded.contains("\"schema\""));
         assert_eq!(decode_server_text(encoded.as_bytes()).unwrap(), message);
+    }
+
+    #[test]
+    fn stderr_byte_role_has_an_explicit_public_identity() {
+        let encoded = serde_json::to_value(PublicByteStreamRole::Stderr).unwrap();
+        assert_eq!(encoded, serde_json::json!("stderr"));
+        assert_eq!(
+            serde_json::from_value::<PublicByteStreamRole>(encoded).unwrap(),
+            PublicByteStreamRole::Stderr
+        );
+    }
+
+    #[test]
+    fn public_mappings_reject_duplicate_byte_roles() {
+        use super::{PublicStreamDirection, PublicStreamMapping, validate_mappings};
+
+        let output = |channel, stream_token: &str, byte_role| PublicStreamMapping {
+            channel,
+            direction: PublicStreamDirection::Output,
+            byte_role: Some(byte_role),
+            input_high_water: None,
+            provisional_ref: None,
+            stream_token: stream_token.to_string(),
+        };
+        assert!(
+            validate_mappings(&[
+                output(1, "first", PublicByteStreamRole::Stderr),
+                output(2, "second", PublicByteStreamRole::Stderr),
+            ])
+            .is_err(),
+            "one acceptance must not assign the stderr role to two streams"
+        );
+    }
+
+    #[test]
+    fn public_mappings_reject_byte_roles_with_the_wrong_direction() {
+        use super::{
+            DecimalU64, PublicInputHighWater, PublicStreamDirection, PublicStreamMapping,
+            validate_mappings,
+        };
+
+        let input_with_stdout_role = PublicStreamMapping {
+            channel: 3,
+            direction: PublicStreamDirection::Input,
+            byte_role: Some(PublicByteStreamRole::Stdout),
+            input_high_water: Some(PublicInputHighWater {
+                sequence: DecimalU64(0),
+                terminal: false,
+            }),
+            provisional_ref: None,
+            stream_token: "third".to_string(),
+        };
+        assert!(
+            validate_mappings(&[input_with_stdout_role]).is_err(),
+            "stdout and stderr roles are output-only"
+        );
     }
 
     #[test]

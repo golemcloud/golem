@@ -225,6 +225,7 @@ impl ProjectedTool {
                             mime: vec!["*/*".into()],
                             required: false,
                         }),
+                        stderr: None,
                         result: Some(ResultSpec {
                             type_: result_type,
                             doc: Doc::default(),

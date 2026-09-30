@@ -261,16 +261,26 @@ impl DurableStreamStore {
                         keys.push(ProducerMetadataKey::Stream(handle.stream_id));
                     }
                 }
+                ProducerOutputSource::Registered(handle, _) => {
+                    keys.push(ProducerMetadataKey::Stream(handle.stream_id));
+                }
             }
         }
         let mut index = self.index_for(keys).await?;
         let invalid_existing_handle = outputs.iter().any(|output| {
-            matches!(&output.source, ProducerOutputSource::Existing(handle)
+            matches!(&output.source, ProducerOutputSource::Existing(handle) | ProducerOutputSource::Registered(handle, _)
                 if self.owns_handle_identity(handle)
                 && index
                     .registrations
                     .get(&handle.stream_id)
                     .is_none_or(|registration| !registration.accepts(handle, self.generation())))
+                || matches!(&output.source, ProducerOutputSource::Registered(handle, source)
+                    if !self.owns_handle_identity(handle)
+                        || index.registrations.get(&handle.stream_id).is_none_or(|registration| {
+                            source != &StreamRecordReference::Local(LocalStreamId(
+                                registration.registration_oplog_index,
+                            ))
+                        }))
         });
         let result_offset = index.invocation_results.get(&session_key).copied();
         let result_session_key = session_key.clone();
@@ -286,7 +296,7 @@ impl DurableStreamStore {
             .iter()
             .filter_map(|output| match &output.source {
                 ProducerOutputSource::New(request) => Some(request.clone()),
-                ProducerOutputSource::Existing(_) => None,
+                ProducerOutputSource::Existing(_) | ProducerOutputSource::Registered(_, _) => None,
             })
             .collect::<Vec<_>>();
         let make_result =
@@ -303,11 +313,12 @@ impl DurableStreamStore {
                             ProducerOutputSource::Existing(handle) => {
                                 StreamRecordReference::Foreign(handle)
                             }
+                            ProducerOutputSource::Registered(_, source) => source,
                         };
                         StreamBindingRecord {
                             transport_stream_id: output.transport_stream_id,
                             source,
-                            role: SessionStreamRole::Output,
+                            role: output.role,
                         }
                     })
                     .collect::<Vec<_>>();
@@ -446,9 +457,24 @@ impl DurableStreamStore {
                         }
                     }
                     ProducerOutputSource::Existing(_) => None,
+                    ProducerOutputSource::Registered(handle, _) => {
+                        let stream = index
+                            .streams
+                            .get(&handle.stream_id)
+                            .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
+                        if stream.terminal {
+                            None
+                        } else {
+                            Some((
+                                stream.next_sequence,
+                                index.entity_parent_start_index(handle.stream_id)?,
+                            ))
+                        }
+                    }
                 };
                 let applied_locally = matches!(&output.source, ProducerOutputSource::New(_))
-                    || matches!(&output.source, ProducerOutputSource::Existing(handle) if self.owns_handle_identity(handle));
+                    || matches!(&output.source, ProducerOutputSource::Existing(handle) if self.owns_handle_identity(handle))
+                    || matches!(&output.source, ProducerOutputSource::Registered(_, _));
                 cancellations.push((position, epoch, terminal, applied_locally));
             }
         }

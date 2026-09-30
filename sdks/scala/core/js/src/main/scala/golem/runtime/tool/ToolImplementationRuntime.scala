@@ -17,12 +17,13 @@
 package golem.runtime.tool
 
 import golem.FutureInterop
-import golem.host.js.tool.{JsByteStreamIterator, JsWasiInputStream, JsWasiOutputStream}
+import golem.host.js.tool.{JsByteStreamIterator, JsByteStreamIteratorResult, JsWasiInputStream, JsWasiOutputStream}
 import golem.runtime.tool.host.ToolHostApi
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire.WitToolError
 
+import scala.collection.mutable
 import scala.concurrent.{Future, Promise}
 import scala.scalajs.js
 import scala.scalajs.js.JSConverters._
@@ -62,8 +63,8 @@ final class JsToolInputStream(val underlying: ToolHostApi.RawByteStream) extends
     cancel().recover { case _ => () }(ToolInvokerRuntime.executionContext)
 }
 
-/** The stdout handle of a JS-guest tool invocation. */
-final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) extends ToolOutputStream {
+/** An output handle of a JS-guest tool invocation. */
+final class JsToolOutputStream(val underlying: ToolHostApi.RawToolOutputWriter) extends ToolOutputStream {
   private implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
   private var pending                                        = Option.empty[Future[Either[StreamWriteError, Unit]]]
   private var terminal                                       = Option.empty[ByteStreamCloseCause]
@@ -81,7 +82,7 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
   override def fail(reason: ByteStreamFailure): Future[Either[StreamWriteError, Unit]] =
     perform(Some(ByteStreamCloseCause.Failed(reason)))(underlying.fail(encodeFailure(reason)))
 
-  private[tool] def finishInvocation(): Future[Unit] =
+  private[golem] def finishInvocation(): Future[Unit] =
     completeInvocation(ByteStreamCloseCause.Finished)
 
   private[golem] def failInvocation(error: Throwable): Future[Unit] =
@@ -176,7 +177,7 @@ final class JsToolOutputStream(val underlying: ToolHostApi.RawToolStdoutWriter) 
   override private[golem] def close(): Future[Unit] = finishInvocation()
 }
 object JsToolOutputStream {
-  private[golem] def dispose(writer: ToolHostApi.RawToolStdoutWriter): Unit = {
+  private[golem] def dispose(writer: ToolHostApi.RawToolOutputWriter): Unit = {
     val symbol  = js.Dynamic.global.Symbol.selectDynamic("dispose")
     val release = js.Dynamic.global.Reflect.applyDynamic("get")(writer, symbol)
     release.applyDynamic("call")(writer)
@@ -192,18 +193,144 @@ object JsToolOutputStream {
   }
 }
 
-/** Adapts the middleware ABI's legacy `stream<u8>` stdin. */
+/** Adapts the middleware ABI's byte-item stdin stream. */
 final class JsMiddlewareInputStream(val underlying: JsWasiInputStream) extends ToolMiddlewareInputHandle {
   private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
 
   override private[golem] def close(): Future[Unit] = lifecycle.close()
 }
 
-/** Adapts the middleware ABI's legacy result-carried stdout stream. */
-final class JsMiddlewareOutputStream(val underlying: JsWasiOutputStream) extends ToolMiddlewareOutputHandle {
+/** Adapts a middleware ABI byte-item output stream. */
+final class JsMiddlewareOutputStream(
+  val underlying: JsWasiOutputStream,
+  completion: Future[Unit] = Future.successful(())
+) extends ToolMiddlewareOutputHandle {
   private val lifecycle = new JsMiddlewareStreamLifecycle(() => underlying.asyncIterator())
 
   override private[golem] def close(): Future[Unit] = lifecycle.close()
+  override private[golem] def drained: Future[Unit] = completion
+}
+
+object JsMiddlewareOutputStream {
+  private[golem] def buffered(source: JsWasiOutputStream): JsMiddlewareOutputStream = {
+    val buffer = new JsMiddlewareOutputBuffer(source)
+    new JsMiddlewareOutputStream(buffer.stream, buffer.completion)
+  }
+}
+
+private final class JsMiddlewareOutputBuffer(source: JsWasiOutputStream) {
+  private implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
+
+  private val sourceIterator = source.asyncIterator()
+  private val queued         = mutable.Queue.empty[js.Any]
+  private val waiting        = mutable.Queue.empty[Promise[JsByteStreamIteratorResult]]
+  private val completed      = Promise[Unit]()
+  private var terminal       = false
+  private var terminalError  = Option.empty[Throwable]
+  private var consumerClosed = false
+
+  val completion: Future[Unit] = completed.future
+
+  val stream: JsWasiOutputStream = {
+    val iterator = js.Dynamic.literal(
+      "next"   -> js.Any.fromFunction0(() => next()),
+      "return" -> js.Any.fromFunction0(() => closeConsumer())
+    )
+    val value = js.Dynamic.literal()
+    js.Dynamic.global.Reflect.applyDynamic("set")(
+      value,
+      js.Dynamic.global.Symbol.selectDynamic("asyncIterator"),
+      js.Any.fromFunction0(() => iterator)
+    )
+    value.asInstanceOf[JsWasiOutputStream]
+  }
+
+  pull()
+
+  private def next(): js.Promise[JsByteStreamIteratorResult] = synchronized {
+    if (queued.nonEmpty)
+      js.Promise.resolve(item(queued.dequeue()))
+    else if (consumerClosed)
+      js.Promise.resolve(done)
+    else if (terminalError.nonEmpty)
+      js.Promise.reject(terminalError.get)
+    else if (terminal)
+      js.Promise.resolve(done)
+    else {
+      val result = Promise[JsByteStreamIteratorResult]()
+      waiting.enqueue(result)
+      FutureInterop.toPromise(result.future)
+    }
+  }
+
+  private def closeConsumer(): js.Promise[JsByteStreamIteratorResult] = synchronized {
+    consumerClosed = true
+    terminal = true
+    queued.clear()
+    while (waiting.nonEmpty) waiting.dequeue().trySuccess(done)
+    val returnFn = sourceIterator.asInstanceOf[js.Dynamic].selectDynamic("return")
+    val closed   =
+      if (js.typeOf(returnFn) == "function")
+        FutureInterop
+          .fromPromise(
+            returnFn
+              .applyDynamic("call")(sourceIterator)
+              .asInstanceOf[js.Promise[js.Any]]
+          )
+          .map(_ => ())
+      else Future.successful(())
+    FutureInterop.toPromise(
+      closed.transform { outcome =>
+        completed.tryComplete(outcome)
+        outcome.map(_ => done)
+      }
+    )
+  }
+
+  private def pull(): Unit =
+    FutureInterop.fromPromise(sourceIterator.next()).onComplete {
+      case _ if consumerClosed                   => ()
+      case scala.util.Success(next) if next.done => finish()
+      case scala.util.Success(next)              =>
+        val value = next.value
+        emit(value)
+        if (isFailure(value)) finish() else pull()
+      case scala.util.Failure(error) => fail(error)
+    }
+
+  private def emit(value: js.Any): Unit = synchronized {
+    if (!consumerClosed) {
+      if (waiting.nonEmpty) waiting.dequeue().trySuccess(item(value))
+      else queued.enqueue(value)
+    }
+  }
+
+  private def finish(): Unit = synchronized {
+    if (!terminal) {
+      terminal = true
+      while (waiting.nonEmpty) waiting.dequeue().trySuccess(done)
+      completed.trySuccess(())
+    }
+  }
+
+  private def fail(error: Throwable): Unit = synchronized {
+    if (!terminal) {
+      terminal = true
+      terminalError = Some(error)
+      while (waiting.nonEmpty) waiting.dequeue().tryFailure(error)
+      completed.tryFailure(error)
+    }
+  }
+
+  private def isFailure(value: js.Any): Boolean =
+    try value.asInstanceOf[js.Dynamic].tag.asInstanceOf[String] == "err"
+    catch { case _: Throwable => false }
+
+  private def item(value: js.Any): JsByteStreamIteratorResult =
+    js.Dynamic.literal("done" -> false, "value" -> value).asInstanceOf[JsByteStreamIteratorResult]
+
+  private def done: JsByteStreamIteratorResult =
+    js.Dynamic.literal("done" -> true).asInstanceOf[JsByteStreamIteratorResult]
 }
 
 private final class JsMiddlewareStreamLifecycle(iterator: () => JsByteStreamIterator) {
@@ -249,8 +376,10 @@ private[golem] object ToolImplementationRuntime {
   def registerWire(handle: WireToolImplementation): Unit =
     ToolRegistry.registerWire(
       handle,
-      (path, input, stdin, stdout, principal) =>
-        handle.invoke(path, WireToolInput(input.value, stdin, stdout, principal)).map(_.map(ToolInvocationResult.apply))
+      (path, input, stdin, stdout, stderr, principal) =>
+        handle
+          .invoke(path, WireToolInput(input.value, stdin, stdout, stderr, principal))
+          .map(_.map(ToolInvocationResult.apply))
     )
 
   def register(handle: ToolImplementationHandle): Unit = {
@@ -267,7 +396,7 @@ private[golem] object ToolImplementationRuntime {
     tool: ExtendedToolType,
     handle: ToolImplementationHandle
   ): ToolRegistry.ToolInvoker =
-    (commandPath, wireInput, stdin, stdout, principal) => {
+    (commandPath, wireInput, stdin, stdout, stderr, principal) => {
       val decoded =
         try Right(SchemaWire.typedSchemaValueFromWit(wireInput))
         catch {
@@ -277,7 +406,7 @@ private[golem] object ToolImplementationRuntime {
       val invoked = decoded match {
         case Left(error)  => Future.successful(Left(error))
         case Right(input) =>
-          val env     = new JsToolInvokeEnv(stdout)
+          val env     = new JsToolInvokeEnv(stdout, stderr)
           val handler = ToolInvokerRuntime.handler(tool, handle, env)
           handler
             .invoke(
@@ -309,7 +438,10 @@ private[golem] object ToolImplementationRuntime {
    * the [[ToolRegistry]] and forwards the invocation's directional stream
    * capabilities.
    */
-  private[golem] final class JsToolInvokeEnv(val stdout: Option[ToolOutputStream]) extends ToolInvokeEnv {
+  private[golem] final class JsToolInvokeEnv(
+    val stdout: Option[ToolOutputStream],
+    val stderr: Option[ToolOutputStream]
+  ) extends ToolInvokeEnv {
 
     def invokerFor(toolName: String): Option[ToolInvokeHandler] =
       ToolRegistry.getInvoker(toolName).map { registryInvoker =>
@@ -333,12 +465,14 @@ private[golem] object ToolImplementationRuntime {
                   SchemaWire.typedSchemaValueToWit(input),
                   value,
                   stdout.collect { case stream: JsToolOutputStream => stream: ToolOutputStream },
+                  stderr.collect { case stream: JsToolOutputStream => stream: ToolOutputStream },
                   principal
                 ).map {
                   case Right(result) =>
                     Right(
                       ToolInvokeResult(
                         result.result.map(SchemaWire.typedSchemaValueFromWit),
+                        None,
                         None
                       )
                     )
