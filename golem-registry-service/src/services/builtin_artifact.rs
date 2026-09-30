@@ -174,13 +174,32 @@ fn resolve_locked(
     })?;
 
     if cache_path.is_file() {
-        let bytes = read_and_verify(&cache_path, artifact_id, expected_sha256.as_ref())?;
-        tracing::info!(
-            artifact_id,
-            cache_path = %cache_path.display(),
-            "Using cached built-in artifact"
-        );
-        return Ok(bytes);
+        match read_and_verify(&cache_path, artifact_id, expected_sha256.as_ref()) {
+            Ok(bytes) => {
+                tracing::info!(
+                    artifact_id,
+                    cache_path = %cache_path.display(),
+                    "Using cached built-in artifact"
+                );
+                return Ok(bytes);
+            }
+            Err(error) if expected_sha256.is_some() => {
+                tracing::warn!(
+                    artifact_id,
+                    cache_path = %cache_path.display(),
+                    error = %error,
+                    "Discarding corrupt cached built-in artifact"
+                );
+                std::fs::remove_file(&cache_path).with_context(|| {
+                    format!(
+                        "failed to remove corrupt built-in artifact '{}' from '{}'",
+                        artifact_id,
+                        cache_path.display()
+                    )
+                })?;
+            }
+            Err(error) => return Err(error),
+        }
     }
 
     tracing::info!(artifact_id, "Downloading built-in artifact");
@@ -385,6 +404,8 @@ mod tests {
         });
         let cache = tempfile::tempdir().unwrap();
         let expected = hex::encode([0; 32]);
+        let cache_path = cache.path().join(format!("{expected}.wasm"));
+        std::fs::write(&cache_path, b"corrupt").unwrap();
         let resolver = BuiltinArtifactResolver::new(&BuiltinArtifactsConfig {
             cache_dir: Some(cache.path().to_path_buf()),
             source_overrides: BTreeMap::from([(
@@ -399,7 +420,54 @@ mod tests {
 
         let error = resolver.resolve("test").await.unwrap_err();
         assert!(error.to_string().contains("SHA-256 mismatch"), "{error:#}");
-        assert!(!cache.path().join(format!("{expected}.wasm")).exists());
+        assert!(!cache_path.exists());
+        server.abort();
+    }
+
+    #[test]
+    async fn corrupt_checksum_pinned_cache_is_redownloaded() {
+        let payload = b"replacement component".to_vec();
+        let expected = hex::encode(Sha256::digest(&payload));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let acceptor = poem::listener::TcpListener::bind("127.0.0.1:0")
+            .into_acceptor()
+            .await
+            .unwrap();
+        let port = acceptor.local_addr()[0].as_socket_addr().unwrap().port();
+        let endpoint = poem::endpoint::make({
+            let payload = payload.clone();
+            let requests = requests.clone();
+            move |_| {
+                requests.fetch_add(1, Ordering::SeqCst);
+                let payload = payload.clone();
+                async move { poem::Response::builder().body(payload) }
+            }
+        });
+        let server = tokio::spawn(async move {
+            poem::Server::new_with_acceptor(acceptor)
+                .run(endpoint)
+                .await
+                .unwrap();
+        });
+
+        let cache = tempfile::tempdir().unwrap();
+        let cache_path = cache.path().join(format!("{expected}.wasm"));
+        std::fs::write(&cache_path, b"corrupt").unwrap();
+        let resolver = BuiltinArtifactResolver::new(&BuiltinArtifactsConfig {
+            cache_dir: Some(cache.path().to_path_buf()),
+            source_overrides: BTreeMap::from([(
+                "test".to_string(),
+                BuiltinArtifactSource {
+                    url: format!("http://127.0.0.1:{port}/artifact.wasm"),
+                    sha256: Some(expected),
+                },
+            )]),
+        })
+        .unwrap();
+
+        assert_eq!(resolver.resolve("test").await.unwrap().as_slice(), payload);
+        assert_eq!(std::fs::read(cache_path).unwrap(), payload);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
         server.abort();
     }
 }
