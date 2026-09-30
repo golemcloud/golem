@@ -37,8 +37,8 @@ use crate::worker::filesystem_snapshots::{
 };
 use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation::{
-    InvocationMode, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
-    lower_invocation, materialize_streaming_result,
+    InvocationMode, InvokeResult, LoweredInvocation, invocation_uses_streams,
+    invoke_observed_and_traced, lower_invocation, materialize_streaming_result,
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
@@ -63,7 +63,7 @@ use golem_common::model::{
 };
 use golem_common::model::{
     AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
-    invocation_context::{AttributeValue, InvocationContextStack},
+    invocation_context::{AttributeValue, InvocationContextStack, SpanId},
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -73,7 +73,7 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_common::model::agent::structural_format::format_structural_typed;
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::ops::DerefMut;
 use std::panic::AssertUnwindSafe;
@@ -3186,25 +3186,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await);
         }
 
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .begin_call_snapshotting_function();
-        let result =
-            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
-                .await;
-        self.store.data().set_suspended();
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .end_call_snapshotting_function_if_active();
-
-        for span_id in local_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
-        for span_id in inherited_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
+        let result = self
+            .invoke_in_snapshotting_mode(lowered, local_span_ids, inherited_span_ids)
+            .await;
 
         match result {
             Ok(InvokeResult::Succeeded { result, .. }) => {
@@ -3413,6 +3397,35 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
     }
 
+    /// Runs the lowered save hook of the guest in snapshotting mode, marks the store suspended
+    /// after it, and removes the spans of its invocation context.
+    async fn invoke_in_snapshotting_mode(
+        &mut self,
+        lowered: LoweredInvocation,
+        local_span_ids: HashSet<SpanId>,
+        inherited_span_ids: HashSet<SpanId>,
+    ) -> Result<InvokeResult, WorkerExecutorError> {
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_call_snapshotting_function();
+        let result =
+            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
+                .await;
+        self.store.data().set_suspended();
+        self.store
+            .data_mut()
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
+        local_span_ids
+            .iter()
+            .chain(&inherited_span_ids)
+            .for_each(|span_id| {
+                let _ = self.store.data_mut().remove_span(span_id);
+            });
+        result
+    }
+
     /// Runs the save hook of the guest for a periodic snapshot. A hook that gives no snapshot
     /// gives the outcome of the loop.
     async fn snapshot_guest_for_periodic(
@@ -3450,25 +3463,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return Err(CommandOutcome::Continue);
         }
 
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .begin_call_snapshotting_function();
-        let result =
-            invoke_observed_and_traced(lowered, self.store, self.instance, InvocationMode::Replay)
-                .await;
-        self.store.data().set_suspended();
-        self.store
-            .data_mut()
-            .durable_ctx_mut()
-            .end_call_snapshotting_function_if_active();
-
-        for span_id in local_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
-        for span_id in inherited_span_ids {
-            let _ = self.store.data_mut().remove_span(&span_id);
-        }
+        let result = self
+            .invoke_in_snapshotting_mode(lowered, local_span_ids, inherited_span_ids)
+            .await;
 
         if let Some(outcome) = periodic_snapshot_failure_outcome(&result) {
             match &result {
