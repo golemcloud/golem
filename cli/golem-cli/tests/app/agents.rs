@@ -1114,8 +1114,8 @@ async fn test_generated_streaming_bridges_end_to_end() {
         start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let rust_driver = formatdoc! {r#"
         use futures_util::{{stream, StreamExt, TryStreamExt}};
-        use golem_client::invocation_session::{{AgentBinary, AgentStream}};
-        use streaming_rpc_target_client::{{configure, GolemServer, NestedStreamInput, StreamingRpcTarget}};
+        use golem_client::invocation_session::AgentStream;
+        use streaming_rpc_target_client::{{AgentBinary, configure, GolemServer, NestedStreamInput, StreamingRpcTarget}};
 
         fn input<T: Send + 'static>(values: Vec<T>) -> AgentStream<T> {{
             AgentStream::input(stream::iter(values.into_iter().map(Ok::<_, std::io::Error>)))
