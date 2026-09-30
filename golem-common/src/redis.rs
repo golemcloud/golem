@@ -902,6 +902,29 @@ return 1
         )
     }
 
+    pub async fn xtrim_and_delete_if_empty<K>(&self, key: K, min_id: u64) -> RedisResult<u64>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = "redis.call('XTRIM', KEYS[1], 'MINID', ARGV[1]); if redis.call('XLEN', KEYS[1]) == 0 then redis.call('DEL', KEYS[1]) end; return 1";
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            SCRIPT.into(),
+            1.into(),
+            self.prefixed_key(key).into(),
+            min_id.to_string().into(),
+        ];
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<u64>());
+        self.record(start, "EVAL", result)
+    }
+
     pub async fn zadd<R, K, V>(
         &self,
         key: K,
