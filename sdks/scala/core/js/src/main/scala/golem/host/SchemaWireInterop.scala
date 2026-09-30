@@ -28,6 +28,8 @@ import scala.concurrent.{Future, Promise}
 import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 import scala.util.{Failure, Success, Try}
 import golem.FutureInterop
+import zio.blocks.async.*
+import zio.blocks.streams.{JvmType, Stream}
 
 /**
  * Mechanical mapping between the host-agnostic flat carrier
@@ -884,36 +886,63 @@ object SchemaWireInterop {
   }
 
   private def wrappedStreamHandle(raw: JsSchemaValueStream): GuestSchemaValueStreamHandle = {
+    object End
     lazy val endpoint: GuestSchemaValueStream.Wrapped = GuestSchemaValueStream.Wrapped(
       raw,
       () =>
         FutureInterop.fromPromise(JsSchemaValueStreamUnwrap.unwrap(raw)).map { iterable =>
           val lifecycle = new JsSchemaValueIteratorLifecycle(iterable.iterator())
-          AgentStream.fromPull(
-            () =>
-              FutureInterop
-                .fromPromise(lifecycle.iterator.next())
+          val stream    = Stream
+            .unfoldAsync(()) { _ =>
+              val next = FutureInterop.fromPromise(lifecycle.iterator.next())
+              next.foreach { result =>
+                if (!result.done && !lifecycle.acceptItem()) drainJsCapabilityHandles(result.value.valueNodes)
+              }
+              Async
+                .fromFuture(next)
                 .map { result =>
                   if (result.done) {
                     lifecycle.complete()
                     None
                   } else if (lifecycle.acceptItem())
-                    Some(
-                      AgentStreamOwnership.capture(endpoint.activeOwnership) {
-                        valueTreeFromJs(result.value)
-                      }
-                    )
-                  else {
-                    drainJsCapabilityHandles(result.value.valueNodes)
-                    throw new IllegalStateException("schema value stream iterator was closed")
-                  }
+                    Some(result.value -> ())
+                  else throw new IllegalStateException("schema value stream iterator was closed")
                 }
-                .transformWith {
-                  case success @ Success(_) => Future.fromTry(success)
-                  case Failure(error)       =>
-                    AgentStreamOwnership.cleanup(lifecycle.close()).flatMap(_ => Future.failed(error))
+            }(using JvmType.Infer.boxed[JsSchemaValueTree])
+          val reader = stream.startAsync.toFuture
+          AgentStream.fromPull(
+            () =>
+              reader
+                .flatMap(_.read[Any](End).toFuture)
+                .flatMap { value =>
+                  if (value.asInstanceOf[AnyRef] eq End) Future.successful(None)
+                  else {
+                    val inherited = endpoint.activeOwnership
+                    val itemOwner = new AgentStreamOwnership
+                    Try(
+                      AgentStreamOwnership.capture(itemOwner) {
+                        valueTreeFromJs(value.asInstanceOf[JsSchemaValueTree])
+                      }
+                    ) match {
+                      case Failure(error) =>
+                        AgentStreamOwnership.cleanup(itemOwner.close()).flatMap(_ => Future.failed(error))
+                      case Success(decoded) if lifecycle.acceptItem() =>
+                        inherited.fold(itemOwner.handoff())(itemOwner.transferTo)
+                        Future.successful(Some(decoded))
+                      case Success(_) =>
+                        itemOwner
+                          .close()
+                          .flatMap(_ =>
+                            Future.failed(new IllegalStateException("schema value stream iterator was closed"))
+                          )
+                    }
+                  }
                 },
-            () => lifecycle.close().flatMap(_ => endpoint.closeTransferredOwnership())
+            () =>
+              lifecycle
+                .close()
+                .flatMap(_ => reader.flatMap(_.close().toFuture))
+                .flatMap(_ => endpoint.closeTransferredOwnership())
           )
         }
     )

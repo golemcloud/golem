@@ -113,7 +113,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
@@ -419,7 +419,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -586,7 +586,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -693,7 +693,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -1100,7 +1100,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT for Scala components
         if: matrix.chunk.needs-scala
