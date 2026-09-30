@@ -22,14 +22,27 @@ components:
     dependencies:
       tools:
         - golem-it:tool-streaming-effect-provider/matrix-core
+        - golem-it:tool-streaming-effect-provider/matrix-resource
 
 tools:
   matrix-core: {}
+  matrix-resource: {}
 
 agents:
   EffectToolStreamingCaller:
     tools:
       matrix-core: {}
+      matrix-resource: {}
+
+resourceDefaults:
+  local:
+    matrix-capacity:
+      limit:
+        type: Capacity
+        value: 20
+      enforcementAction: reject
+      unit: token
+      units: tokens
 
 environments:
   local:

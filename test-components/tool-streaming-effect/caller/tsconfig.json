@@ -10,11 +10,15 @@
     "paths": {
       "matrix-core-tool-guest-client": [
         "../golem-temp/bridge-sdk/effect/internal/matrix-core-tool-guest-client/matrix-core-tool-guest-client.ts"
+      ],
+      "matrix-resource-tool-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/matrix-resource-tool-guest-client/matrix-resource-tool-guest-client.ts"
       ]
     }
   },
   "include": [
     "src/**/*.ts",
-    "../golem-temp/bridge-sdk/effect/internal/matrix-core-tool-guest-client/*.ts"
+    "../golem-temp/bridge-sdk/effect/internal/matrix-core-tool-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/matrix-resource-tool-guest-client/*.ts"
   ]
 }

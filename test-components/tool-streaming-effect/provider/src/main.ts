@@ -1,6 +1,6 @@
 import type * as AgentCommon from "golem:agent/common@2.0.0"
-import { Effect, Schema } from "effect"
-import { Agents, Tool, WitTypes } from "@golemcloud/effect-golem"
+import { Effect, Schema, Stream } from "effect"
+import { Agents, Bridge, Quota, Tool, WitTypes } from "@golemcloud/effect-golem"
 
 const MatrixRequest = Schema.Struct({
   source: Schema.String,
@@ -27,6 +27,26 @@ const Rejected = Schema.Struct({
   retryable: Schema.Boolean,
 })
 
+const ProviderEvidence = {
+  provider: Schema.String,
+  principal: Schema.String,
+  ownerAgentId: Schema.String,
+}
+
+const MatrixQuotaToken = WitTypes.QuotaToken({ resourceName: "matrix-capacity" })
+
+const QuotaExchange = Schema.Struct({
+  ...ProviderEvidence,
+  reserved: Schema.Boolean,
+  token: MatrixQuotaToken,
+})
+
+const PermissionCard = WitTypes.PermissionCard({ polymorphic: false })
+const PermissionExchange = Schema.Struct({
+  ...ProviderEvidence,
+  card: PermissionCard,
+})
+
 const getSelfMetadata = Agents.getSelfMetadata as Effect.Effect<
   Agents.AgentMetadata,
   Agents.AgentsHostError
@@ -45,6 +65,12 @@ const principalLabel = (principal: unknown): string => {
       return "anonymous"
   }
 }
+
+const evidence = (principal: unknown, ownerAgentId: string) => ({
+  provider: "effect",
+  principal: principalLabel(principal),
+  ownerAgentId,
+})
 
 Tool.toolDefinition("matrix-core", { version: "1.0.0" })
   .command("artifact", (artifact) =>
@@ -85,5 +111,65 @@ Tool.toolDefinition("matrix-core", { version: "1.0.0" })
                 ownerAgentId: metadata.agentId.agentId,
               }
             }),
+    },
+  })
+
+Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
+  .command("quota", (quota) =>
+    quota.command("exchange", (exchange) =>
+      exchange.body((body) => body.positional("token", MatrixQuotaToken).returns(QuotaExchange)),
+    ),
+  )
+  .command("permissions", (permissions) =>
+    permissions.command("exchange", (exchange) =>
+      exchange.body((body) => body.positional("card", PermissionCard).returns(PermissionExchange)),
+    ),
+  )
+  .command("typed", (typed) =>
+    typed.command("transform", (transform) =>
+      transform.body((body) =>
+        body
+          .positional("input", WitTypes.AgentStream(WitTypes.Uint32))
+          .returns(WitTypes.AgentStream(WitTypes.Uint32)),
+      ),
+    ),
+  )
+  .implement({
+    quota: {
+      exchange: ({ token }, context) =>
+        Effect.gen(function* () {
+          const owner = yield* getSelfMetadata.pipe(Effect.orDie)
+          const effectToken = Bridge.quotaTokenFromSchemaValue({
+            tag: "quota-token",
+            handle: token,
+          })
+          const returnedToken = Bridge.quotaTokenToSchemaValue(effectToken)
+          if (returnedToken.tag !== "quota-token") {
+            return yield* Effect.die("quota token bridge returned a non-quota value")
+          }
+          return yield* Quota.withReservation(effectToken, 1n, () =>
+            Effect.succeed({
+              used: 1n,
+              value: {
+                ...evidence(context.principal, owner.agentId.agentId),
+                reserved: true,
+                token: returnedToken.handle,
+              },
+            }),
+          ).pipe(Effect.orDie) as Effect.Effect<typeof QuotaExchange.Type, never>
+        }),
+    },
+    permissions: {
+      exchange: ({ card }, context) =>
+        Effect.gen(function* () {
+          const owner = yield* getSelfMetadata.pipe(Effect.orDie)
+          return {
+            ...evidence(context.principal, owner.agentId.agentId),
+            card,
+          }
+        }),
+    },
+    typed: {
+      transform: ({ input }) => Effect.succeed(input.pipe(Stream.map((value) => value * 3 + 1))),
     },
   })
