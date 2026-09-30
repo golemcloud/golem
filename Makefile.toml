@@ -1656,6 +1656,20 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.build-git-tool]
+dependencies = ["wit", "build-sdk-ts"]
+description = "Builds the built-in Git tool component"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build -p golem --bin golem
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+cd builtin-tools/git
+exec --fail-on-error npm ci
+exec --fail-on-error ${golem} build -P optimized --force-build --yes
+exec --fail-on-error ${golem} exec -P optimized copy
+cd ../..
+'''
+
 [tasks.build-javascript-typescript-tools]
 dependencies = ["wit", "build-sdk-ts"]
 description = "Builds the bundled, Wizer-preinitialized JavaScript and TypeScript tool components"
@@ -1684,7 +1698,7 @@ dependencies = ["build-javascript-typescript-tools"]
 description = "Builds the built-in TypeScript tool component"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools"]
+dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools", "build-git-tool"]
 description = "Builds all built-in tool components"
 
 [tasks.fetch-builtin-artifacts]

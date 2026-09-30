@@ -9,7 +9,7 @@ components:
     templates: ts
     customCommands:
       copy:
-        - command: cp golem-temp/agents/golem_git_tool_release.wasm ../git-tool.wasm
+        - command: cp golem-temp/agents/golem_git_tool.wasm ../git-tool.wasm
 
 environments:
   local:
