@@ -470,6 +470,7 @@ struct BridgeSdkTargetKey {
     target_language: GuestLanguage,
     bridge_mode: BridgeMode,
     output_dir: PathBuf,
+    rust_config: String,
 }
 
 impl BridgeSdkTargetKey {
@@ -486,6 +487,10 @@ impl BridgeSdkTargetKey {
                     .bridge_sdks_source()
                     .join(&target.output_dir)
             }),
+            rust_config: target
+                .rust_config
+                .marker_json()
+                .expect("validated Rust config is serializable"),
         }
     }
 }
@@ -1446,6 +1451,7 @@ bridge:
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::Guest,
             output_dir: base_dir.join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client"),
+            rust_config: Default::default(),
         };
         let custom_claim = OutputDirClaim {
             request_id: BridgeRequestId::Custom,

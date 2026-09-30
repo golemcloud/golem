@@ -722,6 +722,12 @@ pub enum GolemCliSubcommand {
         /// for manual inspection or for vendoring into another project.
         #[clap(long)]
         output_dir: Option<PathBuf>,
+        /// Adds derives to matching final Rust type names (`<regex>=Trait,Trait`).
+        #[clap(long)]
+        derive_rule: Vec<String>,
+        /// Adds a Cargo TOML dependency assignment to generated Rust crates.
+        #[clap(long)]
+        rust_dependency: Vec<String>,
     },
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
@@ -3142,6 +3148,35 @@ mod test {
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
     use test_r::test;
+
+    #[test]
+    fn generate_bridge_parses_repeated_rust_configuration_options() {
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "generate-bridge",
+            "--language",
+            "rust",
+            "--derive-rule",
+            "^Order=serde::Serialize",
+            "--derive-rule",
+            "Result$=Eq,Hash",
+            "--rust-dependency",
+            "serde_with = { version = \"3\", features = [\"macros\"] }",
+            "--rust-dependency",
+            "local = { path = \"../local\", package = \"actual\" }",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::GenerateBridge {
+            derive_rule,
+            rust_dependency,
+            ..
+        } = command.subcommand
+        else {
+            panic!("expected generate-bridge command");
+        };
+        assert_eq!(derive_rule.len(), 2);
+        assert_eq!(rust_dependency.len(), 2);
+    }
 
     #[test]
     fn agent_stream_ping_interval_rejects_zero_duration() {

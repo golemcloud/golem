@@ -8,7 +8,7 @@ use crate::bridge_gen::effect::effect_tool::EffectToolBridgeGenerator;
 use crate::bridge_gen::moonbit::tool::MoonBitToolBridgeGenerator;
 use crate::bridge_gen::moonbit::{MoonBitBridgeGenerator, MoonBitBridgeMode};
 use crate::bridge_gen::rust::tool::RustToolBridgeGenerator;
-use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode};
+use crate::bridge_gen::rust::{RustBridgeGenerator, RustBridgeGeneratorConfig, RustBridgeMode};
 use crate::bridge_gen::scala::tool::ScalaToolBridgeGenerator;
 use crate::bridge_gen::scala::{ScalaBridgeGenerator, ScalaBridgeMode};
 use crate::bridge_gen::typescript::tool::TypeScriptToolBridgeGenerator;
@@ -156,6 +156,10 @@ fn deduplicate_bridge_targets(targets: &mut Vec<BridgeSdkTarget>) {
             target.target_language,
             target.bridge_mode,
             target.output_dir.clone(),
+            target
+                .rust_config
+                .marker_json()
+                .expect("validated Rust config is serializable"),
         ))
     });
 }
@@ -347,6 +351,7 @@ pub(crate) async fn collect_custom_targets_lenient(
                 target_language,
                 bridge_mode: BridgeMode::External,
                 output_dir,
+                rust_config: custom_target.rust_config.clone(),
             });
         }
     }
@@ -424,6 +429,21 @@ async fn collect_manifest_targets_for_components_and_mode(
         if bridge_mode_filter.is_some_and(|bridge_mode_filter| bridge_mode_filter != bridge_mode) {
             continue;
         }
+        if target_language == GuestLanguage::Rust
+            && bridge_mode == BridgeMode::Guest
+            && sdk_targets.agents.is_empty()
+            && sdk_targets
+                .rust
+                .is_some_and(|config| config.is_configured())
+        {
+            bail!(
+                "Rust internal bridge additionalDerives/additionalDependencies require an agent selection"
+            );
+        }
+        let rust_config = RustBridgeGeneratorConfig::from_manifest(
+            sdk_targets.rust,
+            ctx.application().bridge_sdks_source(),
+        )?;
 
         collect_agent_manifest_targets_for_entry(
             ctx,
@@ -435,6 +455,7 @@ async fn collect_manifest_targets_for_components_and_mode(
             &application_component_names,
             ignore_unmatched_matchers,
             skip_missing_sources,
+            &rust_config,
             &mut targets,
         )
         .await?;
@@ -484,6 +505,7 @@ async fn collect_agent_manifest_targets_for_entry(
     application_component_names: &BTreeSet<String>,
     ignore_unmatched_matchers: bool,
     skip_missing_sources: bool,
+    rust_config: &RustBridgeGeneratorConfig,
     targets: &mut Vec<BridgeSdkTarget>,
 ) -> anyhow::Result<()> {
     if matchers.is_empty() {
@@ -537,6 +559,7 @@ async fn collect_agent_manifest_targets_for_entry(
                 target_language,
                 bridge_mode,
                 output_dir,
+                rust_config: rust_config.clone(),
             });
         }
     }
@@ -598,6 +621,7 @@ fn collect_remote_tool_manifest_targets_for_entry(
             output_dir: ctx
                 .application()
                 .tool_bridge_sdk_dir(name.as_str(), target_language),
+            rust_config: Default::default(),
         });
     }
     Ok(())
@@ -831,6 +855,7 @@ fn collect_local_tool_manifest_targets_for_component(
             target_language,
             bridge_mode,
             output_dir,
+            rust_config: Default::default(),
         });
     }
 
@@ -880,6 +905,7 @@ async fn collect_dependency_guest_bridge_targets(
                     target_language,
                     bridge_mode: BridgeMode::Guest,
                     output_dir,
+                    rust_config: Default::default(),
                 });
             }
         }
@@ -913,6 +939,7 @@ async fn collect_dependency_guest_bridge_targets(
                     target_language,
                     bridge_mode: BridgeMode::Guest,
                     output_dir,
+                    rust_config: Default::default(),
                 });
             }
         }
@@ -975,6 +1002,7 @@ async fn collect_dependency_guest_bridge_targets(
                 output_dir: ctx
                     .application()
                     .dependency_tool_bridge_sdk_dir(tool_name.as_str(), target_language),
+                rust_config: Default::default(),
             });
         }
     }
@@ -1088,6 +1116,7 @@ fn environment_tool_bridge_target(
         target_language,
         bridge_mode,
         output_dir,
+        rust_config: Default::default(),
     })
 }
 
@@ -1180,6 +1209,7 @@ async fn collect_custom_targets(
                 target_language,
                 bridge_mode: BridgeMode::External,
                 output_dir,
+                rust_config: custom_target.rust_config.clone(),
             });
         }
     }
@@ -1229,6 +1259,7 @@ async fn gen_bridge_sdk_target(
             kind: target_kind,
             language: &target.target_language,
             bridge_mode: target.bridge_mode,
+            rust_config: target.rust_config.clone(),
         })?
         .with_sources(|| vec![&freshness_source])
         .with_targets(|| vec![&output_dir])
@@ -1250,19 +1281,21 @@ async fn gen_bridge_sdk_target(
                     BridgeSdkTargetSubject::Agent(agent_type) => {
                         let mut generator: Box<dyn BridgeGenerator> = match (target.target_language, target.bridge_mode) {
                         (GuestLanguage::Rust, BridgeMode::External) => {
-                            Box::new(RustBridgeGenerator::new_with_mode(
+                            Box::new(RustBridgeGenerator::new_with_mode_and_config(
                                 agent_type,
                                 &output_dir,
                                 false,
                                 RustBridgeMode::ExternalRest,
+                                target.rust_config.clone(),
                             )?)
                         }
                         (GuestLanguage::Rust, BridgeMode::Guest) => {
-                            Box::new(RustBridgeGenerator::new_with_mode(
+                            Box::new(RustBridgeGenerator::new_with_mode_and_config(
                                 agent_type,
                                 &output_dir,
                                 false,
                                 RustBridgeMode::GuestWasmRpc,
+                                target.rust_config.clone(),
                             )?)
                         }
                         (GuestLanguage::TypeScript, BridgeMode::External) => Box::new(
@@ -1404,6 +1437,9 @@ pub(crate) fn validate_no_output_dir_collisions(targets: &[BridgeSdkTarget]) -> 
 
 pub(crate) fn validate_supported_bridge_targets(targets: &[BridgeSdkTarget]) -> anyhow::Result<()> {
     for target in targets {
+        if target.target_language != GuestLanguage::Rust && target.rust_config.is_configured() {
+            bail!("Rust bridge generator configuration requires a Rust target language");
+        }
         let target_kind = target.subject.kind();
         if let Some(error) = target_kind.support_error(target.bridge_mode, target.target_language) {
             bail!(error);
@@ -1444,6 +1480,58 @@ mod tests {
     use strum::IntoEnumIterator;
     use tempfile::{TempDir, tempdir};
     use test_r::test;
+
+    #[test]
+    async fn configured_rust_internal_bridge_requires_agent_selection() {
+        let (application, _dir) = application_from_manifest(
+            r#"
+app: configured-internal
+environments:
+  local:
+    server: local
+components:
+  app:component:
+    componentWasm: component.wasm
+bridge:
+  rust:
+    internal:
+      tools: "*"
+      additionalDerives: [".*=Clone"]
+"#,
+        );
+        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+        let build_config = crate::model::app::BuildConfig::default();
+        let ctx = BuildContext::new(&app_ctx, &build_config);
+
+        let error = collect_manifest_targets(&ctx, None).await.unwrap_err();
+        assert!(
+            error.to_string().contains("require an agent selection"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn otherwise_identical_targets_with_different_rust_configs_conflict() {
+        let dir = tempdir().unwrap();
+        let target = bridge_sdk_target(
+            "ConflictAgent",
+            GuestLanguage::Rust,
+            dir.path().join("bridge"),
+        );
+        let mut configured = target.clone();
+        configured.rust_config = RustBridgeGeneratorConfig::from_cli(
+            &[".*=Eq".into()],
+            &[],
+            std::path::Path::new("/work"),
+        )
+        .unwrap();
+        let mut targets = vec![target, configured];
+
+        deduplicate_bridge_targets(&mut targets);
+
+        assert_eq!(targets.len(), 2);
+        assert!(validate_no_output_dir_collisions(&targets).is_err());
+    }
 
     #[test]
     async fn mcp_manifest_targets_cover_all_languages_and_preserve_native_precedence() {
@@ -1489,6 +1577,7 @@ tools:
             output_dir: ctx
                 .application()
                 .tool_bridge_sdk_dir("echo", GuestLanguage::Rust),
+            rust_config: Default::default(),
         }];
         for language in GuestLanguage::iter() {
             collect_tool_manifest_targets_for_entry(
@@ -1987,6 +2076,7 @@ components:
                 target_language: GuestLanguage::Rust,
                 bridge_mode: BridgeMode::Guest,
                 output_dir,
+                rust_config: Default::default(),
             },
         ];
 
@@ -2065,6 +2155,7 @@ components:
             agent_type_names: HashSet::new(),
             target_language: None,
             output_dir: None,
+            rust_config: Default::default(),
         };
 
         let error = plan_repl_bridge_generation_lenient(&ctx, &target)
@@ -2095,10 +2186,28 @@ components:
                     .unwrap()
                     .path()
                     .join("bridge/my-tool-guest-client"),
+                rust_config: Default::default(),
             };
 
             validate_supported_bridge_targets(&[agent_target, tool_target]).unwrap();
         }
+    }
+
+    #[test]
+    fn rust_generator_configuration_is_rejected_for_non_rust_targets() {
+        let mut target = bridge_sdk_target(
+            "AlphaAgent",
+            GuestLanguage::TypeScript,
+            tempdir().unwrap().path().join("bridge/alpha-client"),
+        );
+        target.rust_config = RustBridgeGeneratorConfig::from_cli(
+            &[".*=serde::Serialize".into()],
+            &[],
+            std::path::Path::new("/work"),
+        )
+        .unwrap();
+
+        assert!(validate_supported_bridge_targets(&[target]).is_err());
     }
 
     #[test]
@@ -2129,6 +2238,7 @@ components:
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::External,
             output_dir: tempdir().unwrap().path().join("bridge/my-tool-client"),
+            rust_config: Default::default(),
         };
 
         assert_eq!(
@@ -2444,6 +2554,7 @@ components:
             target_language,
             bridge_mode,
             output_dir: output_dir.into(),
+            rust_config: Default::default(),
         }
     }
 

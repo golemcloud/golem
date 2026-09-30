@@ -329,6 +329,7 @@ pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub kind: &'static str,
     pub language: &'a GuestLanguage,
     pub bridge_mode: BridgeMode,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
 }
 
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
@@ -346,12 +347,13 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
         Ok(HashFromString(format!(
-            "source={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}\ngeneratorVersion=1",
+            "source={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}\nrustConfig={}\ngeneratorVersion=2",
             serde_json::to_string(self.source)?,
             self.target_name,
             self.kind,
             self.language.id(),
             self.bridge_mode.id(),
+            self.rust_config.marker_json()?,
         )))
     }
 }
@@ -571,6 +573,7 @@ mod tests {
             kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::External,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();
@@ -581,6 +584,7 @@ mod tests {
             kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::Guest,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();
@@ -596,6 +600,41 @@ mod tests {
         assert_ne!(external_source, guest_source);
         assert!(external_source.contains("bridgeMode=external"));
         assert!(guest_source.contains("bridgeMode=internal"));
+    }
+
+    #[test]
+    fn bridge_sdk_marker_hash_source_includes_rust_generator_configuration() {
+        let source = BridgeSdkTargetSource::local(ComponentName("app:producer".to_string()));
+        let language = GuestLanguage::Rust;
+        let marker = |config| {
+            GenerateBridgeSdkMarkerHash {
+                output_dir: Path::new("bridge/alpha"),
+                source: &source,
+                target_name: "AlphaAgent",
+                kind: "agent",
+                language: &language,
+                bridge_mode: BridgeMode::External,
+                rust_config: config,
+            }
+            .source()
+            .unwrap()
+        };
+        let default = marker(Default::default());
+        let configured = marker(
+            crate::bridge_gen::rust::RustBridgeGeneratorConfig::from_cli(
+                &[".*=Eq".into()],
+                &["anyhow = \"1\"".into()],
+                Path::new("/work"),
+            )
+            .unwrap(),
+        );
+        let TaskResultMarkerHashSourceKind::HashFromString(default) = default else {
+            panic!("expected bridge marker to hash from string");
+        };
+        let TaskResultMarkerHashSourceKind::HashFromString(configured) = configured else {
+            panic!("expected bridge marker to hash from string");
+        };
+        assert_ne!(default, configured);
     }
 
     #[test]
@@ -617,6 +656,7 @@ mod tests {
                 kind: "agent",
                 language: &language,
                 bridge_mode,
+                rust_config: Default::default(),
             },
         )
         .unwrap();
@@ -629,6 +669,7 @@ mod tests {
                 kind: "agent",
                 language: &language,
                 bridge_mode,
+                rust_config: Default::default(),
             },
         )
         .unwrap();
@@ -790,6 +831,7 @@ mod tests {
                     kind: "tool",
                     language: &language,
                     bridge_mode: BridgeMode::Guest,
+                    rust_config: Default::default(),
                 },
             )
             .unwrap()
@@ -822,6 +864,7 @@ mod tests {
             kind: "tool",
             language: &language,
             bridge_mode: BridgeMode::Guest,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();

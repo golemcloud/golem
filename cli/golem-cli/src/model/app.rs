@@ -380,6 +380,7 @@ pub struct BridgeSdkTarget {
     pub target_language: GuestLanguage,
     pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -509,6 +510,7 @@ pub struct CustomBridgeSdkTarget {
     pub agent_type_names: HashSet<AgentTypeName>,
     pub target_language: Option<GuestLanguage>,
     pub output_dir: Option<PathBuf>,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
@@ -1548,13 +1550,13 @@ impl Application {
                 .bridge_sdks
                 .value
                 .for_language(language)
-                .and_then(|sdk| sdk.external.as_ref())
+                .and_then(|sdk| sdk.external())
                 .and_then(|sdk| sdk.output_dir.as_ref()),
             BridgeMode::Guest => self
                 .bridge_sdks
                 .value
                 .for_language(language)
-                .and_then(|sdk| sdk.internal.as_ref())
+                .and_then(|sdk| sdk.internal())
                 .and_then(|sdk| sdk.output_dir.as_ref()),
         };
 
@@ -1602,7 +1604,7 @@ impl Application {
             .bridge_sdks
             .value
             .for_language(language)
-            .and_then(|sdk| sdk.internal.as_ref())
+            .and_then(|sdk| sdk.internal())
             .and_then(|sdk| sdk.output_dir.as_ref());
 
         match output_dir {

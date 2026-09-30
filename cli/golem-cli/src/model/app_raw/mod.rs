@@ -1836,7 +1836,7 @@ pub struct BridgeSdks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rust: Option<BridgeSdkLanguageTargets>,
+    pub rust: Option<RustBridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scala: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1844,35 +1844,37 @@ pub struct BridgeSdks {
 }
 
 impl BridgeSdks {
-    pub fn for_language(&self, language: GuestLanguage) -> Option<&BridgeSdkLanguageTargets> {
+    pub fn for_language(&self, language: GuestLanguage) -> Option<BridgeSdkLanguageTargetsRef<'_>> {
         match language {
-            GuestLanguage::Rust => self.rust.as_ref(),
-            GuestLanguage::TypeScript => self.ts.as_ref(),
-            GuestLanguage::Effect => self.effect.as_ref(),
-            GuestLanguage::Scala => self.scala.as_ref(),
-            GuestLanguage::MoonBit => self.moonbit.as_ref(),
+            GuestLanguage::Rust => self.rust.as_ref().map(BridgeSdkLanguageTargetsRef::Rust),
+            GuestLanguage::TypeScript => self.ts.as_ref().map(BridgeSdkLanguageTargetsRef::Other),
+            GuestLanguage::Effect => self.effect.as_ref().map(BridgeSdkLanguageTargetsRef::Other),
+            GuestLanguage::Scala => self.scala.as_ref().map(BridgeSdkLanguageTargetsRef::Other),
+            GuestLanguage::MoonBit => self
+                .moonbit
+                .as_ref()
+                .map(BridgeSdkLanguageTargetsRef::Other),
         }
     }
 
     pub fn for_all_languages(
         &self,
-    ) -> impl Iterator<Item = (GuestLanguage, Option<&BridgeSdkLanguageTargets>)> {
+    ) -> impl Iterator<Item = (GuestLanguage, Option<BridgeSdkLanguageTargetsRef<'_>>)> {
         GuestLanguage::iter().map(|lang| (lang, self.for_language(lang)))
     }
 
     pub fn for_all_used_languages(
         &self,
-    ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
+    ) -> impl Iterator<Item = (GuestLanguage, BridgeSdkLanguageTargetsRef<'_>)> {
         self.for_all_languages().filter_map(|(lang, targets)| {
             targets.and_then(|targets| {
                 (targets
-                    .external
-                    .as_ref()
+                    .external()
                     .is_some_and(|external| !external.agents.is_empty())
                     || targets
-                        .internal
-                        .as_ref()
-                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty()))
+                        .internal()
+                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty())
+                    || targets.has_rust_configuration())
                 .then_some((lang, targets))
             })
         })
@@ -1884,7 +1886,7 @@ impl BridgeSdks {
         let mut result = Vec::new();
         for (language, targets) in self.for_all_languages() {
             if let Some(targets) = targets {
-                if let Some(external) = &targets.external
+                if let Some(external) = targets.external()
                     && !external.agents.is_empty()
                 {
                     result.push((
@@ -1894,11 +1896,17 @@ impl BridgeSdks {
                             agents: &external.agents,
                             tools: None,
                             output_dir: external.output_dir.as_ref(),
+                            rust: targets.rust_external().map(Into::into),
                         },
                     ));
                 }
-                if let Some(guest) = &targets.internal
-                    && (!guest.agents.is_empty() || !guest.tools.is_empty())
+                if let Some(guest) = targets.internal()
+                    && (!guest.agents.is_empty()
+                        || !guest.tools.is_empty()
+                        || targets.rust_internal().is_some_and(|rust| {
+                            !rust.additional_derives.is_empty()
+                                || !rust.additional_dependencies.is_empty()
+                        }))
                 {
                     result.push((
                         language,
@@ -1907,12 +1915,62 @@ impl BridgeSdks {
                             agents: &guest.agents,
                             tools: Some(&guest.tools),
                             output_dir: guest.output_dir.as_ref(),
+                            rust: targets.rust_internal().map(Into::into),
                         },
                     ));
                 }
             }
         }
         result
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum BridgeSdkLanguageTargetsRef<'a> {
+    Other(&'a BridgeSdkLanguageTargets),
+    Rust(&'a RustBridgeSdkLanguageTargets),
+}
+
+impl<'a> BridgeSdkLanguageTargetsRef<'a> {
+    pub fn external(&self) -> Option<&'a BridgeSdkExternalTargets> {
+        match self {
+            Self::Other(targets) => targets.external.as_ref(),
+            Self::Rust(targets) => targets.external.as_ref().map(|targets| &targets.common),
+        }
+    }
+
+    pub fn internal(&self) -> Option<&'a BridgeSdkInternalTargets> {
+        match self {
+            Self::Other(targets) => targets.internal.as_ref(),
+            Self::Rust(targets) => targets.internal.as_ref().map(|targets| &targets.common),
+        }
+    }
+
+    fn rust_external(&self) -> Option<&'a RustBridgeSdkExternalTargets> {
+        match self {
+            Self::Rust(targets) => targets.external.as_ref(),
+            Self::Other(_) => None,
+        }
+    }
+
+    fn rust_internal(&self) -> Option<&'a RustBridgeSdkInternalTargets> {
+        match self {
+            Self::Rust(targets) => targets.internal.as_ref(),
+            Self::Other(_) => None,
+        }
+    }
+
+    fn has_rust_configuration(&self) -> bool {
+        match self {
+            Self::Other(_) => false,
+            Self::Rust(targets) => {
+                targets.external.as_ref().is_some_and(|v| {
+                    !v.additional_derives.is_empty() || !v.additional_dependencies.is_empty()
+                }) || targets.internal.as_ref().is_some_and(|v| {
+                    !v.additional_derives.is_empty() || !v.additional_dependencies.is_empty()
+                })
+            }
+        }
     }
 }
 
@@ -1923,6 +1981,15 @@ pub struct BridgeSdkLanguageTargets {
     pub external: Option<BridgeSdkExternalTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub internal: Option<BridgeSdkInternalTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<RustBridgeSdkExternalTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal: Option<RustBridgeSdkInternalTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1945,11 +2012,105 @@ pub struct BridgeSdkInternalTargets {
     pub output_dir: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkExternalTargets {
+    #[serde(flatten)]
+    pub common: BridgeSdkExternalTargets,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_derives: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_dependencies: BTreeMap<String, RustBridgeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkInternalTargets {
+    #[serde(flatten)]
+    pub common: BridgeSdkInternalTargets,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_derives: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_dependencies: BTreeMap<String, RustBridgeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RustBridgeDependency {
+    Version(String),
+    Detailed(RustBridgeDependencyDetails),
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeDependencyDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_features: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BridgeSdkInternalTargetsRef<'a> {
     pub agents: &'a LenientTokenList,
     pub tools: Option<&'a LenientTokenList>,
     pub output_dir: Option<&'a String>,
+    pub rust: Option<RustBridgeTargetsRef<'a>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum RustBridgeTargetsRef<'a> {
+    External(&'a RustBridgeSdkExternalTargets),
+    Internal(&'a RustBridgeSdkInternalTargets),
+}
+
+impl<'a> From<&'a RustBridgeSdkExternalTargets> for RustBridgeTargetsRef<'a> {
+    fn from(value: &'a RustBridgeSdkExternalTargets) -> Self {
+        Self::External(value)
+    }
+}
+
+impl<'a> From<&'a RustBridgeSdkInternalTargets> for RustBridgeTargetsRef<'a> {
+    fn from(value: &'a RustBridgeSdkInternalTargets) -> Self {
+        Self::Internal(value)
+    }
+}
+
+impl RustBridgeTargetsRef<'_> {
+    pub fn additional_derives(&self) -> &[String] {
+        match self {
+            Self::External(v) => &v.additional_derives,
+            Self::Internal(v) => &v.additional_derives,
+        }
+    }
+    pub fn additional_dependencies(&self) -> &BTreeMap<String, RustBridgeDependency> {
+        match self {
+            Self::External(v) => &v.additional_dependencies,
+            Self::Internal(v) => &v.additional_dependencies,
+        }
+    }
+
+    pub fn is_configured(&self) -> bool {
+        !self.additional_derives().is_empty() || !self.additional_dependencies().is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -18,6 +18,19 @@ bridge:
       #   - MyAgent
       #   - my-app:billing
       outputDir: ./bridge-sdk/rust   # Optional custom output directory
+      additionalDerives:
+        - '^Order.*=serde::Serialize,serde::Deserialize'
+        - 'Response$=my_derives::ApiType'
+      additionalDependencies:
+        anyhow: "1"                 # Version shorthand
+        my_derives:
+          path: ./crates/my-derives # Relative to this golem.yaml
+          package: my-derive-macros # Optional Cargo package rename
+          features: [api]
+          defaultFeatures: false
+        remote_derive:
+          git: https://github.com/example/derive-macros
+          rev: 0123456789abcdef      # Exactly one of branch/tag/rev
 ```
 
 The `agents` field accepts `"*"` (all agents), or a list of agent type names or component names (`namespace:name`).
@@ -33,6 +46,18 @@ golem build --yes
 This produces a Rust crate per agent type (e.g., `my-agent-client/`) in the configured output directory (or `golem-temp/bridge-sdk/rust/` by default). Re-running `golem build` after agent changes keeps the generated client in sync automatically.
 
 Avoid invoking `golem generate-bridge` manually — it exists as a low-level escape hatch, but the manifest-driven flow above is the supported way to keep bridges configured, reproducible, and up to date.
+
+The equivalent low-level CLI options are repeatable and use Cargo TOML syntax for dependencies:
+
+```shell
+golem generate-bridge --language rust \
+  --derive-rule '^Order.*=serde::Serialize,serde::Deserialize' \
+  --derive-rule 'Response$=my_derives::ApiType' \
+  --rust-dependency 'anyhow = "1"' \
+  --rust-dependency 'my_derives = { package = "my-derive-macros", path = "./crates/my-derives", features = ["api"], default-features = false }'
+```
+
+CLI dependency paths are relative to the invocation directory. Manifest dependency paths are relative to the directory containing the manifest declaration. These settings apply only to generated Rust agent bridges, not tool bridges.
 
 ## Step 3: Use the Generated Client
 

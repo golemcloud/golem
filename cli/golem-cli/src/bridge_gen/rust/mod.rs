@@ -55,6 +55,7 @@ use syn::Index;
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 use tracing::debug;
 
+pub mod config;
 #[allow(clippy::module_inception)]
 mod rust;
 mod schema_graph;
@@ -62,6 +63,7 @@ pub mod tool;
 mod type_name;
 mod wire;
 
+pub use config::RustBridgeGeneratorConfig;
 pub use type_name::RustTypeName;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,6 +203,7 @@ pub struct RustBridgeGenerator {
     testing: bool,
     mode: RustBridgeMode,
     same_language: bool,
+    config: RustBridgeGeneratorConfig,
 
     type_naming: TypeNaming<RustTypeName>,
     /// Distinct text-language restriction sets discovered while generating, each
@@ -256,12 +259,23 @@ impl RustBridgeGenerator {
         testing: bool,
         mode: RustBridgeMode,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_config(agent_type, target_path, testing, mode, Default::default())
+    }
+
+    pub fn new_with_mode_and_config(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: RustBridgeMode,
+        config: RustBridgeGeneratorConfig,
+    ) -> anyhow::Result<Self> {
         Self::new_with_mode_and_extra_reserved_names(
             agent_type,
             target_path,
             testing,
             mode,
             std::iter::empty::<String>(),
+            config,
         )
     }
 
@@ -277,6 +291,7 @@ impl RustBridgeGenerator {
             testing,
             RustBridgeMode::GuestWasmRpc,
             extra,
+            Default::default(),
         )
     }
 
@@ -286,6 +301,7 @@ impl RustBridgeGenerator {
         testing: bool,
         mode: RustBridgeMode,
         extra: impl IntoIterator<Item = String>,
+        config: RustBridgeGeneratorConfig,
     ) -> anyhow::Result<Self> {
         validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
@@ -312,6 +328,7 @@ impl RustBridgeGenerator {
             testing,
             mode,
             same_language,
+            config,
             type_naming,
             generated_language_enums: Vec::new(),
             generated_mimetypes_enums: Vec::new(),
@@ -361,6 +378,9 @@ impl RustBridgeGenerator {
             doc["dependencies"]["serde_json"] = dep("1", &[]);
         }
         doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
+        for (name, dependency) in self.config.dependencies() {
+            doc["dependencies"][name] = config::dependency_item(dependency);
+        }
 
         std::fs::write(path, doc.to_string())
             .map_err(|e| anyhow!("Failed to write Cargo.toml file: {e}"))?;
@@ -2105,15 +2125,11 @@ impl RustBridgeGenerator {
                             || find_host_managed_type(&self.agent_type.schema, payload)?.is_some(),
                     )
                 })?;
-            let derive = if contains_host_managed
-                || (streaming && self.mode == RustBridgeMode::GuestWasmRpc)
-            {
-                quote! {}
-            } else if streaming {
-                quote! { #[derive(Debug)] }
-            } else {
-                quote! { #[derive(Debug, Clone)] }
-            };
+            let derive = self.derive_attribute(
+                &name,
+                contains_host_managed || (streaming && self.mode == RustBridgeMode::GuestWasmRpc),
+                streaming,
+            );
             let ordinary_codecs = if streaming && self.mode == RustBridgeMode::ExternalRest {
                 quote! {}
             } else {
@@ -2286,14 +2302,11 @@ impl RustBridgeGenerator {
         let contains_host_managed = self.mode == RustBridgeMode::GuestWasmRpc
             && find_host_managed_type(&self.agent_type.schema, resolved)?.is_some();
         let streaming = contains_stream_in_graph(&self.agent_type.schema, resolved);
-        let derive =
-            if contains_host_managed || (streaming && self.mode == RustBridgeMode::GuestWasmRpc) {
-                quote! {}
-            } else if streaming {
-                quote! { #[derive(Debug)] }
-            } else {
-                quote! { #[derive(Debug, Clone)] }
-            };
+        let derive = self.derive_attribute(
+            &name.to_string(),
+            contains_host_managed || (streaming && self.mode == RustBridgeMode::GuestWasmRpc),
+            streaming,
+        );
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let mut emitted = Vec::new();
@@ -2379,6 +2392,35 @@ impl RustBridgeGenerator {
                 let ty = self.type_reference(other, true)?;
                 Ok(quote! { pub type #name = #ty; })
             }
+        }
+    }
+
+    fn derive_attribute(
+        &self,
+        type_name: &str,
+        omit_builtins: bool,
+        debug_only: bool,
+    ) -> TokenStream {
+        let builtins: &[&str] = if omit_builtins {
+            &[]
+        } else if debug_only {
+            &["Debug"]
+        } else {
+            &["Debug", "Clone"]
+        };
+        let additional = self.config.derives_for(
+            type_name,
+            builtins,
+            !omit_builtins,
+            !omit_builtins && !debug_only,
+        );
+        if builtins.is_empty() && additional.is_empty() {
+            quote! {}
+        } else {
+            let builtins = builtins
+                .iter()
+                .map(|path| syn::parse_str::<syn::Path>(path).expect("built-in derive path"));
+            quote! { #[derive(#(#builtins,)* #(#additional),*)] }
         }
     }
 
@@ -3642,8 +3684,9 @@ impl RustBridgeGenerator {
                 from_cases.push(quote! { #code => Some(Self::#case_ident) });
                 to_cases.push(quote! { Self::#case_ident => #code.to_string() });
             }
+            let derive = self.derive_attribute(name, false, false);
             enums.push(quote! {
-                #[derive(Debug, Clone)]
+                #derive
                 pub enum #ident {
                     #(#cases),*
                 }
@@ -3699,8 +3742,9 @@ impl RustBridgeGenerator {
                 from_cases.push(quote! { #mime => Some(Self::#case_ident) });
                 to_cases.push(quote! { Self::#case_ident => #mime.to_string() });
             }
+            let derive = self.derive_attribute(name, false, false);
             enums.push(quote! {
-                #[derive(Debug, Clone)]
+                #derive
                 pub enum #ident {
                     #(#cases),*
                 }
