@@ -285,22 +285,32 @@ fn plan_periodic_record<Copy>(
     }
 }
 
-/// What a periodic snapshot writes: the name of its record, the name whose confirmation record
-/// follows the record at once, and the upload that starts after the record commits.
-struct PeriodicPlan {
-    name: Option<FilesystemSnapshotName>,
-    confirmed_at_once: Option<FilesystemSnapshotName>,
-    initial_files: Option<TreeMark>,
-    upload: Option<PendingUpload>,
+impl<Copy> PeriodicRecord<Copy> {
+    /// The same record with the copy that `with` makes of its copy.
+    fn with_copy<Other>(self, with: impl FnOnce(Copy) -> Other) -> PeriodicRecord<Other> {
+        match self {
+            Self::Skipped => PeriodicRecord::Skipped,
+            Self::WithoutName => PeriodicRecord::WithoutName,
+            Self::InitialFiles { mark } => PeriodicRecord::InitialFiles { mark },
+            Self::Own { copy, parent } => PeriodicRecord::Own {
+                copy: with(copy),
+                parent,
+            },
+            Self::Reused(name) => PeriodicRecord::Reused(name),
+        }
+    }
 }
 
+/// What a periodic snapshot writes: the record that [`plan_periodic_record`] decides, with the
+/// upload that starts after the record commits. It is never [`PeriodicRecord::Skipped`].
+struct PeriodicPlan(PeriodicRecord<PendingUpload>);
+
 /// The upload of a periodic snapshot whose record is not written yet. It is consumed once, by
-/// [`PeriodicPlan::submit`] or by [`PeriodicPlan::abandon`].
+/// [`PeriodicPlan::written`] or by [`PeriodicPlan::abandon`].
 struct PendingUpload {
     admission: Admission,
     tree: FilesystemCapture,
     mark: TreeMark,
-    parent: Option<(FilesystemSnapshotName, StoreChangeDetection)>,
 }
 
 impl PeriodicPlan {
@@ -315,80 +325,67 @@ impl PeriodicPlan {
             CaptureOutcome,
         )>,
     ) -> Option<Self> {
-        let without_name = Self {
-            name: None,
-            confirmed_at_once: None,
-            initial_files: None,
-            upload: None,
-        };
         let Some((admission, since, outcome)) = capture else {
-            return Some(without_name);
+            return Some(Self(PeriodicRecord::WithoutName));
         };
         match plan_periodic_record(CaptureFinding::of(outcome), since.as_ref()) {
             PeriodicRecord::Skipped => None,
-            PeriodicRecord::WithoutName => Some(without_name),
-            PeriodicRecord::InitialFiles { mark } => Some(Self {
-                initial_files: Some(mark),
-                ..without_name
-            }),
-            PeriodicRecord::Reused(name) => Some(Self {
-                name: Some(name.clone()),
-                confirmed_at_once: Some(name),
-                initial_files: None,
-                upload: None,
-            }),
-            PeriodicRecord::Own {
-                copy: (tree, mark),
-                parent,
-            } => Some(Self {
-                name: Some(admission.name().clone()),
-                confirmed_at_once: None,
-                initial_files: None,
-                upload: Some(PendingUpload {
-                    admission,
-                    tree,
-                    mark,
-                    parent,
-                }),
-            }),
+            record => Some(Self(record.with_copy(|(tree, mark)| PendingUpload {
+                admission,
+                tree,
+                mark,
+            }))),
         }
     }
 
     /// The filesystem snapshot name of the record.
     fn name(&self) -> Option<FilesystemSnapshotName> {
-        self.name.clone()
+        match &self.0 {
+            PeriodicRecord::Own { copy, .. } => Some(copy.admission.name().clone()),
+            PeriodicRecord::Reused(name) => Some(name.clone()),
+            PeriodicRecord::Skipped
+            | PeriodicRecord::WithoutName
+            | PeriodicRecord::InitialFiles { .. } => None,
+        }
     }
 
     /// The name whose confirmation record follows the record at once, in one append.
     fn confirmed_at_once(&self) -> Option<FilesystemSnapshotName> {
-        self.confirmed_at_once.clone()
+        match &self.0 {
+            PeriodicRecord::Reused(name) => Some(name.clone()),
+            PeriodicRecord::Skipped
+            | PeriodicRecord::WithoutName
+            | PeriodicRecord::InitialFiles { .. }
+            | PeriodicRecord::Own { .. } => None,
+        }
     }
 
-    /// The mark of the tree of initial files of the record, which the slot keeps once the record
-    /// is written.
-    fn initial_files(&self) -> Option<TreeMark> {
-        self.initial_files
-    }
-
-    /// Starts the upload of a written record. `confirm` gives the confirmation of the capture
-    /// with the mark.
-    fn submit(self, confirm: impl FnOnce(TreeMark) -> Confirm) {
-        if let Some(PendingUpload {
-            admission,
-            tree,
-            mark,
-            parent,
-        }) = self.upload
-        {
-            admission.submit(tree.into(), parent, confirm(mark));
+    /// Finishes a written record on `host`: a record of a tree of initial files gives its mark to
+    /// the slot, and a record with the name of the admission starts its upload.
+    fn written<Host: PeriodicSnapshotHost>(self, host: &Host) {
+        match self.0 {
+            PeriodicRecord::InitialFiles { mark } => host.initial_files_written(mark),
+            PeriodicRecord::Own {
+                copy:
+                    PendingUpload {
+                        admission,
+                        tree,
+                        mark,
+                    },
+                parent,
+            } => admission.submit(tree.into(), parent, host.confirm(mark)),
+            PeriodicRecord::Skipped | PeriodicRecord::WithoutName | PeriodicRecord::Reused(_) => {}
         }
     }
 
     /// Drops the admission and discards the capture of a record that was not written.
     async fn abandon(self) {
-        if let Some(PendingUpload {
-            admission, tree, ..
-        }) = self.upload
+        if let PeriodicRecord::Own {
+            copy: PendingUpload {
+                admission, tree, ..
+            },
+            ..
+        } = self.0
         {
             drop(admission);
             if let Err(error) = tree.discard().await {
@@ -507,10 +504,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     };
     match written {
         Ok(()) => {
-            if let Some(mark) = plan.initial_files() {
-                host.initial_files_written(mark);
-            }
-            plan.submit(|mark| host.confirm(mark));
+            plan.written(host);
             PeriodicResult::Continue
         }
         Err(failure) => {
