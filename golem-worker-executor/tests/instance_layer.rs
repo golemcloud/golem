@@ -192,7 +192,7 @@ impl Drop for CompletionSignal {
     }
 }
 
-async fn owner_component_metadata(
+pub(crate) async fn owner_component_metadata(
     active_agent: &ActiveAgent<TestWorkerCtx>,
     component_id: ComponentId,
     component_revision: ComponentRevision,
@@ -310,7 +310,7 @@ async fn invoke_entity_method(
     }
 }
 
-fn activation(
+pub(crate) fn activation(
     executable: ExecutableTarget,
     component_name: &str,
     agent_type_name: AgentTypeName,
@@ -435,7 +435,7 @@ fn activation_with_policy(
 /// the parent lane position, installs a live entity scope, starts a fresh entity Store, and waits
 /// for its result. Tests retain the invocation closure so assertions about Store-local host state
 /// remain visible at the call site.
-async fn run_synchronous_entity_invocation<R, F>(
+pub(crate) async fn run_synchronous_entity_invocation<R, F>(
     active_agent: &ActiveAgent<TestWorkerCtx>,
     owner_metadata: Arc<golem_service_base::model::component::Component>,
     owner_id: &OwnedAgentId,

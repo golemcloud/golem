@@ -1,4 +1,7 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
+use environment_probe_tool_guest_client::{
+    EnvironmentProbeClient, EnvironmentProbeEvidence as ToolEnvironmentProbeEvidence,
+};
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
     AgentStream, Config, InputStream, Principal, RpcError, Secret, ToolError, ToolInvocation,
@@ -182,6 +185,65 @@ pub struct SecretPolicyObservation {
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
+}
+
+#[derive(ConfigSchema)]
+pub struct EnvironmentProbeCallerConfig {
+    pub marker: String,
+    #[config_schema(secret)]
+    pub secret: Secret<String>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct EnvironmentProbeEvidence {
+    pub marker: String,
+    pub secret: String,
+    pub reserved: bool,
+}
+
+#[agent_definition]
+pub trait EnvironmentProbeCaller {
+    fn new(name: String, #[agent_config] config: Config<EnvironmentProbeCallerConfig>) -> Self;
+
+    async fn observe_owner_environment(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence;
+}
+
+struct EnvironmentProbeCallerImpl;
+
+#[agent_implementation]
+impl EnvironmentProbeCaller for EnvironmentProbeCallerImpl {
+    fn new(
+        _name: String,
+        #[agent_config] _config: Config<EnvironmentProbeCallerConfig>,
+    ) -> Self {
+        Self
+    }
+
+    async fn observe_owner_environment(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence {
+        let ToolEnvironmentProbeEvidence {
+            marker,
+            secret,
+            reserved,
+        } = EnvironmentProbeClient::new()
+            .observe(expected_use, amount, commit_amount)
+            .await
+            .expect("environment probe tool invocation succeeds");
+        EnvironmentProbeEvidence {
+            marker,
+            secret,
+            reserved,
+        }
+    }
 }
 
 #[agent_definition]

@@ -51,6 +51,7 @@ pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
 pub mod oplog_sweep;
+pub mod owner_tool_isolation;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
@@ -109,6 +110,7 @@ tag_suite!(rdbms, group1);
 
 tag_suite!(hot_update, group2);
 tag_suite!(instance_layer, group2);
+tag_suite!(owner_tool_isolation, group2);
 tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);

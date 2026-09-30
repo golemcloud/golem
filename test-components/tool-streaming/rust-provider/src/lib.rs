@@ -1,7 +1,9 @@
 use golem_rust::agentic::{
-    AgentStream, InputStream, OutputStream, Principal, pump_tool_stdin, spawn_local,
+    AgentStream, InputStream, OutputStream, Principal, Secret, pump_tool_stdin, spawn_local,
 };
+use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
+use golem_rust::quota::QuotaToken;
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
@@ -10,6 +12,64 @@ use golem_rust::{
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
 const MARKER: &[u8] = b"marker:";
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct EnvironmentProbeEvidence {
+    pub marker: String,
+    pub secret: String,
+    pub reserved: bool,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait EnvironmentProbe {
+    async fn observe(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence;
+}
+
+struct EnvironmentProbeImpl;
+
+fn owner_config_string(key: &str) -> Result<String, String> {
+    let graph = golem_rust::schema::try_into_schema_graph::<String>()
+        .map_err(|error| error.to_string())?;
+    let expected = encode_schema_graph(&graph).map_err(|error| error.to_string())?;
+    let value = agent_host::get_config_value(&[key.to_string()], &expected)
+        .map_err(|error| format!("{error:?}"))?;
+    let value = decode_schema_value(value).map_err(|error| error.to_string())?;
+    String::from_value(&value).map_err(|error| error.to_string())
+}
+
+#[tool_implementation]
+impl EnvironmentProbe for EnvironmentProbeImpl {
+    async fn observe(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence {
+        let marker = owner_config_string("marker").expect("caller owner marker is configured");
+        let secret = Secret::<String>::new(vec!["secret".to_string()])
+            .get()
+            .expect("caller environment secret is readable and revealable");
+        let token = QuotaToken::new("owner-capacity", expected_use);
+        let reserved = match token.reserve(amount) {
+            Ok(reservation) => {
+                reservation.commit(commit_amount);
+                true
+            }
+            Err(_) => false,
+        };
+
+        EnvironmentProbeEvidence {
+            marker,
+            secret,
+            reserved,
+        }
+    }
+}
 
 #[tool_definition(version = "1.0.0")]
 pub trait MiddlewareProbe {
