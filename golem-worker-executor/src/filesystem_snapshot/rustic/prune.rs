@@ -845,8 +845,9 @@ impl Observed {
 /// reads only what can still make a prune due. Within the hold it reads nothing more. It lists the
 /// packs only when the records name freed bytes and the last prune marked no packs, because marked
 /// packs make a prune due at any size. It reads the records only when the bytes in their names can
-/// make a prune due. When a prune is due, the delete takes the claim that [`next_claim`] chooses
-/// from the claims of the ledger, or it stops when another delete holds them.
+/// make a prune due, or when the last prune marked packs. When a prune is due, the delete takes the
+/// claim that [`next_claim`] chooses from the claims of the ledger, or it stops when another delete
+/// holds them.
 fn next(observed: &Observed, now: Timestamp, policy: &PrunePolicy) -> Next {
     let Some(ledger) = observed.ledger else {
         return Next::ListLedgers;

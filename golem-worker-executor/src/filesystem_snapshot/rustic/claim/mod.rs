@@ -16,12 +16,14 @@
 //! the final marker of its prune.
 //!
 //! When the delete stops before its prune starts, or the second read of the ledger finds a newer
-//! ledger, the claim is released: each marker that this delete wrote is deleted, and the claim when
-//! this delete knows that it wrote it. When the delete stops after the prune started and before the
-//! final marker is written, the final marker is written. A drop runs them in a task, so they also
-//! run when the caller drops the delete. After the start, only the delete releases the claim, when
-//! each attempt of the prune found a snapshot file gone, because such a prune changed nothing and
-//! counts as a prune that did not run.
+//! ledger, the claim is released: the first marker and each refresh marker whose write succeeded
+//! are deleted, and the claim when this delete knows that it wrote it. The marker of a refresh
+//! write that is in flight at a drop, or that lands and loses its answer, is not deleted. Such a
+//! marker only delays a prune. When the delete stops after the prune started and before the final
+//! marker is written, the final marker is written. A drop runs them in a task, so they also run
+//! when the caller drops the delete. After the start, only the delete releases the claim, when each
+//! attempt of the prune found a snapshot file gone, because such a prune changed nothing and counts
+//! as a prune that did not run.
 //!
 //! [`transition`] holds these rules. The claim and the blocking task of its prune share the state,
 //! and each event replaces the state with the result of [`transition`] in one step under a lock. So
@@ -106,14 +108,14 @@ enum Cleanup {
 /// - The prune starts only from `Claimed`. A start after the release does nothing, and the prune
 ///   does not run.
 /// - A drop after the start writes the final marker and keeps the claim.
-/// - A release after `Won`, before or after the start, deletes the claim and each marker. After
-///   the start, the delete releases only when no attempt of the prune changed the repository. A
-///   release in `Marking` deletes only the markers.
+/// - A release after `Won`, before or after the start, deletes the claim and each marker that the
+///   state holds. After the start, the delete releases only when no attempt of the prune changed
+///   the repository. A release in `Marking` deletes only the markers.
 /// - A finish after the start writes the final marker, and the state stays `Started` until the
 ///   write succeeded, so a drop after a failed write tries again. A finish before the start does
 ///   nothing: the blocking task failed before it started the prune, and the drop releases the
 ///   claim.
-/// - Each refresh marker is kept, so a release deletes it.
+/// - Each refresh marker whose write succeeded is kept, so a release deletes it.
 /// - Each other event keeps the state and needs no cleanup.
 fn transition(state: ClaimState, event: ClaimEvent) -> (ClaimState, Option<Cleanup>) {
     use ClaimEvent as E;
@@ -299,8 +301,8 @@ impl Claim {
     }
 
     /// Writes a new marker of the claim at each refresh period through the files, and keeps each
-    /// written marker in the claim. It ends when the operation of the files is cancelled, or when
-    /// the caller drops it.
+    /// marker whose write succeeded in the claim. It ends when the operation of the files is
+    /// cancelled, or when the caller drops it.
     pub(super) fn keep_fresh<'a>(
         &'a self,
         files: &'a SnapshotFiles,
