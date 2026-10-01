@@ -1484,6 +1484,55 @@ mod tests {
         }
     }
 
+    /// The snapshot service gets the storage mode of the agent filesystems: on unmanaged storage
+    /// it refuses managed snapshots.
+    #[test]
+    async fn the_snapshot_service_refuses_managed_snapshots_on_unmanaged_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let key: Box<str> = "00".repeat(64).into_boxed_str();
+        let mut golem_config = GolemConfig::default();
+        golem_config.filesystem_storage.deterministic_root_dir = Some(root.path().to_path_buf());
+        golem_config.filesystem_snapshots =
+            services::golem_config::FilesystemSnapshotsConfig::Managed(Box::new(
+                services::golem_config::FilesystemSnapshotStoreConfig::new(
+                    &key,
+                    std::time::Duration::from_secs(60),
+                    1,
+                    1,
+                )
+                .unwrap(),
+            ));
+        let shutdown = services::shutdown::Shutdown::new();
+        let active_agents = Arc::new(
+            ActiveAgents::<Context>::new(
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown.token(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        let bound = bind_agent_filesystem_snapshots(
+            &golem_config,
+            None,
+            Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new()),
+            &active_agents,
+            &shutdown,
+        );
+
+        let error = bound
+            .err()
+            .expect("managed snapshots on unmanaged storage must be refused");
+        assert!(
+            format!("{error:#}").contains("filesystem snapshots require managed XFS storage"),
+            "{error:#}"
+        );
+        shutdown.token().cancel();
+    }
+
     /// Bootstrap runs on a thread with its own filesystem attributes and the mask 0o227. The mask
     /// must be 0o027 when the active agents start, and stay 0o027 after.
     #[test]
