@@ -5385,11 +5385,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         );
         // The admission reads the clock and the shard assignment, so it is asked last, and only
         // when the gate needs it.
-        let owner = gate == filesystem_snapshots::OwnerGate::NeedsAdmission
-            && self
-                .shard_service()
+        let owner = filesystem_snapshots::admit_if_needed(gate, || {
+            self.shard_service()
                 .check_admission(&self.owned_agent_id.agent_id)
-                .is_ok();
+                .is_ok()
+        });
         if !owner {
             return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
         }

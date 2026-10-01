@@ -998,6 +998,12 @@ pub(crate) enum OwnerGate {
     NeedsAdmission,
 }
 
+/// Whether a confirmer that the owner gate gave `gate` may write its confirmation record. It
+/// asks `admission` only when the gate needs it, and at most once, after every other condition.
+pub(crate) fn admit_if_needed(gate: OwnerGate, admission: impl FnOnce() -> bool) -> bool {
+    gate == OwnerGate::NeedsAdmission && admission()
+}
+
 /// Whether `who` may write a confirmation record now, before the admission of the shard: only
 /// as the owner of the agent. A running instance needs the generation of its capture. A start
 /// needs its own attempt and no pending terminal interrupt. Both need an attached status and no
@@ -1233,29 +1239,31 @@ mod tests {
     }
 
     #[test]
-    async fn an_earlier_refusal_of_the_gate_leaves_the_admission_unasked() {
-        let (mark, _) = marks();
-        let running = Confirmer::Running(mark);
-        let matching = InstanceView::Running {
-            generation_matches: true,
+    async fn the_admission_is_asked_once_and_only_when_the_gate_needs_it() {
+        let asked = std::cell::Cell::new(0);
+        let admission = |admitted| {
+            let asked = &asked;
+            move || {
+                asked.set(asked.get() + 1);
+                admitted
+            }
         };
 
-        let refusals = [
-            owner_gate(InstanceView::Other, &running, false, false, false),
-            owner_gate(
-                InstanceView::Running {
-                    generation_matches: false,
-                },
-                &running,
-                false,
-                false,
-                false,
-            ),
-            owner_gate(matching, &running, false, true, false),
-            owner_gate(matching, &running, false, false, true),
-        ];
+        let refused = admit_if_needed(OwnerGate::Refused, admission(true));
+        let asked_after_refused = asked.get();
+        let admitted = admit_if_needed(OwnerGate::NeedsAdmission, admission(true));
+        let not_admitted = admit_if_needed(OwnerGate::NeedsAdmission, admission(false));
 
-        assert_eq!(refusals, [OwnerGate::Refused; 4]);
+        assert_eq!(
+            (
+                refused,
+                asked_after_refused,
+                admitted,
+                not_admitted,
+                asked.get()
+            ),
+            (false, 0, true, false, 2)
+        );
     }
 
     fn manual(

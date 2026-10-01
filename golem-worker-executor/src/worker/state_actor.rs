@@ -917,6 +917,19 @@ enum BeforeAppend {
     NeedsAdmission,
 }
 
+/// The reply of a confirmation job before its append, or `None` when the job appends the
+/// confirmation record. It asks `admission` only when `decision` needs it, and at most once.
+fn reply_before_append(
+    decision: BeforeAppend,
+    admission: impl FnOnce() -> bool,
+) -> Option<ConfirmOutcome> {
+    match decision {
+        BeforeAppend::Reply(reply) => Some(reply),
+        BeforeAppend::NeedsAdmission if !admission() => Some(ConfirmOutcome::Deferred),
+        BeforeAppend::NeedsAdmission => None,
+    }
+}
+
 /// Decides a confirmation job before its append, after its first commit, over the status and
 /// before the admission of the shard.
 fn confirmation_before_append(
@@ -996,14 +1009,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 .check_admission(&self.owned_agent_id.agent_id)
                 .is_ok()
         };
-        match confirmation_before_append(
-            self.detached.load(Ordering::Acquire),
-            &self.last_known_status.load(),
-            &name,
+        match reply_before_append(
+            confirmation_before_append(
+                self.detached.load(Ordering::Acquire),
+                &self.last_known_status.load(),
+                &name,
+            ),
+            admitted,
         ) {
-            BeforeAppend::Reply(reply) => reply,
-            BeforeAppend::NeedsAdmission if !admitted() => ConfirmOutcome::Deferred,
-            BeforeAppend::NeedsAdmission => {
+            Some(reply) => reply,
+            None => {
                 match self
                     .oplog
                     .add(OplogEntry::snapshot_confirmed(name.clone()))
@@ -1567,7 +1582,7 @@ mod tests {
     }
 
     #[test]
-    fn a_confirmation_job_appends_only_for_the_unconfirmed_candidate_of_an_admitted_agent() {
+    fn a_confirmation_job_goes_on_to_the_admission_only_for_the_unconfirmed_candidate() {
         use super::{BeforeAppend, ConfirmOutcome, confirmation_before_append};
         use golem_common::model::oplog::FilesystemSnapshotName;
         let name = FilesystemSnapshotName::periodic();
@@ -1581,7 +1596,7 @@ mod tests {
             confirmation_before_append(false, &with_candidate(Some(&name), false), &name),
         ];
 
-        // Each reply before the last case appends nothing and leaves the admission unasked.
+        // Only the last case goes on to the admission; the others reply at once.
         assert_eq!(
             cases,
             [
@@ -1591,6 +1606,38 @@ mod tests {
                 BeforeAppend::Reply(ConfirmOutcome::Superseded),
                 BeforeAppend::NeedsAdmission,
             ]
+        );
+    }
+
+    #[test]
+    fn a_confirmation_job_asks_the_admission_once_and_only_when_its_decision_needs_it() {
+        use super::{BeforeAppend, ConfirmOutcome, reply_before_append};
+        let asked = std::cell::Cell::new(0);
+        let admission = |admitted| {
+            let asked = &asked;
+            move || {
+                asked.set(asked.get() + 1);
+                admitted
+            }
+        };
+
+        let replied = reply_before_append(
+            BeforeAppend::Reply(ConfirmOutcome::Superseded),
+            admission(true),
+        );
+        let asked_after_reply = asked.get();
+        let appends = reply_before_append(BeforeAppend::NeedsAdmission, admission(true));
+        let refused = reply_before_append(BeforeAppend::NeedsAdmission, admission(false));
+
+        assert_eq!(
+            (replied, asked_after_reply, appends, refused, asked.get()),
+            (
+                Some(ConfirmOutcome::Superseded),
+                0,
+                None,
+                Some(ConfirmOutcome::Deferred),
+                2
+            )
         );
     }
 
