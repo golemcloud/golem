@@ -145,8 +145,8 @@ fn an_ended_claim_needs_nothing_more() {
 
 #[test]
 fn a_released_claim_never_starts_a_prune_and_a_drop_after_the_start_does_not_release_it() {
-    // The start of the prune and the drop of the delete are the only events that can come at the
-    // same time. The lock orders them, so one of the two comes first.
+    // The start of the prune on the blocking thread can come at the same time as a refresh or a
+    // drop of the delete. The lock orders them, so one of the two comes first.
     let in_order = |first: ClaimEvent, second: ClaimEvent| {
         let state = Mutex::new(ClaimState::Claimed { markers: markers() });
         let first = apply(&state, first);
@@ -154,17 +154,19 @@ fn a_released_claim_never_starts_a_prune_and_a_drop_after_the_start_does_not_rel
         (first, second)
     };
 
-    // A refresh can also come before the start. Only the start lets the prune run.
+    // Only the start lets the prune run, and only the first start of a claim does.
     assert_eq!(
         (
             in_order(ClaimEvent::Start, ClaimEvent::Dropped),
             in_order(ClaimEvent::Dropped, ClaimEvent::Start),
             in_order(ClaimEvent::Refreshed(path("refresh")), ClaimEvent::Start),
+            in_order(ClaimEvent::Start, ClaimEvent::Start),
         ),
         (
             ((true, None), (false, Some(Cleanup::FinalMarker))),
             ((false, release(true)), (false, None)),
             ((false, None), (true, None)),
+            ((true, None), (false, None)),
         )
     );
 }

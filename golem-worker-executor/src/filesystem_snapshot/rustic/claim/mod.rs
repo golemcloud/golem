@@ -17,8 +17,8 @@
 //!
 //! When the delete stops before its prune starts, the claim is released: the claim and each marker
 //! that this delete wrote are deleted. When the delete stops after the prune started and before
-//! the final marker is written, the final marker is written. Both run in a task, so they also run
-//! when the caller drops the delete. After the start, only the delete releases the claim, when each
+//! the final marker is written, the final marker is written. A drop runs them in a task, so they
+//! also run when the caller drops the delete. After the start, only the delete releases the claim, when each
 //! attempt of the prune found a snapshot file gone, because such a prune changed nothing and counts
 //! as a prune that did not run.
 //!
@@ -70,7 +70,9 @@ enum ClaimEvent {
     Refreshed(Box<Path>),
     /// No prune ran: an error came before the prune, or each attempt found a snapshot file gone.
     Release,
-    /// The prune ended, and the delete writes the final marker.
+    /// The blocking task of the prune ended, and the delete writes the final marker when the prune
+    /// started. It also comes before the start, when the blocking task failed before it started the
+    /// prune.
     Finish,
     /// The final marker is written.
     FinalMarkerWritten,
@@ -152,13 +154,15 @@ fn kept(mut markers: Vec<Box<Path>>, marker: Box<Path>) -> Vec<Box<Path>> {
     markers
 }
 
-/// Applies the event to the shared state in one step under its lock. Gives whether the state after
-/// the event is `Started`, and the cleanup that the event needs. The lock is never held across an
-/// await or while a cleanup runs.
+/// Applies the event to the shared state in one step under its lock. Gives whether this event
+/// started the prune, which is a move from `Claimed` to `Started`, and the cleanup that the event
+/// needs. The lock is never held across an await or while a cleanup runs.
 fn apply(state: &Mutex<ClaimState>, event: ClaimEvent) -> (bool, Option<Cleanup>) {
     let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
-    let (next, cleanup) = transition(std::mem::replace(&mut *state, ClaimState::Ended), event);
-    let started = matches!(next, ClaimState::Started { .. });
+    let previous = std::mem::replace(&mut *state, ClaimState::Ended);
+    let claimed = matches!(previous, ClaimState::Claimed { .. });
+    let (next, cleanup) = transition(previous, event);
+    let started = claimed && matches!(next, ClaimState::Started { .. });
     *state = next;
     (started, cleanup)
 }
@@ -220,7 +224,8 @@ pub(super) struct ClaimStart(Arc<Mutex<ClaimState>>);
 
 impl ClaimStart {
     /// Starts the prune, and tells whether it may run. A claim that the delete released does not
-    /// start. The call takes the value, so one claim starts at most one prune.
+    /// start, and a claim whose prune started does not start again. So one claim starts at most
+    /// one prune.
     pub(super) fn start(self) -> bool {
         apply(&self.0, ClaimEvent::Start).0
     }
