@@ -97,6 +97,8 @@ enum Cleanup {
 
 /// Gives the state of the claim after the event, and the cleanup that the event needs.
 ///
+/// - A won claim write moves `Marking` to `Claimed`. A lost one ends the claim with no cleanup,
+///   because `take_claim` already tried to delete the marker.
 /// - A drop before the prune started releases the claim. The claim itself is deleted only when
 ///   this delete knows that it wrote it, which is after `Won`.
 /// - The prune starts only from `Claimed`. A start after the release does nothing, and the prune
@@ -207,9 +209,11 @@ async fn write_final_marker(files: &SnapshotFiles, claim: &ClaimName, time: Time
 /// counted, so `shut_down` waits for the claim and for each of its cleanups.
 pub(super) struct Claim {
     name: ClaimName,
-    /// The lease of the prune. Each marker write that succeeds moves its end.
+    /// The lease of the prune. It ends one lease span after the `Instant` of the first marker. A
+    /// refresh write that succeeds and that started before the end moves the end to one span after
+    /// its own start, when that is later. Nothing else moves it.
     lease: Arc<Lease>,
-    /// The time that a marker write that succeeds adds to the lease.
+    /// The time from the start of a marker write to the end of the lease that it gives.
     span: Duration,
     /// The time between two markers while the prune runs.
     refresh: Duration,
