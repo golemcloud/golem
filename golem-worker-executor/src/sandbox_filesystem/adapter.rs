@@ -1828,15 +1828,14 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let materialization_root: Arc<Path> = Arc::from(self.root());
         let root_directory = self.root_directory_state();
-        let mode = self.file_copy_mode;
         let quota_authority = self.quota_authority;
+        let mode = file_copy_mode(quota_authority);
         let storage_profile = self.storage_profile();
         async move {
             let error_path = Arc::clone(&materialization_root);
             execute_native(storage_profile, NativeOperation::TreeCopy, move || {
                 let seeded = entries.iter().try_for_each(|entry| {
                     let context = tree_copy::SeedContext {
-                        mode,
                         quota_authority,
                         access: entry.access,
                         placement: entry.placement,
@@ -1898,7 +1897,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<Box<[LinkGroup]>, FilesystemStorageError>> + Send {
         let operation_path = source.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let copy_mode = self.file_copy_mode;
+        let copy_mode = file_copy_mode(self.quota_authority);
         let storage_profile = self.storage_profile();
         let target = target.clone();
         async move {
@@ -3332,14 +3331,17 @@ mod tests {
         SandboxFilesystemProvisioning::new(Some(root), None, RetryConfig::default()).unwrap()
     }
 
-    /// Makes a host directory with `name` under `root` on unmanaged storage.
-    async fn host_directory_at(root: &Path, name: &str) -> HostDirectory {
-        HostDirectory::create_at_root(
-            &unmanaged_provisioning(root.to_path_buf()),
-            std::ffi::OsStr::new(name),
+    /// Makes the host directories under `root` on unmanaged storage, and gives `.scratch`.
+    async fn host_directory_at(root: &Path) -> HostDirectory {
+        SandboxFilesystemProvisioning::provision(
+            Some(root.to_path_buf()),
+            None,
+            RetryConfig::default(),
         )
         .await
         .unwrap()
+        .1
+        .scratch
     }
 
     fn host_child(directory: &HostDirectory, name: &str) -> HostPath {
@@ -3404,7 +3406,6 @@ mod tests {
                 },
             },
             FilesystemVolume::unmanaged_development(),
-            FileCopyMode::Buffered,
             QuotaAuthority::Unsupported,
             NativeNameModeSource::ValidatedManagedXfs(
                 xfs::validated_managed_xfs_name_mode_for_test(device),
@@ -3520,7 +3521,7 @@ mod tests {
     async fn scripted_adapter_returns_programmed_outcomes_and_records_exact_order() {
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
         let seed_parent = tempfile::tempdir().unwrap();
-        let seed_directory = host_directory_at(seed_parent.path(), ".seed-source").await;
+        let seed_directory = host_directory_at(seed_parent.path()).await;
         let seed_source = host_child(&seed_directory, "seed-source");
         let seed_call = format!(
             "seed(entries=[{{source={}, target=SandboxPath {{ base: Root, path: \"seed-destination\" }}, access=ReadWrite, placement=CreateNew}}])",
@@ -4030,7 +4031,7 @@ mod tests {
     #[test]
     async fn scripted_adapter_programs_copy_contents_with_gates() {
         let parent = tempfile::tempdir().unwrap();
-        let copies = host_directory_at(parent.path(), ".copies").await;
+        let copies = host_directory_at(parent.path()).await;
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
         control.push_copy_contents(Ok(Box::new([])));
         control.push_copy_contents(Err(scripted_error("programmed copy failure")));
@@ -4102,7 +4103,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let parent = tempfile::tempdir().unwrap();
-        let copies = host_directory_at(parent.path(), ".copies").await;
+        let copies = host_directory_at(parent.path()).await;
         let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
             .create_fresh(name())
             .await
@@ -4212,7 +4213,7 @@ mod tests {
     #[test]
     async fn copy_contents_refuses_a_target_that_is_not_an_empty_directory() {
         let parent = tempfile::tempdir().unwrap();
-        let copies = host_directory_at(parent.path(), ".copies").await;
+        let copies = host_directory_at(parent.path()).await;
         let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
             .create_fresh(name())
             .await
@@ -4271,7 +4272,7 @@ mod tests {
     #[test]
     async fn scripted_adapter_programs_seed_with_gates() {
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
         control.push_seed(Ok(()));
         control.push_seed(Err(scripted_error("programmed seed failure")));
@@ -4335,7 +4336,7 @@ mod tests {
     #[test]
     async fn seed_puts_entries_in_order_and_stops_at_the_first_failure() {
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         std::fs::write(sources.path().as_path().join("file"), b"first").unwrap();
         std::fs::write(sources.path().as_path().join("after"), b"after").unwrap();
         std::os::unix::fs::symlink("file", sources.path().as_path().join("link")).unwrap();
@@ -4402,7 +4403,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
         [
             ("tool", 0o755),
@@ -4494,7 +4495,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         let tree = sources.path().as_path().join("tree");
         std::fs::create_dir(&tree).unwrap();
         std::fs::write(tree.join("file"), b"file").unwrap();
@@ -4563,7 +4564,7 @@ mod tests {
             return;
         }
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         std::fs::create_dir(sources.path().as_path().join("tree")).unwrap();
         let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
             .create_fresh(name())
@@ -4601,7 +4602,7 @@ mod tests {
     #[test]
     async fn seed_file_entries_follow_the_placement() {
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         std::fs::write(sources.path().as_path().join("new"), b"new").unwrap();
         let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
             .create_fresh(name())
@@ -4699,7 +4700,7 @@ mod tests {
     #[test]
     async fn seed_symlink_entries_follow_the_placement() {
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         std::os::unix::fs::symlink("new-target", sources.path().as_path().join("link")).unwrap();
         let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
             .create_fresh(name())
@@ -4791,7 +4792,7 @@ mod tests {
     #[test]
     async fn seed_reads_a_source_symlink_without_following_it() {
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         let outside = tempfile::tempdir().unwrap();
         std::fs::write(outside.path().join("secret"), b"secret").unwrap();
         std::fs::create_dir(sources.path().as_path().join("real")).unwrap();
@@ -4857,7 +4858,7 @@ mod tests {
     #[test]
     async fn seed_cannot_write_outside_the_root() {
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         std::fs::write(sources.path().as_path().join("file"), b"file").unwrap();
         std::os::unix::fs::symlink("file", sources.path().as_path().join("link")).unwrap();
         let filesystem = unmanaged_provisioning(parent.path().to_path_buf())
@@ -4948,7 +4949,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let parent = tempfile::tempdir().unwrap();
-        let sources = host_directory_at(parent.path(), ".sources").await;
+        let sources = host_directory_at(parent.path()).await;
         let tree = sources.path().as_path().join("tree");
         std::fs::create_dir_all(tree.join("data")).unwrap();
         std::fs::write(tree.join("data/added"), b"added").unwrap();
@@ -5104,7 +5105,7 @@ mod tests {
     #[test]
     async fn production_adapter_executes_the_filesystem_method_families() {
         let parent = tempfile::tempdir().unwrap();
-        let seed_sources = host_directory_at(parent.path(), ".seed-sources").await;
+        let seed_sources = host_directory_at(parent.path()).await;
         std::fs::write(seed_sources.path().as_path().join("file"), b"seeded").unwrap();
         let provisioning = unmanaged_provisioning(parent.path().to_path_buf());
         let filesystem = <SandboxFilesystem as SandboxFilesystemAdapter>::create_fresh(
@@ -5472,7 +5473,7 @@ mod tests {
         std::fs::rename(root.join("pinned"), root.join("renamed")).unwrap();
         std::fs::create_dir(root.join("pinned")).unwrap();
 
-        let host_source = host_directory_at(parent.path(), ".seed-source").await;
+        let host_source = host_directory_at(parent.path()).await;
         std::fs::write(host_source.path().as_path().join("source"), b"seeded").unwrap();
         let source = host_child(&host_source, "source");
         seed_one(
@@ -5648,7 +5649,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let host_source = host_directory_at(parent.path(), ".seed-source").await;
+        let host_source = host_directory_at(parent.path()).await;
         std::fs::write(
             host_source.path().as_path().join("source"),
             b"seeded contents",

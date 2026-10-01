@@ -16,7 +16,8 @@ use crate::filesystem_pressure::FilesystemWriteRecovery;
 pub use crate::sandbox_filesystem::FilesystemStorageError;
 pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
 use crate::sandbox_filesystem::{
-    FilesystemVolume, HostDirectory, SandboxFilesystemProvisioning, observe_space_blocking,
+    FilesystemVolume, HostDirectories, HostDirectory, SandboxFilesystemProvisioning,
+    observe_space_blocking,
 };
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
@@ -44,6 +45,24 @@ pub(crate) use lifecycle::tests::{
 pub(crate) use lifecycle::*;
 
 const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
+
+/// Observes the volume of `provisioning` and checks that the pressure targets of `settings` fit in
+/// its capacity.
+fn validate_volume_capacity(
+    provisioning: &SandboxFilesystemProvisioning,
+    settings: &FilesystemStorageConfig,
+) -> Result<(), FilesystemStorageError> {
+    match observe_space_at_binding(provisioning.volume())? {
+        FilesystemSpace::Observed {
+            total_bytes,
+            total_filesystem_objects,
+            ..
+        } => settings
+            .pressure
+            .validate_capacity(total_bytes, total_filesystem_objects),
+        FilesystemSpace::Unlimited => Ok(()),
+    }
+}
 
 fn observe_space_at_binding(
     volume: &FilesystemVolume,
@@ -98,10 +117,12 @@ const OWNER_WRITE_BIT: libc::mode_t = 0o200;
 /// gives the current mask, and then to that mask without the owner write bit. Between the two
 /// calls, a file that another thread creates gets the usual permissions of the mask 0o022.
 ///
-/// Windows has no file mode creation mask. There, a file is read-only only when its read-only
-/// attribute is set, and an agent cannot set that attribute, so the service changes nothing.
+/// Executor bootstrap calls this once, before it starts the agent filesystem service, in every
+/// process that runs agents. Windows has no file mode creation mask. There, a file is read-only
+/// only when its read-only attribute is set, and an agent cannot set that attribute, so bootstrap
+/// changes nothing.
 #[cfg(unix)]
-fn keep_owner_write_permission() {
+pub(crate) fn keep_owner_write_permission() {
     let mask = current_file_creation_mask();
     // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
     unsafe {
@@ -163,55 +184,63 @@ pub(crate) struct AgentFilesystems {
     pressure: FilesystemPressureConfig,
     filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
     scratch: Arc<HostDirectory>,
+    initial_files: Arc<HostDirectory>,
 }
 
 impl AgentFilesystems {
-    /// Binds filesystem provisioning and pressure settings for an executor, and makes the
-    /// `.scratch` host directory for captures and restores.
+    /// Binds filesystem provisioning and pressure settings for an executor. The provisioning makes
+    /// the host directories `.scratch`, for captures and restores, and `.initial-files`, for the
+    /// downloads of initial files.
     ///
     /// Callers create this service during executor startup, before any agent filesystem exists.
-    /// Every embedder of the executor starts the service here. On Unix platforms the service clears
-    /// bit 0o200 of the process umask and keeps the other bits, so each file that an agent creates
-    /// has write permission for its owner. Making `.scratch` removes what an earlier process left
-    /// under the name. Returns an error for invalid provisioning settings, failed volume observation, a
-    /// pressure target larger than the observed managed volume, or a `.scratch` directory that
-    /// cannot be made.
+    /// The service changes no state of the process. Making the host directories removes what an
+    /// earlier process left under their names. Returns an error for invalid provisioning settings,
+    /// host directories that cannot be made, failed volume observation, or a pressure target
+    /// larger than the observed managed volume. After a failed observation or a failed pressure
+    /// target, both host directories are discarded again.
     pub(crate) async fn new(
         settings: &FilesystemStorageConfig,
     ) -> Result<Self, FilesystemStorageError> {
-        #[cfg(unix)]
-        keep_owner_write_permission();
-        let provisioning = SandboxFilesystemProvisioning::new(
+        let (
+            provisioning,
+            HostDirectories {
+                scratch,
+                initial_files,
+            },
+        ) = SandboxFilesystemProvisioning::provision(
             settings.deterministic_root_dir.clone(),
             settings.managed_xfs_root_dir.clone(),
             settings.cleanup_retry.clone(),
-        )?;
-        let space = observe_space_at_binding(provisioning.volume())?;
-        if let FilesystemSpace::Observed {
-            total_bytes,
-            total_filesystem_objects,
-            ..
-        } = space
-        {
-            settings
-                .pressure
-                .validate_capacity(total_bytes, total_filesystem_objects)?;
+        )
+        .await?;
+        if let Err(error) = validate_volume_capacity(&provisioning, settings) {
+            futures::future::join_all([scratch.discard(), initial_files.discard()])
+                .await
+                .into_iter()
+                .filter_map(Result::err)
+                .for_each(|cleanup| {
+                    tracing::warn!(
+                        error = %cleanup,
+                        "Failed to discard a host directory after a failed binding"
+                    );
+                });
+            return Err(error);
         }
-        let scratch =
-            HostDirectory::create_at_root(&provisioning, std::ffi::OsStr::new(".scratch")).await?;
         Ok(Self {
             provisioning,
             pressure: settings.pressure.clone(),
             filesystem_object_limit_policy: settings.filesystem_object_limit_policy.clone(),
             scratch: Arc::new(scratch),
+            initial_files: Arc::new(initial_files),
         })
     }
 
-    /// Returns the provisioning that makes agent filesystems and host directories on the volume.
+    /// Returns the `.initial-files` host directory that binding made.
     ///
-    /// Callers use this while wiring shared services, before agent creation.
-    pub(crate) fn provisioning(&self) -> &SandboxFilesystemProvisioning {
-        &self.provisioning
+    /// Executor bootstrap gives it to the one file loader of the executor, which keeps its
+    /// downloads there. The executor has exactly one file loader on this directory.
+    pub(crate) fn initial_files_directory(&self) -> Arc<HostDirectory> {
+        Arc::clone(&self.initial_files)
     }
 
     /// Returns the pressure thresholds used to recover writes on the provisioned volume.
@@ -270,9 +299,57 @@ impl AgentFilesystems {
     }
 }
 
+/// Helpers for tests that change the file mode creation mask of one thread only.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod file_creation_mask_for_test {
+    /// Runs `f` on a new thread whose file mode creation mask is `mask`, and gives its result.
+    ///
+    /// The file mode creation mask is a value that all threads of a process share. So the thread
+    /// first takes its own copy of the filesystem attributes of the process with
+    /// `unshare(CLONE_FS)`. After that call, a change of the mask on the thread changes only the
+    /// mask of the thread, and the other tests of this binary keep the mask of the process.
+    pub(crate) fn with_private_file_creation_mask<T: Send + 'static>(
+        mask: libc::mode_t,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        std::thread::spawn(move || {
+            // SAFETY: `unshare` with `CLONE_FS` only gives the calling thread its own copy of the
+            // root directory, the current directory and the file mode creation mask. It needs no
+            // privilege.
+            let unshared = unsafe { libc::unshare(libc::CLONE_FS) };
+            assert_eq!(
+                unshared,
+                0,
+                "the thread must get its own filesystem attributes: {}",
+                std::io::Error::last_os_error()
+            );
+            // SAFETY: `umask` only replaces the mask of the thread. It cannot fail.
+            unsafe {
+                libc::umask(mask);
+            }
+            f()
+        })
+        .join()
+        .expect("the thread with a private file mode creation mask must not panic")
+    }
+
+    /// Gives the file mode creation mask of the calling thread, which must have its own filesystem
+    /// attributes. The function sets a mask and then sets the mask from before again.
+    pub(crate) fn thread_file_creation_mask() -> libc::mode_t {
+        // SAFETY: `umask` only replaces the mask of the thread. It cannot fail.
+        unsafe {
+            let mask = libc::umask(0o022);
+            libc::umask(mask);
+            mask
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
     use test_r::test;
 
     #[cfg(unix)]
@@ -307,55 +384,11 @@ mod tests {
         );
     }
 
-    /// Runs `f` on a new thread whose file mode creation mask is `mask`, and gives its result.
-    ///
-    /// The file mode creation mask is a value that all threads of a process share, and other
-    /// tests of this binary change it through `AgentFilesystems::new`. So the thread first takes
-    /// its own copy of the filesystem attributes of the process with `unshare(CLONE_FS)`. After
-    /// that call, a change of the mask on the thread changes only the mask of the thread.
-    #[cfg(target_os = "linux")]
-    fn with_private_file_creation_mask<T: Send + 'static>(
-        mask: libc::mode_t,
-        f: impl FnOnce() -> T + Send + 'static,
-    ) -> T {
-        std::thread::spawn(move || {
-            // SAFETY: `unshare` with `CLONE_FS` only gives the calling thread its own copy of the
-            // root directory, the current directory and the file mode creation mask. It needs no
-            // privilege.
-            let unshared = unsafe { libc::unshare(libc::CLONE_FS) };
-            assert_eq!(
-                unshared,
-                0,
-                "the thread must get its own filesystem attributes: {}",
-                std::io::Error::last_os_error()
-            );
-            // SAFETY: `umask` only replaces the mask of the thread. It cannot fail.
-            unsafe {
-                libc::umask(mask);
-            }
-            f()
-        })
-        .join()
-        .expect("the thread with a private file mode creation mask must not panic")
-    }
-
-    /// Gives the file mode creation mask of the calling thread, which must have its own filesystem
-    /// attributes. The function sets a mask and then sets the mask from before again.
-    #[cfg(target_os = "linux")]
-    fn thread_file_creation_mask() -> libc::mode_t {
-        // SAFETY: `umask` only replaces the mask of the thread. It cannot fail.
-        unsafe {
-            let mask = libc::umask(0o022);
-            libc::umask(mask);
-            mask
-        }
-    }
-
     /// The test makes its temporary root under the mask that the process has. Then it binds the
-    /// filesystems on a thread with the mask 0o227, which must change the mask to 0o027.
+    /// filesystems on a thread with the mask 0o227, which must stay as it is.
     #[cfg(target_os = "linux")]
     #[test]
-    fn agent_filesystems_binding_clears_only_bit_0o200_of_the_file_mode_creation_mask() {
+    fn agent_filesystems_binding_leaves_the_file_mode_creation_mask_as_it_is() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
             deterministic_root_dir: Some(root.path().to_path_buf()),
@@ -371,11 +404,11 @@ mod tests {
             (bound, thread_file_creation_mask())
         });
 
-        assert_eq!(
-            mask, 0o027,
-            "binding must change the mask 227 to 27, and the mask is {mask:o}"
-        );
         bound.unwrap();
+        assert_eq!(
+            mask, 0o227,
+            "binding must leave the mask 227 as it is, and the mask is {mask:o}"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -528,9 +561,12 @@ mod tests {
     }
 
     #[test]
-    async fn agent_filesystems_make_the_scratch_directory_once_at_binding() {
+    async fn agent_filesystems_make_the_scratch_and_initial_files_directories_at_binding() {
         let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join(".scratch/left-by-an-earlier-process")).unwrap();
+        [".scratch", ".initial-files"].into_iter().for_each(|name| {
+            std::fs::create_dir_all(root.path().join(name).join("left-by-an-earlier-process"))
+                .unwrap();
+        });
         let settings = FilesystemStorageConfig {
             deterministic_root_dir: Some(root.path().to_path_buf()),
             ..FilesystemStorageConfig::default()
@@ -538,20 +574,46 @@ mod tests {
 
         let filesystems = AgentFilesystems::new(&settings).await.unwrap();
 
-        assert!(
-            std::fs::read_dir(root.path().join(".scratch"))
-                .unwrap()
-                .next()
-                .is_none(),
-            "binding must remove what an earlier process left in the scratch directory"
+        [".scratch", ".initial-files"].into_iter().for_each(|name| {
+            assert!(
+                std::fs::read_dir(root.path().join(name))
+                    .unwrap()
+                    .next()
+                    .is_none(),
+                "binding must remove what an earlier process left in {name}"
+            );
+        });
+        assert_eq!(
+            filesystems.initial_files_directory().path().as_path(),
+            root.path().join(".initial-files")
         );
-        let again = HostDirectory::create_at_root(
-            filesystems.provisioning(),
-            std::ffi::OsStr::new(".scratch"),
+    }
+
+    #[test]
+    async fn a_failed_binding_discards_both_host_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let observed_total_bytes = settings.pressure.target_available_bytes() - 1;
+
+        let result = with_binding_space_observation(
+            FilesystemSpace::Observed {
+                total_bytes: observed_total_bytes,
+                available_bytes: observed_total_bytes,
+                total_filesystem_objects: u64::MAX,
+                available_filesystem_objects: u64::MAX,
+            },
+            AgentFilesystems::new(&settings),
         )
-        .await
-        .unwrap_err();
-        assert_eq!(again.io_kind(), Some(std::io::ErrorKind::AlreadyExists));
+        .await;
+
+        assert!(result.is_err(), "binding must fail");
+        assert!(
+            std::fs::read_dir(root.path()).unwrap().next().is_none(),
+            "a failed binding must leave no host directory"
+        );
     }
 
     #[test]

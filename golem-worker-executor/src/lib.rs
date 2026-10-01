@@ -210,10 +210,30 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
         source,
-        filesystems.provisioning().uses_managed_storage(),
+        filesystems.volume().is_managed(),
         shutdown,
     )
     .map_err(|error| anyhow!(error))
+}
+
+/// Starts the active agents of the executor, with the agent filesystem service in them.
+///
+/// On a Unix platform it first clears bit 0o200 of the file mode creation mask of the process and
+/// keeps the other bits, so each file that an agent creates has write permission for its owner.
+/// Every process that runs agents starts them here, before any agent filesystem exists.
+async fn start_active_agents<
+    Ctx: WorkerCtx,
+    BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
+>(
+    bootstrap: &BootstrapImpl,
+    golem_config: &GolemConfig,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
+    #[cfg(unix)]
+    services::agent_filesystem::keep_owner_write_permission();
+    bootstrap
+        .create_active_agents(golem_config, shutdown_token)
+        .await
 }
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -955,18 +975,12 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_agents = bootstrap
-        .create_active_agents(&golem_config, shutdown_token.clone())
-        .await?;
+    let active_agents =
+        start_active_agents(bootstrap, &golem_config, shutdown_token.clone()).await?;
 
-    let initial_files = sandbox_filesystem::HostDirectory::create_at_root(
-        active_agents.agent_filesystems().provisioning(),
-        std::ffi::OsStr::new(".initial-files"),
-    )
-    .await?;
     let file_loader = Arc::new(FileLoader::new(
         initial_files_service.clone(),
-        initial_files,
+        active_agents.agent_filesystems().initial_files_directory(),
     ));
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
@@ -1431,5 +1445,71 @@ async fn build_inner_key_value_storage(
                 ));
             Ok((None, None, key_value_storage))
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::services::NoAdditionalDeps;
+    use crate::services::agent_filesystem::file_creation_mask_for_test::{
+        thread_file_creation_mask, with_private_file_creation_mask,
+    };
+    use crate::workerctx::default::Context;
+    use test_r::test;
+
+    /// Records the file mode creation mask of the thread when bootstrap starts the active agents,
+    /// and starts none.
+    #[derive(Default)]
+    struct MaskRecordingBootstrap {
+        mask: std::sync::Mutex<Option<libc::mode_t>>,
+    }
+
+    #[async_trait]
+    impl Bootstrap<Context> for MaskRecordingBootstrap {
+        fn create_additional_deps(
+            &self,
+            _registry_service: Arc<dyn RegistryService>,
+        ) -> NoAdditionalDeps {
+            NoAdditionalDeps {}
+        }
+
+        async fn create_active_agents(
+            &self,
+            _golem_config: &GolemConfig,
+            _shutdown_token: tokio_util::sync::CancellationToken,
+        ) -> anyhow::Result<Arc<ActiveAgents<Context>>> {
+            *self.mask.lock().unwrap() = Some(thread_file_creation_mask());
+            Err(anyhow!("the test starts no active agents"))
+        }
+    }
+
+    /// Bootstrap runs on a thread with its own filesystem attributes and the mask 0o227. The mask
+    /// must be 0o027 when the active agents start, and stay 0o027 after.
+    #[test]
+    fn executor_bootstrap_clears_only_bit_0o200_before_the_agent_filesystems_start() {
+        let (started, recorded, after) = with_private_file_creation_mask(0o227, || {
+            let bootstrap = MaskRecordingBootstrap::default();
+            let started = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(start_active_agents(
+                    &bootstrap,
+                    &GolemConfig::default(),
+                    tokio_util::sync::CancellationToken::new(),
+                ))
+                .is_ok();
+            let recorded = *bootstrap.mask.lock().unwrap();
+            (started, recorded, thread_file_creation_mask())
+        });
+
+        assert!(!started, "the recording bootstrap starts no active agents");
+        assert_eq!(
+            recorded,
+            Some(0o027),
+            "the mask 227 must be 27 when the agent filesystems start"
+        );
+        assert_eq!(after, 0o027, "the mask must stay 27, and it is {after:o}");
     }
 }

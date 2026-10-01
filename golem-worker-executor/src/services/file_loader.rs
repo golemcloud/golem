@@ -55,7 +55,7 @@ impl InitialFileSource {
 /// Interface for loading immutable, content-addressed initial-file sources.
 pub struct FileLoader {
     initial_agent_files_service: Arc<InitialAgentFilesService>,
-    cache_dir: HostDirectory,
+    cache_dir: Arc<HostDirectory>,
     // Note: The cache is shared between accounts. One account no accessing data from another account
     // is implicitly done by the key being a hash of the content.
     cache: Cache,
@@ -68,11 +68,11 @@ pub struct FileLoader {
 impl FileLoader {
     /// Makes a loader that keeps its sources in `cache_dir`.
     ///
-    /// The loader owns the directory, so the directory and the sources in it go away with the
-    /// loader.
+    /// The loader is the only loader on the directory. The directory and the sources in it go
+    /// away when the loader and the other holders of the directory are gone.
     pub(crate) fn new(
         initial_agent_files_service: Arc<InitialAgentFilesService>,
-        cache_dir: HostDirectory,
+        cache_dir: Arc<HostDirectory>,
     ) -> Self {
         Self {
             initial_agent_files_service,
@@ -310,12 +310,12 @@ mod tests {
     test_r::enable!();
 
     /// Makes the cache directory of a loader on unmanaged storage with a temporary root.
-    async fn cache_directory() -> HostDirectory {
-        let provisioning =
-            SandboxFilesystemProvisioning::new(None, None, RetryConfig::default()).unwrap();
-        HostDirectory::create_at_root(&provisioning, OsStr::new(".initial-files"))
-            .await
-            .unwrap()
+    async fn cache_directory() -> Arc<HostDirectory> {
+        let (_, directories) =
+            SandboxFilesystemProvisioning::provision(None, None, RetryConfig::default())
+                .await
+                .unwrap();
+        Arc::new(directories.initial_files)
     }
 
     /// Build a `FileLoader` sharing a single in-memory blob store,

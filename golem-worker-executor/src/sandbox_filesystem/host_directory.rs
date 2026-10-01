@@ -15,6 +15,12 @@
 use super::*;
 use std::ffi::OsStr;
 
+/// The name of the host directory in which each capture and each restore gets its own directory.
+const SCRATCH: &str = ".scratch";
+
+/// The name of the host directory that holds the downloads of initial files.
+const INITIAL_FILES: &str = ".initial-files";
+
 /// A path on the host under a [`HostDirectory`], on the volume of the sandboxes and outside every
 /// agent project.
 ///
@@ -48,8 +54,23 @@ impl HostPath {
     }
 }
 
-/// A directory on the host that this value owns. Discard or drop removes the directory with all
-/// that is in it.
+/// The host directories of a volume. The provisioning makes both when it is built.
+///
+/// Each is a plain directory directly under the volume root, outside every agent project, with no
+/// project id, no quota and no metering.
+#[derive(Debug)]
+pub(crate) struct HostDirectories {
+    /// `.scratch`: each capture and each restore gets its own directory in it.
+    pub(crate) scratch: HostDirectory,
+    /// `.initial-files`: the downloads of initial files.
+    pub(crate) initial_files: HostDirectory,
+}
+
+/// A directory on the host that this value owns.
+///
+/// [`HostDirectory::discard`] removes the directory with all that is in it and checks that it is
+/// gone. An owner that knows the end of the directory calls it. A drop without a discard removes
+/// the directory as a best effort, does not check, and only logs a failure.
 ///
 /// A host directory keeps the volume root that it is in usable while it lives, also after its
 /// provisioning is dropped.
@@ -62,68 +83,6 @@ pub(crate) struct HostDirectory {
 }
 
 impl HostDirectory {
-    /// Makes an empty directory with this name directly under the volume root. Removes what an
-    /// earlier process left under the name first. Fails if this process already made the name, or
-    /// if the name is not one normal component that starts with a dot.
-    pub(crate) async fn create_at_root(
-        provisioning: &SandboxFilesystemProvisioning,
-        name: &OsStr,
-    ) -> Result<HostDirectory, FilesystemStorageError> {
-        let root = provisioning.host_root();
-        if !is_one_normal_component(name) || !name.as_encoded_bytes().starts_with(b".") {
-            return Err(FilesystemStorageError::io(
-                "validate host directory name",
-                root.path,
-                std::io::Error::from(std::io::ErrorKind::InvalidInput),
-            ));
-        }
-        let path = HostPath(Arc::from(tree_copy::child_path(root.path, name)));
-        if !root
-            .names
-            .lock()
-            .expect("host directory name registry poisoned")
-            .insert(Box::from(name))
-        {
-            return Err(FilesystemStorageError::io(
-                "create a host directory that this provisioning already made",
-                path.as_path(),
-                std::io::Error::from(std::io::ErrorKind::AlreadyExists),
-            ));
-        }
-        let root_path: Box<Path> = root.path.into();
-        let verify_no_project = root.verify_no_project;
-        let outcome = execute_native(
-            NativeStorageProfile::Unknown,
-            NativeOperation::RecursiveCleanup,
-            move || {
-                let result =
-                    make_empty_directory_at_root(&root_path, path.as_path(), verify_no_project);
-                (path, result)
-            },
-        )
-        .await;
-        match outcome {
-            Ok((path, Ok(()))) => Ok(HostDirectory {
-                path,
-                removed: false,
-                _root: root.anchor,
-                _temporary_root: root.temporary_root,
-            }),
-            Ok((_, Err(error))) => {
-                forget_name(root.names, name);
-                Err(error)
-            }
-            Err(error) => {
-                forget_name(root.names, name);
-                Err(FilesystemStorageError::task_failure(
-                    "create host directory",
-                    root.path,
-                    error,
-                ))
-            }
-        }
-    }
-
     /// Makes an empty directory with this name in `parent`. Fails if the name exists, or if the
     /// name is not one normal component.
     pub(crate) async fn create_in(
@@ -192,12 +151,109 @@ impl Drop for HostDirectory {
         if self.removed {
             return;
         }
-        if let Err(error) =
-            remove_and_verify_blocking(self.path.as_path(), "discard host directory")
-        {
-            tracing::error!(error = %error, "Failed to remove a dropped host directory");
+        match std::fs::remove_dir_all(self.path.as_path()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::error!(
+                error = %error,
+                path = %self.path.as_path().display(),
+                "Failed to remove a dropped host directory"
+            ),
         }
     }
+}
+
+/// Makes `.scratch` and `.initial-files` directly under the volume root of `provisioning`.
+///
+/// Without a configured root on unmanaged storage, the root is a new temporary directory that the
+/// two host directories keep while they live. Removes what an earlier process left under each
+/// name first. On managed storage, a host directory that has a project identity gives an error.
+/// When `.initial-files` cannot be made, `.scratch` is removed again, and nothing is left under
+/// either name.
+pub(super) async fn make_host_directories(
+    provisioning: &SandboxFilesystemProvisioning,
+) -> Result<HostDirectories, FilesystemStorageError> {
+    let (root, anchor, verify_no_project) = match &provisioning.mode {
+        SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => {
+            (unmanaged.deterministic_root().map(Box::from), None, false)
+        }
+        #[cfg(target_os = "linux")]
+        SandboxFilesystemProvisioningMode::Managed(managed) => (
+            Some(Box::from(managed.root())),
+            provisioning.volume.managed_root().cloned(),
+            true,
+        ),
+    };
+    let error_root: Box<Path> = root
+        .clone()
+        .unwrap_or_else(|| Box::from(Path::new("<temp>")));
+    let (scratch, initial_files, temporary_root) = execute_native(
+        NativeStorageProfile::Unknown,
+        NativeOperation::RecursiveCleanup,
+        move || make_host_directories_blocking(root, verify_no_project),
+    )
+    .await
+    .map_err(|error| {
+        FilesystemStorageError::task_failure("create host directory", &error_root, error)
+    })??;
+    let directory = |path: HostPath| HostDirectory {
+        path,
+        removed: false,
+        _root: anchor.clone(),
+        _temporary_root: temporary_root.clone(),
+    };
+    Ok(HostDirectories {
+        scratch: directory(scratch),
+        initial_files: directory(initial_files),
+    })
+}
+
+/// The paths of `.scratch` and `.initial-files`, with the temporary root that holds them when no
+/// root was given.
+type MadeHostDirectories = (HostPath, HostPath, Option<Arc<tempfile::TempDir>>);
+
+/// Makes the root, or a temporary root when `root` is `None`, and then `.scratch` and
+/// `.initial-files` in it, as [`make_host_directories`] says.
+fn make_host_directories_blocking(
+    root: Option<Box<Path>>,
+    verify_no_project: bool,
+) -> Result<MadeHostDirectories, FilesystemStorageError> {
+    let (root, temporary_root) = match root {
+        Some(root) => {
+            std::fs::create_dir_all(&root).map_err(|error| {
+                FilesystemStorageError::io("create host directory root", &root, error)
+            })?;
+            (root, None)
+        }
+        None => {
+            let temporary = tempfile::Builder::new()
+                .prefix("golem-host-directories")
+                .tempdir()
+                .map_err(|error| {
+                    FilesystemStorageError::io(
+                        "create temporary host directory root",
+                        Path::new("<temp>"),
+                        error,
+                    )
+                })?;
+            (Box::from(temporary.path()), Some(Arc::new(temporary)))
+        }
+    };
+    let scratch = HostPath(Arc::from(root.join(SCRATCH)));
+    let initial_files = HostPath(Arc::from(root.join(INITIAL_FILES)));
+    make_empty_host_directory(scratch.as_path(), verify_no_project)?;
+    if let Err(error) = make_empty_host_directory(initial_files.as_path(), verify_no_project) {
+        return Err(
+            match remove_and_verify_blocking(
+                scratch.as_path(),
+                "remove the scratch directory after a failed host directory",
+            ) {
+                Ok(()) => error,
+                Err(cleanup_error) => cleanup_error,
+            },
+        );
+    }
+    Ok((scratch, initial_files, temporary_root))
 }
 
 fn is_one_normal_component(name: &OsStr) -> bool {
@@ -211,13 +267,13 @@ fn is_one_normal_component(name: &OsStr) -> bool {
         )
 }
 
-fn make_empty_directory_at_root(
-    root: &Path,
+/// Removes what an earlier process left at `path`, and makes an empty directory there. With
+/// `verify_no_project`, a directory that has a project identity is removed again and gives an
+/// error.
+fn make_empty_host_directory(
     path: &Path,
     verify_no_project: bool,
 ) -> Result<(), FilesystemStorageError> {
-    std::fs::create_dir_all(root)
-        .map_err(|error| FilesystemStorageError::io("create host directory root", root, error))?;
     remove_and_verify_blocking(
         path,
         "remove what an earlier process left under a host directory name",
@@ -241,13 +297,6 @@ fn make_empty_directory_at_root(
     Ok(())
 }
 
-fn forget_name(names: &Mutex<HashSet<Box<OsStr>>>, name: &OsStr) {
-    names
-        .lock()
-        .expect("host directory name registry poisoned")
-        .remove(name);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,129 +305,122 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
     use test_r::test;
 
-    fn provisioning(root: &Path) -> SandboxFilesystemProvisioning {
-        SandboxFilesystemProvisioning::new(Some(root.to_path_buf()), None, RetryConfig::default())
-            .unwrap()
-    }
-
-    #[test]
-    async fn create_at_root_removes_what_an_earlier_process_left() {
-        let root = tempfile::tempdir().unwrap();
-        let leftover = root.path().join(".downloads");
-        std::fs::create_dir_all(leftover.join("nested")).unwrap();
-        std::fs::write(leftover.join("nested/garbage"), b"stale").unwrap();
-
-        let directory =
-            HostDirectory::create_at_root(&provisioning(root.path()), OsStr::new(".downloads"))
-                .await
-                .unwrap();
-
-        assert_eq!(directory.path().as_path(), leftover);
-        assert!(std::fs::read_dir(&leftover).unwrap().next().is_none());
-    }
-
-    #[test]
-    async fn create_at_root_refuses_a_name_that_this_provisioning_already_made() {
-        let root = tempfile::tempdir().unwrap();
-        let provisioning = provisioning(root.path());
-        let first = HostDirectory::create_at_root(&provisioning, OsStr::new(".downloads"))
-            .await
-            .unwrap();
-        std::fs::write(first.path().as_path().join("kept"), b"kept").unwrap();
-
-        let error = HostDirectory::create_at_root(&provisioning.clone(), OsStr::new(".downloads"))
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.io_kind(), Some(ErrorKind::AlreadyExists));
-        assert!(first.path().as_path().join("kept").is_file());
-        HostDirectory::create_at_root(&provisioning, OsStr::new(".other"))
-            .await
-            .unwrap();
-    }
-
-    #[test]
-    async fn create_at_root_refuses_a_name_that_is_not_one_component_with_a_leading_dot() {
-        let root = tempfile::tempdir().unwrap();
-        let provisioning = provisioning(root.path());
-        let names = ["downloads", ".", "..", "", ".a/b", "/.a", ".a/"];
-
-        let results = futures::future::join_all(
-            names
-                .iter()
-                .map(|name| HostDirectory::create_at_root(&provisioning, OsStr::new(name))),
+    async fn provision(root: Option<&Path>) -> (SandboxFilesystemProvisioning, HostDirectories) {
+        SandboxFilesystemProvisioning::provision(
+            root.map(Path::to_path_buf),
+            None,
+            RetryConfig::default(),
         )
-        .await;
+        .await
+        .unwrap()
+    }
 
-        names.iter().zip(results).for_each(|(name, result)| {
-            assert_eq!(
-                result.unwrap_err().io_kind(),
-                Some(ErrorKind::InvalidInput),
-                "{name:?} must be refused"
+    async fn scratch_at(root: &Path) -> HostDirectory {
+        provision(Some(root)).await.1.scratch
+    }
+
+    fn is_empty_directory(path: &Path) -> bool {
+        std::fs::read_dir(path).unwrap().next().is_none()
+    }
+
+    #[test]
+    fn host_directory_names_are_one_component_that_starts_with_a_dot() {
+        [SCRATCH, INITIAL_FILES].into_iter().for_each(|name| {
+            assert!(is_one_normal_component(OsStr::new(name)), "{name}");
+            assert!(name.starts_with('.'), "{name}");
+            assert!(
+                SandboxFilesystemName::new(name.to_string(), "c".to_string(), "f".to_string())
+                    .is_err(),
+                "an agent directory must not be able to take the name {name}"
             );
         });
-        assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
+        assert_ne!(SCRATCH, INITIAL_FILES);
+    }
+
+    #[test]
+    async fn provision_makes_both_host_directories_and_removes_what_an_earlier_process_left() {
+        let root = tempfile::tempdir().unwrap();
+        [SCRATCH, INITIAL_FILES].into_iter().for_each(|name| {
+            let leftover = root.path().join(name).join("nested");
+            std::fs::create_dir_all(&leftover).unwrap();
+            std::fs::write(leftover.join("garbage"), b"stale").unwrap();
+        });
+
+        let (_provisioning, directories) = provision(Some(root.path())).await;
+
+        assert_eq!(
+            directories.scratch.path().as_path(),
+            root.path().join(".scratch")
+        );
+        assert_eq!(
+            directories.initial_files.path().as_path(),
+            root.path().join(".initial-files")
+        );
+        assert!(is_empty_directory(&root.path().join(".scratch")));
+        assert!(is_empty_directory(&root.path().join(".initial-files")));
     }
 
     #[cfg(unix)]
     #[test]
-    async fn create_at_root_accepts_the_name_again_after_a_failed_creation() {
+    async fn provision_removes_the_scratch_directory_when_the_initial_files_directory_cannot_be_made()
+     {
         if running_as_root() {
             return;
         }
         let root = tempfile::tempdir().unwrap();
-        let provisioning = provisioning(root.path());
-        let locked = root.path().join(".downloads/locked");
+        let locked = root.path().join(".initial-files/locked");
         std::fs::create_dir_all(&locked).unwrap();
         std::fs::write(locked.join("file"), b"stale").unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
 
-        let failure = HostDirectory::create_at_root(&provisioning, OsStr::new(".downloads"))
-            .await
-            .unwrap_err();
+        let failure = SandboxFilesystemProvisioning::provision(
+            Some(root.path().to_path_buf()),
+            None,
+            RetryConfig::default(),
+        )
+        .await
+        .err()
+        .expect("a .initial-files that cannot be made must fail the provisioning");
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let directory = HostDirectory::create_at_root(&provisioning, OsStr::new(".downloads"))
-            .await
-            .unwrap();
 
         assert!(failure.cleanup_failed(), "{failure}");
         assert!(
-            std::fs::read_dir(directory.path().as_path())
-                .unwrap()
-                .next()
-                .is_none()
+            !root.path().join(".scratch").exists(),
+            "a failed .initial-files must leave no .scratch"
         );
     }
 
     #[test]
-    async fn a_temporary_root_lives_while_its_provisioning_or_a_host_directory_lives() {
-        let provisioning =
-            SandboxFilesystemProvisioning::new(None, None, RetryConfig::default()).unwrap();
+    async fn a_temporary_root_lives_while_a_host_directory_lives() {
+        let (provisioning, directories) = provision(None).await;
+        let HostDirectories {
+            scratch,
+            initial_files,
+        } = directories;
 
-        let directory = HostDirectory::create_at_root(&provisioning, OsStr::new(".downloads"))
-            .await
-            .unwrap();
-
-        let root = directory.path().as_path().parent().unwrap().to_path_buf();
+        let root = scratch.path().as_path().parent().unwrap().to_path_buf();
         assert_ne!(root, std::env::temp_dir());
-        drop(provisioning);
-        assert!(
-            directory.path().as_path().is_dir(),
-            "the host directory must keep the temporary root after the provisioning is dropped"
+        assert_eq!(
+            initial_files.path().as_path().parent(),
+            Some(root.as_path())
         );
-        drop(directory);
+        drop(provisioning);
+        drop(initial_files);
+        assert!(
+            scratch.path().as_path().is_dir(),
+            "a host directory must keep the temporary root after the provisioning is dropped"
+        );
+        drop(scratch);
         assert!(
             !root.exists(),
-            "the temporary root must go away with its last user"
+            "the temporary root must go away with its last host directory"
         );
     }
 
     #[test]
     async fn create_in_refuses_an_existing_name() {
         let root = tempfile::tempdir().unwrap();
-        let parent = HostDirectory::create_at_root(&provisioning(root.path()), OsStr::new(".work"))
-            .await
-            .unwrap();
+        let parent = scratch_at(root.path()).await;
         std::fs::write(parent.path().as_path().join("file"), b"").unwrap();
 
         let child = HostDirectory::create_in(parent.path(), OsStr::new("child"))
@@ -394,7 +436,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(child.path().as_path(), root.path().join(".work/child"));
+        assert_eq!(child.path().as_path(), root.path().join(".scratch/child"));
         assert!(child.path().as_path().is_dir());
         assert_eq!(existing_directory.io_kind(), Some(ErrorKind::AlreadyExists));
         assert_eq!(existing_file.io_kind(), Some(ErrorKind::AlreadyExists));
@@ -404,10 +446,7 @@ mod tests {
     #[test]
     async fn child_refuses_a_name_that_is_not_one_normal_component() {
         let root = tempfile::tempdir().unwrap();
-        let directory =
-            HostDirectory::create_at_root(&provisioning(root.path()), OsStr::new(".work"))
-                .await
-                .unwrap();
+        let directory = scratch_at(root.path()).await;
 
         ["", ".", "..", "a/b", "/a", "a/"]
             .into_iter()
@@ -424,49 +463,46 @@ mod tests {
             });
         assert_eq!(
             directory.path().child(OsStr::new("a")).unwrap().as_path(),
-            root.path().join(".work/a")
+            root.path().join(".scratch/a")
         );
         assert_eq!(
             directory.path().child(OsStr::new(".a")).unwrap().as_path(),
-            root.path().join(".work/.a")
+            root.path().join(".scratch/.a")
         );
     }
 
     #[test]
     async fn discard_and_drop_remove_the_directory_with_its_contents() {
         let root = tempfile::tempdir().unwrap();
-        let provisioning = provisioning(root.path());
-        let discarded = HostDirectory::create_at_root(&provisioning, OsStr::new(".discarded"))
-            .await
-            .unwrap();
-        let dropped = HostDirectory::create_at_root(&provisioning, OsStr::new(".dropped"))
-            .await
-            .unwrap();
+        let (_provisioning, directories) = provision(Some(root.path())).await;
+        let HostDirectories {
+            scratch: discarded,
+            initial_files: dropped,
+        } = directories;
         std::fs::create_dir(discarded.path().as_path().join("nested")).unwrap();
         std::fs::write(discarded.path().as_path().join("nested/file"), b"data").unwrap();
-        std::fs::write(dropped.path().as_path().join("file"), b"data").unwrap();
+        std::fs::create_dir(dropped.path().as_path().join("nested")).unwrap();
+        std::fs::write(dropped.path().as_path().join("nested/file"), b"data").unwrap();
 
         discarded.discard().await.unwrap();
         drop(dropped);
 
-        assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
+        assert!(is_empty_directory(root.path()));
     }
 
     #[test]
     async fn a_child_removed_with_its_parent_discards_without_error() {
         let root = tempfile::tempdir().unwrap();
-        let parent = HostDirectory::create_at_root(&provisioning(root.path()), OsStr::new(".work"))
-            .await
-            .unwrap();
-        let child = HostDirectory::create_in(parent.path(), OsStr::new("child"))
+        let (_provisioning, directories) = provision(Some(root.path())).await;
+        let child = HostDirectory::create_in(directories.scratch.path(), OsStr::new("child"))
             .await
             .unwrap();
         std::fs::write(child.path().as_path().join("file"), b"data").unwrap();
 
-        drop(parent);
+        drop(directories);
 
         child.discard().await.unwrap();
-        assert!(std::fs::read_dir(root.path()).unwrap().next().is_none());
+        assert!(is_empty_directory(root.path()));
     }
 
     #[cfg(unix)]
@@ -476,10 +512,7 @@ mod tests {
             return;
         }
         let root = tempfile::tempdir().unwrap();
-        let directory =
-            HostDirectory::create_at_root(&provisioning(root.path()), OsStr::new(".work"))
-                .await
-                .unwrap();
+        let directory = scratch_at(root.path()).await;
         let locked = directory.path().as_path().join("locked");
         std::fs::create_dir(&locked).unwrap();
         std::fs::write(locked.join("file"), b"contents").unwrap();

@@ -1,7 +1,7 @@
 use super::*;
 use crate::filesystem_pressure::FilesystemWriteRecoveryAuthority;
 use crate::sandbox_filesystem::{
-    FilesystemAllocation, HostDirectory, ScriptedSandboxFilesystemControl,
+    FilesystemAllocation, HostDirectories, HostDirectory, ScriptedSandboxFilesystemControl,
     ScriptedSandboxFilesystemProvisioning, ScriptedSandboxPath, ScriptedSandboxPathBase,
     ScriptedSandboxPathCall,
 };
@@ -182,22 +182,26 @@ fn sandbox_provisioning(
     )
 }
 
+/// Makes the host directories on unmanaged storage with a temporary root.
+async fn host_directories() -> HostDirectories {
+    SandboxFilesystemProvisioning::provision(
+        None,
+        None,
+        golem_common::model::RetryConfig::default(),
+    )
+    .await
+    .unwrap()
+    .1
+}
+
 /// Makes the cache directory of a file loader on unmanaged storage with a temporary root.
-async fn initial_files_directory() -> HostDirectory {
-    let provisioning = sandbox_provisioning(&FilesystemStorageConfig::default()).unwrap();
-    HostDirectory::create_at_root(&provisioning, std::ffi::OsStr::new(".initial-files"))
-        .await
-        .unwrap()
+async fn initial_files_directory() -> Arc<HostDirectory> {
+    Arc::new(host_directories().await.initial_files)
 }
 
 /// Makes a scratch directory on unmanaged storage with a temporary root.
 pub(crate) async fn scratch_directory() -> Arc<HostDirectory> {
-    let provisioning = sandbox_provisioning(&FilesystemStorageConfig::default()).unwrap();
-    Arc::new(
-        HostDirectory::create_at_root(&provisioning, std::ffi::OsStr::new(".scratch"))
-            .await
-            .unwrap(),
-    )
+    Arc::new(host_directories().await.scratch)
 }
 
 /// Prepares no initial files, with a file loader on in-memory storage.

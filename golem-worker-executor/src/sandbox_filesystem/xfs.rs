@@ -680,15 +680,19 @@ fn clear_root_project_assignment(
     let assigned = get_fsxattr(root_fd).map_err(|error| {
         FilesystemStorageError::io("verify managed XFS root project attributes", root, error)
     })?;
-    if assigned.fsx_projid != 0
-        || assigned.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
-    {
+    if has_project_identity(&assigned) {
         return Err(FilesystemStorageError::verification(
             "verify managed XFS root has neutral project identity",
             root,
         ));
     }
     Ok(())
+}
+
+/// Whether a directory has a project id or gives one to what is made in it.
+fn has_project_identity(attributes: &linux_raw_sys::general::fsxattr) -> bool {
+    attributes.fsx_projid != 0
+        || attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
 }
 
 /// Checks that a host directory has no project id and gives no project id to what is made in it.
@@ -705,9 +709,7 @@ pub(super) fn verify_host_directory_has_no_project(
             error,
         )
     })?;
-    if attributes.fsx_projid != 0
-        || attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT != 0
-    {
+    if has_project_identity(&attributes) {
         return Err(FilesystemStorageError::verification(
             "verify managed XFS host directory has no project identity",
             path,
@@ -1216,7 +1218,6 @@ impl ManagedProvisioning {
                 })),
             },
             volume,
-            FileCopyMode::Reflink,
             QuotaAuthority::Project {
                 project_id,
                 filesystem_block_bytes: self.filesystem_block_bytes,
@@ -1674,17 +1675,28 @@ mod tests {
         let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
             .map(PathBuf::from)
             .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
-        let provisioning =
-            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
-                .unwrap();
+        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+            None,
+            Some(root.clone()),
+            RetryConfig::default(),
+        )
+        .await
+        .unwrap();
         assert!(
-            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
-                .is_err()
+            SandboxFilesystemProvisioning::provision(
+                None,
+                Some(root.clone()),
+                RetryConfig::default()
+            )
+            .await
+            .is_err()
         );
+        assert!(directories.scratch.path().as_path().is_dir());
+        assert!(directories.initial_files.path().as_path().is_dir());
 
-        let sources = HostDirectory::create_at_root(
-            &provisioning,
-            std::ffi::OsStr::new(".sandbox-filesystem-source"),
+        let sources = HostDirectory::create_in(
+            directories.scratch.path(),
+            std::ffi::OsStr::new("sandbox-filesystem-source"),
         )
         .await
         .unwrap();
@@ -1965,6 +1977,35 @@ mod tests {
         sources.discard().await.unwrap();
     }
 
+    #[test]
+    fn has_project_identity_needs_a_project_id_or_the_inherit_flag() {
+        let inherit = linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
+        let attributes = |projid: u32, xflags: u32| {
+            // SAFETY: `fsxattr` is a plain C struct of integers, and all zero bits are a valid
+            // value of it.
+            let mut attributes: linux_raw_sys::general::fsxattr = unsafe { std::mem::zeroed() };
+            attributes.fsx_projid = projid;
+            attributes.fsx_xflags = xflags;
+            attributes
+        };
+        [
+            (0, 0, false),
+            (0, 0x1, false),
+            (7, 0, true),
+            (0, inherit, true),
+            (7, inherit, true),
+            (0, inherit | 0x1, true),
+        ]
+        .into_iter()
+        .for_each(|(projid, xflags, expected)| {
+            assert_eq!(
+                has_project_identity(&attributes(projid, xflags)),
+                expected,
+                "project id {projid} with flags {xflags:#x}"
+            );
+        });
+    }
+
     fn managed_test_root() -> PathBuf {
         std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
             .map(PathBuf::from)
@@ -2058,28 +2099,42 @@ mod tests {
         const FILE_BYTES: usize = 64 * 1024;
 
         let root = managed_test_root();
-        let stale_copies = root.join(".native-test-copies").join("stale-copy");
-        std::fs::create_dir_all(&stale_copies).unwrap();
-        std::fs::write(stale_copies.join("garbage"), b"stale").unwrap();
+        [".scratch", ".initial-files"].into_iter().for_each(|name| {
+            let stale = root.join(name).join("stale-copy");
+            std::fs::create_dir_all(&stale).unwrap();
+            std::fs::write(stale.join("garbage"), b"stale").unwrap();
+        });
         let inherited_project = NonZeroU32::new(0x7fff_0001).unwrap();
         assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
-        let provisioning =
-            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
-                .unwrap();
-        let copies = HostDirectory::create_at_root(
-            &provisioning,
-            std::ffi::OsStr::new(".native-test-copies"),
+        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+            None,
+            Some(root.clone()),
+            RetryConfig::default(),
         )
         .await
         .unwrap();
-        let copies_root = root.join(".native-test-copies");
-        assert!(std::fs::read_dir(&copies_root).unwrap().next().is_none());
-        let copies_attributes = get_fsxattr(&File::open(&copies_root).unwrap()).unwrap();
-        assert_eq!(copies_attributes.fsx_projid, 0);
-        assert_eq!(
-            copies_attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
-            0
-        );
+        let HostDirectories {
+            scratch: copies,
+            initial_files,
+        } = directories;
+        let copies_root = root.join(".scratch");
+        assert_eq!(copies.path().as_path(), copies_root);
+        assert_eq!(initial_files.path().as_path(), root.join(".initial-files"));
+        [copies_root.clone(), root.join(".initial-files")]
+            .into_iter()
+            .for_each(|host_directory| {
+                assert!(
+                    std::fs::read_dir(&host_directory).unwrap().next().is_none(),
+                    "{} must hold nothing that an earlier process left",
+                    host_directory.display()
+                );
+                let attributes = get_fsxattr(&File::open(&host_directory).unwrap()).unwrap();
+                assert_eq!(attributes.fsx_projid, 0);
+                assert_eq!(
+                    attributes.fsx_xflags & linux_raw_sys::general::FS_XFLAG_PROJINHERIT,
+                    0
+                );
+            });
         let root_attributes = get_fsxattr(&File::open(&root).unwrap()).unwrap();
         assert_eq!(root_attributes.fsx_projid, 0);
         assert_eq!(
@@ -2262,9 +2317,13 @@ mod tests {
         const FILE_BYTES: usize = 1024 * 1024;
 
         let root = managed_test_root();
-        let provisioning =
-            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
-                .unwrap();
+        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+            None,
+            Some(root.clone()),
+            RetryConfig::default(),
+        )
+        .await
+        .unwrap();
         let volume_root = volume_root(&provisioning);
         let block_bytes = filesystem_block_bytes(&volume_root);
         let cow_extent_size = cow_extent_size_hint(&volume_root, block_bytes).unwrap();
@@ -2275,9 +2334,9 @@ mod tests {
             .unwrap();
         let agent_file = filesystem.root().join("db");
         std::fs::write(&agent_file, vec![0x11; FILE_BYTES]).unwrap();
-        let copies = HostDirectory::create_at_root(
-            &provisioning,
-            std::ffi::OsStr::new(".native-test-cow-copies"),
+        let copies = HostDirectory::create_in(
+            directories.scratch.path(),
+            std::ffi::OsStr::new("native-test-cow-copies"),
         )
         .await
         .unwrap();
@@ -2350,12 +2409,16 @@ mod tests {
     #[timeout("120s")]
     async fn managed_xfs_seed_charges_the_project_and_follows_the_placement() {
         let root = managed_test_root();
-        let provisioning =
-            SandboxFilesystemProvisioning::new(None, Some(root.clone()), RetryConfig::default())
-                .unwrap();
-        let sources = HostDirectory::create_at_root(
-            &provisioning,
-            std::ffi::OsStr::new(".native-test-seed-sources"),
+        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+            None,
+            Some(root.clone()),
+            RetryConfig::default(),
+        )
+        .await
+        .unwrap();
+        let sources = HostDirectory::create_in(
+            directories.scratch.path(),
+            std::ffi::OsStr::new("native-test-seed-sources"),
         )
         .await
         .unwrap();

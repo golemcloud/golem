@@ -16,7 +16,6 @@ use cap_fs_ext::DirExt as _;
 use golem_common::model::RetryConfig;
 use golem_common::retries::RetryState;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::num::{NonZeroU32, NonZeroU64};
@@ -31,7 +30,7 @@ mod unmanaged;
 
 #[allow(unused_imports)]
 pub(crate) use adapter::*;
-pub(crate) use host_directory::{HostDirectory, HostPath};
+pub(crate) use host_directory::{HostDirectories, HostDirectory, HostPath};
 pub(crate) use tree_copy::TreeExclusions;
 
 #[cfg(target_os = "linux")]
@@ -368,6 +367,15 @@ impl FilesystemVolume {
         }
     }
 
+    /// Whether the volume is managed XFS storage.
+    pub(crate) fn is_managed(&self) -> bool {
+        match &self.mode {
+            #[cfg(target_os = "linux")]
+            FilesystemVolumeMode::Managed { .. } => true,
+            FilesystemVolumeMode::UnmanagedDevelopment => false,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn managed_root(&self) -> Option<&Arc<File>> {
         match &self.mode {
@@ -465,7 +473,6 @@ pub(crate) struct SandboxFilesystem {
     root: NativeRoot,
     lease: ExclusiveFilesystemLease,
     volume: FilesystemVolume,
-    file_copy_mode: FileCopyMode,
     quota_authority: QuotaAuthority,
     name_mode_source: NativeNameModeSource,
     name_mode_probe: NativeNameModeProbe,
@@ -692,13 +699,15 @@ impl NativeCleanup {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FileCopyMode {
     Reflink,
     Buffered,
 }
 
-#[derive(Clone, Copy)]
+/// How a sandbox charges what is written into it. A sandbox with a project identity charges its
+/// project, and it copies files by reflink. A sandbox without one copies bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuotaAuthority {
     Unsupported,
     Project {
@@ -707,11 +716,18 @@ enum QuotaAuthority {
     },
 }
 
+/// Gives how the files of a sandbox with `authority` are copied.
+fn file_copy_mode(authority: QuotaAuthority) -> FileCopyMode {
+    match authority {
+        QuotaAuthority::Unsupported => FileCopyMode::Buffered,
+        QuotaAuthority::Project { .. } => FileCopyMode::Reflink,
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct SandboxFilesystemProvisioning {
     volume: FilesystemVolume,
     mode: SandboxFilesystemProvisioningMode,
-    host_directory_names: Arc<Mutex<HashSet<Box<OsStr>>>>,
 }
 
 #[derive(Clone)]
@@ -722,7 +738,35 @@ enum SandboxFilesystemProvisioningMode {
 }
 
 impl SandboxFilesystemProvisioning {
+    /// Binds the storage settings and makes the host directories `.scratch` and
+    /// `.initial-files` directly under the volume root.
+    ///
+    /// Exactly one storage mode applies: managed XFS at `managed_xfs_root_dir`, unmanaged storage
+    /// at `deterministic_root_dir`, or unmanaged storage in temporary directories when neither is
+    /// given. The binding comes first, so on managed storage a root that another provisioning
+    /// holds gives an error before any host directory changes. What an earlier process left under
+    /// the two names is removed. See [`HostDirectories`].
+    pub(crate) async fn provision(
+        deterministic_root_dir: Option<PathBuf>,
+        managed_xfs_root_dir: Option<PathBuf>,
+        cleanup_retry: RetryConfig,
+    ) -> Result<(Self, HostDirectories), FilesystemStorageError> {
+        let provisioning = Self::bind(deterministic_root_dir, managed_xfs_root_dir, cleanup_retry)?;
+        let directories = host_directory::make_host_directories(&provisioning).await?;
+        Ok((provisioning, directories))
+    }
+
+    /// Binds the storage settings without host directories.
+    #[cfg(test)]
     pub(crate) fn new(
+        deterministic_root_dir: Option<PathBuf>,
+        managed_xfs_root_dir: Option<PathBuf>,
+        cleanup_retry: RetryConfig,
+    ) -> Result<Self, FilesystemStorageError> {
+        Self::bind(deterministic_root_dir, managed_xfs_root_dir, cleanup_retry)
+    }
+
+    fn bind(
         deterministic_root_dir: Option<PathBuf>,
         managed_xfs_root_dir: Option<PathBuf>,
         cleanup_retry: RetryConfig,
@@ -737,56 +781,18 @@ impl SandboxFilesystemProvisioning {
         match managed_xfs_root_dir.as_deref() {
             Some(root) => configured_managed(root, &cleanup_retry),
             None => {
-                let volume = FilesystemVolume::unmanaged_development();
                 let unmanaged =
-                    unmanaged::UnmanagedProvisioning::new(deterministic_root_dir, cleanup_retry)
-                        .map_err(|error| {
-                            FilesystemStorageError::io(
-                                "create temporary host directory root",
-                                Path::new("<temp>"),
-                                error,
-                            )
-                        })?;
+                    unmanaged::UnmanagedProvisioning::new(deterministic_root_dir, cleanup_retry);
                 Ok(Self {
-                    volume: volume.clone(),
+                    volume: FilesystemVolume::unmanaged_development(),
                     mode: SandboxFilesystemProvisioningMode::Unmanaged(unmanaged),
-                    host_directory_names: Arc::default(),
                 })
             }
         }
     }
 
-    /// Whether the agent filesystems live on managed XFS storage.
-    pub(crate) fn uses_managed_storage(&self) -> bool {
-        match &self.mode {
-            SandboxFilesystemProvisioningMode::Unmanaged(_) => false,
-            #[cfg(target_os = "linux")]
-            SandboxFilesystemProvisioningMode::Managed(_) => true,
-        }
-    }
-
     pub(crate) fn volume(&self) -> &FilesystemVolume {
         &self.volume
-    }
-
-    fn host_root(&self) -> HostRoot<'_> {
-        match &self.mode {
-            SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => HostRoot {
-                path: unmanaged.host_root(),
-                anchor: None,
-                temporary_root: unmanaged.temporary_host_root().cloned(),
-                names: &self.host_directory_names,
-                verify_no_project: false,
-            },
-            #[cfg(target_os = "linux")]
-            SandboxFilesystemProvisioningMode::Managed(managed) => HostRoot {
-                path: managed.root(),
-                anchor: self.volume.managed_root().cloned(),
-                temporary_root: None,
-                names: &self.host_directory_names,
-                verify_no_project: true,
-            },
-        }
     }
 
     pub(crate) async fn create_fresh(
@@ -813,15 +819,6 @@ impl SandboxFilesystemProvisioning {
     }
 }
 
-/// Where the host directories of a provisioning are made, and what a new one must satisfy.
-struct HostRoot<'a> {
-    path: &'a Path,
-    anchor: Option<Arc<File>>,
-    temporary_root: Option<Arc<tempfile::TempDir>>,
-    names: &'a Mutex<HashSet<Box<OsStr>>>,
-    verify_no_project: bool,
-}
-
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
@@ -832,7 +829,6 @@ fn configured_managed(
     Ok(SandboxFilesystemProvisioning {
         volume,
         mode: SandboxFilesystemProvisioningMode::Managed(managed),
-        host_directory_names: Arc::default(),
     })
 }
 
@@ -890,7 +886,6 @@ impl SandboxFilesystem {
         root: NativeRoot,
         lease: LeaseState,
         volume: FilesystemVolume,
-        file_copy_mode: FileCopyMode,
         quota_authority: QuotaAuthority,
         name_mode_source: NativeNameModeSource,
     ) -> Self {
@@ -900,7 +895,6 @@ impl SandboxFilesystem {
                 state: Mutex::new(Some(lease)),
             },
             volume,
-            file_copy_mode,
             quota_authority,
             name_mode_source,
             name_mode_probe: NativeNameModeProbe::default(),
@@ -1376,31 +1370,23 @@ impl<'a> CapabilityTempFile<'a> {
         Ok(())
     }
 
-    /// Gives the file the name `destination`, in place of what is at that name. A directory at
-    /// that name goes away first, together with all that is in it.
+    /// Gives the file the name `destination`, in place of what is at that name, as
+    /// [`tree_copy::clear_for_replacement`] decides for a file.
     fn persist_replacing(mut self, destination: &Path) -> std::io::Result<()> {
         let name = self
             .name
             .as_ref()
             .expect("capability temporary file name missing");
-        remove_directory_in_the_way(self.directory.as_dir(), destination)?;
+        tree_copy::clear_for_replacement(
+            self.directory.as_dir(),
+            destination,
+            &tree_copy::TreeEntryKind::File,
+        )?;
         self.directory
             .as_dir()
             .rename(name, self.directory.as_dir(), destination)?;
         self.name = None;
         Ok(())
-    }
-}
-
-/// Removes the directory at `path` in `directory`, together with all that is in it.
-///
-/// Another kind of object at the path, or no object, stays as it is. A symlink is not followed.
-fn remove_directory_in_the_way(directory: &cap_std::fs::Dir, path: &Path) -> std::io::Result<()> {
-    match directory.symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => directory.remove_dir_all(path),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
     }
 }
 
@@ -1570,6 +1556,26 @@ mod tests {
     use super::*;
     use test_r::test;
 
+    #[test]
+    fn file_copy_mode_follows_the_quota_authority() {
+        assert_eq!(
+            file_copy_mode(QuotaAuthority::Unsupported),
+            FileCopyMode::Buffered
+        );
+        assert_eq!(
+            file_copy_mode(QuotaAuthority::Project {
+                project_id: NonZeroU32::new(1).unwrap(),
+                filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
+            }),
+            FileCopyMode::Reflink
+        );
+    }
+
+    #[test]
+    fn an_unmanaged_volume_is_not_managed() {
+        assert!(!FilesystemVolume::unmanaged_development().is_managed());
+    }
+
     fn name() -> SandboxFilesystemName {
         SandboxFilesystemName::new(
             "environment".to_string(),
@@ -1733,7 +1739,10 @@ mod tests {
                 .next()
                 .is_none()
         );
-        assert!(matches!(filesystem.file_copy_mode, FileCopyMode::Buffered));
+        assert_eq!(
+            file_copy_mode(filesystem.quota_authority),
+            FileCopyMode::Buffered
+        );
         assert!(matches!(
             filesystem.quota_authority,
             QuotaAuthority::Unsupported
