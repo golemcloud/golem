@@ -298,6 +298,9 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                             object: name.clone(),
                             length,
                         };
+                        // Persist Start before quota admission and storage I/O. A completed call
+                        // replays its recorded response without charging again, while an incomplete
+                        // retry resumes under the same Start before repeating the live effect.
                         (
                             begun.start_live(self, request).await?,
                             environment_id,
@@ -445,7 +448,12 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_object(environment_id, container_name.clone(), name.clone())
+                    .delete_object(
+                        self.account_resource_limits(),
+                        environment_id,
+                        container_name.clone(),
+                        name.clone(),
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -456,10 +464,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                if let Ok(mutation) = &result {
-                    self.account_resource_limits()
-                        .try_record_blob_storage_delta(mutation.bytes_delta);
-                }
                 let account_id = self.created_by().to_string();
                 let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
@@ -544,7 +548,12 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_objects(environment_id, &container_name, &names)
+                    .delete_objects(
+                        self.account_resource_limits(),
+                        environment_id,
+                        &container_name,
+                        &names,
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -555,10 +564,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                if let Ok(mutation) = &result {
-                    self.account_resource_limits()
-                        .try_record_blob_storage_delta(mutation.bytes_delta);
-                }
                 let account_id = self.created_by().to_string();
                 let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
@@ -785,7 +790,11 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .clear(environment_id, container_name.clone())
+                    .clear(
+                        self.account_resource_limits(),
+                        environment_id,
+                        container_name.clone(),
+                    )
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -796,10 +805,6 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                if let Ok(mutation) = &result {
-                    self.account_resource_limits()
-                        .try_record_blob_storage_delta(mutation.bytes_delta);
-                }
                 let account_id = self.created_by().to_string();
                 let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(

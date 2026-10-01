@@ -42,8 +42,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 
 pub const BLOB_STORAGE_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(300);
+const MAX_CONCURRENT_BLOB_STORAGE_RECONCILIATIONS: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceUsageUpdate {
@@ -64,8 +67,16 @@ pub struct AccountUsageService {
     blob_storage: Arc<dyn BlobStorage>,
     blob_storage_reconciliation_enabled: bool,
     blob_storage_reconciliation_interval: Duration,
-    accounting_locks: Mutex<HashMap<AccountId, Arc<tokio::sync::Mutex<()>>>>,
-    blob_storage_reconciled_at: Mutex<HashMap<AccountId, Instant>>,
+    blob_storage_reconciliation_state:
+        Arc<Mutex<HashMap<AccountId, BlobStorageReconciliationState>>>,
+    blob_storage_reconciliation_tasks: Mutex<JoinSet<()>>,
+    blob_storage_reconciliation_permits: Arc<Semaphore>,
+}
+
+#[derive(Debug, Default)]
+struct BlobStorageReconciliationState {
+    running: bool,
+    last_success: Option<Instant>,
 }
 
 // TODO: do we want to add component max size limit?
@@ -86,72 +97,89 @@ impl AccountUsageService {
             blob_storage,
             blob_storage_reconciliation_enabled,
             blob_storage_reconciliation_interval,
-            accounting_locks: Mutex::new(HashMap::new()),
-            blob_storage_reconciled_at: Mutex::new(HashMap::new()),
+            blob_storage_reconciliation_state: Arc::new(Mutex::new(HashMap::new())),
+            blob_storage_reconciliation_tasks: Mutex::new(JoinSet::new()),
+            blob_storage_reconciliation_permits: Arc::new(Semaphore::new(
+                MAX_CONCURRENT_BLOB_STORAGE_RECONCILIATIONS,
+            )),
         }
     }
 
-    fn accounting_lock(&self, account_id: AccountId) -> Arc<tokio::sync::Mutex<()>> {
-        self.accounting_locks
-            .lock()
-            .unwrap()
-            .entry(account_id)
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
-    }
-
-    async fn reconcile_blob_storage_usage(
-        &self,
-        account_id: AccountId,
-    ) -> Result<(), AccountUsageError> {
+    fn trigger_blob_storage_reconciliation(&self, account_id: AccountId) {
         // Incremental executor deltas and the S3 snapshot are intentionally not coordinated.
         // Deltas delayed across a sweep can temporarily over- or under-count usage. A later
         // sweep restores the physical total. Sweeps are activity-triggered by limit reads and
         // usage updates, so an idle account is corrected on its next such request after the
         // interval has elapsed.
         if !self.blob_storage_reconciliation_enabled {
-            return Ok(());
+            return;
         }
-        if self
-            .blob_storage_reconciled_at
-            .lock()
-            .unwrap()
-            .get(&account_id)
-            .is_some_and(|last| last.elapsed() < self.blob_storage_reconciliation_interval)
+
         {
-            return Ok(());
+            let mut state = self.blob_storage_reconciliation_state.lock().unwrap();
+            let account = state.entry(account_id).or_default();
+            if account.running
+                || account
+                    .last_success
+                    .is_some_and(|last| last.elapsed() < self.blob_storage_reconciliation_interval)
+            {
+                return;
+            }
+            account.running = true;
         }
-        let environments = self
-            .environment_repo
-            .list_default_card_refs_by_account(account_id.0)
-            .await
-            .map_err(anyhow::Error::new)?;
-        let mut total = 0u64;
-        for environment in environments {
-            let namespace = BlobStorageNamespace::CustomStorage {
-                environment_id: environment.environment_id,
-            };
-            let blobs = self
-                .blob_storage
-                .list_blobs_below(
-                    "account_usage",
-                    "reconcile_blob_storage_usage",
-                    namespace,
-                    Path::new(""),
+
+        let account_usage_repo = self.account_usage_repo.clone();
+        let environment_repo = self.environment_repo.clone();
+        let blob_storage = self.blob_storage.clone();
+        let state = self.blob_storage_reconciliation_state.clone();
+        let permits = self.blob_storage_reconciliation_permits.clone();
+        let mut tasks = self.blob_storage_reconciliation_tasks.lock().unwrap();
+        while tasks.try_join_next().is_some() {}
+        tasks.spawn(async move {
+            let result = async {
+                let _permit = permits.acquire_owned().await.map_err(anyhow::Error::new)?;
+                reconcile_blob_storage_usage(
+                    account_id,
+                    account_usage_repo,
+                    environment_repo,
+                    blob_storage,
                 )
-                .await?;
-            total = blobs.iter().fold(total, |sum, (_, metadata)| {
-                sum.saturating_add(metadata.size)
-            });
+                .await
+            }
+            .await;
+
+            let mut state = state.lock().unwrap();
+            let account = state.entry(account_id).or_default();
+            account.running = false;
+            match result {
+                Ok(()) => account.last_success = Some(Instant::now()),
+                Err(error) => tracing::warn!(
+                    %account_id,
+                    %error,
+                    "Failed to reconcile blob storage usage; retaining the incrementally tracked value"
+                ),
+            }
+        });
+    }
+
+    async fn get_account_usage_for_resource_limits(
+        &self,
+        account_id: AccountId,
+    ) -> Result<RepoAccountUsage, AccountUsageError> {
+        let period = AccountUsagePeriod::current();
+        let date = SqlDateTime::new(
+            Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
+                .single()
+                .expect("validated account usage period"),
+        );
+        match self
+            .account_usage_repo
+            .get_for_resource_limits(account_id.0, &date)
+            .await?
+        {
+            Some(usage) => Ok(usage),
+            None => Err(AccountUsageError::AccountNotfound(account_id)),
         }
-        self.account_usage_repo
-            .set_total_usage(account_id.0, UsageType::TotalBlobStorageBytes, total)
-            .await?;
-        self.blob_storage_reconciled_at
-            .lock()
-            .unwrap()
-            .insert(account_id, Instant::now());
-        Ok(())
     }
 
     pub async fn ensure_application_within_limits(
@@ -286,8 +314,7 @@ impl AccountUsageService {
 
         let mut limits_of_updated_accounts = HashMap::new();
         for (account_id, update) in updates {
-            let _accounting = self.accounting_lock(account_id).lock_owned().await;
-            match self.get_account_usage(account_id, None).await {
+            match self.get_account_usage_for_resource_limits(account_id).await {
                 Ok(mut account_usage) => {
                     // Usage can slightly exceed the monthly limit. The worker executor
                     // will suspend the worker at the next opportunity.
@@ -332,15 +359,8 @@ impl AccountUsageService {
 
                     match self.account_usage_repo.add(&account_usage).await {
                         Ok(()) => {
-                            if let Err(error) = self.reconcile_blob_storage_usage(account_id).await
-                            {
-                                tracing::warn!(
-                                    %account_id,
-                                    %error,
-                                    "Failed to reconcile blob storage usage; retaining the incrementally tracked value"
-                                );
-                            }
-                            match self.get_account_usage(account_id, None).await {
+                            self.trigger_blob_storage_reconciliation(account_id);
+                            match self.get_account_usage_for_resource_limits(account_id).await {
                                 Ok(reconciled_usage) => {
                                     limits_of_updated_accounts
                                         .insert(account_id, reconciled_usage.resource_limits());
@@ -410,16 +430,10 @@ impl AccountUsageService {
 
         authorize_account_usage_permission(auth, &account.email, AccountUsageVerb::View)?;
 
-        let _accounting = self.accounting_lock(account_id).lock_owned().await;
-        if let Err(error) = self.reconcile_blob_storage_usage(account_id).await {
-            tracing::warn!(
-                %account_id,
-                %error,
-                "Failed to reconcile blob storage usage; returning the last known limit"
-            );
-        }
-
-        let account_usage = self.get_account_usage(account_id, None).await?;
+        self.trigger_blob_storage_reconciliation(account_id);
+        let account_usage = self
+            .get_account_usage_for_resource_limits(account_id)
+            .await?;
 
         Ok(account_usage.resource_limits())
     }
@@ -567,6 +581,38 @@ impl AccountUsageService {
 
         Ok(())
     }
+}
+
+async fn reconcile_blob_storage_usage(
+    account_id: AccountId,
+    account_usage_repo: Arc<dyn AccountUsageRepo>,
+    environment_repo: Arc<dyn EnvironmentRepo>,
+    blob_storage: Arc<dyn BlobStorage>,
+) -> Result<(), AccountUsageError> {
+    let environments = environment_repo
+        .list_ids_by_account_including_deleted(account_id.0)
+        .await
+        .map_err(anyhow::Error::new)?;
+    let mut total = 0u64;
+    for environment_id in environments {
+        let blobs = blob_storage
+            .list_blobs_below(
+                "account_usage",
+                "reconcile_blob_storage_usage",
+                BlobStorageNamespace::CustomStorage {
+                    environment_id: environment_id.into(),
+                },
+                Path::new(""),
+            )
+            .await?;
+        total = blobs.iter().fold(total, |sum, (_, metadata)| {
+            sum.saturating_add(metadata.size)
+        });
+    }
+    account_usage_repo
+        .set_total_usage(account_id.0, UsageType::TotalBlobStorageBytes, total)
+        .await?;
+    Ok(())
 }
 
 fn metering_status(enabled: bool) -> MeteringStatus {

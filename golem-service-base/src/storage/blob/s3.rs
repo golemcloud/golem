@@ -343,6 +343,55 @@ impl S3BlobStorage {
         }
     }
 
+    async fn get_exact_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {key:?}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key.to_string()),
+            |(client, bucket, key)| {
+                Box::pin(async move {
+                    client
+                        .head_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .send()
+                        .await
+                })
+            },
+            Self::is_head_object_error_retriable,
+            Self::head_object_error_as_loggable,
+            false,
+        )
+        .await;
+
+        match result {
+            Ok(result) => Ok(Some(BlobMetadata {
+                size: result.content_length().unwrap_or_default().max(0) as u64,
+                last_modified_at: Timestamp::from(
+                    result
+                        .last_modified
+                        .unwrap()
+                        .to_millis()
+                        .expect("failed to convert date-time value to millis")
+                        as u64,
+                ),
+            })),
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
+                HeadObjectError::NotFound(_) => Ok(None),
+                err => Err(err.into()),
+            },
+            Err(err) => Err(err.into()),
+        }
+    }
+
     fn is_get_object_error_retriable(
         error: &SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
     ) -> bool {
@@ -686,90 +735,21 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.key_of(&namespace, path)?;
-        let op_id = format!("{bucket} - {key:?}");
-
-        let file_head_result = with_retries_customized(
-            target_label,
-            op_label,
-            Some(op_id.clone()),
-            &self.config.retries,
-            &(self.client.clone(), bucket, key.clone()),
-            |(client, bucket, key)| {
-                Box::pin(async move {
-                    client
-                        .head_object()
-                        .bucket(*bucket)
-                        .key(key.clone())
-                        .send()
-                        .await
-                })
-            },
-            Self::is_head_object_error_retriable,
-            Self::head_object_error_as_loggable,
-            false,
-        )
-        .await;
-        match file_head_result {
-            Ok(result) => Ok(Some(BlobMetadata {
-                size: result.content_length().unwrap_or_default() as u64,
-                last_modified_at: Timestamp::from(
-                    result
-                        .last_modified
-                        .unwrap()
-                        .to_millis()
-                        .expect("failed to convert date-time value to millis")
-                        as u64,
-                ),
-            })),
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                HeadObjectError::NotFound(_) => {
-                    let marker = join_blob_key(&key, "__dir_marker");
-                    let dir_marker_head_result = with_retries_customized(
-                        target_label,
-                        op_label,
-                        Some(op_id),
-                        &self.config.retries,
-                        &(self.client.clone(), bucket, marker),
-                        |(client, bucket, marker)| {
-                            Box::pin(async move {
-                                client
-                                    .head_object()
-                                    .bucket(*bucket)
-                                    .key(marker.clone())
-                                    .send()
-                                    .await
-                            })
-                        },
-                        Self::is_head_object_error_retriable,
-                        Self::head_object_error_as_loggable,
-                        false,
-                    )
-                    .await;
-                    match dir_marker_head_result {
-                        Ok(result) => Ok(Some(BlobMetadata {
-                            size: 0,
-                            last_modified_at: Timestamp::from(
-                                result
-                                    .last_modified
-                                    .unwrap()
-                                    .to_millis()
-                                    .expect("failed to convert date-time value to millis")
-                                    as u64,
-                            ),
-                        })),
-                        Err(SdkError::ServiceError(service_error)) => {
-                            match service_error.into_err() {
-                                HeadObjectError::NotFound(_) => Ok(None),
-                                err => Err(err.into()),
-                            }
-                        }
-                        Err(err) => Err(err.into()),
-                    }
-                }
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+        if let Some(metadata) = self
+            .get_exact_metadata(target_label, op_label, bucket, &key)
+            .await?
+        {
+            return Ok(Some(metadata));
         }
+
+        let marker = join_blob_key(&key, DIRECTORY_MARKER_NAME);
+        Ok(self
+            .get_exact_metadata(target_label, op_label, bucket, &marker)
+            .await?
+            .map(|metadata| BlobMetadata {
+                size: 0,
+                ..metadata
+            }))
     }
 
     async fn put_raw(
@@ -1056,10 +1036,18 @@ impl BlobStorage for S3BlobStorage {
         let namespace_root = self.prefix_of(&namespace);
         let prefix = self.key_of(&namespace, path)?;
 
+        let mut result = Vec::new();
+        if blob_path_is_root(path)
+            && let Some(metadata) = self
+                .get_exact_metadata(target_label, op_label, bucket, &namespace_root)
+                .await?
+        {
+            result.push((PathBuf::new(), metadata));
+        }
+
         let objects = self
             .list_objects(target_label, op_label, bucket, &prefix)
             .await?;
-        let mut result = Vec::new();
         for object in objects {
             let Some(object_key) = object.key() else {
                 continue;

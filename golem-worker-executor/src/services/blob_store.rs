@@ -18,11 +18,11 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
-    blob_file_name_to_string, join_blob_path,
+    blob_file_name_to_string, blob_path_to_string, join_blob_path,
 };
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tokio::sync::Mutex;
 
 fn signed_delta(new_size: u64, old_size: u64) -> i64 {
@@ -77,6 +77,7 @@ impl std::fmt::Display for BlobStoreError {
 pub trait BlobStoreService: Send + Sync {
     async fn clear(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError>;
@@ -105,12 +106,14 @@ pub trait BlobStoreService: Send + Sync {
 
     async fn delete_container(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError>;
 
     async fn delete_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
@@ -118,6 +121,7 @@ pub trait BlobStoreService: Send + Sync {
 
     async fn delete_objects(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_names: &[String],
@@ -153,6 +157,7 @@ pub trait BlobStoreService: Send + Sync {
 
     async fn move_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
@@ -179,15 +184,27 @@ pub trait BlobStoreService: Send + Sync {
 
 pub struct DefaultBlobStoreService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
-    mutation_lock: Mutex<()>,
+    mutation_locks: StdMutex<HashMap<EnvironmentId, Weak<Mutex<()>>>>,
 }
 
 impl DefaultBlobStoreService {
     pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
         Self {
             blob_storage,
-            mutation_lock: Mutex::new(()),
+            mutation_locks: StdMutex::new(HashMap::new()),
         }
+    }
+
+    fn mutation_lock(&self, environment_id: EnvironmentId) -> Arc<Mutex<()>> {
+        let mut locks = self.mutation_locks.lock().unwrap();
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&environment_id).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(environment_id, Arc::downgrade(&lock));
+        lock
     }
 
     fn container_path(container_name: &str) -> Result<PathBuf, BlobStoreError> {
@@ -200,6 +217,10 @@ impl DefaultBlobStoreService {
             .map_err(|err| BlobStoreError::InvalidInput(err.to_string()))
     }
 
+    fn blob_path_identity(path: &Path) -> Result<String, BlobStoreError> {
+        blob_path_to_string(path).map_err(|err| BlobStoreError::InvalidInput(err.to_string()))
+    }
+
     fn object_name(path: &Path) -> Result<String, BlobStoreError> {
         blob_file_name_to_string(path).map_err(|err| BlobStoreError::InvalidInput(err.to_string()))
     }
@@ -209,10 +230,11 @@ impl DefaultBlobStoreService {
 impl BlobStoreService for DefaultBlobStoreService {
     async fn clear(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        let _mutation = self.mutation_lock.lock().await;
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let path = Self::container_path(&container_name)?;
         let blob_storage = self.blob_storage.with("blob_store", "clear");
@@ -252,6 +274,8 @@ impl BlobStoreService for DefaultBlobStoreService {
             bytes_delta: -(deleted_bytes.min(i64::MAX as u64) as i64),
             objects_deleted: blobs.len() as u64,
         };
+        let recorded = resource_limits.try_record_blob_storage_delta(mutation.bytes_delta);
+        debug_assert!(recorded);
         Ok(mutation)
     }
 
@@ -285,7 +309,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         destination_container_name: String,
         destination_object_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        let _mutation = self.mutation_lock.lock().await;
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let source = Self::object_path(&source_container_name, &source_object_name)?;
         let destination = Self::object_path(&destination_container_name, &destination_object_name)?;
@@ -302,14 +326,20 @@ impl BlobStoreService for DefaultBlobStoreService {
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?
             .map_or(0, |metadata| metadata.size);
         let delta = signed_delta(source_size, old_destination_size);
-        if !resource_limits.try_record_blob_storage_delta(delta) {
+        if delta > 0 && !resource_limits.try_record_blob_storage_delta(delta) {
             return Err(BlobStoreError::LimitExceeded(
                 "Blob storage byte limit exceeded".to_string(),
             ));
         }
         if let Err(error) = blob_storage.copy(namespace, &source, &destination).await {
-            resource_limits.rollback_blob_storage_delta(delta);
+            if delta > 0 {
+                resource_limits.rollback_blob_storage_delta(delta);
+            }
             return Err(BlobStoreError::TransientBackend(error.to_string()));
+        }
+        if delta < 0 {
+            let recorded = resource_limits.try_record_blob_storage_delta(delta);
+            debug_assert!(recorded);
         }
         Ok(BlobStoreMutation {
             bytes_delta: delta,
@@ -322,6 +352,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         let path = Self::container_path(&container_name)?;
         self.blob_storage
             .with("blob_store", "create_container")
@@ -336,10 +367,11 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn delete_container(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        let _mutation = self.mutation_lock.lock().await;
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let path = Self::container_path(&container_name)?;
         let blob_storage = self.blob_storage.with("blob_store", "delete_container");
@@ -365,19 +397,23 @@ impl BlobStoreService for DefaultBlobStoreService {
         {
             return Ok(BlobStoreMutation::default());
         }
-        Ok(BlobStoreMutation {
+        let mutation = BlobStoreMutation {
             bytes_delta: -(deleted_bytes.min(i64::MAX as u64) as i64),
             objects_deleted: blobs.len() as u64,
-        })
+        };
+        let recorded = resource_limits.try_record_blob_storage_delta(mutation.bytes_delta);
+        debug_assert!(recorded);
+        Ok(mutation)
     }
 
     async fn delete_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        let _mutation = self.mutation_lock.lock().await;
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let path = Self::object_path(&container_name, &object_name)?;
         let blob_storage = self.blob_storage.with("blob_store", "delete_object");
@@ -390,29 +426,36 @@ impl BlobStoreService for DefaultBlobStoreService {
             .delete(namespace, &path)
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
-        Ok(BlobStoreMutation {
+        let mutation = BlobStoreMutation {
             bytes_delta: -(old_size.min(i64::MAX as u64) as i64),
             objects_deleted: u64::from(old_metadata.is_some()),
-        })
+        };
+        let recorded = resource_limits.try_record_blob_storage_delta(mutation.bytes_delta);
+        debug_assert!(recorded);
+        Ok(mutation)
     }
 
     async fn delete_objects(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_names: &[String],
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        let _mutation = self.mutation_lock.lock().await;
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         Self::container_path(container_name)?;
-        let paths: HashSet<PathBuf> = object_names
+        let paths: HashMap<String, PathBuf> = object_names
             .iter()
-            .map(|object_name| Self::object_path(container_name, object_name))
+            .map(|object_name| {
+                let path = Self::object_path(container_name, object_name)?;
+                Ok((Self::blob_path_identity(&path)?, path))
+            })
             .collect::<Result<_, _>>()?;
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let mut deleted_bytes = 0u64;
         let mut existing_paths = Vec::new();
         let blob_storage = self.blob_storage.with("blob_store", "delete_objects");
-        for path in &paths {
+        for path in paths.values() {
             if let Some(metadata) = blob_storage
                 .get_metadata(namespace.clone(), path)
                 .await
@@ -429,10 +472,13 @@ impl BlobStoreService for DefaultBlobStoreService {
             .delete_many(namespace, &existing_paths)
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
-        Ok(BlobStoreMutation {
+        let mutation = BlobStoreMutation {
             bytes_delta: -(deleted_bytes.min(i64::MAX as u64) as i64),
             objects_deleted: existing_paths.len() as u64,
-        })
+        };
+        let recorded = resource_limits.try_record_blob_storage_delta(mutation.bytes_delta);
+        debug_assert!(recorded);
+        Ok(mutation)
     }
 
     async fn get_container(
@@ -522,18 +568,19 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     async fn move_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        let _mutation = self.mutation_lock.lock().await;
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let source = Self::object_path(&source_container_name, &source_object_name)?;
         let destination = Self::object_path(&destination_container_name, &destination_object_name)?;
         let blob_storage = self.blob_storage.with("blob_store", "move_object");
-        if source == destination {
+        if Self::blob_path_identity(&source)? == Self::blob_path_identity(&destination)? {
             blob_storage
                 .get_metadata(namespace, &source)
                 .await
@@ -552,10 +599,13 @@ impl BlobStoreService for DefaultBlobStoreService {
             .r#move(namespace, &source, &destination)
             .await
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?;
-        Ok(BlobStoreMutation {
+        let mutation = BlobStoreMutation {
             bytes_delta: -(old_destination_size.min(i64::MAX as u64) as i64),
             objects_deleted: u64::from(old_destination.is_some()),
-        })
+        };
+        let recorded = resource_limits.try_record_blob_storage_delta(mutation.bytes_delta);
+        debug_assert!(recorded);
+        Ok(mutation)
     }
 
     async fn object_info(
@@ -595,7 +645,7 @@ impl BlobStoreService for DefaultBlobStoreService {
         object_name: &str,
         data: &[u8],
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        let _mutation = self.mutation_lock.lock().await;
+        let _mutation = self.mutation_lock(environment_id).lock_owned().await;
         let namespace = BlobStorageNamespace::CustomStorage { environment_id };
         let path = Self::object_path(container_name, object_name)?;
         let blob_storage = self.blob_storage.with("blob_store", "write_data");
@@ -605,14 +655,20 @@ impl BlobStoreService for DefaultBlobStoreService {
             .map_err(|err| BlobStoreError::TransientBackend(err.to_string()))?
             .map_or(0, |metadata| metadata.size);
         let delta = signed_delta(data.len() as u64, old_size);
-        if !resource_limits.try_record_blob_storage_delta(delta) {
+        if delta > 0 && !resource_limits.try_record_blob_storage_delta(delta) {
             return Err(BlobStoreError::LimitExceeded(
                 "Blob storage byte limit exceeded".to_string(),
             ));
         }
         if let Err(error) = blob_storage.put_raw(namespace, &path, data).await {
-            resource_limits.rollback_blob_storage_delta(delta);
+            if delta > 0 {
+                resource_limits.rollback_blob_storage_delta(delta);
+            }
             return Err(BlobStoreError::TransientBackend(error.to_string()));
+        }
+        if delta < 0 {
+            let recorded = resource_limits.try_record_blob_storage_delta(delta);
+            debug_assert!(recorded);
         }
         Ok(BlobStoreMutation {
             bytes_delta: delta,
@@ -627,11 +683,20 @@ mod tests {
         BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
     };
     use crate::services::resource_limits::AtomicResourceEntry;
+    use anyhow::Error;
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::stream::BoxStream;
     use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::replayable_stream::ErasedReplayableStream;
     use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use std::path::Path;
+    use golem_service_base::storage::blob::{
+        BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace, ExistsResult,
+    };
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tempfile::TempDir;
     use test_r::test;
 
@@ -643,6 +708,189 @@ mod tests {
             u64::MAX,
             u64::MAX,
         ))
+    }
+
+    #[derive(Debug)]
+    struct FailingPutBlobStorage {
+        inner: InMemoryBlobStorage,
+        fail_next_put: AtomicBool,
+        block_next_put: AtomicBool,
+        put_started: tokio::sync::Notify,
+        release_put: tokio::sync::Notify,
+    }
+
+    impl FailingPutBlobStorage {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryBlobStorage::new(),
+                fail_next_put: AtomicBool::new(false),
+                block_next_put: AtomicBool::new(false),
+                put_started: tokio::sync::Notify::new(),
+                release_put: tokio::sync::Notify::new(),
+            }
+        }
+
+        fn fail_next_put(&self) {
+            self.fail_next_put.store(true, Ordering::Release);
+        }
+
+        fn block_next_put(&self) {
+            self.block_next_put.store(true, Ordering::Release);
+        }
+
+        async fn wait_for_blocked_put(&self) {
+            self.put_started.notified().await;
+        }
+
+        fn release_blocked_put(&self) {
+            self.release_put.notify_one();
+        }
+    }
+
+    #[async_trait]
+    impl BlobStorage for FailingPutBlobStorage {
+        async fn get_raw(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<Vec<u8>>, Error> {
+            self.inner
+                .get_raw(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn get_stream(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+            self.inner
+                .get_stream(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn get_range_stream(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+            offset: u64,
+            length: u64,
+        ) -> Result<Option<BlobRangeStream>, Error> {
+            self.inner
+                .get_range_stream(target_label, op_label, namespace, path, offset, length)
+                .await
+        }
+
+        async fn get_metadata(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Option<BlobMetadata>, Error> {
+            self.inner
+                .get_metadata(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn put_raw(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+            data: &[u8],
+        ) -> Result<(), Error> {
+            if self.fail_next_put.swap(false, Ordering::AcqRel) {
+                return Err(anyhow::anyhow!("injected put failure"));
+            }
+            if self.block_next_put.swap(false, Ordering::AcqRel) {
+                self.put_started.notify_one();
+                self.release_put.notified().await;
+            }
+            self.inner
+                .put_raw(target_label, op_label, namespace, path, data)
+                .await
+        }
+
+        async fn put_stream(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+            stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+        ) -> Result<(), Error> {
+            self.inner
+                .put_stream(target_label, op_label, namespace, path, stream)
+                .await
+        }
+
+        async fn delete(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), Error> {
+            self.inner
+                .delete(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn create_dir(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<(), Error> {
+            self.inner
+                .create_dir(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn list_dir(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<Vec<PathBuf>, Error> {
+            self.inner
+                .list_dir(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn delete_dir(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<bool, Error> {
+            self.inner
+                .delete_dir(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn exists(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &Path,
+        ) -> Result<ExistsResult, Error> {
+            self.inner
+                .exists(target_label, op_label, namespace, path)
+                .await
+        }
     }
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
@@ -672,7 +920,7 @@ mod tests {
             .await
             .unwrap();
         blob_store
-            .delete_container(environment_id, "container1".to_string())
+            .delete_container(unlimited_limits(), environment_id, "container1".to_string())
             .await
             .unwrap();
         assert!(
@@ -784,6 +1032,7 @@ mod tests {
 
         blob_store
             .move_object(
+                unlimited_limits(),
                 environment_id,
                 "container1".to_string(),
                 "obj1".to_string(),
@@ -903,14 +1152,14 @@ mod tests {
             assert!(matches!(error, BlobStoreError::InvalidInput(_)));
 
             let error = blob_store
-                .delete_objects(environment_id, container_name, &[])
+                .delete_objects(unlimited_limits(), environment_id, container_name, &[])
                 .await
                 .unwrap_err();
             assert!(matches!(error, BlobStoreError::InvalidInput(_)));
         }
     }
 
-    fn in_memory_blob_store() -> impl BlobStoreService {
+    fn in_memory_blob_store() -> DefaultBlobStoreService {
         let blob_storage = Arc::new(InMemoryBlobStorage::new());
         DefaultBlobStoreService::new(blob_storage)
     }
@@ -1077,7 +1326,7 @@ mod tests {
 
         let copied = blob_store
             .copy_object(
-                limits,
+                limits.clone(),
                 environment_id,
                 "container".to_string(),
                 "source".to_string(),
@@ -1090,6 +1339,7 @@ mod tests {
 
         let moved = blob_store
             .move_object(
+                limits.clone(),
                 environment_id,
                 "container".to_string(),
                 "source".to_string(),
@@ -1101,7 +1351,7 @@ mod tests {
         assert_eq!(moved.bytes_delta, -2);
 
         let cleared = blob_store
-            .clear(environment_id, "container".to_string())
+            .clear(limits, environment_id, "container".to_string())
             .await
             .unwrap();
         assert_eq!(cleared.bytes_delta, -2);
@@ -1128,7 +1378,12 @@ mod tests {
         }
 
         let zero = blob_store
-            .delete_object(environment_id, "container".to_string(), "zero".to_string())
+            .delete_object(
+                limits.clone(),
+                environment_id,
+                "container".to_string(),
+                "zero".to_string(),
+            )
             .await
             .unwrap();
         assert_eq!(zero.bytes_delta, 0);
@@ -1136,11 +1391,12 @@ mod tests {
 
         let many = blob_store
             .delete_objects(
+                limits.clone(),
                 environment_id,
                 "container",
                 &[
                     "first".to_string(),
-                    "first".to_string(),
+                    "./first".to_string(),
                     "missing".to_string(),
                 ],
             )
@@ -1150,6 +1406,7 @@ mod tests {
         assert_eq!(many.objects_deleted, 1);
         let already_deleted = blob_store
             .delete_objects(
+                limits.clone(),
                 environment_id,
                 "container",
                 &["first".to_string(), "missing".to_string()],
@@ -1159,7 +1416,7 @@ mod tests {
         assert_eq!(already_deleted, BlobStoreMutation::default());
 
         let cleared = blob_store
-            .clear(environment_id, "container".to_string())
+            .clear(limits.clone(), environment_id, "container".to_string())
             .await
             .unwrap();
         assert_eq!(cleared.bytes_delta, -3);
@@ -1177,6 +1434,7 @@ mod tests {
             .unwrap();
         let same_path = blob_store
             .move_object(
+                limits.clone(),
                 environment_id,
                 "container".to_string(),
                 "source".to_string(),
@@ -1186,6 +1444,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(same_path, BlobStoreMutation::default());
+        assert!(
+            blob_store
+                .has_object(
+                    environment_id,
+                    "container".to_string(),
+                    "source".to_string(),
+                )
+                .await
+                .unwrap()
+        );
+        let aliased_same_path = blob_store
+            .move_object(
+                limits.clone(),
+                environment_id,
+                "./container".to_string(),
+                "source".to_string(),
+                "container".to_string(),
+                "source".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(aliased_same_path, BlobStoreMutation::default());
         assert!(
             blob_store
                 .has_object(
@@ -1208,7 +1488,7 @@ mod tests {
             .unwrap();
         let copy = blob_store
             .copy_object(
-                limits,
+                limits.clone(),
                 environment_id,
                 "container".to_string(),
                 "source".to_string(),
@@ -1221,6 +1501,7 @@ mod tests {
 
         let moved = blob_store
             .move_object(
+                limits.clone(),
                 environment_id,
                 "container".to_string(),
                 "source".to_string(),
@@ -1232,7 +1513,7 @@ mod tests {
         assert_eq!(moved.bytes_delta, -5);
 
         let deleted = blob_store
-            .delete_container(environment_id, "container".to_string())
+            .delete_container(limits, environment_id, "container".to_string())
             .await
             .unwrap();
         assert_eq!(deleted.bytes_delta, -5);
@@ -1273,14 +1554,14 @@ mod tests {
 
         assert_eq!(
             blob_store
-                .clear(environment_id, String::new())
+                .clear(limits.clone(), environment_id, String::new())
                 .await
                 .unwrap(),
             BlobStoreMutation::default()
         );
         assert_eq!(
             blob_store
-                .delete_container(environment_id, ".".to_string())
+                .delete_container(limits.clone(), environment_id, ".".to_string())
                 .await
                 .unwrap(),
             BlobStoreMutation::default()
@@ -1368,6 +1649,7 @@ mod tests {
 
         let moved = blob_store
             .move_object(
+                unlimited_limits(),
                 environment_id,
                 "container".to_string(),
                 "source".to_string(),
@@ -1379,5 +1661,197 @@ mod tests {
 
         assert_eq!(moved.bytes_delta, 0);
         assert_eq!(moved.objects_deleted, 0);
+    }
+
+    #[test]
+    async fn concurrent_replacements_keep_accounting_equal_to_physical_size() {
+        let blob_store = in_memory_blob_store();
+        let environment_id = EnvironmentId::new();
+        let limits = unlimited_limits();
+        limits.set_available_blob_storage_bytes(10);
+        blob_store
+            .create_container(environment_id, "container".to_string())
+            .await
+            .unwrap();
+        blob_store
+            .write_data(
+                limits.clone(),
+                environment_id,
+                "container",
+                "object",
+                &[0; 4],
+            )
+            .await
+            .unwrap();
+
+        let (first, second) = tokio::join!(
+            blob_store.write_data(
+                limits.clone(),
+                environment_id,
+                "container",
+                "object",
+                &[1; 2],
+            ),
+            blob_store.write_data(
+                limits.clone(),
+                environment_id,
+                "container",
+                "object",
+                &[2; 5],
+            ),
+        );
+        first.unwrap();
+        second.unwrap();
+
+        let physical_size = blob_store
+            .object_info(
+                environment_id,
+                "container".to_string(),
+                "object".to_string(),
+            )
+            .await
+            .unwrap()
+            .size;
+        assert_eq!(limits.blob_storage_delta_for_test(), physical_size as i64);
+
+        let first_lock = blob_store.mutation_lock(environment_id);
+        let same_environment_lock = blob_store.mutation_lock(environment_id);
+        let other_environment_lock = blob_store.mutation_lock(EnvironmentId::new());
+        assert!(Arc::ptr_eq(&first_lock, &same_environment_lock));
+        assert!(!Arc::ptr_eq(&first_lock, &other_environment_lock));
+    }
+
+    #[test]
+    async fn environment_locks_serialize_only_matching_environments() {
+        let storage = Arc::new(FailingPutBlobStorage::new());
+        let blob_store = Arc::new(DefaultBlobStoreService::new(storage.clone()));
+        let first_environment = EnvironmentId::new();
+        let other_environment = EnvironmentId::new();
+        for environment_id in [first_environment, other_environment] {
+            blob_store
+                .create_container(environment_id, "container".to_string())
+                .await
+                .unwrap();
+        }
+
+        storage.block_next_put();
+        let first = tokio::spawn({
+            let blob_store = blob_store.clone();
+            async move {
+                blob_store
+                    .write_data(
+                        unlimited_limits(),
+                        first_environment,
+                        "container",
+                        "first",
+                        &[1],
+                    )
+                    .await
+            }
+        });
+        storage.wait_for_blocked_put().await;
+
+        let mut same_environment = tokio::spawn({
+            let blob_store = blob_store.clone();
+            async move {
+                blob_store
+                    .write_data(
+                        unlimited_limits(),
+                        first_environment,
+                        "container",
+                        "second",
+                        &[2],
+                    )
+                    .await
+            }
+        });
+        let other_environment_result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            tokio::spawn({
+                let blob_store = blob_store.clone();
+                async move {
+                    blob_store
+                        .write_data(
+                            unlimited_limits(),
+                            other_environment,
+                            "container",
+                            "other",
+                            &[3],
+                        )
+                        .await
+                }
+            }),
+        )
+        .await
+        .expect("another environment must not wait for the blocked mutation")
+        .unwrap();
+        other_environment_result.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut same_environment)
+                .await
+                .is_err(),
+            "the same environment must wait for the blocked mutation"
+        );
+
+        storage.release_blocked_put();
+        first.await.unwrap().unwrap();
+        same_environment.await.unwrap().unwrap();
+    }
+
+    #[test]
+    async fn failed_writes_restore_reservations_without_publishing_credit() {
+        let storage = Arc::new(FailingPutBlobStorage::new());
+        let blob_store = DefaultBlobStoreService::new(storage.clone());
+        let environment_id = EnvironmentId::new();
+        let limits = unlimited_limits();
+        limits.set_available_blob_storage_bytes(10);
+        blob_store
+            .create_container(environment_id, "container".to_string())
+            .await
+            .unwrap();
+        blob_store
+            .write_data(
+                limits.clone(),
+                environment_id,
+                "container",
+                "object",
+                &[0; 5],
+            )
+            .await
+            .unwrap();
+
+        storage.fail_next_put();
+        let failed_growth = blob_store
+            .write_data(
+                limits.clone(),
+                environment_id,
+                "container",
+                "another",
+                &[1; 3],
+            )
+            .await;
+        assert!(matches!(
+            failed_growth,
+            Err(BlobStoreError::TransientBackend(_))
+        ));
+        assert_eq!(limits.blob_storage_delta_for_test(), 5);
+
+        storage.fail_next_put();
+        let failed = blob_store
+            .write_data(
+                limits.clone(),
+                environment_id,
+                "container",
+                "object",
+                &[1; 2],
+            )
+            .await;
+        assert!(matches!(failed, Err(BlobStoreError::TransientBackend(_))));
+        assert_eq!(limits.blob_storage_delta_for_test(), 5);
+
+        let rejected = blob_store
+            .write_data(limits, environment_id, "container", "another", &[2; 6])
+            .await;
+        assert!(matches!(rejected, Err(BlobStoreError::LimitExceeded(_))));
     }
 }

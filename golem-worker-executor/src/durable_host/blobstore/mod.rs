@@ -292,7 +292,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let result = self
                     .state
                     .blob_store_service
-                    .delete_container(environment_id, name.clone())
+                    .delete_container(self.account_resource_limits(), environment_id, name.clone())
                     .await;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
@@ -303,10 +303,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             };
             if result.is_ok() {
-                if let Ok(mutation) = &result {
-                    self.account_resource_limits()
-                        .try_record_blob_storage_delta(mutation.bytes_delta);
-                }
                 let account_id = self.created_by().to_string();
                 let environment_id_str = environment_id.to_string();
                 record_storage_objects_deleted(
@@ -523,6 +519,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .state
                     .blob_store_service
                     .move_object(
+                        self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
@@ -538,10 +535,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     InternalRetryResult::RetryInternally => continue,
                 }
             };
-            if let Ok(mutation) = &result {
-                self.account_resource_limits()
-                    .try_record_blob_storage_delta(mutation.bytes_delta);
-            }
             handle
                 .complete(
                     self,

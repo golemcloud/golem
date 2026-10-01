@@ -476,9 +476,107 @@ define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_m
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 
 #[test]
+#[test_r::timeout("120s")]
 async fn s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(
     #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(test, namespace)
+        .await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn prefixed_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(
+    #[tagged_as("s3_prefixed")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(test, namespace)
+        .await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn s3_list_blobs_below_includes_namespace_root_object(
+    #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_includes_namespace_root_object(test, namespace).await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn prefixed_s3_list_blobs_below_includes_namespace_root_object(
+    #[tagged_as("s3_prefixed")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_includes_namespace_root_object(test, namespace).await;
+}
+
+async fn test_s3_list_blobs_below_includes_namespace_root_object(
+    test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    storage
+        .put_raw(
+            "root_object_inventory",
+            "put-root",
+            namespace.clone(),
+            Path::new(""),
+            &[1, 2, 3, 4, 5],
+        )
+        .await
+        .unwrap();
+
+    for expected_size in [5, 5] {
+        let blobs = storage
+            .list_blobs_below(
+                "root_object_inventory",
+                "list",
+                namespace.clone(),
+                Path::new(""),
+            )
+            .await
+            .unwrap();
+        assert!(
+            blobs.iter().any(|(path, metadata)| {
+                path.as_os_str().is_empty() && metadata.size == expected_size
+            }),
+            "namespace-root object must contribute to recursive inventory: {blobs:?}"
+        );
+    }
+
+    storage
+        .put_raw(
+            "root_object_inventory",
+            "replace-root",
+            namespace.clone(),
+            Path::new(""),
+            &[0; 10],
+        )
+        .await
+        .unwrap();
+    let replaced = storage
+        .list_blobs_below(
+            "root_object_inventory",
+            "list-replaced",
+            namespace.clone(),
+            Path::new(""),
+        )
+        .await
+        .unwrap();
+    assert!(
+        replaced
+            .iter()
+            .any(|(path, metadata)| path.as_os_str().is_empty() && metadata.size == 10),
+        "replacement bytes at the namespace root must remain in inventory: {replaced:?}"
+    );
+}
+
+async fn test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(
+    test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
     let root = Path::new("recursive-list");

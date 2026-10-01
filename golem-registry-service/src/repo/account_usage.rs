@@ -70,6 +70,12 @@ impl AccountUsageReportRow {
 pub trait AccountUsageRepo: Send + Sync {
     async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>>;
 
+    async fn get_for_resource_limits(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>>;
+
     async fn get_for_type(
         &self,
         account_id: Uuid,
@@ -121,6 +127,17 @@ impl<Repo: AccountUsageRepo> AccountUsageRepo for LoggedAccountUsageRepo<Repo> {
     async fn get(&self, account_id: Uuid, date: &SqlDateTime) -> RepoResult<Option<AccountUsage>> {
         self.repo
             .get(account_id, date)
+            .instrument(Self::span_account_id(account_id))
+            .await
+    }
+
+    async fn get_for_resource_limits(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>> {
+        self.repo
+            .get_for_resource_limits(account_id, date)
             .instrument(Self::span_account_id(account_id))
             .await
     }
@@ -273,6 +290,52 @@ impl AccountUsageRepo for DbAccountUsageRepo<PostgresPool> {
                 .bind(UsageType::TotalEnvCount)
                 .bind(UsageType::TotalComponentCount)
                 .bind(UsageType::TotalComponentStorageBytes),
+            )
+            .await?;
+
+        let mut usage = BTreeMap::new();
+        for row in usage_rows {
+            usage.insert(
+                row.try_get("usage_type")?,
+                row.try_get::<NumericU64, _>("value")?.get(),
+            );
+        }
+
+        Ok(Some(AccountUsage {
+            account_id,
+            year: date.as_utc().year(),
+            month: date.as_utc().month(),
+            usage,
+            storage_limit: storage_limit(&account_plan),
+            max_memory_per_worker: max_memory_per_worker(&account_plan),
+            monthly_memory_gb_seconds: monthly_memory_gb_seconds(&account_plan),
+            metering: None,
+            plan: account_plan.plan,
+            changes: Default::default(),
+        }))
+    }
+
+    async fn get_for_resource_limits(
+        &self,
+        account_id: Uuid,
+        date: &SqlDateTime,
+    ) -> RepoResult<Option<AccountUsage>> {
+        let Some(account_plan) = self.get_plan(account_id).await? else {
+            return Ok(None);
+        };
+
+        let usage_rows = self
+            .with_ro("get_for_resource_limits")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT usage_type, value
+                    FROM account_usage_stats
+                    WHERE account_id = $1
+                      AND usage_key IN ($2, $3)
+                "#})
+                .bind(account_id)
+                .bind(date_to_usage_key(date))
+                .bind(USAGE_KEY_TOTAL),
             )
             .await?;
 

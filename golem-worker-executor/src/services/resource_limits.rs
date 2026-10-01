@@ -362,6 +362,23 @@ impl AtomicResourceEntry {
         )
     }
 
+    #[doc(hidden)]
+    pub fn new_with_blob_storage_limit(available_blob_storage_bytes: u64) -> Self {
+        let mut entry = Self::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            Self::UNLIMITED_CONCURRENT_AGENTS,
+        );
+        entry
+            .blob_storage_quota
+            .get_mut()
+            .expect("new blob storage quota mutex is not poisoned")
+            .available_from_server = available_blob_storage_bytes;
+        entry
+    }
+
     /// Full constructor used when all limits (including monthly HTTP/RPC) are available
     /// from the registry at initialization time.
     pub fn new_with_all_limits(
@@ -987,6 +1004,12 @@ impl AtomicResourceEntry {
             .available_from_server = value;
     }
 
+    #[cfg(test)]
+    pub(crate) fn blob_storage_delta_for_test(&self) -> i64 {
+        let quota = self.blob_storage_quota.lock().unwrap();
+        quota.unsynced_delta.saturating_add(quota.syncing_delta)
+    }
+
     pub fn max_concurrent_agents_per_executor(&self) -> u64 {
         self.max_concurrent_agents_per_executor
             .load(Ordering::Acquire)
@@ -1149,33 +1172,32 @@ impl ResourceLimitsGrpc {
                 }
 
                 tracing::debug!(
-                    "Sending batch: {} fuel, {} memory, {} durable storage, {} ephemeral storage, {} http, {} rpc, {} blob storage, {} stale idle account(s)",
-                    updates.values().filter(|u| u.fuel_delta != 0).count(),
-                    updates
+                    fuel_accounts = updates.values().filter(|u| u.fuel_delta != 0).count(),
+                    memory_accounts = updates
                         .values()
                         .filter(|u| u.memory_gb_seconds_delta != 0)
                         .count(),
-                    updates
+                    durable_storage_accounts = updates
                         .values()
                         .filter(|u| u.durable_storage_byte_seconds_delta != 0)
                         .count(),
-                    updates
+                    ephemeral_storage_accounts = updates
                         .values()
                         .filter(|u| u.ephemeral_storage_byte_seconds_delta != 0)
                         .count(),
-                    updates
+                    http_accounts = updates
                         .values()
                         .filter(|u| u.http_call_count_delta > 0)
                         .count(),
-                    updates
+                    rpc_accounts = updates
                         .values()
                         .filter(|u| u.rpc_call_count_delta > 0)
                         .count(),
-                    updates
+                    blob_storage_accounts = updates
                         .values()
                         .filter(|u| u.blob_storage_bytes_delta != 0)
                         .count(),
-                    updates
+                    stale_idle_accounts = updates
                         .values()
                         .filter(|u| {
                             u.fuel_delta == 0
@@ -1187,6 +1209,7 @@ impl ResourceLimitsGrpc {
                                 && u.blob_storage_bytes_delta == 0
                         })
                         .count(),
+                    "Sending resource usage batch"
                 );
 
                 // Send resource usage batch. The response refreshes all account limits
@@ -1202,8 +1225,14 @@ impl ResourceLimitsGrpc {
                             let Some(resource_limits) = updated_limits.0.get(account_id) else {
                                 record_resource_usage_batch_update_failure();
                                 error!(
-                                    "Registry did not apply resource usage update for account {account_id}; dropping the in-flight update"
+                                    %account_id,
+                                    "Registry omitted resource usage update result; dropping the in-flight update"
                                 );
+                                self.settle_blob_storage_delta(
+                                    *account_id,
+                                    update.blob_storage_bytes_delta,
+                                )
+                                .await;
                                 self.reset_in_flight_delta(*account_id).await;
                                 continue;
                             };
@@ -1255,25 +1284,24 @@ impl ResourceLimitsGrpc {
                             }
                         }
                         for (account_id, resource_limits) in updated_limits.0 {
-                            let acknowledged_blob_storage_delta =
-                                if resource_limits.usage_update_applied {
-                                    updates.get(&account_id).map_or(0, |update| {
-                                        update.blob_storage_bytes_delta
-                                    })
-                                } else {
-                                    0
-                                };
+                            // Blob stock deltas are not safe to resend after an ambiguous batch
+                            // outcome: the registry may already have committed them. Settle every
+                            // submitted delta locally and rely on physical reconciliation to repair
+                            // either direction of drift.
+                            let settled_blob_storage_delta = updates
+                                .get(&account_id)
+                                .map_or(0, |update| update.blob_storage_bytes_delta);
                             self.update_last_known_limits(
                                 account_id,
                                 resource_limits,
-                                acknowledged_blob_storage_delta,
+                                settled_blob_storage_delta,
                             )
                             .await;
                         }
                     }
                     Err(err) => {
                         record_resource_usage_batch_update_failure();
-                        error!("Failed to send batched resource usage updates: {}", err);
+                        error!(error = %err, "Failed to send batched resource usage updates");
                         for (account_id, update) in &updates {
                             if update.fuel_delta != 0
                                 || update.memory_gb_seconds_delta != 0
@@ -1284,15 +1312,21 @@ impl ResourceLimitsGrpc {
                                 || update.blob_storage_bytes_delta != 0
                             {
                                 error!(
-                                    "Lost resource usage updates for account {account_id}: fuel_delta={}, memory_gb_seconds_delta={}, durable_storage_byte_seconds_delta={}, ephemeral_storage_byte_seconds_delta={}, http_call_count_delta={}, rpc_call_count_delta={}, blob_storage_bytes_delta={}",
-                                    update.fuel_delta,
-                                    update.memory_gb_seconds_delta,
-                                    update.durable_storage_byte_seconds_delta,
-                                    update.ephemeral_storage_byte_seconds_delta,
-                                    update.http_call_count_delta,
-                                    update.rpc_call_count_delta,
-                                    update.blob_storage_bytes_delta,
+                                    %account_id,
+                                    fuel_delta = update.fuel_delta,
+                                    memory_gb_seconds_delta = update.memory_gb_seconds_delta,
+                                    durable_storage_byte_seconds_delta = update.durable_storage_byte_seconds_delta,
+                                    ephemeral_storage_byte_seconds_delta = update.ephemeral_storage_byte_seconds_delta,
+                                    http_call_count_delta = update.http_call_count_delta,
+                                    rpc_call_count_delta = update.rpc_call_count_delta,
+                                    blob_storage_bytes_delta = update.blob_storage_bytes_delta,
+                                    "Dropping ambiguous resource usage update"
                                 );
+                                self.settle_blob_storage_delta(
+                                    *account_id,
+                                    update.blob_storage_bytes_delta,
+                                )
+                                .await;
                                 self.reset_in_flight_delta(*account_id).await;
                             }
                         }
@@ -1308,7 +1342,7 @@ impl ResourceLimitsGrpc {
         &self,
         account_id: AccountId,
         updated_limits: golem_service_base::model::ResourceLimits,
-        acknowledged_blob_storage_delta: i64,
+        settled_blob_storage_delta: i64,
     ) {
         if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
             && let Some(entry) = cell.get()
@@ -1371,7 +1405,7 @@ impl ResourceLimitsGrpc {
                 let mut quota = entry.blob_storage_quota.lock().unwrap();
                 quota.syncing_delta = quota
                     .syncing_delta
-                    .saturating_sub(acknowledged_blob_storage_delta);
+                    .saturating_sub(settled_blob_storage_delta);
                 quota.available_from_server = updated_limits.available_blob_storage_bytes;
             }
             entry.max_concurrent_agents_per_executor.store(
@@ -1385,6 +1419,26 @@ impl ResourceLimitsGrpc {
                 entry
                     .last_refresh_secs
                     .store(Utc::now().timestamp(), Ordering::Release);
+            }
+        }
+    }
+
+    async fn settle_blob_storage_delta(&self, account_id: AccountId, delta: i64) {
+        if delta == 0 {
+            return;
+        }
+        if let Some(cell) = self.entries.read_async(&account_id, |_, e| e.clone()).await
+            && let Some(entry) = cell.get()
+        {
+            let mut quota = entry.blob_storage_quota.lock().unwrap();
+            quota.syncing_delta = quota.syncing_delta.saturating_sub(delta);
+            if delta > 0 {
+                quota.available_from_server =
+                    quota.available_from_server.saturating_sub(delta as u64);
+            } else {
+                quota.available_from_server = quota
+                    .available_from_server
+                    .saturating_add(delta.unsigned_abs());
             }
         }
     }
@@ -3089,22 +3143,7 @@ mod tests {
     }
 
     #[test]
-    async fn failed_blob_usage_batch_keeps_local_stock_reserved() {
-        let mock = Arc::new(MockRegistryService::new(1000, 512));
-        mock.set_batch_update_error();
-        let svc = make_grpc(mock);
-        let id = account_id();
-
-        let entry = svc.initialize_account(id).await.unwrap();
-        entry.set_available_blob_storage_bytes(10);
-        assert!(entry.try_record_blob_storage_delta(10));
-        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
-
-        assert!(!entry.try_record_blob_storage_delta(1));
-    }
-
-    #[test]
-    async fn failed_blob_usage_batch_stays_reserved_after_a_successful_refresh() {
+    async fn failed_blob_usage_batch_is_settled_and_not_resent() {
         let mock = Arc::new(MockRegistryService::new(1000, 512));
         mock.set_batch_update_error();
         let svc = make_grpc(mock.clone());
@@ -3114,6 +3153,87 @@ mod tests {
         entry.set_available_blob_storage_bytes(10);
         assert!(entry.try_record_blob_storage_delta(10));
         svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        {
+            let quota = entry.blob_storage_quota.lock().unwrap();
+            assert_eq!(quota.unsynced_delta, 0);
+            assert_eq!(quota.syncing_delta, 0);
+        }
+
+        mock.set_batch_update_response(AccountResourceLimits(HashMap::from([(
+            id,
+            ServiceResourceLimits {
+                available_fuel: 1000,
+                max_memory_per_worker: 512,
+                max_table_elements_per_worker: u64::MAX,
+                max_disk_space_per_worker: u64::MAX,
+                per_invocation_http_call_limit: u64::MAX,
+                per_invocation_rpc_call_limit: u64::MAX,
+                available_http_calls: u64::MAX,
+                available_rpc_calls: u64::MAX,
+                available_blob_storage_bytes: 0,
+                max_concurrent_agents_per_executor: u64::MAX,
+                oplog_writes_per_second: u64::MAX,
+                usage_update_applied: true,
+            },
+        )])));
+        svc.send_batch(0).await;
+
+        assert_eq!(mock.last_batch_update(id).blob_storage_bytes_delta, 0);
+        assert!(!entry.try_record_blob_storage_delta(1));
+    }
+
+    #[test]
+    async fn failed_blob_usage_batch_does_not_restore_spent_local_headroom() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        mock.set_batch_update_error();
+        let svc = make_grpc(mock);
+        let id = account_id();
+
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.set_available_blob_storage_bytes(10);
+        assert!(entry.try_record_blob_storage_delta(10));
+
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        assert!(
+            !entry.try_record_blob_storage_delta(1),
+            "an ambiguous report must not make already spent local quota available again"
+        );
+    }
+
+    #[test]
+    async fn omitted_blob_usage_batch_result_is_settled_and_not_resent() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        mock.set_batch_update_response(AccountResourceLimits(HashMap::new()));
+        let svc = make_grpc(mock.clone());
+        let id = account_id();
+
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.set_available_blob_storage_bytes(10);
+        assert!(entry.try_record_blob_storage_delta(10));
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
+
+        {
+            let quota = entry.blob_storage_quota.lock().unwrap();
+            assert_eq!(quota.unsynced_delta, 0);
+            assert_eq!(quota.syncing_delta, 0);
+        }
+
+        svc.send_batch(0).await;
+        assert_eq!(mock.last_batch_update(id).blob_storage_bytes_delta, 0);
+        assert!(!entry.try_record_blob_storage_delta(1));
+    }
+
+    #[test]
+    async fn rejected_blob_usage_batch_is_settled_and_refreshes_headroom() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock.clone());
+        let id = account_id();
+
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.set_available_blob_storage_bytes(10);
+        assert!(entry.try_record_blob_storage_delta(10));
 
         mock.set_batch_update_response(AccountResourceLimits(HashMap::from([(
             id,
@@ -3129,12 +3249,36 @@ mod tests {
                 available_blob_storage_bytes: 10,
                 max_concurrent_agents_per_executor: u64::MAX,
                 oplog_writes_per_second: u64::MAX,
-                usage_update_applied: true,
+                usage_update_applied: false,
             },
         )])));
-        svc.send_batch(0).await;
+        svc.send_batch(NO_IDLE_REFRESH_THRESHOLD_SECS).await;
 
-        assert!(!entry.try_record_blob_storage_delta(1));
+        let quota = entry.blob_storage_quota.lock().unwrap();
+        assert_eq!(quota.unsynced_delta, 0);
+        assert_eq!(quota.syncing_delta, 0);
+        assert_eq!(quota.available_from_server, 10);
+    }
+
+    #[test]
+    async fn settling_an_in_flight_blob_delta_preserves_new_unsynced_delta() {
+        let mock = Arc::new(MockRegistryService::new(1000, 512));
+        let svc = make_grpc(mock);
+        let id = account_id();
+        let entry = svc.initialize_account(id).await.unwrap();
+        entry.set_available_blob_storage_bytes(10);
+        {
+            let mut quota = entry.blob_storage_quota.lock().unwrap();
+            quota.syncing_delta = 10;
+            quota.unsynced_delta = 3;
+        }
+
+        svc.settle_blob_storage_delta(id, 10).await;
+
+        let quota = entry.blob_storage_quota.lock().unwrap();
+        assert_eq!(quota.syncing_delta, 0);
+        assert_eq!(quota.unsynced_delta, 3);
+        assert_eq!(quota.available_from_server, 0);
     }
 
     #[test]

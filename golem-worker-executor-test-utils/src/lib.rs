@@ -7113,10 +7113,13 @@ impl FailingBlobStoreService {
 impl BlobStoreService for FailingBlobStoreService {
     async fn clear(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
-        self.inner.clear(environment_id, container_name).await
+        self.inner
+            .clear(resource_limits, environment_id, container_name)
+            .await
     }
 
     async fn container_exists(
@@ -7162,27 +7165,30 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn delete_container(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
-            .delete_container(environment_id, container_name)
+            .delete_container(resource_limits, environment_id, container_name)
             .await
     }
 
     async fn delete_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
     ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
-            .delete_object(environment_id, container_name, object_name)
+            .delete_object(resource_limits, environment_id, container_name, object_name)
             .await
     }
 
     async fn delete_objects(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_names: &[String],
@@ -7204,7 +7210,12 @@ impl BlobStoreService for FailingBlobStoreService {
             ))
         } else {
             self.inner
-                .delete_objects(environment_id, container_name, object_names)
+                .delete_objects(
+                    resource_limits,
+                    environment_id,
+                    container_name,
+                    object_names,
+                )
                 .await
         }
     }
@@ -7265,6 +7276,7 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn move_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
@@ -7273,6 +7285,7 @@ impl BlobStoreService for FailingBlobStoreService {
     ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .move_object(
+                resource_limits,
                 environment_id,
                 source_container_name,
                 source_object_name,

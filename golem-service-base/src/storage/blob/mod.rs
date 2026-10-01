@@ -596,7 +596,7 @@ pub(crate) fn blob_path_is_root(path: &Path) -> bool {
     })
 }
 
-pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
+pub fn blob_path_to_string(path: &Path) -> Result<String, Error> {
     Ok(unix_blob_path(path)?.normalize().into_string())
 }
 
@@ -640,7 +640,7 @@ pub fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        blob_file_name_to_string, blob_parent_to_string, join_blob_path,
+        blob_file_name_to_string, blob_parent_to_string, blob_path_to_string, join_blob_path,
         validate_relative_blob_path,
     };
     use std::path::Path;
@@ -682,5 +682,13 @@ mod tests {
         let path = Path::new(r"photos/animals\cat.png");
         assert_eq!(blob_parent_to_string(path).unwrap(), "photos");
         assert_eq!(blob_file_name_to_string(path).unwrap(), r"animals\cat.png");
+    }
+
+    #[test]
+    fn blob_path_identity_normalizes_current_directory_components() {
+        assert_eq!(
+            blob_path_to_string(Path::new("./photos/./cat.png")).unwrap(),
+            "photos/cat.png"
+        );
     }
 }
