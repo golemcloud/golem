@@ -915,7 +915,8 @@ const MOST_PASSES: usize = 5;
 /// Tells whether a prune of the scope is due, and which claim the delete takes for it.
 ///
 /// Each pass makes the storage calls of the step that [`next`] asked for, then reads the clock one
-/// time, and asks [`next`] again with that reading. So each comparison with a time from storage
+/// time after those calls, and asks [`next`] again with that reading. The passes after `Stop` or
+/// `Claim` make no call and read no clock. So each comparison with a time from storage
 /// uses a clock reading from after the listing that gave that time. A listing can take up to one
 /// storage call deadline, and a stale reading can put a marker that another host wrote within the
 /// margin beyond the margin. A failed call gives its error.
