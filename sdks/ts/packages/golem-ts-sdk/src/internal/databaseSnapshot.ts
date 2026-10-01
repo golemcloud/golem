@@ -168,15 +168,19 @@ export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>)
 }
 
 /**
- * Reads the databases of a loaded snapshot from its multipart parts and its `fileDatabases`
- * value. Throws a string, which starts with `description`, when `fileDatabases` does not map
- * field names to locations.
+ * Reads the databases of a loaded snapshot from its multipart parts and the `fileDatabases`
+ * field of its JSON envelope. Throws a string, which starts with `description`, when the
+ * envelope has no `fileDatabases` field or when the field does not map field names to locations.
  */
 export function decodeSnapshotDatabases(
   parts: readonly MultipartPart[],
-  fileDatabases: unknown,
+  envelope: object,
   description: string,
 ): SnapshotDatabases {
+  if (!Object.hasOwn(envelope, 'fileDatabases')) {
+    throw `${description} missing 'fileDatabases' field`;
+  }
+  const fileDatabases: unknown = (envelope as { fileDatabases: unknown }).fileDatabases;
   if (
     fileDatabases === null ||
     typeof fileDatabases !== 'object' ||

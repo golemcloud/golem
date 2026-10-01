@@ -903,9 +903,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     if (!Object.hasOwn(envelope, 'state')) {
       throw `${description} missing 'state' field`;
     }
-    if (!Object.hasOwn(envelope, 'fileDatabases')) {
-      throw `${description} missing 'fileDatabases' field`;
-    }
     return envelope;
   };
 
@@ -928,14 +925,14 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
-    databases = decodeSnapshotDatabases(parts, envelope.fileDatabases, 'multipart state part');
+    databases = decodeSnapshotDatabases(parts, envelope, 'multipart state part');
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
-    databases = decodeSnapshotDatabases([], envelope.fileDatabases, 'JSON snapshot');
+    databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
   } else {
     // Custom binary snapshot with version envelope
     if (bytes.byteLength < 1) {
