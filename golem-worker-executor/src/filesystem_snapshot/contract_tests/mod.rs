@@ -1166,11 +1166,54 @@ async fn a_dropped_save_publishes_nothing_and_leaves_the_name_free(open: OpenSto
     );
 }
 
+/// The number of threads of the blocking pool of the runtime of [`no_method_blocks_the_runtime`].
+/// The case holds all of them while a call starts, so no work of the call can run on them before
+/// the call gives its thread back.
+const GATED_BLOCKING_THREADS: usize = 4;
+
+/// A gate that holds the threads of a blocking pool until it opens.
+#[derive(Default)]
+struct BlockingGate {
+    opened: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+impl BlockingGate {
+    /// Holds the calling thread until the gate opens.
+    fn wait(&self) {
+        let opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        drop(
+            self.changed
+                .wait_while(opened, |opened| !*opened)
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+    }
+
+    /// Opens the gate, and gives whether it was closed.
+    fn open(&self) -> bool {
+        let mut opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let was_closed = !*opened;
+        *opened = true;
+        self.changed.notify_all();
+        was_closed
+    }
+}
+
 async fn no_method_blocks_the_runtime(open: OpenStore) {
-    // The calls run in a `LocalSet` on one thread, next to a local task that counts. The task runs
-    // only while a call waits. So a call that does its work without giving the thread back leaves
-    // the count as it was. The test-r runtime has more than one thread, so a task of that runtime
-    // could count on another thread. The `LocalSet` keeps the count on the thread of the calls.
+    // The calls run in a `LocalSet` on one thread, next to a local task. The test future awaits
+    // nothing but the call, so the local task runs only while the call gives the thread back.
+    // Before each call, gate tasks hold every thread of the blocking pool, and the first run of
+    // the local task opens the gate. A store that does its work on the blocking pool therefore
+    // gives the thread back before its work can start, and the gate opens during the call. A
+    // store that does its work in the call itself never gives the thread back, so the gate is
+    // still closed when the call ends. The case reads no clock and does not depend on how the
+    // threads are scheduled.
     let store = open();
     let scope = new_scope();
     let tree = new_tree(&[(
@@ -1183,45 +1226,72 @@ async fn no_method_blocks_the_runtime(open: OpenStore) {
     let into = Scratch::new();
     let tree_path = tree.path().to_path_buf();
     let into_path = into.path().to_path_buf();
-    let handle = tokio::runtime::Handle::current();
 
-    let (during_save, during_restore) = tokio::task::spawn_blocking(move || {
-        handle.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let ticks = Arc::new(AtomicU64::new(0));
+    let (opened_by_save, opened_by_restore) = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(GATED_BLOCKING_THREADS)
+            .enable_all()
+            .build()
+            .unwrap();
+        let opened = runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let current = Arc::new(std::sync::Mutex::new(None::<Arc<BlockingGate>>));
+            let opened_by_ticker = Arc::new(AtomicU64::new(0));
             let ticker = tokio::task::spawn_local({
-                let ticks = ticks.clone();
+                let current = current.clone();
+                let opened_by_ticker = opened_by_ticker.clone();
                 futures::stream::repeat(()).for_each(move |()| {
-                    let ticks = ticks.clone();
-                    async move {
-                        ticks.fetch_add(1, Ordering::SeqCst);
-                        tokio::task::yield_now().await;
+                    let gate = current.lock().unwrap().clone();
+                    if let Some(gate) = gate
+                        && gate.open()
+                    {
+                        opened_by_ticker.fetch_add(1, Ordering::SeqCst);
                     }
+                    tokio::task::yield_now()
                 })
             });
-            let counted = |from: u64| ticks.load(Ordering::SeqCst) - from;
+            let close = || {
+                let gate = Arc::new(BlockingGate::default());
+                (0..GATED_BLOCKING_THREADS).for_each(|_| {
+                    let gate = gate.clone();
+                    drop(tokio::task::spawn_blocking(move || gate.wait()));
+                });
+                *current.lock().unwrap() = Some(gate.clone());
+                gate
+            };
+            let opened_during = |gate: Arc<BlockingGate>, before: u64| {
+                *current.lock().unwrap() = None;
+                gate.open();
+                opened_by_ticker.load(Ordering::SeqCst) > before
+            };
 
-            let before_save = ticks.load(Ordering::SeqCst);
+            let before = opened_by_ticker.load(Ordering::SeqCst);
+            let gate = close();
             store
                 .save(&scope, &name("p-large"), &tree_path, None)
                 .await
                 .unwrap();
-            let during_save = counted(before_save);
-            let before_restore = ticks.load(Ordering::SeqCst);
+            let opened_by_save = opened_during(gate, before);
+            let before = opened_by_ticker.load(Ordering::SeqCst);
+            let gate = close();
             store
                 .restore(&scope, &name("p-large"), &into_path)
                 .await
                 .unwrap();
-            let during_restore = counted(before_restore);
+            let opened_by_restore = opened_during(gate, before);
             ticker.abort();
-            (during_save, during_restore)
-        }))
+            (opened_by_save, opened_by_restore)
+        }));
+        runtime.shutdown_background();
+        opened
     })
     .await
     .unwrap();
 
     assert!(
-        during_save > 0 && during_restore > 0,
-        "the local task counted {during_save} times during the save and {during_restore} times during the restore"
+        opened_by_save && opened_by_restore,
+        "the call gave the thread back during the save: {opened_by_save}, during the restore: \
+         {opened_by_restore}"
     );
     assert_eq!(listing(into.path()), listing(tree.path()));
 }
