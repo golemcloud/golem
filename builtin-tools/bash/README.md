@@ -113,10 +113,12 @@ flowchart TD
 - `golem-schema::tool::argv` is also used by the native CLI. Bash passes shell-expanded arguments
   to it; there is no second tool argument grammar. Local commands win name collisions, with a
   diagnostic identifying shadowed tools. Unsupported secret/capability arguments are refused.
-- Every wait in the shell — `sleep`, `tail -s`, the grace period for leftover jobs, and
-  `curl --retry-delay` — goes through Golem's durable monotonic clock, and every "now" (`find
-  -mtime`, `date`, `touch`) through its recorded wall clock, so a script recovered after a crash
-  sees the same times it saw before.
+- Every wait in the shell — `sleep`, `timeout`, `read -t`, `tail -s`, the grace period for
+  leftover jobs, the call's own time limit and `curl --retry-delay` — goes through Golem's durable
+  monotonic clock, and every "now" (`find -mtime`, `date`, `touch`) through its recorded wall
+  clock, so a script recovered after a crash sees the same times it saw before. A wait is made of
+  steps of at most 5 s: Golem suspends an agent while one of its timers has 10 s or more to run
+  (`suspend_after`), and the replay that resumes it cannot always reproduce the call it was in.
 - HTTP requests go through Golem's durable `wasi:http`. After a crash, a request that had not
   finished is sent again: a GET, HEAD, PUT, DELETE, OPTIONS or TRACE with the same
   `Idempotency-Key` header Golem gave it, a POST or PATCH (which Golem does not assume to be
@@ -393,7 +395,12 @@ synchronous builtin's output into a pipe.
   `bash -c` runs inside the process the signal ends rather than replacing it, so a TERM trap set
   inside that nested shell does not run; one set by the call's script does. `env
   --block-signal` holds a signal off from its command as `--ignore-signal` does (nothing in a call
-  could deliver it once unblocked), so a `trap -p` in that command shows it ignored.
+  could deliver it once unblocked), so a `trap -p` in that command shows it ignored. The shell's
+  own waits are too short for Golem to suspend the owner at its default `suspend_after` (see
+  Implementation), but a bound tool that itself waits 10 s or more on one timer (a sibling that
+  sleeps 15 s) can still get the owner suspended in the middle of the call, and the replay that
+  resumes it can then hang or fail the owner. That remains for Golem to fix, by not suspending an
+  agent in the middle of a call.
 - **HTTP.** `curl` and `wget` hold at most 64 MiB of a response body when they must buffer it
   (`curl --compressed` decodes the whole body first): past that they fail with
   `curl: response body exceeded 67108864 bytes` (status 4). `curl -m`/`wget -T` bound the whole

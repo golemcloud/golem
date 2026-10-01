@@ -309,7 +309,12 @@ fn execute_http(
         // `wcurl::Outcome`/`waget::Outcome` are structurally identical but distinct types (each
         // crate is deliberately standalone) — flatten to a common tuple so both arms unify.
         let streamed: Result<(Vec<u8>, Vec<u8>, u8), std::io::Error> = if is_curl {
-            wcurl::run_streaming(&argv, cwd, sink)
+            // `--retry-delay` waits on the shell's clock, as `sleep` does.
+            #[cfg(target_arch = "wasm32")]
+            let sleep = context.shell.execution_services().sleep;
+            #[cfg(not(target_arch = "wasm32"))]
+            let sleep = tokio::time::sleep;
+            wcurl::run_streaming(&argv, cwd, sink, sleep)
                 .await
                 .map(|o| (o.stdout, o.stderr, o.exit_code))
         } else {

@@ -37,8 +37,9 @@ fn seconds(secs: f64) -> std::time::Duration {
     std::time::Duration::from_secs_f64(secs).min(std::time::Duration::from_nanos(u64::MAX))
 }
 
-/// Sleep for `duration`, on whichever target is running. Used only by `--retry-delay` — this
-/// crate otherwise does no timed waiting.
+/// Sleep for `duration`, on whichever target is running: `--retry-delay`'s wait in [`run`] and
+/// [`run_in_directory`]. An embedder passes its own to [`run_streaming`]. This crate otherwise
+/// does no timed waiting.
 async fn sleep(duration: std::time::Duration) {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -211,7 +212,7 @@ pub async fn run_in_directory(args: &[String], cwd: &std::path::Path) -> Outcome
         exit_code: 0,
     };
     for transfer in req.transfers() {
-        let mut outcome = transfer_buffered(transfer, cwd).await;
+        let mut outcome = transfer_buffered(transfer, cwd, &sleep).await;
         total.stdout.append(&mut outcome.stdout);
         total.stderr.append(&mut outcome.stderr);
         total.exit_code = outcome.exit_code;
@@ -219,8 +220,13 @@ pub async fn run_in_directory(args: &[String], cwd: &std::path::Path) -> Outcome
     total
 }
 
-/// One URL's transfer, its body kept in the returned [`Outcome`].
-async fn transfer_buffered(mut req: Request, cwd: &std::path::Path) -> Outcome {
+/// One URL's transfer, its body kept in the returned [`Outcome`]; `sleep` waits out
+/// `--retry-delay`.
+async fn transfer_buffered(
+    mut req: Request,
+    cwd: &std::path::Path,
+    sleep: &impl AsyncFn(std::time::Duration),
+) -> Outcome {
     if let Some(outcome) = check_url(&mut req) {
         return outcome;
     }
@@ -447,6 +453,8 @@ fn prepare(req: &mut Request, cwd: &std::path::Path) -> Result<Prepared, Outcome
 /// through the sink in one call, still honoring the "forward through the sink, don't return it in
 /// `Outcome`" contract.
 ///
+/// `sleep` waits out `--retry-delay`, so the embedder decides how its timers run.
+///
 /// # Errors
 ///
 /// Returns the [`std::io::Error`] from the first failed write to `stdout`.
@@ -454,6 +462,7 @@ pub async fn run_streaming(
     args: &[String],
     cwd: &std::path::Path,
     stdout: &mut (dyn futures::io::AsyncWrite + Unpin + Send),
+    sleep: impl AsyncFn(std::time::Duration),
 ) -> Result<Outcome, std::io::Error> {
     use futures::io::AsyncWriteExt;
 
@@ -470,7 +479,7 @@ pub async fn run_streaming(
     };
     for transfer in req.transfers() {
         stdout.write_all(&total.stdout).await?;
-        let mut outcome = transfer_streaming(transfer, cwd, stdout).await?;
+        let mut outcome = transfer_streaming(transfer, cwd, stdout, &sleep).await?;
         total.stdout = outcome.stdout;
         total.stderr.append(&mut outcome.stderr);
         total.exit_code = outcome.exit_code;
@@ -483,6 +492,7 @@ async fn transfer_streaming(
     mut req: Request,
     cwd: &std::path::Path,
     stdout: &mut (dyn futures::io::AsyncWrite + Unpin + Send),
+    sleep: &impl AsyncFn(std::time::Duration),
 ) -> Result<Outcome, std::io::Error> {
     use futures::io::AsyncWriteExt;
 
@@ -491,7 +501,7 @@ async fn transfer_streaming(
     }
 
     if req.compressed {
-        let buffered = transfer_buffered(req, cwd).await;
+        let buffered = transfer_buffered(req, cwd, sleep).await;
         stdout.write_all(&buffered.stdout).await?;
         return Ok(Outcome {
             stdout: Vec::new(),
@@ -505,7 +515,7 @@ async fn transfer_streaming(
         Err(outcome) => return Ok(outcome),
     };
     let warnings = std::mem::take(&mut prepared.warnings);
-    Ok(stream_prepared(&req, prepared, cwd, stdout)
+    Ok(stream_prepared(&req, prepared, cwd, stdout, sleep)
         .await?
         .after(warnings))
 }
@@ -516,6 +526,7 @@ async fn stream_prepared(
     prepared: Prepared,
     cwd: &std::path::Path,
     stdout: &mut (dyn futures::io::AsyncWrite + Unpin + Send),
+    sleep: &impl AsyncFn(std::time::Duration),
 ) -> Result<Outcome, std::io::Error> {
     use futures::io::AsyncWriteExt;
 
@@ -1943,7 +1954,9 @@ mod tests {
 
     async fn run_streaming_to_vec(args_: &[&str], cwd: &std::path::Path) -> (Outcome, Vec<u8>) {
         let mut sink = futures::io::AllowStdIo::new(Vec::new());
-        let outcome = run_streaming(&argv(args_), cwd, &mut sink).await.unwrap();
+        let outcome = run_streaming(&argv(args_), cwd, &mut sink, sleep)
+            .await
+            .unwrap();
         (outcome, sink.into_inner())
     }
 
@@ -2076,12 +2089,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_retry_delay_waits_on_the_embedders_clock() {
+        let (base, requests) = recording_server(vec![
+            reply(503, &[], "busy"),
+            reply(200, &[], "finally-streamed"),
+        ]);
+        let waits = std::cell::RefCell::new(Vec::new());
+        let mut sink = futures::io::AllowStdIo::new(Vec::new());
+        let out = run_streaming(
+            &argv(&["--retry", "1", "--retry-delay", "7", &base]),
+            std::path::Path::new("."),
+            &mut sink,
+            async |duration| waits.borrow_mut().push(duration),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.exit_code, 0);
+        assert_eq!(*waits.borrow(), [std::time::Duration::from_secs(7)]);
+        assert_eq!(requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn streaming_output_file_writes_incrementally_and_the_sink_stays_empty() {
         let dir = std::env::temp_dir().join(format!("wcurl_stream_file_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let url = mock_server(200, "file-streamed-body");
         let mut sink = futures::io::AllowStdIo::new(Vec::new());
-        let out = run_streaming(&argv(&["-o", "out.bin", &url]), &dir, &mut sink)
+        let out = run_streaming(&argv(&["-o", "out.bin", &url]), &dir, &mut sink, sleep)
             .await
             .unwrap();
         assert_eq!(out.exit_code, 0);
@@ -2106,9 +2140,14 @@ mod tests {
             "csv-body",
         );
         let mut sink = futures::io::AllowStdIo::new(Vec::new());
-        let out = run_streaming(&argv(&["-OJ", &format!("{url}/ignored")]), &dir, &mut sink)
-            .await
-            .unwrap();
+        let out = run_streaming(
+            &argv(&["-OJ", &format!("{url}/ignored")]),
+            &dir,
+            &mut sink,
+            sleep,
+        )
+        .await
+        .unwrap();
         assert_eq!(out.exit_code, 0);
         assert_eq!(
             std::fs::read_to_string(dir.join("real.csv")).unwrap(),
@@ -2181,7 +2220,8 @@ mod tests {
     async fn streaming_propagates_a_sink_write_error_instead_of_swallowing_it() {
         let url = mock_server(200, "body");
         let mut sink = BrokenSink;
-        let result = run_streaming(&argv(&[&url]), std::path::Path::new("."), &mut sink).await;
+        let result =
+            run_streaming(&argv(&[&url]), std::path::Path::new("."), &mut sink, sleep).await;
         let error = result.expect_err("a closed sink must surface as Err, not a status code");
         assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
     }

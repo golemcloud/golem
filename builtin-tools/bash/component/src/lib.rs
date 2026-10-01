@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod adapter;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod execution;
 
 /// Smallest `$$` given to a new session; lower numbers look like system processes.
