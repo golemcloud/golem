@@ -8,23 +8,20 @@ Use targeted commands for TUI work:
 
 ```shell
 cargo check -p golem-cli
-cargo test -p golem-cli --features tui-preview --lib -- tui::preview --report-time
+cargo check -p golem-cli --features tui-preview --example tui-preview
+cargo test -p golem-cli --lib -- tui:: --report-time
+cargo test -p golem-cli --lib --features tui-preview -- tui:: --report-time
 ```
 
 Do not use `cargo make test`. Avoid `--report-time` on broad `cargo test` commands because doctests reject it on stable Rust.
 
 In this environment, `test-r` may need local socket listener permissions. If the sandboxed run fails with `Failed to create local socket listener`, rerun the same targeted command outside the sandbox.
 
-The rebuilt local Dev/read-only Ops checkpoint currently establishes this
-automated baseline:
-
-- 142 focused `tui::app::tests`, including exact nested-CLI arguments,
-  one-shot `--yes`, stale typed results, responsive layouts, and interaction
-  routing;
-- 222 complete `tui::` tests with `tui-preview`, including every deterministic
-  story at wide, short, narrow, and extreme sizes;
-- `cargo check -p golem-cli --features tui-preview`, package formatting, and
-  `git diff --check`.
+The rebuilt local Dev/read-only Ops checkpoint runs the complete `tui::`
+library suite in both feature configurations. Preview coverage renders every
+registered production fixture at its default, wide, short, narrow, and
+degenerate sizes. Both package configurations must compile without TUI
+dead-code or unused-import warnings.
 
 This does not replace the `UX-024` real-terminal and dev-release playground
 acceptance pass.
@@ -84,7 +81,8 @@ High-value scenarios:
   AgentID plus per-Agent oplog index, and Live never silently retargets;
 - Metrics navigates family to concrete series, distinguishes service and Agent
   OTLP sources, and renders every provider-availability state truthfully;
-- deterministic fake Metrics data is available only to preview/test providers;
+- Metrics fixtures are introduced only for an active provider-independent UI
+  review and must remain unmistakably synthetic;
 - stale typed refresh results are ignored by request and context generation;
 - non-manifest, unreachable, and incomplete contexts keep unavailable views
   and actions discoverable with concrete reasons;
@@ -93,11 +91,12 @@ High-value scenarios:
   the quit-policy planning gate is closed.
 # TUI preview verification
 
-The browser and terminal preview galleries render deterministic `TuiApp`
-stories through Ratatui's `TestBackend` and the production render tree. The
-browser representation is cell-accurate and preserves symbols, colors, and
-modifiers, although indexed colors and font metrics can vary from a real
-terminal.
+The `tui-preview` feature contains the host and a feature-gated production
+fixture; normal CLI builds do not compile either. The browser, terminal, and
+export modes render registered cases through Ratatui's `TestBackend` and the
+production render tree. The browser representation preserves cells, symbols,
+colors, and modifiers, although indexed colors and font metrics can vary from a
+real terminal.
 
 Use these focused checks when changing the renderer:
 
@@ -105,29 +104,21 @@ Use these focused checks when changing the renderer:
 cargo check -p golem-cli
 cargo check -p golem-cli --features tui-preview --example tui-preview
 cargo test -p golem-cli --lib -- tui::
+cargo test -p golem-cli --lib --features tui-preview -- tui::
 ```
 
 Also inspect `cargo make tui-preview` for browser reload behavior and
-`cargo make tui-preview-terminal` for case/variant switching. Use
+`cargo make tui-preview-terminal` for case switching and resize cleanup. Use
 `cargo make tui-preview-live` only for the production provider and PTY path.
 
-Browser review links must preserve Focus/Production/Coverage mode and the
-relevant focus, case, variant, font, and size across watched server restarts.
-Focus mode must show exactly Frame Base plus the current mutations; secondary
-tools remain collapsed by default. Every preview case needs a unique ID.
+Browser review links preserve case, font, and size across watched server
+restarts. Every registered case has a unique ID. The persistent catalog contains
+only `ops-agents`; add a focused lab case only for an active design question,
+and remove it after acceptance unless it adds unique regression coverage.
 
-The initial catalog is a workflow-neutral design lab: shell, content density
-and states, content splits, content scrolling, long/narrow content, mixed splits
-and focus, leader shortcuts, search overlays, and decision overlays. Each case
-renders under Production, Frame Base, and the
-current focus mutations. Add a
-workflow case only when that flow is actively being reviewed, and retain it
-after acceptance only when it provides useful regression coverage. Add compact
-coverage after normal-sized foundation rules settle.
-
-Production wrapper equivalence is tested separately from the design lab. The
-generic cases intentionally avoid product-state assumptions. Workflow stories
-are added for the Dev and Ops checkpoints only after their planning gates close.
+The preview wrapper is tested against direct production rendering. The
+production case renders at representative wide, short, narrow, and `1×1`
+sizes and must reject unknown case IDs.
 
 Pane geometry tests assert that every visible scrollbar occupies its pane's
 trailing-right cell, removes exactly one usable content column, preserves the
@@ -137,25 +128,18 @@ assert that text and ellipses stop immediately before that reserved cell.
 Terminal preview tests route resize events through a backend-generic helper and
 verify both viewport dimensions and redraw signaling.
 
-Pane-table tests cover required and optional visibility, persisted visual
-preferences, transactional chooser apply/cancel behavior, content-aware width
-allocation, horizontal offset clamping, frozen marker placement, one-line
-ellipsis, one-cell selection rails, and independent minimal/rule/zebra
-decorations. Preview coverage includes right/bottom table-details splits and
-pane focus at standard and degenerate terminal sizes. Fitting and truncation
-tests include wide, emoji, and combining characters and assert exact terminal
-display widths.
+Pane-table tests cover required and optional visibility, transactional chooser
+apply/cancel behavior, content-aware width allocation, horizontal offset
+clamping, frozen marker placement, selected-row wrapping, one-cell selection
+rails, and all four odd/even × selected/unselected surface tokens. Fitting and
+truncation tests include wide, emoji, and combining characters and assert exact
+terminal display widths.
 
-Decoration tests also assert unpadded one-cell rules and all four odd/even ×
-selected/unselected surface tokens. The Columns overlay coverage checks its
-popup-table headers, selected row, visibility states, and navigation hint.
-
-The terminal design lab is watched. It starts on the current focus case,
-left/right cycles only the focus options, `p` toggles the Production reference,
-and up/down remains available for secondary case inspection. Its process must
-handle the watcher's termination signal, poll for input with a bounded delay,
-and return through the normal terminal cleanup guard before cargo-watch rebuilds
-it. Do not apply this restart model to the production live runtime.
+The watched terminal preview uses up/down for registered case inspection. Its
+process must handle the watcher's termination signal, poll for input with a
+bounded delay, and return through the normal terminal cleanup guard before
+cargo-watch rebuilds it. Do not apply this restart model to the production live
+runtime.
 
 Browser preview fonts are pinned remote assets and require network access in
 the reviewing browser. A font must load at regular and bold weights and pass the

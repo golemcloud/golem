@@ -146,7 +146,8 @@ Deliverables:
 - family then series navigation;
 - samples, attributes, details, filters, ranges, refresh, and sparklines;
 - distinct Golem service and Agent OTLP source availability;
-- preview-only fake provider and truthful production unavailable states.
+- truthful production unavailable states; focused synthetic fixtures are added
+  only when provider-independent Metrics UI review resumes.
 
 Acceptance:
 

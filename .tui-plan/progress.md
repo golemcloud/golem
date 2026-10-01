@@ -1,5 +1,36 @@
 # Progress
 
+## 2026-10-01: Isolated And Minimized TUI Preview Tooling
+
+- Kept browser, terminal, and static-export preview hosts behind the optional
+  `tui-preview` feature, with one deterministic Ops Agents fixture rendered by
+  the production Ratatui tree.
+- Moved fixture construction into the feature-gated
+  `tui::app::preview_fixture` child module so normal CLI builds do not compile
+  preview state construction.
+- Removed the synthetic story catalog, visual variants, Frame Base and
+  candidate machinery, fake OTLP explorer, and obsolete lab-only widget
+  contracts. No empty lab module remains.
+- Reduced the visual and pane-table APIs to their accepted production
+  contracts while retaining odd/even and selected/unselected row coverage.
+- Updated the design, architecture, testing, product, and task contracts to
+  describe temporary labs as active-review tools rather than a dormant product
+  surface. `UX-024` remains open for real-terminal visual acceptance.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo check -p golem-cli`
+- `cargo check -p golem-cli --features tui-preview --example tui-preview`
+- `cargo test -p golem-cli --lib -- tui:: --report-time` (213 passed)
+- `cargo test -p golem-cli --lib --features tui-preview -- tui::preview --report-time`
+  (14 passed)
+- `cargo test -p golem-cli --lib --features tui-preview -- tui:: --report-time`
+  (227 passed)
+- `cargo make tui-preview-export`
+- `cargo make install-golem-dev-release`
+- `/home/noise64/.cargo/bin/golem tui --help`
+
 ## 2026-09-29: Hardened TUI State And Runtime Boundaries
 
 - Moved workspace and Dev-view identity out of the application implementation

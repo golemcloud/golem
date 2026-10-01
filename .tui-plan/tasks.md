@@ -310,8 +310,8 @@ Recommended commit checkpoints: Journal provider; Timeline mapping; Live.
 
 Planning prerequisite: Metrics control gate. Acquisition remains deferred.
 
-- [x] Replace the production fake explorer with truthful source availability;
-  retain deterministic samples only in preview/test providers.
+- [x] Replace the production fake explorer with truthful source availability
+  and retire the synthetic OTLP lab until Metrics UI review resumes.
 - [ ] Define typed metric-family, concrete-series, sample, attributes, scope,
   time-coverage, and availability models.
 - [ ] Implement family collection, series drill-down, sample/details document,
@@ -342,6 +342,11 @@ unavailable production state.
 
 ## Checkpoint 9: Cleanup And Final Acceptance
 
+- [x] Gate the preview host and production fixture behind `tui-preview`;
+  remove the synthetic catalog, fake OTLP explorer, visual candidates, and
+  obsolete lab-only widget contracts.
+- [x] Separate the real production preview fixture into
+  `tui::app::preview_fixture`; do not create an empty lab module.
 - [~] Remove dormant renderers, actions, state, fixtures, and compatibility code
   replaced by the rebuilt workspaces. Replaced production paths are gone; a
   final post-review audit remains.
@@ -352,7 +357,7 @@ unavailable production state.
 - [~] Run focused TUI tests after each checkpoint and the complete TUI library
   suite at final acceptance.
 - [~] Run cargo check for golem-cli with tui-preview/tests as appropriate,
-  non-mutating formatting checks, every deterministic story size, and
+  non-mutating formatting checks, every registered production-preview size, and
   git diff --check.
 - [ ] Install the matching dev-release binary and manually smoke test Dev/Ops,
   context switching, PTY cleanup, mouse routing, compact layout, and remote

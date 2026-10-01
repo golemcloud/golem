@@ -290,6 +290,10 @@ the process discards it.
 
 Extract stable seams as the rebuild reaches them:
 
+- keep the optional preview host in `tui::preview` and production fixture
+  construction in a feature-gated `tui::app::preview_fixture` child module;
+- add a lab module only while concrete synthetic stories exist, never as an
+  empty or dormant parallel renderer;
 - product navigation and context capability state;
 - action metadata, risk policy, and palette scopes;
 - finite Jobs and persistent sessions;

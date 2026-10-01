@@ -7,25 +7,23 @@ deferred, or incorporated into an authoritative plan document.
 ## Review Workflow
 
 1. Start the watched browser gallery with `cargo make tui-preview`.
-2. Review the one current focus through Frame Base and at most three mutations.
-3. Record small observations as scratch bullets under that focus and mutate the
-   existing candidates instead of adding variants.
-4. Fold the selected candidate into Frame Base and codify it in a named widget,
-   token, typed model, or tested layout invariant.
-5. Delete every mutation, validate coverage, synchronize the design-system
-   rule with its programmatic representation, and advance the queued focus.
+2. Review the registered real production fixture and the live terminal path.
+3. Add the smallest focused lab case set only when the active question cannot
+   be evaluated clearly through the production fixture.
+4. Record observations under the current focus and codify accepted outcomes in
+   a named widget, token, typed model, or tested layout invariant.
+5. Delete temporary lab cases after acceptance unless they add unique
+   regression coverage, then synchronize the owning design-system document.
 
-`Production` is the runtime baseline and `Frame Base` is the preview-only design
-baseline. The default browser and terminal views show only the current focus;
-Production and full coverage are secondary tools. Promotion into Production is
-a separate explicit decision and never creates a user-selectable theme.
+`Production` is the only visual style and runtime baseline. The preview host
+does not retain candidate, comparison, coverage, or Frame Base machinery.
 
 ## Current Focus
 
 - Focus: accept the rebuilt local Dev and read-only Ops slice (`UX-024`)
-- Cases: Production Dev Build & Deploy, Server, and REPL; Production Ops
-  Agents, Agent, Deployment, Environment, and Server; compact and extreme
-  shell fallbacks.
+- Cases: the `ops-agents` production-rendered fixture plus the Production
+  runtime for Dev Build & Deploy, Server, REPL, Ops resources, compact layout,
+  and extreme shell fallbacks.
 - Decision: the planned slice is implemented and deterministic coverage is
   green. Review now checks the real terminal workflow and visual continuity,
   not another product-topology alternative.
@@ -43,10 +41,6 @@ a separate explicit decision and never creates a user-selectable theme.
   materializers beyond resolved CLI flags remain architectural follow-up work.
 - Exit: terminal review is accepted, required fixes are implemented, and the
   dev-release playground smoke test passes.
-
-The `shell-compact` case reuses the default shell content at 50×16 so compact
-behavior can be evaluated without introducing another workflow or visual
-direction.
 
 ## Sources Of Truth
 
@@ -96,26 +90,21 @@ below is concrete enough to approve without another implementation decision.
   the appropriate sources of truth.
 - `deferred`: intentionally postponed with a recorded reason or dependency.
 
-## Story Coverage
+## Preview Coverage
 
-Record the most recent review status and active note IDs for each preview case.
-The preview case ID, rather than its underlying fixture name, is the stable
-identity; this keeps compact and wide cases independently reviewable.
+Record the most recent review status and active note IDs for persistent preview
+cases. Temporary lab cases belong here only while their design session is
+active.
 
 | Preview case | Last reviewed | Active notes |
 |---|---|---|
-| `shell-default` | — | `UX-003`, `UX-004`, `UX-005`, `UX-007`, `UX-008` |
-| `content-density` | — | `UX-003`, `UX-007` |
-| `split-focus` | — | `UX-003`, `UX-004`, `UX-006`, `UX-007`, `UX-009` |
-| `shortcut-leader` | — | `UX-003` |
-| `overlay-search` | — | `UX-003`, `UX-004`, `UX-006` |
-| `overlay-decision` | — | `UX-003`, `UX-004`, `UX-006` |
+| `ops-agents` | automated production-render check | `UX-024` |
 
-## Themed Batches
+## Historical Themed Batches
 
-Before implementation, record the batch name, included note IDs, affected
-stories, intended outcome, and validation. Mark the batch approved only after
-explicit review.
+The entries below record the retired design-lab process and remain historical
+context. Their case IDs, Frame Base links, candidate status, and synthetic
+renderers are no longer live contracts.
 
 ### Remove the Home logo background
 
@@ -135,7 +124,7 @@ explicit review.
 
 ### Establish the generic design lab
 
-- Status: implemented; awaiting review
+- Status: retired after foundation acceptance
 - Notes: `UX-003`
 - Cases: all six generic design-lab cases
 - Validation: every case under Production and Frame Base; preview exporter tests,
@@ -143,7 +132,7 @@ explicit review.
 
 ### Iterate on Frame Base
 
-- Status: active exploration
+- Status: retired after promotion into Production
 - Notes: `UX-004`
 - Cases: `shell-default`, `split-focus`, `overlay-search`, `overlay-decision`
 - Validation: Frame Base structural assertions and all design-lab cases under
@@ -151,7 +140,7 @@ explicit review.
 
 ### Compare pane boundaries
 
-- Status: implemented; awaiting review
+- Status: retired after promotion into Production
 - Notes: `UX-009`
 - Cases: `split-focus`
 - Validation: four-card focus filtering, structural boundary assertions, every
@@ -620,7 +609,7 @@ explicit review.
 ### UX-024 — Accept rebuilt local Dev and read-only Ops
 
 - Status: awaiting terminal review
-- Preview: Production runtime and deterministic production stories
+- Preview: Production runtime and the `ops-agents` production-rendered fixture
 - Area: Dev workflows, nested terminals, recursive layout, Ops subjects,
   action availability, and context safety
 - Theme: workflow | navigation | safety | terminal

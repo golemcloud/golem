@@ -9,29 +9,25 @@ these rules or update this document first.
 
 ## Real-renderer previews
 
-TUI design work uses deterministic stories rendered by the actual Ratatui
-widget tree. Run `cargo make tui-preview` for the watched browser gallery,
-`cargo make tui-preview-terminal` for the watched interactive terminal gallery, or
-`cargo make tui-preview-export` for a standalone artifact under `target/`.
+The optional `tui-preview` feature owns browser, terminal, and static-export
+tooling without entering the normal CLI build. Run `cargo make tui-preview`
+for the watched browser, `cargo make tui-preview-terminal` for the watched
+terminal, or `cargo make tui-preview-export` for an artifact under `target/`.
 
-The browser opens on one explicit current focus with Frame Base and no more than
-three mutations. Its URL identifies the focus, view mode, font, and font size,
-so feedback and follow-up changes should reuse copied gallery links. Production,
-case browsing, and coverage live under collapsed secondary tools. Browser ligatures are disabled to
-better match terminal cell rendering. Version-pinned Fira Code and
-commit-pinned Iosevka Term files load directly from jsDelivr so a browser on a
-different machine sees the same fonts. The gallery verifies regular and bold
-cell widths plus joined vertical decorators before showing a frame; it blocks
-review instead of silently falling back to a platform font. Coverage mode
-renders every case under one selected variant. Track normalized
-feedback and review status in `dx-ux-review.md`; durable rules accepted through
-that review still belong in this document.
+The baseline registry contains one `ops-agents` fixture constructed in a
+feature-gated child module of the production application. It renders through
+the same Ratatui tree as the live TUI rather than a synthetic parallel
+renderer. The browser URL preserves case, font, and font size. Browser
+ligatures are disabled; pinned Fira Code and Iosevka Term assets must pass
+regular/bold cell-width and joined-vertical-glyph checks before a frame is
+shown.
 
-The `Production` visual style is the only runtime style. `Frame Base` is the
-preview-only baseline for temporary current-focus mutations. They are
-comparison material, not themes. Accepted rules are deliberately folded back
-into Frame Base and all mutations are deleted before the next focus begins.
-Explicit promotion into `Production` happens later.
+`Production` is the only visual style. There is no dormant Frame Base,
+candidate, comparison, or coverage machinery. Add a focused synthetic lab
+module only when a concrete design session needs one, keep it behind
+`tui-preview`, and remove it after acceptance unless it provides unique
+regression value. Track review outcomes in `dx-ux-review.md`; durable rules
+belong in this document and their executable production representation.
 
 ### Programmatic design sources
 
@@ -44,7 +40,7 @@ spacing, alignment, colors, selection treatment, or boundary behavior locally.
 The shared component system owns context headers, pane boundaries, workspace
 selectors, shortcut rows, scrollbars, popup frames and titles, search inputs,
 selectable rows, decision-table rows, section headings, label/value fields,
-status markers, notices, content tables, and output rows. `TuiVisualStyle` owns
+status markers, notices, and pane tables. `TuiVisualStyle` owns
 their semantic colors. Explicit pane and footer geometry owns junction
 placement. The accepted foundation is promoted into Production; production
 screens and preview stories must compose the same components rather than
@@ -59,16 +55,14 @@ with no body rail. Body boundaries render after pane content so content cannot
 punch blank cells through the outer left spine or shared dividers.
 
 When a decision is revisited, change its existing representation and focused
-tests. Temporary alternatives may exist only for the active comparison and are
-removed when the new choice is locked.
+tests. Temporary lab alternatives are removed when the choice is locked.
 
-Design-lab cases are synthetic, deterministic, offline render fixtures. They are useful
-for visual comparison and render regression tests, but they do not exercise
-providers or process lifecycles. Use `cargo make tui-preview-live -- <global
-flags>` to launch the checkout-built production `golem <global flags> tui`
-runtime. The terminal preview catches watcher termination and returns through
-its raw-mode and alternate-screen cleanup guard before it is rebuilt. Neither
-preview watcher supervises the live runtime.
+Preview fixtures are deterministic and offline; they do not exercise providers
+or process lifecycles. Use `cargo make tui-preview-live -- <global flags>` to
+launch the checkout-built production `golem <global flags> tui` runtime. The
+terminal preview catches watcher termination and returns through its raw-mode
+and alternate-screen cleanup guard before it is rebuilt. Neither preview
+watcher supervises the live runtime.
 
 ## Core Model
 
@@ -81,13 +75,12 @@ between them preserves context, processes, focus, navigation, and layout.
 The complete behavioral contract and vocabulary live in product-contract.md.
 This document owns their visual and interaction representation.
 
-## Generic Foundation Review
+## Preview Review Policy
 
-The preview starts with focused, workflow-neutral cases for shell chrome,
-content density and states, splits and focus, leader shortcuts, search overlays,
-and decision overlays. Workflow-specific cases are added only when their flow
-is actively being reviewed and retained afterward when they provide regression
-value.
+The persistent preview baseline is the real production-rendered Ops Agents
+case. Add the smallest case set required for an active design question and
+retain a case afterward only when normal production render tests cannot provide
+the same regression coverage.
 
 Shortcut visibility uses progressive disclosure:
 
@@ -326,13 +319,12 @@ workspace destinations use the same ordered selector model. Remaining global,
 workspace, and focused-pane shortcut hints may collapse without hiding or
 moving the primary selector.
 
-Frame Base enters its compact shell below 72 columns or 20 rows. Compact mode
+Production enters its compact shell below 72 columns or 20 rows. Compact mode
 keeps the workspace selector and one global Commands/Help/Quit row, while
 omitting contextual hint rows so the body retains vertical space. The selector
 keeps the canonical short workspace name without clipping.
-`design_lab_compact_shell`,
-`WorkspaceSelector`, and focused render tests are the executable contract for
-these reductions.
+`SHELL_COMPACT_WIDTH`, `SHELL_COMPACT_HEIGHT`, `WorkspaceSelector`, and focused
+production render tests are the executable contract for these reductions.
 
 Structural decorators never change color to communicate focus or mode. Rails,
 junctions, rules, and popup borders use one neutral decorator color; semantic
@@ -735,9 +727,8 @@ scrollback, context switching, and the bounded finite-Job history are live.
 Production composes the accepted `ContextHeader`, `PaneHeader`, status,
 boundary, scrollbar, workspace-selector, shortcut-row, notice, table, and
 overlay primitives. Dev and Ops share one context-only header, title grammar,
-neutral structural chrome, and semantic status colors. Deterministic fake OTLP
-data remains preview/test-only; production Metrics truthfully reports that no
-provider is configured.
+neutral structural chrome, and semantic status colors. The fake OTLP lab was
+retired; production Metrics truthfully reports that no provider is configured.
 
 Activity/Live, real Metrics providers, remote unlock, generalized Ops
 mutations, and neutral target materializers beyond resolved CLI flags remain

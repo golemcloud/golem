@@ -11,8 +11,11 @@ golem tui and golem-cli tui.
   workflows with bounded Jobs and persistent terminal sessions.
 - Ops preserves the live typed Agents collection and adds individual Agent plus
   current Deployment, Environment, and Server read-only overviews.
-- Production Metrics truthfully reports that no provider is configured;
-  deterministic fake OTLP data exists only in preview/test builds.
+- Production Metrics truthfully reports that no provider is configured. The
+  retired fake OTLP explorer is not retained as dormant preview code.
+- The optional `tui-preview` feature keeps one real production-rendered Ops
+  Agents fixture plus browser, terminal, and export tooling. Focused lab cases
+  are added only while a new design question is active.
 - Replaced Home, Output, Agents Dev panel, named layout presets, global Server
   drawer, and nested Agent Inspect paths are implementation history rather than
   compatibility behavior.

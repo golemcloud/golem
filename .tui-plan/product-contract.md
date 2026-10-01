@@ -353,8 +353,9 @@ trace or invocation link establishes causality.
   distinct sources.
 - Availability distinguishes unsupported, unconfigured, unreachable,
   configured with no matching data, and no samples in the selected range.
-- Deterministic fake metrics are preview and test fixtures only. Production
-  never mixes them with live context data.
+- Focused deterministic metric fixtures may be introduced only for an active
+  UI review and must be unmistakably synthetic. None are retained currently;
+  Production never mixes invented measurements with live context data.
 
 Metrics acquisition, retention, query storage, Docker integration, and a
 possible web UI remain a post-TUI decision. The UI must depend on a typed
