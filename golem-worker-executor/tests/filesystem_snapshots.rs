@@ -296,23 +296,29 @@ impl Agent {
         let oplog = executor
             .get_oplog(&self.worker_id, OplogIndex::INITIAL)
             .await?;
-        Ok(oplog
-            .into_iter()
-            .fold(Records::default(), |mut records, entry| {
+        let (snapshots, confirmations, failed_updates) = oplog.into_iter().fold(
+            (Vec::new(), Vec::new(), Vec::new()),
+            |(mut snapshots, mut confirmations, mut failed_updates), entry| {
                 match entry.entry {
                     PublicOplogEntry::Snapshot(snapshot) => {
-                        records.snapshots.push(snapshot.filesystem_snapshot)
+                        snapshots.push(snapshot.filesystem_snapshot.map(String::into_boxed_str))
                     }
                     PublicOplogEntry::SnapshotConfirmed(confirmed) => {
-                        records.confirmations.push(confirmed.filesystem_snapshot)
+                        confirmations.push(confirmed.filesystem_snapshot.into_boxed_str())
                     }
-                    PublicOplogEntry::FailedUpdate(failed) => records
-                        .failed_updates
-                        .push(failed.details.unwrap_or_default()),
+                    PublicOplogEntry::FailedUpdate(failed) => {
+                        failed_updates.push(failed.details.unwrap_or_default().into_boxed_str())
+                    }
                     _ => {}
                 }
-                records
-            }))
+                (snapshots, confirmations, failed_updates)
+            },
+        );
+        Ok(Records {
+            snapshots: snapshots.into_boxed_slice(),
+            confirmations: confirmations.into_boxed_slice(),
+            failed_updates: failed_updates.into_boxed_slice(),
+        })
     }
 
     /// Waits until the confirmation of the newest snapshot record with a name is in the oplog,
@@ -320,14 +326,9 @@ impl Agent {
     async fn confirmed(&self, executor: &TestWorkerExecutor) -> anyhow::Result<String> {
         eventually(Duration::from_secs(30), || async {
             let records = self.records(executor).await?;
-            Ok(records
-                .snapshots
-                .iter()
-                .rev()
-                .flatten()
-                .next()
-                .filter(|name| records.confirmations.last() == Some(name))
-                .cloned())
+            Ok(records.newest_name().filter(|name| {
+                records.confirmations.last().map(|confirmed| &**confirmed) == Some(name.as_str())
+            }))
         })
         .await
     }
@@ -336,7 +337,13 @@ impl Agent {
     async fn failed_updates(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Vec<String>> {
         eventually(Duration::from_secs(60), || async {
             let records = self.records(executor).await?;
-            Ok((!records.failed_updates.is_empty()).then_some(records.failed_updates))
+            Ok((!records.failed_updates.is_empty()).then(|| {
+                records
+                    .failed_updates
+                    .iter()
+                    .map(|details| details.to_string())
+                    .collect()
+            }))
         })
         .await
     }
@@ -468,12 +475,40 @@ fn entry_kind(entry: &PublicOplogEntry) -> String {
         .to_string()
 }
 
-/// What the oplog of an agent holds about snapshots.
+/// What the oplog of an agent holds about snapshots, in oplog order.
 #[derive(Debug, Default)]
 struct Records {
-    snapshots: Vec<Option<String>>,
-    confirmations: Vec<String>,
-    failed_updates: Vec<String>,
+    snapshots: Box<[Option<Box<str>>]>,
+    confirmations: Box<[Box<str>]>,
+    failed_updates: Box<[Box<str>]>,
+}
+
+impl Records {
+    /// The filesystem snapshot name of the newest snapshot record with a name.
+    fn newest_name(&self) -> Option<String> {
+        self.snapshots
+            .iter()
+            .rev()
+            .flatten()
+            .next()
+            .map(|name| name.to_string())
+    }
+
+    /// The filesystem snapshot name of the oldest snapshot record with a name.
+    fn oldest_name(&self) -> Option<String> {
+        self.snapshots
+            .iter()
+            .flatten()
+            .next()
+            .map(|name| name.to_string())
+    }
+
+    /// Whether a confirmation record confirms `name`.
+    fn is_confirmed(&self, name: &str) -> bool {
+        self.confirmations
+            .iter()
+            .any(|confirmed| &**confirmed == name)
+    }
 }
 
 /// Calls `check` until it gives a value, for at most `limit`.
@@ -703,10 +738,13 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
         start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
     let after_recovery = agent.describe(&recovering).await?;
 
-    assert_eq!(failed.confirmations.last(), Some(&first));
+    assert_eq!(
+        failed.confirmations.last().map(|confirmed| &**confirmed),
+        Some(first.as_str())
+    );
     assert_ne!(
-        failed.snapshots.iter().rev().flatten().next(),
-        Some(&first),
+        failed.newest_name(),
+        Some(first.clone()),
         "the failed upload wrote its own record"
     );
     assert_eq!(after_failure, live);
@@ -785,11 +823,8 @@ async fn the_next_start_confirms_the_snapshot_of_an_agent_that_stopped_during_it
     let after_start = agent.describe(&executor).await?;
     let records = agent.records(&executor).await?;
 
-    assert!(
-        !while_stopped.confirmations.contains(&named),
-        "{while_stopped:?}"
-    );
-    assert!(records.confirmations.contains(&named), "{records:?}");
+    assert!(!while_stopped.is_confirmed(&named), "{while_stopped:?}");
+    assert!(records.is_confirmed(&named), "{records:?}");
     assert_eq!(after_start, live);
     assert!(store.restored_names().len() > restores);
     Ok(())
@@ -818,7 +853,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
     let after_start = agent.describe(&restarted).await?;
     let records = agent.records(&restarted).await?;
 
-    assert!(records.confirmations.contains(&named), "{records:?}");
+    assert!(records.is_confirmed(&named), "{records:?}");
     assert_eq!(after_start, live);
     assert!(store.restored_names().len() > restores);
     Ok(())
@@ -846,7 +881,7 @@ async fn stop_during_an_upload(
     let live = agent.describe(executor).await?;
     let named = eventually(Duration::from_secs(30), || async {
         let records = agent.records(executor).await?;
-        Ok(records.snapshots.iter().rev().flatten().next().cloned())
+        Ok(records.newest_name())
     })
     .await?;
     agent.stop(executor, context).await?;
@@ -935,13 +970,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
         }
     })
     .await?;
-    let newest = agent
-        .records(&executor)
-        .await?
-        .snapshots
-        .into_iter()
-        .flatten()
-        .next_back();
+    let newest = agent.records(&executor).await?.newest_name();
     // The crash: the executor goes away while the upload of the last snapshot is held.
     executor.release().await?;
     drop(held);
@@ -957,7 +986,7 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
 
     assert_eq!(newest.as_ref(), Some(&blocked));
     assert!(
-        !records.confirmations.contains(&blocked),
+        !records.is_confirmed(&blocked),
         "the held snapshot {blocked} was confirmed: {records:?}"
     );
     assert_eq!(restored, [confirmed]);
@@ -965,9 +994,9 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
     assert_eq!(
         shape,
         InvocationShape {
-            not_finished_once: Vec::new(),
-            starts_without_terminal: Vec::new(),
-            durable_calls_between_invocations: Vec::new(),
+            not_finished_once: Box::default(),
+            starts_without_terminal: Box::default(),
+            durable_calls_between_invocations: Box::default(),
             applied: operations.len(),
         }
     );
@@ -978,13 +1007,13 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
 #[derive(Debug, PartialEq, Eq)]
 struct InvocationShape {
     /// Each idempotency key whose invocation has no `AgentInvocationFinished`, or more than one.
-    not_finished_once: Vec<String>,
+    not_finished_once: Box<[Box<str>]>,
     /// The index of each durable-call `Start` without an `End` or a `Cancelled`.
-    starts_without_terminal: Vec<u64>,
+    starts_without_terminal: Box<[u64]>,
     /// The index of each durable-call `Start`, `End` or `Cancelled` in a gap between
     /// invocations: after an `AgentInvocationFinished` and before the next
     /// `AgentInvocationStarted`, or the end.
-    durable_calls_between_invocations: Vec<u64>,
+    durable_calls_between_invocations: Box<[u64]>,
     /// The number of finished `apply` invocations.
     applied: usize,
 }
@@ -1024,7 +1053,7 @@ fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
         not_finished_once: finished
             .into_iter()
             .filter(|(_, count)| *count != 1)
-            .map(|(key, count)| format!("{key}: {count}"))
+            .map(|(key, count)| format!("{key}: {count}").into_boxed_str())
             .collect(),
         starts_without_terminal: indexed()
             .filter(|(index, entry)| {
@@ -1208,14 +1237,14 @@ async fn an_unchanged_tree_reuses_the_confirmed_name_and_saves_nothing(
     assert!(
         records.snapshots[snapshots_before..]
             .iter()
-            .all(|snapshot| snapshot.as_ref() == Some(&name)),
+            .all(|snapshot| snapshot.as_deref() == Some(name.as_str())),
         "{records:?}"
     );
     assert_eq!(
         records
             .confirmations
             .iter()
-            .filter(|confirmed| *confirmed == &name)
+            .filter(|confirmed| ***confirmed == *name)
             .count(),
         records.snapshots.len() - snapshots_before + 1
     );
@@ -1421,7 +1450,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
     let live = agent.describe(&executor).await?;
     let named = eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
-        Ok(records.snapshots.iter().flatten().next().cloned())
+        Ok(records.oldest_name())
     })
     .await?;
     agent.stop(&executor, &context).await?;
@@ -1436,7 +1465,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
     assert_eq!(after_start, live);
     assert!(waited >= limit, "the start waited {waited:?}");
     assert!(waited < limit * 5, "the start waited {waited:?}");
-    assert!(!records.confirmations.contains(&named), "{records:?}");
+    assert!(!records.is_confirmed(&named), "{records:?}");
     assert_eq!(store.restored_names().len(), restores);
     Ok(())
 }
@@ -1694,13 +1723,17 @@ fn step_strategy() -> impl proptest::strategy::Strategy<Value = Step> {
 }
 
 /// The tree of an agent and the number of operations that it applied.
-type Outcome = (Vec<String>, u32);
+type Outcome = (Box<[Box<str>]>, u32);
 
 impl Agent {
     /// The tree of the agent and the number of operations that it applied.
     async fn outcome(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Outcome> {
         Ok((
-            self.describe(executor).await?,
+            self.describe(executor)
+                .await?
+                .into_iter()
+                .map(String::into_boxed_str)
+                .collect(),
             self.applied(executor).await?,
         ))
     }
@@ -1763,7 +1796,7 @@ enum Restart {
 #[derive(Debug)]
 struct RestartSelection {
     /// The names of the restores of the restart that gave a tree.
-    restored: Vec<String>,
+    restored: Box<[Box<str>]>,
     /// The number of reads of automatic snapshot entries up to the end of the first call after
     /// the restart. A start reads the entry that it selected, to load its guest snapshot.
     automatic_reads: usize,
@@ -1773,7 +1806,7 @@ struct RestartSelection {
 #[derive(Debug, PartialEq, Eq)]
 struct HistoryRun {
     /// The result of each step, before the restart and then after it.
-    results: Vec<String>,
+    results: Box<[Box<str>]>,
     /// The tree and the operation count right after the restart.
     restarted: Outcome,
     /// The tree and the operation count after the steps that follow the restart.
@@ -1838,7 +1871,10 @@ async fn run_history(
     };
     let restarted_outcome = agent.outcome(&restarted).await?;
     let selection = RestartSelection {
-        restored: store.completed_restore_names()[restores..].to_vec(),
+        restored: store.completed_restore_names()[restores..]
+            .iter()
+            .map(|name| name.as_str().into())
+            .collect(),
         automatic_reads: restarted
             .oplog_service_call_count(&agent.worker_id, "read_automatic_snapshot"),
     };
@@ -1848,7 +1884,7 @@ async fn run_history(
     restarted.release().await?;
     Ok((
         HistoryRun {
-            results,
+            results: results.into_iter().map(String::into_boxed_str).collect(),
             restarted: restarted_outcome,
             finished,
         },
@@ -2165,7 +2201,7 @@ async fn a_manual_update_during_an_upload_waits_for_the_upload_and_succeeds(
         .await?;
     eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
-        Ok(records.snapshots.iter().flatten().next().cloned())
+        Ok(records.oldest_name())
     })
     .await?;
     let updated = executor
@@ -2272,7 +2308,7 @@ async fn a_start_during_an_upload_waits_for_it_and_then_confirms_its_snapshot(
     let live = agent.describe(&executor).await?;
     let named = eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
-        Ok(records.snapshots.iter().rev().flatten().next().cloned())
+        Ok(records.newest_name())
     })
     .await?;
     agent.stop(&executor, &context).await?;
@@ -2290,7 +2326,7 @@ async fn a_start_during_an_upload_waits_for_it_and_then_confirms_its_snapshot(
     store.set_save_delay(Duration::ZERO);
 
     assert!(!stored_at_start);
-    assert!(records.confirmations.contains(&named), "{records:?}");
+    assert!(records.is_confirmed(&named), "{records:?}");
     assert_eq!(store.restored_names()[restores..], [named]);
     assert_eq!(after_start, live);
     assert!(
@@ -2344,7 +2380,7 @@ async fn an_invocation_during_a_stop_waits_for_the_upload_only_in_its_start_and_
     let live = agent.describe(&executor).await?;
     eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
-        Ok(records.snapshots.iter().flatten().next().cloned())
+        Ok(records.oldest_name())
     })
     .await?;
 
@@ -2607,7 +2643,7 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
         .await?;
     eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
-        Ok(records.snapshots.iter().flatten().next().cloned())
+        Ok(records.oldest_name())
     })
     .await?;
 
@@ -2703,7 +2739,7 @@ async fn a_lost_shard_ends_a_manual_update_that_waits_for_an_upload_without_a_fa
         .await?;
     eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
-        Ok(records.snapshots.iter().flatten().next().cloned())
+        Ok(records.oldest_name())
     })
     .await?;
     let updated = executor

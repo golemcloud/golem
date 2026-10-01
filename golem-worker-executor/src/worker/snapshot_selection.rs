@@ -24,7 +24,7 @@
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use golem_common::model::{
-    AgentStatusRecord, AutomaticSnapshot, PendingUpdateKind, SnapshotFiles, UsableAutomaticSnapshot,
+    AgentStatusRecord, PendingUpdateKind, SnapshotFiles, UsableAutomaticSnapshot,
 };
 use std::collections::{BTreeSet, HashSet};
 
@@ -101,6 +101,17 @@ impl SnapshotExclusions {
     }
 }
 
+/// The automatic snapshot entry that a start of `status` selects under `exclusions`, as
+/// [`StartSelection::of`] gives it, without the rest of the selection. `enabled` tells whether
+/// this executor keeps filesystem snapshots.
+pub(crate) fn selected_automatic_snapshot(
+    status: &AgentStatusRecord,
+    exclusions: &SnapshotExclusions,
+    enabled: bool,
+) -> Option<UsableAutomaticSnapshot> {
+    select_automatic_snapshot(status, exclusions.filter(status, enabled, true))
+}
+
 /// What a start selects from the status of an agent, under the exclusions of the agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StartSelection {
@@ -162,21 +173,32 @@ fn select_automatic_snapshot(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> Option<UsableAutomaticSnapshot> {
-    let last = status
-        .last_automatic_snapshot
-        .as_ref()
-        .and_then(AutomaticSnapshot::usable);
-    last.into_iter()
-        .chain(status.previous_usable_automatic_snapshot.clone())
-        .find(|snapshot| {
-            passes(
+    let last = status.last_automatic_snapshot.as_ref().filter(|last| {
+        !matches!(last.files, SnapshotFiles::Unconfirmed(_))
+            && passes(
                 status,
                 filter,
-                snapshot.index,
-                snapshot.component_revision,
-                snapshot.filesystem_snapshot.is_some(),
+                last.index,
+                last.component_revision,
+                last.files.name().is_some(),
             )
-        })
+    });
+    match last {
+        Some(last) => last.usable(),
+        None => status
+            .previous_usable_automatic_snapshot
+            .as_ref()
+            .filter(|previous| {
+                passes(
+                    status,
+                    filter,
+                    previous.index,
+                    previous.component_revision,
+                    previous.filesystem_snapshot.is_some(),
+                )
+            })
+            .cloned(),
+    }
 }
 
 /// Gives the filesystem snapshot name of the last automatic snapshot record when the record is
@@ -286,6 +308,7 @@ fn component_revision_for_replay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::AutomaticSnapshot;
     use golem_common::model::PendingUpdateRef;
     use golem_common::model::Timestamp;
     use golem_common::model::oplog::FilesystemSnapshotName;

@@ -4054,6 +4054,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
     managed_xfs_root: PathBuf,
     filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4062,7 +4063,8 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_storage.managed_xfs_root_dir =
+                    Some(managed_xfs_root.to_path_buf());
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;

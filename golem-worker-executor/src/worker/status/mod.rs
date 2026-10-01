@@ -1612,7 +1612,7 @@ fn calculate_update_fields(
                         filesystem_snapshot.is_none()
                             || last.files.name() != filesystem_snapshot.as_ref()
                     })
-                    .and_then(|last| last.usable())
+                    .and_then(AutomaticSnapshot::into_usable)
                 {
                     previous_usable_automatic_snapshot = Some(usable);
                 }

@@ -903,7 +903,7 @@ impl OwnerCommitController {
 /// Whether the last automatic snapshot record of `status` has `name` and its confirmation.
 fn confirmed_with_name(status: &AgentStatusRecord, name: &FilesystemSnapshotName) -> bool {
     status.last_automatic_snapshot.as_ref().is_some_and(|last| {
-        last.files == golem_common::model::SnapshotFiles::Confirmed(name.clone())
+        matches!(&last.files, golem_common::model::SnapshotFiles::Confirmed(own) if own == name)
     })
 }
 

@@ -5469,8 +5469,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// the status.
     pub(crate) fn start_baselines_now(&self) -> filesystem_snapshots::StartBaselines {
         let status = self.last_known_status.load();
+        let enabled = self.filesystem_snapshots_enabled();
         filesystem_snapshots::StartBaselines {
-            automatic: self.selection_in_memory(&status).automatic,
+            automatic: self.read_exclusions(|exclusions| {
+                snapshot_selection::selected_automatic_snapshot(&status, exclusions, enabled)
+            }),
             manual_update: status.last_manual_update_snapshot_index,
         }
     }

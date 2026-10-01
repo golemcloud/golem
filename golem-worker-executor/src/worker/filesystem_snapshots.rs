@@ -272,9 +272,9 @@ fn plan_periodic_record<Copy>(
     finding: CaptureFinding<Copy>,
     since: Option<&ConfirmedFilesystemSnapshot>,
 ) -> Option<PeriodicRecord<Copy>> {
-    let since_name = since.map(|since| since.name.clone());
+    let since_name = since.map(|since| since.name.as_ref());
     Some(match (finding, since_name) {
-        (CaptureFinding::Unchanged, Some(Some(name))) => PeriodicRecord::Reused(name),
+        (CaptureFinding::Unchanged, Some(Some(name))) => PeriodicRecord::Reused(name.clone()),
         (CaptureFinding::Unchanged, Some(None)) => PeriodicRecord::WithoutName,
         (CaptureFinding::Unchanged, None) => return None,
         (CaptureFinding::InitialFiles { mark }, _) => PeriodicRecord::InitialFiles { mark },
@@ -286,7 +286,7 @@ fn plan_periodic_record<Copy>(
             Some(Some(name)),
         ) => PeriodicRecord::Own {
             copy,
-            parent: Some((name, StoreChangeDetection::SizeMtime)),
+            parent: Some((name.clone(), StoreChangeDetection::SizeMtime)),
         },
         (CaptureFinding::Captured { copy, .. }, _) => PeriodicRecord::Own { copy, parent: None },
     })
@@ -1510,7 +1510,7 @@ mod tests {
 
     /// A host that records its calls and answers as the test says.
     struct ScriptedHost {
-        calls: std::sync::Mutex<Vec<String>>,
+        calls: std::sync::Mutex<Vec<Box<str>>>,
         guest: Option<Result<RawSnapshotData, &'static str>>,
         since: Option<ConfirmedFilesystemSnapshot>,
         capture: std::sync::Mutex<Option<CaptureOutcome>>,
@@ -1540,11 +1540,16 @@ mod tests {
         }
 
         fn call(&self, call: String) {
-            self.calls.lock().unwrap().push(call);
+            self.calls.lock().unwrap().push(call.into_boxed_str());
         }
 
         fn calls(&self) -> Vec<String> {
-            self.calls.lock().unwrap().clone()
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|call| call.to_string())
+                .collect()
         }
     }
 
