@@ -84,13 +84,14 @@ async fn start_snapshotting(
     confirmation_wait: Duration,
     root: Option<&Path>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let root = root.map(Path::to_path_buf);
+    let root: Option<Box<Path>> = root.map(Box::from);
     start_with_overrides(
         deps,
         context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = root.clone();
+                config.filesystem_storage.deterministic_root_dir =
+                    root.as_deref().map(Path::to_path_buf);
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
             })),
             filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
@@ -118,13 +119,13 @@ async fn start_replaying_with(
     root: &Path,
     store: Option<&TestFilesystemSnapshotStore>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let root = root.to_path_buf();
+    let root: Box<Path> = Box::from(root);
     start_with_overrides(
         deps,
         context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.deterministic_root_dir = Some(root.to_path_buf());
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
             })),
