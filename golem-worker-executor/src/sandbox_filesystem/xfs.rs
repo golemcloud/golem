@@ -2007,6 +2007,16 @@ mod tests {
         });
     }
 
+    /// Whether two paths name the same directory. A host directory path on managed storage starts
+    /// at the descriptor of the volume root (`/proc/self/fd/<n>`), not at the mount path, so the
+    /// test compares the device and the inode.
+    fn is_same_directory(left: &Path, right: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        let left = std::fs::metadata(left).unwrap();
+        let right = std::fs::metadata(right).unwrap();
+        left.is_dir() && (left.dev(), left.ino()) == (right.dev(), right.ino())
+    }
+
     fn managed_test_root() -> PathBuf {
         std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
             .map(PathBuf::from)
@@ -2119,8 +2129,14 @@ mod tests {
             initial_files,
         } = directories;
         let copies_root = root.join(".scratch");
-        assert_eq!(copies.path().as_path(), copies_root);
-        assert_eq!(initial_files.path().as_path(), root.join(".initial-files"));
+        assert!(
+            is_same_directory(copies.path().as_path(), &copies_root),
+            "the scratch directory must be .scratch under the mount"
+        );
+        assert!(
+            is_same_directory(initial_files.path().as_path(), &root.join(".initial-files")),
+            "the initial-files directory must be .initial-files under the mount"
+        );
         [copies_root.clone(), root.join(".initial-files")]
             .into_iter()
             .for_each(|host_directory| {
