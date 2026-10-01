@@ -1,6 +1,7 @@
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::account::AccountId;
+use golem_common::model::agent::extraction::extract_component_metadata_from_bytes;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentName;
@@ -21,6 +22,41 @@ use test_r::{test, timeout};
 use tokio::task::JoinSet;
 
 pub mod native;
+
+#[test]
+async fn filesystem_artifact_exports_five_closed_world_tools_requiring_filesystem_access() {
+    let wasm = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../builtin-tools/filesystem-tools.wasm"
+    ))
+    .expect("build the filesystem tool component before running this test");
+    let metadata = extract_component_metadata_from_bytes(&wasm, true, true)
+        .await
+        .unwrap();
+    let expected = ["read-file", "write-file", "edit-file", "ls", "grep"];
+
+    assert_eq!(metadata.tools.len(), expected.len());
+    for name in expected {
+        let tool = metadata
+            .tools
+            .iter()
+            .find(|tool| tool.name() == Some(name))
+            .unwrap_or_else(|| panic!("missing filesystem tool '{name}'"));
+        assert_eq!(tool.version, "0.1.0", "{name}");
+        assert!(tool.requires_filesystem, "{name}");
+        assert!(
+            tool.commands
+                .nodes
+                .iter()
+                .filter_map(|node| node.body.as_ref())
+                .all(|body| body
+                    .annotations
+                    .as_ref()
+                    .is_some_and(|annotations| !annotations.open_world)),
+            "{name}"
+        );
+    }
+}
 
 #[test]
 #[timeout("120s")]
