@@ -158,10 +158,10 @@ pub fn wire_value_is_literal(@tool-core.WireToolType, @tool-core.ToolLiteral) ->
 // Errors
 
 // Types and methods
-pub(all) struct CollectedToolInvocation[T] {
-  result : T
-  stdout : Bytes?
-  stderr : Bytes?
+pub(all) struct CollectedToolInvocation[T, E] {
+  result : Result[T, ToolError[E]]
+  stdout : Result[Bytes?, @tool-core.ToolStreamError]
+  stderr : Result[Bytes?, @tool-core.ToolStreamError]
 }
 
 pub struct ProviderOutput {
@@ -222,7 +222,7 @@ pub struct ToolInvocation[E] {
   // private fields
 }
 pub fn[E] ToolInvocation::cancel(Self[E]) -> Unit
-pub async fn[E] ToolInvocation::collect(Self[E]) -> Result[CollectedToolInvocation[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult], ToolError[E]]
+pub async fn[E] ToolInvocation::collect(Self[E]) -> CollectedToolInvocation[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, E]
 pub fn[E] ToolInvocation::drop(Self[E]) -> Unit
 pub async fn[E] ToolInvocation::get(Self[E]) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, ToolError[E]]
 pub fn[E] ToolInvocation::stderr_stream(Self[E]) -> @async-core.Stream[Byte]?
@@ -234,7 +234,7 @@ pub struct TypedToolInvocation[T, E] {
   // private fields
 }
 pub fn[T, E] TypedToolInvocation::cancel(Self[T, E]) -> Unit
-pub async fn[T, E] TypedToolInvocation::collect(Self[T, E]) -> Result[CollectedToolInvocation[T], ToolError[E]]
+pub async fn[T, E] TypedToolInvocation::collect(Self[T, E]) -> CollectedToolInvocation[T, E]
 pub fn[T, E] TypedToolInvocation::drop(Self[T, E]) -> Unit
 pub async fn[T, E] TypedToolInvocation::get(Self[T, E]) -> Result[T, ToolError[E]]
 
