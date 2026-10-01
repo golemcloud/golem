@@ -1491,7 +1491,7 @@ async fn managed_snapshots_on_unmanaged_storage_fail_at_startup(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let key = "00".repeat(64);
+    let key: Box<str> = "00".repeat(64).into_boxed_str();
 
     let started = start_with_overrides(
         deps,
