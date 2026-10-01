@@ -744,13 +744,14 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> anyhow::Result<golem_common::model::ExportForkAdmissions> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = Worker::find_durable_stream_worker(
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
             self.services
                 .as_ref()
                 .expect("test service graph is captured"),
             &owned_agent_id,
         )
-        .await?
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok(worker
             .get_attached_last_known_status()
@@ -873,13 +874,14 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> anyhow::Result<AgentStatusRecord> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = Worker::find_durable_stream_worker(
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
             self.services
                 .as_ref()
                 .expect("test service graph is captured"),
             &owned_agent_id,
         )
-        .await?
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok((*worker.get_attached_last_known_status().await).clone())
     }

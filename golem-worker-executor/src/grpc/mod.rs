@@ -543,7 +543,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             let result =
                 match Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id).await? {
-                    Some(worker) => worker.control_export_stream(control.into()).await?,
+                    Some((worker, _response_lease)) => {
+                        worker.control_export_stream(control.into()).await?
+                    }
                     None => DomainExportResult::NotFound,
                 };
             let result = golem::workerexecutor::v1::ExportStreamControlResult::from(result);
@@ -592,9 +594,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             )
             .into());
         }
-        let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
-            .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let (worker, _response_lease) =
+            Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
+                .await?
+                .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         // A producer that is being deleted is unavailable rather than failed: the caller retries
         // until the deletion either finishes (the producer is then not found, which completes a
         // consumer-side finalization) or fails and leaves the producer resident again. A consumer
@@ -701,9 +704,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
         }
-        let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
-            .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let (worker, _response_lease) =
+            Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
+                .await?
+                .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         match read {
             DurableStreamReadRequest::AttachedConsumer(read) => {
                 let events = worker.read_durable_stream_segment(*read).await?;
@@ -721,7 +725,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         owned_agent_id: &OwnedAgentId,
         auth_ctx: Option<golem::auth::AuthCtx>,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+    ) -> Result<
+        (
+            Arc<Worker<Ctx>>,
+            Option<Arc<crate::worker::EphemeralResponseLease>>,
+        ),
+        DurableStreamRemoteError<WorkerExecutorError>,
+    > {
         self.ensure_worker_belongs_to_this_executor(owned_agent_id)?;
         let auth_ctx: AuthCtx = auth_ctx
             .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -733,6 +743,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::<Ctx>::find_durable_stream_worker(self, owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
+            .map_err(Into::into)
     }
 
     async fn create_stream_session_internal(
@@ -3362,14 +3373,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = match extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)
         {
             Ok(id) => self.stream_slot_worker(&id, request.auth_ctx.clone()).await,
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         };
         let result = match worker {
-            Ok(worker) => match request.try_into() {
+            Ok((worker, _response_lease)) => match request.try_into() {
                 Ok(request) => worker.read_stream_slot(request).await,
                 Err(error) => Err(DurableStreamRemoteError::Other(error)),
             },
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error),
         };
         let result = match result {
             Ok(Some(value)) => Outcome::Success(value.into()),
@@ -3396,28 +3407,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let result = async {
             let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
             let auth_ctx = request.auth_ctx.clone();
-            let outcome = self
-                .stream_slot_worker(&id, auth_ctx)
-                .await?
-                .append_to_stream_slot(request.into())
-                .await?;
-            Ok::<_, WorkerExecutorError>(AppendToStreamSlotResponse::from(outcome))
+            let (worker, _response_lease) = self.stream_slot_worker(&id, auth_ctx).await?;
+            let outcome = worker.append_to_stream_slot(request.into()).await?;
+            Ok::<_, DurableStreamRemoteError<WorkerExecutorError>>(
+                AppendToStreamSlotResponse::from(outcome),
+            )
         }
         .await;
-        Ok(Response::new(result.unwrap_or_else(|error| {
-            AppendToStreamSlotResponse {
-                result: Some(
-                    golem::workerexecutor::v1::append_to_stream_slot_response::Result::Failure(
-                        error.into(),
+        match result {
+            Ok(response) => Ok(Response::new(response)),
+            Err(DurableStreamRemoteError::Unavailable) => Err(Status::unavailable(
+                "durable stream producer is unavailable",
+            )),
+            Err(DurableStreamRemoteError::Other(error)) => {
+                Ok(Response::new(AppendToStreamSlotResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::append_to_stream_slot_response::Result::Failure(
+                            error.into(),
+                        ),
                     ),
-                ),
-                invocation_key: None,
-                expiry_policy: None,
-                expiry_deadline_millis: None,
-                stream_head_offset: Vec::new(),
-                stream_closed: None,
+                    invocation_key: None,
+                    expiry_policy: None,
+                    expiry_deadline_millis: None,
+                    stream_head_offset: Vec::new(),
+                    stream_closed: None,
+                }))
             }
-        })))
+        }
     }
 
     async fn fork_stream_slot(
