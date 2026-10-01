@@ -1301,7 +1301,8 @@ async fn a_manual_update_brings_the_files_into_the_target_revision(
             ],
         )
         .await?;
-    // A manual update fails while an upload of the agent runs.
+    // Let the periodic upload end first, so the manual update is admitted at once and does not
+    // wait for the running upload.
     agent.confirmed(&executor).await?;
     let saves = store.save_count();
 

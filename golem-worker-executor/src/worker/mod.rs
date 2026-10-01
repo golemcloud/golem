@@ -11471,8 +11471,8 @@ impl RunningWorker {
             .last_manual_update_snapshot_index;
         let mut last_snapshot_source = last_snapshot_index.map(|_| SnapshotSource::ManualUpdate);
 
-        // Only snapshots newer than the rejection watermark and matching the active revision
-        // are eligible. Pending updates temporarily ignore them so compatibility
+        // Only snapshots whose exact record index is not rejected, and that match the active
+        // revision, are eligible. Pending updates temporarily ignore them so compatibility
         // is established by replaying from the authoritative manual-update baseline.
         if let Some(snapshot_idx) = start_filesystem
             .selection
