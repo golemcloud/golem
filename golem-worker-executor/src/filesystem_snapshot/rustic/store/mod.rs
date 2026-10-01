@@ -35,6 +35,7 @@ use super::prune::{
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
+use super::spawner::Spawner;
 use super::{
     PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
     prune, restore_snapshot, run_blocking,
@@ -420,6 +421,16 @@ fn snapshots_changed_error() -> SnapshotStoreError {
     }
 }
 
+/// Gives the runtime of the operation that calls it.
+fn runtime() -> Result<Handle, SnapshotStoreError> {
+    Handle::try_current()
+        .context("a filesystem snapshot operation needs an async runtime")
+        .map_err(|source| SnapshotStoreError::Storage {
+            retryable: false,
+            source,
+        })
+}
+
 /// The error of an operation of a store that is shut down.
 fn shut_down_error() -> SnapshotStoreError {
     SnapshotStoreError::Storage {
@@ -500,13 +511,7 @@ impl RusticSnapshotStore {
     /// Gives a backend over the repository of the blobs, whose calls follow the policy of the
     /// blobs.
     fn backend(&self, files: SnapshotFiles) -> Result<BlobBackend, SnapshotStoreError> {
-        let runtime = Handle::try_current()
-            .context("a filesystem snapshot operation needs an async runtime")
-            .map_err(|source| SnapshotStoreError::Storage {
-                retryable: false,
-                source,
-            })?;
-        Ok(BlobBackend::new(files, runtime, KEPT_PACKS_LIMIT).tracked_by(self.tracker.token()))
+        Ok(BlobBackend::new(files, runtime()?, KEPT_PACKS_LIMIT).tracked_by(self.tracker.token()))
     }
 
     /// Gives a backend over the repository of the scope for the operation with the token.
@@ -700,7 +705,11 @@ impl RusticSnapshotStore {
                 // No snapshot file is written. A later prune marks the packs of the save.
                 return Err(shut_down_error());
             }
-            publish(&files, &staged, &tracker)
+            let spawner = Spawner {
+                tracker,
+                runtime: runtime()?,
+            };
+            publish(&files, &staged, &spawner)
                 .await
                 .map_err(storage_failure)
         })

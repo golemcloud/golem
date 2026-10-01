@@ -25,6 +25,7 @@ mod priority;
 mod prune;
 mod publish;
 mod scope;
+mod spawner;
 mod store;
 
 pub(crate) use store::RusticSnapshotStore;

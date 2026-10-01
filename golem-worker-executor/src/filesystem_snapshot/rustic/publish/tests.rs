@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
+use super::super::spawner::Spawner;
 use super::super::tests::files_of;
 use super::super::tests::holding::reached_deadline;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
@@ -72,6 +73,14 @@ fn files(
 }
 
 /// Gives the content of the snapshot file, when the storage below the script holds it.
+/// Gives a spawner on the runtime of the test, counted by the tracker.
+fn spawner(tracker: &TaskTracker) -> Spawner {
+    Spawner {
+        tracker: tracker.clone(),
+        runtime: tokio::runtime::Handle::current(),
+    }
+}
+
 async fn stored(inner: &SnapshotFiles) -> Option<Vec<u8>> {
     inner.get("test", Path::new(SNAPSHOT_PATH)).await.unwrap()
 }
@@ -81,7 +90,7 @@ async fn stored(inner: &SnapshotFiles) -> Option<Vec<u8>> {
 async fn a_publish_writes_the_staged_file() {
     let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
 
-    let published = publish(&files, &staged(), &TaskTracker::new()).await;
+    let published = publish(&files, &staged(), &spawner(&TaskTracker::new())).await;
 
     assert_eq!(
         (published.is_ok(), stored(&inner).await),
@@ -95,8 +104,8 @@ async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
     let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
     let tracker = TaskTracker::new();
 
-    let first = publish(&files, &staged(), &tracker).await;
-    let second = publish(&files, &staged(), &tracker).await;
+    let first = publish(&files, &staged(), &spawner(&tracker)).await;
+    let second = publish(&files, &staged(), &spawner(&tracker)).await;
 
     assert_eq!(
         (first.is_ok(), second.is_ok(), stored(&inner).await),
@@ -110,7 +119,7 @@ async fn a_publish_whose_answer_is_lost_deletes_the_file_and_gives_the_error() {
     let (files, storage, inner) =
         files(Script::LoseTheAnswer, Script::Pass, Duration::from_secs(2));
 
-    let published = publish(&files, &staged(), &TaskTracker::new()).await;
+    let published = publish(&files, &staged(), &spawner(&TaskTracker::new())).await;
 
     assert_eq!(
         (
@@ -138,7 +147,7 @@ async fn a_publish_that_reaches_the_deadline_deletes_the_file_that_the_storage_w
         Duration::from_millis(100),
     );
 
-    let published = publish(&files, &staged(), &TaskTracker::new()).await;
+    let published = publish(&files, &staged(), &spawner(&TaskTracker::new())).await;
 
     assert_eq!(
         (
@@ -163,7 +172,7 @@ async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_track
     );
     let tracker = TaskTracker::new();
 
-    let dropped = publish(&files, &staged(), &tracker).now_or_never();
+    let dropped = publish(&files, &staged(), &spawner(&tracker)).now_or_never();
     let written_before_the_drop = stored(&inner).await;
     storage.open_gate();
     tracker.close();
@@ -186,7 +195,7 @@ async fn a_publish_that_returns_keeps_the_file_when_the_tasks_of_the_tracker_end
     let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
     let tracker = TaskTracker::new();
 
-    let published = publish(&files, &staged(), &tracker).await;
+    let published = publish(&files, &staged(), &spawner(&tracker)).await;
     tracker.close();
     let waited = tokio::time::timeout(LIMIT, tracker.wait()).await;
 
