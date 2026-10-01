@@ -244,17 +244,28 @@ fn make_host_directories_blocking(
     let initial_files = HostPath(Arc::from(root.join(INITIAL_FILES)));
     make_empty_host_directory(scratch.as_path(), verify_no_project)?;
     if let Err(error) = make_empty_host_directory(initial_files.as_path(), verify_no_project) {
-        return Err(
-            match remove_and_verify_blocking(
+        return Err(error_after_removal(
+            error,
+            remove_and_verify_blocking(
                 scratch.as_path(),
                 "remove the scratch directory after a failed host directory",
-            ) {
-                Ok(()) => error,
-                Err(cleanup_error) => cleanup_error,
-            },
-        );
+            ),
+        ));
     }
     Ok((scratch, initial_files, temporary_root))
+}
+
+/// Gives the error of a step that failed and then removed what it had made. A failed removal is
+/// the error, because it leaves a directory behind. After a removal that succeeded, the error of
+/// the step is the error.
+fn error_after_removal(
+    error: FilesystemStorageError,
+    removal: Result<(), FilesystemStorageError>,
+) -> FilesystemStorageError {
+    match removal {
+        Ok(()) => error,
+        Err(removal_error) => removal_error,
+    }
 }
 
 fn is_one_normal_component(name: &OsStr) -> bool {
@@ -283,15 +294,10 @@ fn make_empty_host_directory(
         .map_err(|error| FilesystemStorageError::io("create host directory", path, error))?;
     #[cfg(target_os = "linux")]
     if verify_no_project && let Err(error) = xfs::verify_host_directory_has_no_project(path) {
-        return Err(
-            match remove_and_verify_blocking(
-                path,
-                "remove a host directory that has a project identity",
-            ) {
-                Ok(()) => error,
-                Err(cleanup_error) => cleanup_error,
-            },
-        );
+        return Err(error_after_removal(
+            error,
+            remove_and_verify_blocking(path, "remove a host directory that has a project identity"),
+        ));
     }
     #[cfg(not(target_os = "linux"))]
     let _ = verify_no_project;
@@ -322,6 +328,47 @@ mod tests {
 
     fn is_empty_directory(path: &Path) -> bool {
         std::fs::read_dir(path).unwrap().next().is_none()
+    }
+
+    #[test]
+    fn a_failed_removal_is_the_error_after_a_failed_step() {
+        let step = || {
+            FilesystemStorageError::io(
+                "make a host directory",
+                Path::new("/step"),
+                std::io::Error::from(ErrorKind::PermissionDenied),
+            )
+        };
+        let removal = FilesystemStorageError::cleanup_io(
+            "remove a host directory",
+            Path::new("/removal"),
+            std::io::Error::from(ErrorKind::PermissionDenied),
+        );
+
+        assert_eq!(
+            error_after_removal(step(), Ok(())).to_string(),
+            step().to_string()
+        );
+        let failed = error_after_removal(step(), Err(removal));
+        assert!(failed.cleanup_failed(), "{failed}");
+        assert!(
+            failed.to_string().contains("remove a host directory"),
+            "{failed}"
+        );
+    }
+
+    #[test]
+    async fn provision_makes_a_root_that_does_not_exist_yet() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("not/yet/there");
+
+        let (_provisioning, directories) = provision(Some(&root)).await;
+
+        assert!(is_empty_directory(directories.scratch.path().as_path()));
+        assert!(is_empty_directory(
+            directories.initial_files.path().as_path()
+        ));
+        assert_eq!(directories.scratch.path().as_path(), root.join(".scratch"));
     }
 
     #[test]
