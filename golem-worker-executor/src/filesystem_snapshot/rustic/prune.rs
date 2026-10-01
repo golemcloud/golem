@@ -1713,16 +1713,13 @@ mod tests {
     async fn a_claim_is_taken_after_its_marker_and_a_loser_deletes_its_marker() {
         let files = new_files();
         let directory = claims_directory(&ledger(Some(42), false));
-        let marker = || {
-            let (at, time) = marker_time(&SystemClock);
-            (marker_path(&directory, 0, time), at)
-        };
+        let marker = || marker_path(&directory, 0, marker_time(&SystemClock).1);
         let claim = ClaimName {
             directory: directory.clone().into(),
             number: 0,
         };
-        let (first_marker, _) = marker();
-        let (second_marker, _) = marker();
+        let first_marker = marker();
+        let second_marker = marker();
         let first = take_claim(&files, &claim, &first_marker).await.unwrap();
         let again = take_claim(&files, &claim, &second_marker).await.unwrap();
         let listed = list_claims(&files, &directory).await.unwrap();
