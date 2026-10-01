@@ -26,8 +26,8 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Rust compiler | `1.98.0 (88d9e12ae 2026-08-18)` |
 | Standalone WASM runner | Wasmtime `46.0.1` |
 | Guest artifact | `builtin-tools/bash.wasm` (built, not committed), release build, `golem:bash` / `bash@0.2.0` |
-| Artifact size | 23,356,048 bytes (22.27 MiB) |
-| Artifact SHA-256 | `95410bc60350d71ebd63fe69796e6c675b34d79b541e6430dbb42fc4e30df425` |
+| Artifact size | 23,352,740 bytes (22.27 MiB) |
+| Artifact SHA-256 | `ff69ffbb0faf86a1e1696024b7102e78cf482d97e3451b69cbeab41f0c8927da` |
 
 `cargo make build-bash-tool` built the component in the pinned container the README describes
 (Build and verify), wrote it to `builtin-tools/bash.wasm` and passed
