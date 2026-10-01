@@ -2750,14 +2750,36 @@ fn left_out_of(capture: &FilesystemCapture) -> BTreeSet<String> {
         .collect()
 }
 
-/// The number of histories in which the restore property compared the tree with times.
-static TIMES_CHECKS: AtomicUsize = AtomicUsize::new(0);
+/// The checks that one history of the restore property reached.
+#[derive(Clone, Copy, Debug, Default)]
+struct Coverage {
+    /// The property compared the tree with times.
+    times: bool,
+    /// An install of the reference model found the old object of a read-only file back at its
+    /// path, with other content of the declared size.
+    old_object_back: bool,
+    /// The capture found a tree of initial files.
+    initial_files: bool,
+}
 
-/// The number of histories in which an install of the reference model found the old object of a
-/// read-only file back at its path, with other content of the declared size.
-static OLD_OBJECT_BACK_CHECKS: AtomicUsize = AtomicUsize::new(0);
-/// The number of cases in which the capture found a tree of initial files.
-static INITIAL_FILES_CHECKS: AtomicUsize = AtomicUsize::new(0);
+/// The number of histories of one run of the restore property that reached each check.
+#[derive(Clone, Copy, Debug, Default)]
+struct CoverageCounts {
+    times: usize,
+    old_object_back: usize,
+    initial_files: usize,
+}
+
+impl CoverageCounts {
+    /// The counts with the checks of one more history.
+    fn with(self, coverage: Coverage) -> Self {
+        Self {
+            times: self.times + usize::from(coverage.times),
+            old_object_back: self.old_object_back + usize::from(coverage.old_object_back),
+            initial_files: self.initial_files + usize::from(coverage.initial_files),
+        }
+    }
+}
 
 /// Starts an agent from a restore of `snapshot` with the component declarations `files`.
 async fn start_restored(
@@ -2789,7 +2811,6 @@ async fn compare_start_from_initial_files(
     expected: Expected<'_>,
     problems: &mut Vec<String>,
 ) {
-    INITIAL_FILES_CHECKS.fetch_add(1, Ordering::Relaxed);
     let current = declarations_at(&history.initial, before, prefix);
     let agent = agents.agent("initial-files");
     let files = declare_files(&agents.store, &current).await;
@@ -3576,7 +3597,7 @@ impl ReferenceModel {
 /// modification times that a restore keeps must equal the tree of agent B at the capture.
 async fn check_restore_against_replay(
     history: &History,
-) -> Result<(), proptest::test_runner::TestCaseError> {
+) -> Result<Coverage, proptest::test_runner::TestCaseError> {
     let agents = UnmanagedAgents::new().await;
     let capture_at = history.capture;
     let (before, after) = history.steps.split_at(capture_at);
@@ -3629,9 +3650,10 @@ async fn check_restore_against_replay(
                 "step {index} of the replay gave {actual:?}, and the reference model gives {expected:?}"
             ));
         });
-    if model.old_object_back {
-        OLD_OBJECT_BACK_CHECKS.fetch_add(1, Ordering::Relaxed);
-    }
+    let mut coverage = Coverage {
+        old_object_back: model.old_object_back,
+        ..Coverage::default()
+    };
     let model_tree = model.tree();
     if replay_tree != model_tree {
         problems.push(format!(
@@ -3675,7 +3697,10 @@ async fn check_restore_against_replay(
         )
         .await;
         proptest::prop_assert!(problems.is_empty(), "{}", problems.join("\n"));
-        return Ok(());
+        return Ok(Coverage {
+            initial_files: true,
+            ..coverage
+        });
     }
     let snapshot = outcome.map(|outcome| match outcome {
         CaptureOutcome::Captured { capture, .. } => capture,
@@ -3698,7 +3723,7 @@ async fn check_restore_against_replay(
             let current = declarations_at(&history.initial, before, &prefix);
             match start_restored(&agents, "restored", &current, &snapshot).await {
                 (agent, Ok(restored)) => {
-                    TIMES_CHECKS.fetch_add(1, Ordering::Relaxed);
+                    coverage.times = true;
                     let restored_tree = tree_with_times(&agents.root(&agent), &left_out);
                     if restored_tree != captured_tree {
                         problems.push(format!(
@@ -3771,7 +3796,7 @@ async fn check_restore_against_replay(
         }
     }
     proptest::prop_assert!(problems.is_empty(), "{}", problems.join("\n"));
-    Ok(())
+    Ok(coverage)
 }
 
 #[test]
@@ -3797,9 +3822,13 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
         .unwrap();
     let started = Instant::now();
 
+    let counts = std::cell::Cell::new(CoverageCounts::default());
     let result = runner.run(&histories(), |history| {
-        runtime.block_on(check_restore_against_replay(&history))
+        runtime
+            .block_on(check_restore_against_replay(&history))
+            .map(|coverage| counts.set(counts.get().with(coverage)))
     });
+    let counts = counts.get();
 
     let elapsed = started.elapsed();
     eprintln!(
@@ -3807,23 +3836,19 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
          times compared in {} histories, the old object of a read-only file back at its path in {} \
          histories, a tree of initial files in {} histories",
         elapsed / cases.max(1),
-        TIMES_CHECKS.load(Ordering::Relaxed),
-        OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed),
-        INITIAL_FILES_CHECKS.load(Ordering::Relaxed)
+        counts.times,
+        counts.old_object_back,
+        counts.initial_files
     );
     if let Err(error) = result {
         panic!("{error}");
     }
     // A run with fewer histories does not have to reach every case.
     if cases >= RESTORE_PROPERTY_CASES {
+        assert!(counts.times > 0, "no history compared the tree with times");
         assert!(
-            TIMES_CHECKS.load(Ordering::Relaxed) > 0,
-            "TIMES_CHECKS: no history compared the tree with times"
-        );
-        assert!(
-            OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed) > 0,
-            "OLD_OBJECT_BACK_CHECKS: no history found the old object of a read-only file back at \
-             its path"
+            counts.old_object_back > 0,
+            "no history found the old object of a read-only file back at its path"
         );
     }
 }
