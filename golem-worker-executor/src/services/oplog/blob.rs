@@ -33,7 +33,6 @@ use golem_service_base::storage::blob::{
     agent_path_segment,
 };
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -60,6 +59,22 @@ fn agent_id_blob_path(directory: &Path) -> PathBuf {
 /// Gives the path of the chunk that ends at the index, in the directory of an archive.
 fn chunk_path(directory: &Path, idx: OplogIndex) -> PathBuf {
     directory.join(idx.to_string())
+}
+
+/// A name in the directory of an archive that is neither the `agent_id` blob nor a chunk.
+#[derive(Debug, PartialEq, Eq)]
+struct InvalidChunkName;
+
+/// Gives the index of the chunk at `path` in the directory of an archive. Gives `None` for the
+/// `agent_id` blob, which is not a chunk, and an error for a name that is not an index.
+fn chunk_index(path: &Path) -> Result<Option<OplogIndex>, InvalidChunkName> {
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some(AGENT_ID_BLOB) => Ok(None),
+        name => name
+            .and_then(|name| name.parse::<u64>().ok())
+            .map(|index| Some(OplogIndex::from_u64(index)))
+            .ok_or(InvalidChunkName),
+    }
 }
 
 /// Reads the agent name from the `agent_id` blob in the directory of an archive.
@@ -466,21 +481,13 @@ impl BlobOplogArchive {
 
         paths
             .into_iter()
-            // The `agent_id` blob is not a chunk, and its name is not an index.
-            .filter(|path| path.file_name() != Some(OsStr::new(AGENT_ID_BLOB)))
-            .map(|path| {
-                let idx = Self::path_to_oplog_index(&path);
-                (idx, path)
+            .filter_map(|path| match chunk_index(&path) {
+                Ok(index) => index.map(|index| (index, path)),
+                Err(InvalidChunkName) => {
+                    panic!("failed to parse oplog index from path: {path:?}")
+                }
             })
             .collect::<BTreeMap<OplogIndex, PathBuf>>()
-    }
-
-    pub(crate) fn path_to_oplog_index(path: &Path) -> OplogIndex {
-        path.file_name()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(OplogIndex::from_u64)
-            .unwrap_or_else(|| panic!("failed to parse oplog index from path: {path:?}"))
     }
 
     pub(crate) fn oplog_index_to_path(&self, idx: OplogIndex) -> PathBuf {

@@ -340,3 +340,22 @@ async fn a_directory_without_an_agent_id_holds_no_archive() {
         )
     );
 }
+
+#[test]
+fn chunk_index_gives_the_index_of_a_chunk_and_none_for_the_agent_id_blob() {
+    use super::{InvalidChunkName, chunk_index};
+    use std::path::Path;
+
+    assert_eq!(
+        [
+            chunk_index(Path::new("directory/17")),
+            chunk_index(Path::new("directory/agent_id")),
+            chunk_index(Path::new("directory/other")),
+        ],
+        [
+            Ok(Some(OplogIndex::from_u64(17))),
+            Ok(None),
+            Err(InvalidChunkName),
+        ]
+    );
+}
