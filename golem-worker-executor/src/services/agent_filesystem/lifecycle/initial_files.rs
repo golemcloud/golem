@@ -876,18 +876,46 @@ pub(super) async fn holds_golem_file<Adapter: SandboxFilesystemAdapter>(
     installed: Option<&InstalledFile>,
     attributes: &SandboxAttributes,
 ) -> Result<bool, FilesystemStorageError> {
+    match golem_file_evidence(declared, installed, attributes) {
+        GolemFileEvidence::NotGolem => Ok(false),
+        GolemFileEvidence::Golem => Ok(true),
+        GolemFileEvidence::SameContentAs(expected) => content_hash(sandbox, path)
+            .await
+            .map(|hash| hash == *expected),
+    }
+}
+
+/// What the attributes of an object tell about whether it is Golem's file of a declaration.
+#[derive(Debug, Eq, PartialEq)]
+enum GolemFileEvidence<'a> {
+    /// The object is not Golem's file.
+    NotGolem,
+    /// The object is Golem's file.
+    Golem,
+    /// The object is Golem's file only when its content has this hash.
+    SameContentAs(&'a blake3::Hash),
+}
+
+/// Decides from `attributes` whether the object is Golem's file of the declaration `declared`.
+///
+/// An object that is not a regular file, that has write permission where `declared` is
+/// read-only, or that has another size is not Golem's file. An object that matches `installed`
+/// is Golem's file. Any other object is Golem's file only when its content has the declared hash.
+fn golem_file_evidence<'a>(
+    declared: &'a InitialAgentFile,
+    installed: Option<&InstalledFile>,
+    attributes: &SandboxAttributes,
+) -> GolemFileEvidence<'a> {
     let read_only = declared.permissions == AgentFilePermissions::ReadOnly;
     if attributes.kind != SandboxObjectKind::File
         || (read_only && !attributes.read_only)
         || attributes.size != declared.size
     {
-        Ok(false)
+        GolemFileEvidence::NotGolem
     } else if installed.is_some_and(|installed| installed.matches(attributes)) {
-        Ok(true)
+        GolemFileEvidence::Golem
     } else {
-        content_hash(sandbox, path)
-            .await
-            .map(|hash| hash == *declared.content_hash.0.as_blake3_hash())
+        GolemFileEvidence::SameContentAs(declared.content_hash.0.as_blake3_hash())
     }
 }
 
@@ -1043,16 +1071,9 @@ pub(super) async fn provision<Adapter: SandboxFilesystemAdapter>(
     let _update = generation.initial_file_updates.lock().await;
     let requested = declarations_of(files, "materialize unique entity-provisioned file target")?;
     let state = Arc::clone(&generation.initial_files.lock().unwrap());
-    validate_compatible(&declaration_view([&requested]), &state.declarations())?;
-    let provisioned = state
-        .provisioned
-        .iter()
-        .chain(&requested)
-        .map(|(path, file)| (Arc::clone(path), Arc::clone(file)))
-        .collect::<Declarations>();
-    if provisioned == *state.provisioned {
+    let Some(provisioned) = provisioned_after(&state, &requested)? else {
         return Ok(());
-    }
+    };
     let new = declaration_view([&*state.initial, &provisioned]);
     let installed = install_resident(generation, sources, &state, &new).await?;
     *generation.initial_files.lock().unwrap() = Arc::new(InitialFileState {
@@ -1061,6 +1082,23 @@ pub(super) async fn provision<Adapter: SandboxFilesystemAdapter>(
         installed,
     });
     Ok(())
+}
+
+/// Gives the provisioned declarations of `state` with `requested` added, or `None` when `state`
+/// already has each declaration of `requested`. Refuses a declaration of `requested` that
+/// describes another file than `state` declares at its path.
+fn provisioned_after(
+    state: &InitialFileState,
+    requested: &Declarations,
+) -> Result<Option<Declarations>, Error> {
+    validate_compatible(&declaration_view([requested]), &state.declarations())?;
+    let provisioned = state
+        .provisioned
+        .iter()
+        .chain(requested)
+        .map(|(path, file)| (Arc::clone(path), Arc::clone(file)))
+        .collect::<Declarations>();
+    Ok((provisioned != *state.provisioned).then_some(provisioned))
 }
 
 /// Installs `new` over the files of `state` in a generation that the agent uses.
@@ -1240,5 +1278,106 @@ mod tests {
             kind: SandboxObjectKind::Directory,
             ..attributes(1, true)
         }));
+    }
+
+    fn file_attributes(read_only: bool, size: u64, object: u64) -> SandboxAttributes {
+        SandboxAttributes {
+            kind: SandboxObjectKind::File,
+            link_count: 1,
+            size,
+            accessed: None,
+            modified: None,
+            read_only,
+            object: SandboxObjectId::scripted(object),
+        }
+    }
+
+    #[test]
+    fn golem_file_evidence_refuses_another_kind_size_or_write_permission_first() {
+        let declared = read_only(4);
+        let installed = InstalledFile::of(&file_attributes(true, 4, 1));
+        let directory = SandboxAttributes {
+            kind: SandboxObjectKind::Directory,
+            ..file_attributes(true, 4, 1)
+        };
+
+        assert_eq!(
+            [
+                golem_file_evidence(&declared, Some(&installed), &directory),
+                golem_file_evidence(&declared, Some(&installed), &file_attributes(true, 5, 1)),
+                golem_file_evidence(&declared, Some(&installed), &file_attributes(false, 4, 1)),
+            ],
+            [
+                GolemFileEvidence::NotGolem,
+                GolemFileEvidence::NotGolem,
+                GolemFileEvidence::NotGolem,
+            ]
+        );
+    }
+
+    #[test]
+    fn golem_file_evidence_takes_the_installed_file_and_asks_for_the_hash_otherwise() {
+        let declared = read_only(4);
+        let writable = read_write(4);
+        let installed = InstalledFile::of(&file_attributes(true, 4, 1));
+        let hash = declared.content_hash.0.as_blake3_hash();
+
+        assert_eq!(
+            [
+                golem_file_evidence(&declared, Some(&installed), &file_attributes(true, 4, 1)),
+                golem_file_evidence(&declared, Some(&installed), &file_attributes(true, 4, 2)),
+                golem_file_evidence(&declared, None, &file_attributes(true, 4, 1)),
+                golem_file_evidence(&writable, None, &file_attributes(false, 4, 1)),
+            ],
+            [
+                GolemFileEvidence::Golem,
+                GolemFileEvidence::SameContentAs(hash),
+                GolemFileEvidence::SameContentAs(hash),
+                GolemFileEvidence::SameContentAs(writable.content_hash.0.as_blake3_hash()),
+            ]
+        );
+    }
+
+    fn declared_at(path: &str, file: InitialAgentFile) -> Declarations {
+        Declarations::from([(Arc::<Path>::from(Path::new(path)), Arc::new(file))])
+    }
+
+    #[test]
+    fn provisioning_files_that_the_state_already_declares_is_a_no_op() {
+        let state = InitialFileState {
+            initial: Arc::new(declared_at("initial", read_only(1))),
+            provisioned: Arc::new(declared_at("provisioned", read_only(2))),
+            installed: InstalledFiles::new(),
+        };
+
+        assert_eq!(
+            provisioned_after(&state, &declared_at("provisioned", read_only(2))).unwrap(),
+            None
+        );
+        assert_eq!(
+            provisioned_after(&state, &declared_at("added", read_write(3))).unwrap(),
+            Some(Declarations::from([
+                (
+                    Arc::<Path>::from(Path::new("provisioned")),
+                    Arc::new(read_only(2))
+                ),
+                (
+                    Arc::<Path>::from(Path::new("added")),
+                    Arc::new(read_write(3))
+                ),
+            ]))
+        );
+    }
+
+    #[test]
+    fn provisioning_another_file_at_a_declared_path_is_refused() {
+        let state = InitialFileState {
+            initial: Arc::new(declared_at("initial", read_only(1))),
+            provisioned: Arc::new(declared_at("provisioned", read_only(2))),
+            installed: InstalledFiles::new(),
+        };
+
+        assert!(provisioned_after(&state, &declared_at("initial", read_write(1))).is_err());
+        assert!(provisioned_after(&state, &declared_at("provisioned", read_only(3))).is_err());
     }
 }
