@@ -14,8 +14,8 @@
 
 //! Go guest tool client generator.
 //!
-//! A generated tool client declares the tool with `golem.DeclareRemoteTool`
-//! and each command with the same field-bound spec a Go tool is written with,
+//! A generated tool client declares the tool with `golem.DefineToolClient`,
+//! under an identity type of its own, and each command with the same field-bound spec a Go tool is written with,
 //! mirroring the published metadata. The guest SDK then builds the canonical
 //! input record, invokes through tool RPC and decodes the result exactly as for
 //! a tool declared in Go, so the generator emits no codec:
@@ -53,6 +53,8 @@ pub struct GoToolBridgeGenerator {
 /// package namespace with the generated types, so they are reserved before any
 /// type is named.
 struct ToolNames {
+    /// The tool's identity type.
+    marker: String,
     /// Per node with a body: the command's variable.
     commands: BTreeMap<usize, String>,
     /// Per node with a body: the argument struct.
@@ -138,8 +140,15 @@ impl GoToolBridgeGenerator {
                 lower_first(summary)
             )
         });
+        let marker = &self.names.marker;
+        writer.doc(&format!(
+            "{marker} identifies the {} tool, so its commands and errors cannot be used for another.",
+            self.tool_name
+        ));
+        writer.line(format!("type {marker} struct{{}}"));
+        writer.blank();
         writer.line(format!(
-            "var {TOOL_VAR} = golem.DeclareRemoteTool({})",
+            "var {TOOL_VAR} = golem.DefineToolClient[{marker}]({})",
             go_string(&self.tool_name)
         ));
         writer.blank();
@@ -572,13 +581,23 @@ impl ToolNames {
 
         // Every exported name shares one namespace, so they are made unique
         // together, in a stable order.
-        let mut all = vec![TOOL_VAR.to_string()];
+        let tool_name = tool
+            .commands
+            .nodes
+            .first()
+            .map(|n| n.name.as_str())
+            .unwrap_or_default();
+        let mut all = vec![
+            TOOL_VAR.to_string(),
+            format!("{}Tool", to_exported_ident(tool_name)),
+        ];
         all.extend(commands.iter().map(|(_, stem)| stem.clone()));
         all.extend(commands.iter().map(|(_, stem)| format!("{stem}Args")));
         all.extend(globals.iter().map(|(_, name)| name.clone()));
         all.extend(error_candidates.iter().map(|(ident, _)| ident.clone()));
         let unique = unique_idents(all);
         let mut it = unique.into_iter().skip(1);
+        let marker = it.next().expect("a name");
 
         let command_vars = commands
             .iter()
@@ -611,6 +630,7 @@ impl ToolNames {
         }
 
         Ok(Self {
+            marker,
             commands: command_vars,
             args,
             globals,
@@ -621,7 +641,7 @@ impl ToolNames {
     }
 
     fn reserved(&self) -> Vec<String> {
-        let mut out = vec![TOOL_VAR.to_string()];
+        let mut out = vec![TOOL_VAR.to_string(), self.marker.clone()];
         out.extend(self.commands.values().cloned());
         out.extend(self.args.values().cloned());
         out.extend(self.globals.values().cloned());

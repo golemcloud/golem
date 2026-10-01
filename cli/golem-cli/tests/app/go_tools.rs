@@ -43,11 +43,13 @@ fn replace_go_component(component: &Path, package: &str, source: &str) {
     .unwrap();
 }
 
-/// A Go tool is called with typed arguments three ways: by an agent of its own
-/// component through the tool's own declaration, and by a Go agent of another
-/// component through the generated guest tool client — a plain command with
-/// globals and a tail, a stdout command fed from standard input, and declared
-/// errors matched on the caller's side.
+/// A Go tool is called with typed arguments by an agent of its own component
+/// through the tool's own declaration, and by a Go agent of another component
+/// through the generated guest tool client — a plain command with globals and a
+/// tail, a stdout command fed from standard input, and declared errors matched
+/// on the caller's side. The second caller's binding installs a typed Go
+/// middleware that rewrites one command, refuses a value, and passes the
+/// stdout command through untouched.
 #[test]
 #[timeout("25 minutes")]
 async fn test_go_tools_e2e() {
@@ -92,13 +94,20 @@ async fn test_go_tools_e2e() {
                 - go-tools:provider/vcs
         tools:
           vcs: {{}}
+          middleware:
+            vcs-policy:
+              component: go-tools:provider
         agents:
           VcsSelfCaller:
             tools:
               vcs: {{}}
           VcsUser:
             tools:
-              vcs: {{}}
+              vcs:
+                middleware:
+                  - name: vcs-policy
+                    parameters:
+                      forbid: secret
         bridge:
           go:
             internal:
@@ -149,7 +158,7 @@ async fn test_go_tools_e2e() {
 
     let generated = run("VcsUser").await;
     assert!(
-        generated.contains("ok:.|fix|ada|golem-user:protected forbidden"),
+        generated.contains("ok:.|checked:fix|ada|golem-user:protected forbidden"),
         "{generated}"
     );
 }

@@ -3,6 +3,7 @@
 package user
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,6 +36,11 @@ func init() {
 		})
 		check(err == nil, "commit: %v", err)
 		check(res.Files == 2, "files: %d", res.Files)
+
+		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "secret"; a.Paths = []string{"x"} })
+		var policy *golem.ToolCallError
+		check(errors.As(err, &policy) && strings.Contains(policy.Message, "forbidden by policy"),
+			"the policy middleware let a forbidden commit through: %v", err)
 
 		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "empty" })
 		_, nothing := vcs.ErrNothingToCommit.Match(err)

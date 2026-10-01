@@ -24,7 +24,7 @@
 //! differs is how a call is made:
 //!
 //! - **Guest** mode sits directly on the guest SDK. The target is declared with
-//!   `golem.DeclareRemoteAgent`, each method with a typed descriptor, and every
+//!   `golem.DefineFullAgentClient`, each method with a typed descriptor, and every
 //!   conversion is done by the SDK's own reflective codec — so the generator
 //!   emits no codec at all. The sum types are registered with the SDK
 //!   (`DefineVariant`, `DefineEnum`, `DefineFlags`, `DefineUnion`), which is also
@@ -63,6 +63,7 @@ use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, sdk_overrides};
 use crate::versions;
 use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
+use golem_common::model::agent::AgentMode;
 use golem_common::schema::agent::contains_stream_in_graph;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{DiscriminatorRule, SchemaType};
@@ -457,8 +458,14 @@ impl GoBridgeGenerator {
             &mut writer,
         )?;
 
+        let ephemeral = matches!(self.agent_type.mode, AgentMode::Ephemeral);
+        let spec = if ephemeral {
+            "golem.AgentClientSpec{Mode: golem.Ephemeral}"
+        } else {
+            "golem.AgentClientSpec{}"
+        };
         writer.line(format!(
-            "var {remote} = golem.DeclareRemoteAgent[{}]({})",
+            "var {remote} = golem.DefineFullAgentClient[{}]({}, {spec})",
             n.id,
             go_string(agent_name)
         ));
@@ -507,20 +514,23 @@ impl GoBridgeGenerator {
         ));
         writer.blank();
 
-        writer.doc(&format!(
-            "{} returns a client for the {agent_name} instance identified by id,\n\
-             creating it if it does not exist yet.",
-            n.get
-        ));
-        // Always multi-line: gofmt keeps a one-line body only below a size
-        // limit, and an agent's name decides which side of it this falls on.
-        writer.line(format!("func {}(id {}) {} {{", n.get, n.id, n.client));
-        writer.indent();
-        writer.line(format!("return {}{{client: {remote}.Get(id)}}", n.client));
-        writer.dedent();
-        writer.line("}");
-        writer.blank();
-
+        // An ephemeral agent has no durable identity, so only phantoms
+        // address one.
+        if !ephemeral {
+            writer.doc(&format!(
+                "{} returns a client for the {agent_name} instance identified by id,\n\
+                 creating it if it does not exist yet.",
+                n.get
+            ));
+            // Always multi-line: gofmt keeps a one-line body only below a size
+            // limit, and an agent's name decides which side of it this falls on.
+            writer.line(format!("func {}(id {}) {} {{", n.get, n.id, n.client));
+            writer.indent();
+            writer.line(format!("return {}{{client: {remote}.Get(id)}}", n.client));
+            writer.dedent();
+            writer.line("}");
+            writer.blank();
+        }
         writer.doc(&format!(
             "{} allocates a fresh phantom {agent_name} instance.",
             n.new_phantom

@@ -1,6 +1,7 @@
 // Package vcs is the Go tool fixture driven by go_tools.rs: a tool with
 // globals, a group, a tail, a stdout command, standard input and declared
-// errors, and an agent that calls the tool from its own component.
+// errors, a typed middleware over it, and an agent that calls the tool from its
+// own component.
 package vcs
 
 import (
@@ -11,7 +12,10 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem"
 )
 
-var Tool = golem.DefineTool("vcs", golem.ToolSpec{Version: "1.0.0", Summary: "A tiny version control tool"})
+// Vcs is the tool's identity type.
+type Vcs struct{}
+
+var Tool = golem.DefineTool[Vcs]("vcs", golem.ToolSpec{Version: "1.0.0", Summary: "A tiny version control tool"})
 
 type Globals struct{ Dir string }
 
@@ -97,6 +101,20 @@ var _ = Push.Handle(func(ctx *golem.ToolStdoutContext, a PushArgs) (int32, error
 	}
 	n, err := io.WriteString(ctx.Stdout(), strings.ToUpper(string(data)))
 	return int32(n), err
+})
+
+type PolicyParams struct{ Forbid string }
+
+// Policy is a transparent middleware: it checks and rewrites commit, and the
+// tool's other commands pass straight through it.
+var Policy = Tool.Middleware[PolicyParams]("vcs-policy", golem.ToolMiddlewareSpec{Version: "1.0.0"})
+
+var _ = Policy.Handle(Commit, func(ctx *golem.ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+	if a.Message == ctx.Parameters().Forbid {
+		return CommitResult{}, fmt.Errorf("message %q is forbidden by policy", a.Message)
+	}
+	a.Message = "checked:" + a.Message
+	return Policy.Underlying(ctx, Commit).Forward(a)
 })
 
 type SelfID struct{ Name string }

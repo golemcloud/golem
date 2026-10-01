@@ -371,7 +371,9 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         "{client}"
     );
     assert!(
-        client.contains("golem.DeclareRemoteAgent[CounterAgentId](\"CounterAgent\")"),
+        client.contains(
+            "golem.DefineFullAgentClient[CounterAgentId](\"CounterAgent\", golem.AgentClientSpec{})"
+        ),
         "{client}"
     );
     // A method without parameters takes golem.Unit, as a hand-written one would.
@@ -1031,7 +1033,8 @@ fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
     let generated = GeneratedGo::tool(env, go_grep_tool());
     let client = generated.read("client.go");
     for expected in [
-        "var Tool = golem.DeclareRemoteTool(\"grep\")",
+        "type GrepTool struct{}",
+        "var Tool = golem.DefineToolClient[GrepTool](\"grep\")",
         "var ErrIo = golem.DefineToolError[golem.Unit](Tool, \"io\"",
         "var ErrRootBadPattern = golem.DefineToolError[string](Tool, \"bad-pattern\"",
         "var ErrReplaceBadPattern = golem.DefineToolError[uint32](Tool, \"bad-pattern\"",
@@ -1088,4 +1091,28 @@ func TestTheToolClientResolves(t *testing.T) {{
 "#
         ),
     );
+}
+
+/// An ephemeral agent has no durable identity, so its guest client offers
+/// phantoms only and declares the target's mode.
+#[test]
+fn go_guest_ephemeral_client_has_no_get(env: &GoEnv) {
+    let request = agent(
+        "RequestAgent",
+        "rust",
+        vec![field("route", SchemaType::string())],
+        vec![method("run", vec![], Some(SchemaType::string()))],
+        vec![],
+        AgentMode::Ephemeral,
+    );
+    let generated = GeneratedGo::guest(env, request);
+    let client = generated.read("client.go");
+    assert!(
+        client.contains("golem.AgentClientSpec{Mode: golem.Ephemeral}"),
+        "{client}"
+    );
+    assert!(client.contains("func NewPhantomRequestAgent("), "{client}");
+    assert!(!client.contains("func GetRequestAgent("), "{client}");
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
 }

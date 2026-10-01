@@ -1,21 +1,71 @@
 # Calling Agents with Runtime Reflection (Go)
 
-Normal RPC through the callee's definition package or a generated guest client (see [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go)) is the baseline. Reflection covers the cases where the caller does not have that definition:
+Normal RPC through the callee's definition package or a generated guest client (see [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go)) is the baseline. Reflection adds three more levels, which compose through agent ids:
 
-| Situation | Use |
-|---|---|
-| Caller owns Go types for the target and wants the full typed client | `golem.DeclareRemoteAgent[Id]` + `Method[In, Out]` |
-| Caller owns Go types and only has an existing agent id | `golem.BindAgentID(id)` + `golem.Invoke[In, Out]` |
-| Type or method is chosen at runtime and should be validated | `golem.DiscoverAgentType` → `Bind` → `InvokeAndAwait` |
-| Existing agent id, schema wanted | `golem.DiscoverAgentTypeByID(id)` |
-| Values are already packed; no schema authority kept | `golem.BindAgentID(id)` + `InvokeDynamic` / `InvokeJSON` |
-| Tools instead of agents | `golem.DiscoverTool` (see [`golem-call-tool-go`](/next/how-to-guides/go/golem-call-tool-go)) |
+| Level | Use it when | Go |
+|---|---|---|
+| Caller-defined, method-only | Many agent types share a method shape; you have an id | `golem.DefineAgentClient[Shape]()` + `Method[In, Out]`, `Bind(id)` |
+| Caller-defined, full | You own Go types for one target type, without its definition | `golem.DefineFullAgentClient[Id](name, spec)` + `Method[In, Out]` |
+| Discovered | The type or method is chosen at runtime and should be validated | `golem.DiscoverAgentType` → `Get` / `Bind` → `Call` |
+| Fully dynamic | Values are already packed; no schema authority kept | `golem.BindAgentID(id)` → `Call` |
+
+Every level uses the same verbs: `Call` waits for the result, `Trigger` does not, `Schedule` runs it later.
+
+## Method-Only Clients
+
+A method-only client declares methods and nothing else, so it calls any existing agent that has them, whatever its type:
+
+```go
+type Pingable struct{} // the shape's identity type
+
+var (
+	Pinger = golem.DefineAgentClient[Pingable]()
+	Ping   = Pinger.Method[golem.Unit, string]("ping")
+)
+
+func pingAll(ids []string) {
+	for _, id := range ids {
+		c, err := Pinger.Bind(id)
+		if err != nil {
+			continue
+		}
+		fmt.Println(id, Ping.Call(c, golem.Unit{}))
+	}
+}
+```
+
+`Bind` checks nothing about the target, which the client does not describe; a mismatch is reported by the host or when the result is decoded. Binding does not create the agent, but the first call to a durable id does.
+
+## Full Clients
+
+A full client also declares the target type's name, constructor and lifecycle, so it creates and addresses instances like the agent's own definition:
+
+```go
+type CounterID struct{ Name string }
+type AddIn struct{ By int64 }
+
+var (
+	Counter = golem.DefineFullAgentClient[CounterID]("CounterAgent", golem.AgentClientSpec{})
+	Add     = Counter.Method[AddIn, int64]("add")
+)
+
+total := Add.Call(Counter.Get(CounterID{Name: "main"}), AddIn{By: 5})
+
+c, err := Counter.Bind(agentID) // the id must name CounterAgent with a CounterID constructor
+id, err := Counter.AgentID(CounterID{Name: "main"}, golem.None[golem.UUID]()) // without creating it
+```
+
+- `Get`, `NewPhantom`, `Bind` and `AgentID` work the same on an agent's own definition (`DefineAgent`).
+- `golem.AgentClientSpec{Mode: golem.Ephemeral}` declares an ephemeral target: it has no durable identity, so `Get` and `Bind` are refused and `NewPhantom` addresses it.
+- `golem.DefineConfiguredFullAgentClient[Id, Cfg]` declares the target's configuration type, so `Get(id, golem.WithConfig(cfg))` passes typed creation-time overrides, checked before the call.
+
+Generated guest clients are built on full clients.
 
 ## Discover and Inspect
 
 ```go
 for _, t := range golem.DiscoverAgentTypes() {
-	fmt.Println(t.Name(), t.SourceLanguage())
+	fmt.Println(t.Name(), t.Mode(), t.SourceLanguage())
 	for _, m := range t.Methods() {
 		fmt.Println("  ", m.Name(), m.Description(), m.ReadOnly())
 	}
@@ -29,20 +79,20 @@ add, known := counter.Method("add")
 if !known {
 	panic("CounterAgent has no method add")
 }
-params := golem.Must(add.Parameters())      // []schema.Parameter
-schema := golem.Must(add.ToJSONSchema(true)) // arguments as JSON Schema, e.g. for an LLM
+input := golem.Must(add.Input())                 // a schema.Ref of the parameter record
+fmt.Println(golem.Must(input.ToJSONSchema(true))) // e.g. for an LLM
 ```
 
-A discovery miss (not deployed, not visible to the caller) reports `false` rather than failing. A snapshot is immutable and never refreshes itself; discover again when a newer deployment matters. `Constructor()` describes the constructor the same way, and `OutputJSONSchema` renders a method's result.
+`Input()` is the parameter record (without host-filled fields such as the principal) and `Output()` the result type, `golem.None` when there is none; both are `schema.Ref`s from `github.com/golemcloud/golem/sdks/go/core/schema`, which pack and unpack canonical JSON and render JSON Schema. `Constructor().Input()` describes the constructor the same way. A discovery miss (not deployed, not visible to the caller) reports `false`. A snapshot never refreshes itself; discover again when a newer deployment matters.
 
-## Invoke a Discovered Agent
+## Call a Discovered Agent
 
 ```go
-client, err := counter.Bind(map[string]any{"name": "main"})
+client, err := counter.Get(map[string]any{"name": "main"})
 if err != nil {
 	panic(err)
 }
-total, err := client.InvokeAndAwait("add", map[string]any{"by": "5"}) // s64 is a string
+total, invocation, err := client.Call("add", map[string]any{"by": "5"}) // s64 is a string
 if err != nil {
 	var rce *golem.RemoteCallError
 	if errors.As(err, &rce) {
@@ -50,39 +100,13 @@ if err != nil {
 	}
 	panic(err)
 }
-fmt.Println(client.AgentID(), total)
+fmt.Println(client.AgentID(), total, invocation.IdempotencyKey)
 ```
 
-- `Bind` takes the constructor arguments by name and creates the agent if it does not exist; `BindPhantom(ctorArgs, uuid)` addresses a phantom instance.
-- Arguments and results are canonical JSON. Missing, unexpected or invalid arguments fail with `*schema.ValidationError` (from `github.com/golemcloud/golem/sdks/go/core/schema`) before anything is sent; `add.PackJSON(args)` runs the same check on its own.
+- `Get` takes the constructor arguments by name and creates the agent if it does not exist; `golem.WithPhantomID(uuid)` addresses a phantom instance and `NewPhantom` allocates one. `Bind(agentID)` addresses an existing id of this type.
+- `Call`, `Trigger` and `Schedule` return the invocation's `golem.InvocationID` (agent id and idempotency key) — for an ephemeral agent, the only record of which instance ran.
+- Missing, unexpected or invalid arguments fail with `*schema.ValidationError`, listing every problem, before anything is sent.
 - Remote failures are `*golem.RemoteCallError`; for a remote agent error, its `Cause` is a `*golem.AgentError`.
-
-## Caller-Owned Types
-
-When the caller has its own Go types for the target, declare the target instead of discovering it:
-
-```go
-type CounterID struct{ Name string }
-type AddIn struct{ By int64 }
-
-var (
-	Counter = golem.DeclareRemoteAgent[CounterID]("CounterAgent")
-	Add     = Counter.Method[AddIn, int64]("add")
-)
-
-total := Add.Call(Counter.Get(CounterID{Name: "main"}), AddIn{By: 5})
-```
-
-This is the full typed client: `Get`, `NewPhantom` and `golem.WithPhantomID`, and `Call`, `CallAsync`, `Trigger`, `Schedule` on each method. Generated guest clients are built on it.
-
-With only an existing agent id, bind the identity and call through your own types:
-
-```go
-client := golem.Must(golem.BindAgentID(agentID))
-total := golem.Must(golem.Invoke[AddIn, int64](client, "add", AddIn{By: 5}))
-```
-
-`BindAgentID` never creates the agent and makes no claim about its type; a mismatch surfaces as a decode error or the host rejecting the input.
 
 ## Agent IDs
 
@@ -91,31 +115,36 @@ typed := golem.Must(golem.ParseAgentID[CounterID](agentID))
 fmt.Println(typed.TypeName, typed.ID.Name, typed.PhantomID.IsSome())
 
 raw := golem.Must(golem.ParseRawAgentID(agentID)) // no Go type needed
-fmt.Println(raw.AgentType, golem.Must(raw.ConstructorJSON()))
+fmt.Println(raw.TypeName, golem.Must(raw.ConstructorJSON()))
 
 t, found := golem.DiscoverAgentTypeByID(agentID) // the type behind an existing agent
+id := golem.Must(t.AgentID(map[string]any{"name": "other"}, golem.None[golem.UUID]()))
 ```
 
 Parsing is strict and reports malformed ids; lookup by id never creates the agent. Agent ids are scoped to the caller's environment.
 
 ## Fully Dynamic
 
-Keep the discovered snapshot beside a dynamic client when you want validation:
+A dynamic client sends values the caller packed itself and validates nothing. Keep a discovered snapshot beside it for validation:
 
 ```go
 t, _ := golem.DiscoverAgentType(agentType)
 m, _ := t.Method(method)
-ref := golem.Must(t.Schema())
-params := golem.Must(m.Parameters())
+input := golem.Must(golem.Must(m.Input()).PackJSON(args))
 
 client := golem.Must(golem.BindAgentID(agentID))
-out := golem.Must(client.InvokeJSON(method, ref, params, args))
+out, _, err := client.Call(method, input)
+if err != nil {
+	panic(err)
+}
 if v, has := out.Get(); has {
-	fmt.Println(golem.Must(m.UnpackOutput(v)))
+	if result, declared := golem.Must(m.Output()).Get(); declared {
+		fmt.Println(golem.Must(result.UnpackJSON(v)))
+	}
 }
 ```
 
-`client.InvokeDynamic(method, packed)` takes a value already packed, e.g. by `m.PackJSON(args)`, and returns the result. Both are `schema.SchemaValue`s from `github.com/golemcloud/golem/sdks/go/core/schema`, the same value model `schema.Ref` packs and unpacks.
+`golem.MakeAgentID(typeName, constructor, phantom)` builds an id from a packed constructor, so a dynamic caller can address any instance; the first call to it creates a durable agent.
 
 ## Canonical JSON
 
@@ -125,13 +154,12 @@ if v, has := out.Get(); has {
 
 ## Current Surface
 
-- Reflected and dynamic calls are awaited; there is no trigger, schedule or cancellation form, and no invocation metadata is returned.
-- Creation-time configuration overrides (`golem.WithConfig`) are accepted only by `Get` on an agent defined in the same component; reflected and remote clients use the target's provisioned configuration.
+- Creation-time configuration overrides are not accepted by reflected clients; use a full client with `DefineConfiguredFullAgentClient` when the target's configuration is known.
 
 ### Related Guides
 | Guide | Description |
 |-------|--------------|
 | [`golem-agent-reflection`](/next/how-to-guides/common/golem-agent-reflection) | Choosing between client approaches, identity rules |
 | [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | Typed RPC through definitions and guest clients |
-| [`golem-call-tool-go`](/next/how-to-guides/go/golem-call-tool-go) | Discovering and calling tools |
+| [`golem-call-tool-go`](/next/how-to-guides/go/golem-call-tool-go) | Calling tools the same ways |
 | [`golem-multi-instance-agent-go`](/next/how-to-guides/go/golem-multi-instance-agent-go) | Agent identities and phantoms |

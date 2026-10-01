@@ -64,7 +64,7 @@ require golem.local/bridge/greeter-tool-guest-client v0.0.0
 replace golem.local/bridge/greeter-tool-guest-client => ../golem-temp/bridge-sdk/go/internal/greeter-tool-guest-client
 ```
 
-It declares the tool with `golem.DeclareRemoteTool` and each command the same way, so calls look identical:
+It declares the tool with `golem.DefineToolClient` and each command the same way, so calls look identical:
 
 ```go
 import greeter "golem.local/bridge/greeter-tool-guest-client"
@@ -72,7 +72,29 @@ import greeter "golem.local/bridge/greeter-tool-guest-client"
 greeting, err := greeter.Greet.Call(func(a *greeter.GreetArgs) { a.Name = "ada" })
 ```
 
-Names follow the command path: `Tool`, `Root` for the tool's own body, `Greet`, `StockShow` for `stock show`, with `<Command>Args` structs, `<Node>Globals` structs embedded in them, and `Err<Case>` error cases (`Err<Command><Case>` when two commands give one case different payloads). Defaults a Go literal can spell are filled in; set any other field yourself.
+Names follow the command path: `Tool` (with its identity type, e.g. `GreeterTool`), `Root` for the tool's own body, `Greet`, `StockShow` for `stock show`, with `<Command>Args` structs, `<Node>Globals` structs embedded in them, and `Err<Case>` error cases (`Err<Command><Case>` when two commands give one case different payloads). Defaults a Go literal can spell are filled in; set any other field yourself.
+
+## A Tool Without Its Definition
+
+`golem.DefineToolClient[T](name)` declares a tool's shape for calling only, with the same commands, specs and error cases a definition has, but no handlers — what a generated client contains, and what to write by hand for a subset of a tool:
+
+```go
+type Search struct{}
+
+var (
+	Tool  = golem.DefineToolClient[Search]("document-search")
+	Query = Tool.Command[QueryArgs, QueryResult]("query", func(a *QueryArgs, s *golem.ToolCommandSpec) {
+		s.Positional(&a.Text)
+	})
+)
+```
+
+Calls go to the definition's name. When a deployment registers the same tool under another name, target it with `Bind` and `On`:
+
+```go
+archive := Tool.Bind("archive-search")
+res, err := Query.On(archive).Call(func(a *QueryArgs) { a.Text = "golem" })
+```
 
 ## Stdin and Stdout
 
@@ -101,21 +123,20 @@ tool, found := golem.DiscoverTool("greeter")
 if !found {
 	return fmt.Errorf("the greeter tool is not available to this agent")
 }
-client, err := tool.Bind()
-if err != nil {
-	return err
-}
-out, err := client.InvokeAndAwait([]string{"greet"}, map[string]any{
+client := golem.Must(tool.Bind())
+out, err := client.Call([]string{"greet"}, map[string]any{
 	"name": "ada", "loud": false, "times": 2, "title": nil,
 })
+var ce *golem.ToolCallError
+if errors.As(err, &ce) && ce.Kind == golem.ToolCallDeclaredError {
+	fmt.Println(ce.ErrorName, golem.Must(ce.Payload().JSON()))
+}
 ```
 
-- Supply every field of the command's input record by its wire name: inherited globals, positionals, the tail (a list), options and flags. `cmd.Arguments()` lists them in order. Nothing is filled in from declared defaults.
-- Arguments that do not match the snapshot fail with `*schema.ValidationError` before anything is sent.
-- `tool.Command(path)`, `tool.Commands()`, `cmd.Result()`, `cmd.Errors()` and `cmd.ToJSONSchema(true)` describe the tool; a snapshot never refreshes itself.
-- `golem.BindTool(name)` binds by name without a snapshot; its `InvokeDynamic(path, input)` forwards an already packed `golem.TypedValue` unchecked.
-
-Discovered calls are awaited, and cannot supply stdin or read stdout.
+- Supply every field of the command's input record by its wire name: inherited globals, positionals, the tail (a list), options and flags. Nothing is filled in from declared defaults.
+- `client.Start(path, args, stdin)` runs a command that reads standard input or writes standard output, and returns the running invocation.
+- `cmd.Input()` is the input record and `cmd.Output()` the result type, as `schema.Ref`s that pack, unpack and render JSON Schema; `tool.Command(path)`, `tool.Commands()` and `cmd.Errors()` describe the rest. Arguments that do not match fail with `*schema.ValidationError` before anything is sent. A snapshot never refreshes itself.
+- `golem.BindTool(name)` gives a dynamic client that forwards already packed `golem.TypedValue`s unchecked, with the same `Call` and `Start`.
 
 ### Related Skills
 

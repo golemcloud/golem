@@ -43,7 +43,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-configure-durability-go` | Choosing durable vs ephemeral agents, and adding periodic snapshots |
 | `golem-custom-snapshot-go` | Snapshot-based recovery and customizing state save/load |
 | `golem-call-another-agent-go` | Calling one agent from another via typed RPC |
-| `golem-agent-reflection-go` | Discovering and calling agents at runtime without their Go definition (reflected, remote, dynamic clients) |
+| `golem-agent-reflection-go` | Calling agents without their Go definition: method-only and full agent clients, discovered (reflected) and dynamic clients |
 | `golem-fire-and-forget-go` | Fire-and-forget agent invocations with `Trigger` |
 | `golem-parallel-workers-go` | Fanning out work to parallel agents and collecting results |
 | `golem-recurring-task-go` | Recurring / scheduled work (self-rescheduling via `Schedule`) |
@@ -65,7 +65,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-transactions-go` | Saga-pattern transactions with compensation |
 | `golem-define-tool-go` | Defining and implementing a typed tool (`DefineTool`, `Tool.Command`, `Handle`) |
 | `golem-call-tool-go` | Calling a tool with typed arguments (its own declaration or a generated guest tool client), or a discovered one |
-| `golem-tools-middleware-go` | Wrapping tool invocations with middleware for policy, auditing or rewriting |
+| `golem-tools-middleware-go` | Typed or universal tool middleware for policy, auditing, adapting or rewriting tool calls |
 | `golem-add-postgres-go` | Using PostgreSQL via the `golem/rdbms/postgres` wrapper |
 | `golem-add-mysql-go` | Using MySQL via the `golem/rdbms/mysql` wrapper |
 | `golem-add-config-go` | Adding typed configuration (`DefineConfiguredAgent` + `ctx.Config`) |

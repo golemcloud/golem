@@ -14,7 +14,11 @@ package greeter
 
 import "github.com/golemcloud/golem/sdks/go/golem"
 
-var Tool = golem.DefineTool("greeter", golem.ToolSpec{
+// Greeter is the tool's identity type: its commands, errors and middleware
+// carry it, so one tool's command cannot be used where another's is expected.
+type Greeter struct{}
+
+var Tool = golem.DefineTool[Greeter]("greeter", golem.ToolSpec{
 	Version: "1.0.0",
 	Summary: "Greets people",
 })
