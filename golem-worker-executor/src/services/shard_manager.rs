@@ -1001,7 +1001,7 @@ mod tests {
             self.register_calls.lock().unwrap().push(executor_id);
             let hangs = self
                 .hanging_registrations
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::SeqCst,
                     std::sync::atomic::Ordering::SeqCst,
                     |left| left.checked_sub(1),

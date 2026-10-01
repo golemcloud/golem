@@ -283,11 +283,20 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     agent_type_name,
                     output_dir,
+                    derive_rule,
+                    rust_dependency,
                 } => {
                     ctx.get_or_init()
                         .await?
                         .bridge_handler()
-                        .cmd_generate_bridge(language, component_name, agent_type_name, output_dir)
+                        .cmd_generate_bridge(
+                            language,
+                            component_name,
+                            agent_type_name,
+                            output_dir,
+                            derive_rule,
+                            rust_dependency,
+                        )
                         .await
                 }
                 GolemCliSubcommand::Repl {

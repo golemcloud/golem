@@ -2648,7 +2648,7 @@ mod tests {
                 let admitted = admitted.clone();
                 async move {
                     admitted
-                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                        .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                             (current + bytes <= 6).then_some(current + bytes)
                         })
                         .ok()
