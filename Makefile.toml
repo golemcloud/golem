@@ -773,7 +773,7 @@ cargo-test-r run --package integration-tests --test sharding -- --skip coordinat
 
 [tasks.integration-tests-group7]
 description = "Runs integration tests (group 7/11 - otlp_plugin, plugins)"
-dependencies = ["build-bins-non-ci"]
+dependencies = ["build-bins-non-ci", "fetch-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration :tag:group7 -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
