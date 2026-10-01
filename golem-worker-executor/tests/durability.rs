@@ -1851,8 +1851,9 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
 
 /// On an executor without filesystem snapshots, the periodic snapshots of `SqliteSnapshotAgent`
 /// have no filesystem snapshot name, so a start from one of them finds no file at the recorded
-/// locations of its file-backed databases. The load fails, each periodic snapshot is rejected in
-/// turn, and the start replays the whole oplog, which rebuilds the databases.
+/// locations of its file-backed databases. The start tries the newest periodic snapshot and the
+/// usable one before it; both loads fail, and the start replays the whole oplog, which rebuilds
+/// the databases.
 #[test]
 #[tracing::instrument]
 async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_full_replay(
@@ -1890,18 +1891,26 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
     let snapshots: Vec<_> = oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Snapshot(snapshot) => Some(snapshot.filesystem_snapshot.clone()),
+            PublicOplogEntry::Snapshot(snapshot) => {
+                Some((entry.oplog_index, snapshot.filesystem_snapshot.clone()))
+            }
             _ => None,
         })
         .collect();
     assert!(
-        !snapshots.is_empty(),
-        "no periodic snapshot before the restart"
+        snapshots.len() >= 2,
+        "fewer than two periodic snapshots before the restart: {snapshots:?}"
     );
     assert!(
-        snapshots.iter().all(Option::is_none),
+        snapshots.iter().all(|(_, name)| name.is_none()),
         "a periodic snapshot has a filesystem snapshot name: {snapshots:?}"
     );
+    let newest_two: Vec<OplogIndex> = snapshots
+        .iter()
+        .rev()
+        .take(2)
+        .map(|(index, _)| *index)
+        .collect();
 
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -1916,7 +1925,11 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
         let mut failures = Vec::new();
         while let Some(event) = events.recv().await {
             match AgentEvent::try_from(event) {
-                Ok(AgentEvent::SnapshotRecoveryFailed { error, .. }) => failures.push(error),
+                Ok(AgentEvent::SnapshotRecoveryFailed {
+                    snapshot_index,
+                    error,
+                    ..
+                }) => failures.push((snapshot_index, error)),
                 Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
                     panic!("the snapshot at {snapshot_index} loaded without its database file")
                 }
@@ -1927,9 +1940,10 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
         failures
     })
     .await?;
-    assert!(!failures.is_empty(), "no snapshot recovery failed");
+    let failed_indexes: Vec<OplogIndex> = failures.iter().map(|(index, _)| *index).collect();
+    assert_eq!(failed_indexes, newest_two);
     assert!(
-        failures.iter().all(|error| error.contains("fileDb")
+        failures.iter().all(|(_, error)| error.contains("fileDb")
             && error.contains("no database file at /tmp/sqlite-snapshot-test.db")),
         "{failures:?}"
     );
