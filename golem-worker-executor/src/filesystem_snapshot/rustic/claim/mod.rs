@@ -18,9 +18,9 @@
 //! When the delete stops before its prune starts, the claim is released: the claim and each marker
 //! that this delete wrote are deleted. When the delete stops after the prune started and before
 //! the final marker is written, the final marker is written. A drop runs them in a task, so they
-//! also run when the caller drops the delete. After the start, only the delete releases the claim, when each
-//! attempt of the prune found a snapshot file gone, because such a prune changed nothing and counts
-//! as a prune that did not run.
+//! also run when the caller drops the delete. After the start, only the delete releases the claim,
+//! when each attempt of the prune found a snapshot file gone, because such a prune changed nothing
+//! and counts as a prune that did not run.
 //!
 //! [`transition`] holds these rules. The claim and the blocking task of its prune share the state,
 //! and each event replaces the state with the result of [`transition`] in one step under a lock. So
@@ -62,7 +62,8 @@ enum ClaimState {
 enum ClaimEvent {
     /// The write of the claim succeeded.
     Won,
-    /// Another delete holds the claim, and this delete deleted its marker.
+    /// Another delete holds the claim, and this delete tried to delete its marker. A marker that
+    /// stays only delays a prune.
     Lost,
     /// The blocking task of the prune asks to start the rustic prune.
     Start,
@@ -99,14 +100,15 @@ enum Cleanup {
 /// - The prune starts only from `Claimed`. A start after the release does nothing, and the prune
 ///   does not run.
 /// - A drop after the start writes the final marker and keeps the claim.
-/// - A release before or after the start deletes the claim and each marker. After the start, the
-///   delete releases only when no attempt of the prune changed the repository.
+/// - A release after `Won`, before or after the start, deletes the claim and each marker. After
+///   the start, the delete releases only when no attempt of the prune changed the repository. A
+///   release in `Marking` deletes only the markers.
 /// - A finish after the start writes the final marker, and the state stays `Started` until the
 ///   write succeeded, so a drop after a failed write tries again. A finish before the start does
 ///   nothing: the blocking task failed before it started the prune, and the drop releases the
 ///   claim.
 /// - Each refresh marker is kept, so a release deletes it.
-/// - Other events cannot occur in a state, and they keep it.
+/// - Each other event keeps the state and needs no cleanup.
 fn transition(state: ClaimState, event: ClaimEvent) -> (ClaimState, Option<Cleanup>) {
     use ClaimEvent as E;
     use ClaimState as S;
@@ -233,9 +235,10 @@ impl ClaimStart {
 
 impl Claim {
     /// Writes the first marker of the claim, then takes the claim, and gives the claim when this
-    /// delete holds it. The lease starts with the marker write: it ends the lease span after the
-    /// instant that [`marker_time`] gave with the time in the name of the marker. The claim exists
-    /// before the marker write, so a drop or an error from that write on releases the claim.
+    /// delete holds it. The lease starts with the marker write. [`marker_time`] reads an `Instant`
+    /// and the time in the name of the marker. The lease ends one lease span after that `Instant`.
+    /// The claim exists before the marker write. So a drop or an error from that write on releases
+    /// the claim.
     pub(super) async fn take(
         files: &SnapshotFiles,
         name: ClaimName,
