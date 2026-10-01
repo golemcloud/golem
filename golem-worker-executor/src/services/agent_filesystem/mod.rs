@@ -196,8 +196,8 @@ impl AgentFilesystems {
     /// The service changes no state of the process. Making the host directories removes what an
     /// earlier process left under their names. Returns an error for invalid provisioning settings,
     /// host directories that cannot be made, failed volume observation, or a pressure target
-    /// larger than the observed managed volume. After a failed observation or a failed pressure
-    /// target, both host directories are discarded again.
+    /// larger than the observed managed volume. After a failed space check, it discards both host
+    /// directories, logs a failed discard, and returns the error of the check.
     pub(crate) async fn new(
         settings: &FilesystemStorageConfig,
     ) -> Result<Self, FilesystemStorageError> {

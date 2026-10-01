@@ -1691,6 +1691,7 @@ mod tests {
             .await
             .is_err()
         );
+        assert!(provisioning.volume().is_managed());
         assert!(directories.scratch.path().as_path().is_dir());
         assert!(directories.initial_files.path().as_path().is_dir());
 

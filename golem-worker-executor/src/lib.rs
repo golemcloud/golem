@@ -1448,10 +1448,12 @@ async fn build_inner_key_value_storage(
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use crate::services::NoAdditionalDeps;
+    #[cfg(target_os = "linux")]
     use crate::services::agent_filesystem::file_creation_mask_for_test::{
         thread_file_creation_mask, with_private_file_creation_mask,
     };
@@ -1460,11 +1462,13 @@ mod tests {
 
     /// Records the file mode creation mask of the thread when bootstrap starts the active agents,
     /// and starts none.
+    #[cfg(target_os = "linux")]
     #[derive(Default)]
     struct MaskRecordingBootstrap {
         mask: std::sync::Mutex<Option<libc::mode_t>>,
     }
 
+    #[cfg(target_os = "linux")]
     #[async_trait]
     impl Bootstrap<Context> for MaskRecordingBootstrap {
         fn create_additional_deps(
@@ -1535,6 +1539,7 @@ mod tests {
 
     /// Bootstrap runs on a thread with its own filesystem attributes and the mask 0o227. The mask
     /// must be 0o027 when the active agents start, and stay 0o027 after.
+    #[cfg(target_os = "linux")]
     #[test]
     fn executor_bootstrap_clears_only_bit_0o200_before_the_agent_filesystems_start() {
         let (started, recorded, after) = with_private_file_creation_mask(0o227, || {
