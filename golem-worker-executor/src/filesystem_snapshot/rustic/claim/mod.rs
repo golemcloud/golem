@@ -55,8 +55,8 @@ enum ClaimState {
     Marking { markers: Vec<Box<Path>> },
     /// This delete wrote the claim, and its prune did not start.
     Claimed { markers: Vec<Box<Path>> },
-    /// The prune started, so the claim needs its final marker. It stays, unless no attempt of the
-    /// prune changed the repository.
+    /// The prune started, so the claim needs its final marker. It stays, unless each attempt of
+    /// the prune found a snapshot file gone.
     Started { markers: Vec<Box<Path>> },
     /// The claim needs nothing more from this delete.
     Ended,
@@ -110,13 +110,14 @@ enum Cleanup {
 ///   does not run.
 /// - A drop after the start writes the final marker and keeps the claim.
 /// - A release after `Won`, before or after the start, deletes the claim and each marker that the
-///   state holds. After the start, the delete releases only when no attempt of the prune changed
-///   the repository. A release in `Marking` deletes only the markers.
+///   state holds. After the start, the delete releases only when each attempt of the prune found
+///   a snapshot file gone. A release in `Marking` deletes only the markers.
 /// - A finish after the start writes the final marker, and the state stays `Started` until the
 ///   write succeeded, so a drop after a failed write tries again. A finish before the start does
 ///   nothing: the blocking task failed before it started the prune, and the drop releases the
 ///   claim.
-/// - Each refresh marker whose write succeeded is kept, so a release deletes it.
+/// - Each refresh marker whose write succeeded before the claim ended is kept, so a release
+///   deletes it.
 /// - Each other event keeps the state and needs no cleanup.
 fn transition(state: ClaimState, event: ClaimEvent) -> (ClaimState, Option<Cleanup>) {
     use ClaimEvent as E;

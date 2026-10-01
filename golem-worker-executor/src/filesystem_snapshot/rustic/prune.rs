@@ -608,10 +608,10 @@ pub(super) fn refresh_period(grace: Duration, deadline: Duration) -> Duration {
 }
 
 /// Writes a new marker of the claim at each period, until the caller drops the stream or the
-/// operation of the files is cancelled, and gives the path of each marker that it wrote. A write
-/// that succeeds and started before the end of the lease moves the end to `span` after its start,
-/// when that is later. A write that started at or after the end does not move it. A failed write
-/// gives a warning, and the next period tries again.
+/// operation of the files is cancelled, and gives the path of each marker whose write succeeded. A
+/// write that succeeds and started before the end of the lease moves the end to `span` after its
+/// start, when that is later. A write that started at or after the end does not move it. A failed
+/// write gives a warning, and the next period tries again.
 pub(super) fn keep_claim_fresh<'a>(
     files: &'a SnapshotFiles,
     claim: &'a ClaimName,

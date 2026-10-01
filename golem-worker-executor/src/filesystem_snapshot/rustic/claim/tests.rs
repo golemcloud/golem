@@ -112,7 +112,8 @@ fn a_claim_that_is_taken_starts_its_prune_or_is_released_with_the_claim() {
 #[test]
 fn a_claim_whose_prune_started_keeps_the_claim_and_gets_its_final_marker() {
     // A finish keeps the state until the final marker is written, so a drop after a failed write
-    // writes it again. A release after the start comes only from a prune that changed nothing.
+    // writes it again. A release after the start comes only when each attempt of the prune found
+    // a snapshot file gone.
     let started = || ClaimState::Started { markers: markers() };
 
     assert_eq!(
