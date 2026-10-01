@@ -582,6 +582,9 @@ describe('snapshot — in-memory and file-backed databases', () => {
       restoreDatabaseSync,
       isAutocommitDatabaseSync: (db: FakeDatabaseSync) => !db.inTransaction,
     }));
+    const existingFiles = new Set(['/data/app.db', '/data/other.db']);
+    const existsSync = vi.fn((path: string) => existingFiles.has(path));
+    vi.doMock('../src/internal/fileSystem', () => ({ existsSync }));
     const [
       { defineAgent: isolatedDefineAgent },
       isolatedGuest,
@@ -618,6 +621,8 @@ describe('snapshot — in-memory and file-backed databases', () => {
     return {
       FakeDatabaseSync,
       FakeStatementSync,
+      existingFiles,
+      existsSync,
       constructed,
       warmed,
       serializeDatabaseSync,
@@ -634,6 +639,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
 
   afterEach(() => {
     vi.doUnmock('../src/internal/sqlite');
+    vi.doUnmock('../src/internal/fileSystem');
     vi.resetModules();
   });
 
@@ -800,6 +806,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
       mimeType: 'application/json',
     });
 
+    expect(env.existsSync).toHaveBeenCalledWith('/data/app.db');
     expect(env.constructed).toEqual([
       { path: '/data/app.db', options: env.REOPENED_DATABASE_OPTIONS },
     ]);
@@ -810,6 +817,41 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const saved = await env.isolatedGuest.saveSnapshot.save();
     expect(saved.mimeType).toBe('application/json');
     expect(jsonOf(saved.payload)).toEqual(envelope);
+  });
+
+  it('fails the load when no file exists at a recorded location', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'MissingFileDatabase',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => {
+          throw new Error('init must not run on load');
+        },
+        methods: {},
+      });
+    env.select('MissingFileDatabase');
+    env.existingFiles.delete('/data/app.db');
+
+    await expect(
+      env.isolatedGuest.loadSnapshot.load({
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 5 },
+            fileDatabases: { fileDb: '/data/app.db' },
+          }),
+        ),
+        mimeType: 'application/json',
+      }),
+    ).rejects.toContain('snapshot database field \\"fileDb\\": no database file at /data/app.db');
+    expect(env.existsSync).toHaveBeenCalledWith('/data/app.db');
+    expect(env.constructed).toEqual([]);
   });
 
   it('round-trips in-memory and file-backed databases through a multipart snapshot', async () => {
@@ -893,6 +935,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         },
       });
     env.select('CustomLoadFileDatabase');
+    env.existingFiles.clear();
 
     await env.isolatedGuest.loadSnapshot.load({
       payload: new TextEncoder().encode(
@@ -918,6 +961,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
       '/data/app.db',
       '/data/other.db',
     ]);
+    expect(env.existsSync).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -24,6 +24,7 @@ import {
   SQLTagStore,
   StatementSync,
 } from './sqlite';
+import { existsSync } from './fileSystem';
 import type { MultipartPart } from './multipart';
 
 /** The SQLite databases of a typed snapshot, keyed by the agent field that holds each one. */
@@ -194,18 +195,25 @@ export function decodeSnapshotDatabases(
 
 /**
  * Puts the snapshot databases into `state`. An entry whose field is `undefined` gets a new
- * database, in memory or opened at its location; a field that holds any other value that is not
- * a `DatabaseSync`, `null` included, fails the load. The bytes of each in-memory entry are
- * restored into its database. Each open database then reads its schema and, when file-backed, every page, so
- * that the first recorded statements after the load match a live connection that holds its pages
- * in cache; otherwise snapshot recovery falls back to a full replay.
+ * database: an in-memory one, or one opened at its location, which fails the load when no file
+ * exists there. A field that holds any other value that is not a `DatabaseSync`, `null`
+ * included, fails the load. The bytes of each in-memory entry are restored into its database.
+ * Each open database then reads its schema and, when file-backed, every page, so that the first
+ * recorded statements after the load match a live connection that holds its pages in cache;
+ * otherwise snapshot recovery falls back to a full replay.
  */
 export function restoreDatabases(state: Record<string, unknown>, databases: SnapshotDatabases) {
   for (const { name, bytes } of databases.inMemory) {
-    restoreDatabaseSync(databaseAt(state, name, IN_MEMORY_LOCATION), bytes);
+    const database = databaseAt(state, name, () => openDatabase(IN_MEMORY_LOCATION));
+    restoreDatabaseSync(database, bytes);
   }
   for (const [name, location] of Object.entries(databases.fileDatabases)) {
-    databaseAt(state, name, location);
+    databaseAt(state, name, () => {
+      if (!existsSync(location)) {
+        throw new Error(`snapshot database field "${name}": no database file at ${location}`);
+      }
+      return openDatabase(location);
+    });
   }
   const warmed = new Set<DatabaseSync>();
   for (const value of Object.values(state)) {
@@ -219,10 +227,18 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
   }
 }
 
-function databaseAt(state: Record<string, unknown>, name: string, location: string): DatabaseSync {
+function openDatabase(location: string): DatabaseSync {
+  return new DatabaseSync(location, REOPENED_DATABASE_OPTIONS);
+}
+
+function databaseAt(
+  state: Record<string, unknown>,
+  name: string,
+  open: () => DatabaseSync,
+): DatabaseSync {
   let target = state[name];
   if (target === undefined) {
-    target = new DatabaseSync(location, REOPENED_DATABASE_OPTIONS);
+    target = open();
     state[name] = target;
   }
   if (!isDatabaseSync(target)) {
