@@ -18,9 +18,11 @@ package golem
 
 import (
 	"fmt"
+	"time"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
+	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_host"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -63,58 +65,64 @@ type witRPC struct {
 	target string
 }
 
-// invokeAndAwait awaits through the asynchronous import, for the same reason
+// call awaits through the asynchronous import, for the same reason
 // [MethodDef.Call] does: it is the form a suspended caller is resumed into.
-func (w witRPC) invokeAndAwait(method string, input types.SchemaValueTree) (types.SchemaValueTree, bool, error) {
+func (w witRPC) call(method string, input types.SchemaValueTree) (witTypes.Option[types.SchemaValueTree], InvocationID, error) {
 	inv := w.rpc.AsyncInvokeAndAwait(method, input, noScopeCard())
+	id := invocationIDFrom(inv.Metadata)
 	res := inv.Future.Get()
 	inv.Future.Drop()
 	if res.Tag() == witTypes.ResultErr {
-		return types.SchemaValueTree{}, false, rpcErrorToGo(w.target, method, res.Err())
+		return witTypes.None[types.SchemaValueTree](), id, rpcErrorToGo(w.target, method, res.Err())
 	}
-	out := res.Ok()
-	if out.IsNone() {
-		return types.SchemaValueTree{}, false, nil
-	}
-	return out.Some(), true, nil
+	return res.Ok(), id, nil
 }
 
-// Bind connects to the agent this constructor value identifies, creating it if
-// it does not exist yet, exactly as a typed client would.
-func (r ReflectedAgentType) Bind(ctorArgs map[string]any, opts ...ClientOpt) (*ReflectedAgentClient, error) {
-	return r.bind(ctorArgs, witTypes.None[types.Uuid](), opts)
-}
-
-// BindPhantom addresses a specific phantom instance of the agent.
-func (r ReflectedAgentType) BindPhantom(ctorArgs map[string]any, phantom UUID, opts ...ClientOpt) (*ReflectedAgentClient, error) {
-	return r.bind(ctorArgs, witTypes.Some(uuidToWit(phantom)), opts)
-}
-
-func (r ReflectedAgentType) bind(
-	ctorArgs map[string]any, phantom witTypes.Option[types.Uuid], opts []ClientOpt,
-) (*ReflectedAgentClient, error) {
-	ctor, err := r.Constructor().packTree(ctorArgs)
-	if err != nil {
-		return nil, fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
+func (w witRPC) trigger(method string, input types.SchemaValueTree) (InvocationID, error) {
+	res := w.rpc.Invoke(method, input, noScopeCard())
+	if res.IsErr() {
+		return InvocationID{}, rpcErrorToGo(w.target, method, res.Err())
 	}
+	return invocationIDFrom(res.Ok()), nil
+}
 
+func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTree) (*ScheduledInvocation, error) {
+	res := w.rpc.ScheduleCancelableInvocation(instantFrom(at), method, input, noScopeCard())
+	if res.IsErr() {
+		return nil, rpcErrorToGo(w.target, method, res.Err())
+	}
+	receipt := res.Ok()
+	return &ScheduledInvocation{ID: invocationIDFrom(receipt.Metadata), token: receipt.CancellationToken}, nil
+}
+
+// Get returns a client for the instance the constructor arguments identify,
+// creating it if it does not exist yet, exactly as a typed client would. Pass
+// [WithPhantomID] to address a phantom instance.
+func (r ReflectedAgentType) Get(ctorArgs map[string]any, opts ...ClientOpt) (*ReflectedAgentClient, error) {
 	var o clientOpts
+	o.phantomID = witTypes.None[types.Uuid]()
 	for _, opt := range opts {
 		opt(&o)
+	}
+	if r.Mode() == Ephemeral && o.phantomID.IsNone() {
+		return nil, fmt.Errorf("golem: %s is ephemeral and has no durable identity; use NewPhantom", r.Name())
+	}
+	ctor, err := r.packConstructor(ctorArgs)
+	if err != nil {
+		return nil, fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
 	}
 	agentConfig, cfgErr := reflectedAgentConfig(r, o)
 	if cfgErr != nil {
 		return nil, cfgErr
 	}
-
-	resolved := host.MakeAgentId(r.Name(), ctor, phantom)
+	resolved := host.MakeAgentId(r.Name(), ctor, o.phantomID)
 	if resolved.IsErr() {
 		return nil, fmt.Errorf("golem: %s: %w", r.Name(), agentErrorToGo(resolved.Err()))
 	}
 	// The fallible form is the reflective one: a caller that built its
 	// constructor from a snapshot should get an error, not a trap, when the
 	// deployment has moved on.
-	created := host.WasmRpcCreate(r.Name(), ctor, phantom, agentConfig)
+	created := host.WasmRpcCreate(r.Name(), ctor, o.phantomID, agentConfig)
 	if created.Tag() == witTypes.ResultErr {
 		return nil, rpcErrorToGo(r.Name(), "<constructor>", created.Err())
 	}
@@ -123,6 +131,40 @@ func (r ReflectedAgentType) bind(
 		agentID:   resolved.Ok(),
 		rpc:       witRPC{rpc: created.Ok(), target: r.Name()},
 	}, nil
+}
+
+// NewPhantom allocates a fresh phantom instance and returns a client for it.
+func (r ReflectedAgentType) NewPhantom(ctorArgs map[string]any, opts ...ClientOpt) (*ReflectedAgentClient, error) {
+	return r.Get(ctorArgs, append(opts, WithPhantomID(uuidFromWit(apiHost.GenerateIdempotencyKey())))...)
+}
+
+// Bind addresses an existing agent by its id, which must name this agent type.
+func (r ReflectedAgentType) Bind(agentID string) (*ReflectedAgentClient, error) {
+	if r.Mode() == Ephemeral {
+		return nil, fmt.Errorf("golem: %s is ephemeral; an ephemeral agent id cannot be bound", r.Name())
+	}
+	parsed, err := ParseRawAgentID(agentID)
+	if err != nil {
+		return nil, err
+	}
+	if parsed.TypeName != r.Name() {
+		return nil, fmt.Errorf("golem: agent id %q names %s, not %s", agentID, parsed.TypeName, r.Name())
+	}
+	rpc, err := bindRPC(parsed)
+	if err != nil {
+		return nil, err
+	}
+	return &ReflectedAgentClient{agentType: r, agentID: agentID, rpc: rpc}, nil
+}
+
+// AgentID renders the identity the constructor arguments (and phantom, if
+// any) name, without creating the agent.
+func (r ReflectedAgentType) AgentID(ctorArgs map[string]any, phantom Option[UUID]) (string, error) {
+	ctor, err := r.packConstructor(ctorArgs)
+	if err != nil {
+		return "", fmt.Errorf("golem: %s constructor: %w", r.Name(), err)
+	}
+	return makeAgentID(r.Name(), ctor, phantom)
 }
 
 // reflectedAgentConfig resolves creation-time configuration overrides against
@@ -155,37 +197,6 @@ func DiscoverTool(name string) (ReflectedTool, bool) {
 	return newReflectedTool(found.Some().LookupName, found.Some().Definition), true
 }
 
-// witToolRPC invokes through the host's tool RPC resource.
-type witToolRPC struct {
-	rpc  *toolHost.ToolRpc
-	name string
-}
-
-func (w witToolRPC) invokeAndAwait(commandPath []string, input types.TypedSchemaValue) (types.TypedSchemaValue, bool, error) {
-	res := w.rpc.InvokeAndAwait(commandPath, input,
-		witTypes.None[*toolHost.ToolStdin](), witTypes.None[*toolHost.ToolStdout]())
-	if res.Tag() == witTypes.ResultErr {
-		return types.TypedSchemaValue{}, false, fmt.Errorf("golem: tool %s %s: %s",
-			w.name, commandLabel(commandPath), toolRPCErrorMessage(res.Err()))
-	}
-	out := res.Ok().Result
-	if out.IsNone() {
-		return types.TypedSchemaValue{}, false, nil
-	}
-	return out.Some(), true, nil
-}
-
-// Bind connects to the discovered tool.
-func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
-	// The fallible form is the reflective one: a snapshot that has gone stale
-	// should give an error rather than a trap.
-	created := toolHost.ToolRpcCreate(r.lookupName)
-	if created.Tag() == witTypes.ResultErr {
-		return nil, fmt.Errorf("golem: tool %s: %s", r.lookupName, toolRPCErrorMessage(created.Err()))
-	}
-	return &ReflectedToolClient{tool: r, rpc: witToolRPC{rpc: created.Ok(), name: r.lookupName}}, nil
-}
-
 // ParseRawAgentID takes an agent identity apart without decoding its
 // constructor into a Go type. Parsing is strict: a malformed identity is
 // reported rather than guessed at.
@@ -199,39 +210,50 @@ func ParseRawAgentID(agentID string) (RawAgentID, error) {
 	if t.F2.IsSome() {
 		phantom = Some(uuidFromWit(t.F2.Some()))
 	}
-	return RawAgentID{AgentType: t.F0, Constructor: TypedValue{wit: t.F1}, Phantom: phantom}, nil
+	return RawAgentID{TypeName: t.F0, Constructor: TypedValue{wit: t.F1}, PhantomID: phantom}, nil
 }
 
-// BindAgentID binds an existing agent identity. Binding never creates the
-// agent, and makes no claim about its type beyond what the identity says.
+// BindAgentID binds an existing agent identity. It makes no claim about the
+// agent's type beyond what the identity says. Binding does not create the
+// agent, but the first call to a durable identity does.
 func BindAgentID(agentID string) (*DynamicAgentClient, error) {
 	parsed, err := ParseRawAgentID(agentID)
 	if err != nil {
 		return nil, err
 	}
-	phantom := witTypes.None[types.Uuid]()
-	if id, present := parsed.Phantom.Get(); present {
-		phantom = witTypes.Some(uuidToWit(id))
+	rpc, err := bindRPC(parsed)
+	if err != nil {
+		return nil, err
 	}
-	created := host.WasmRpcCreate(parsed.AgentType, parsed.Constructor.wit.Value, phantom, nil)
-	if created.Tag() == witTypes.ResultErr {
-		return nil, rpcErrorToGo(parsed.AgentType, "<bind>", created.Err())
-	}
-	return &DynamicAgentClient{
-		agentID: agentID,
-		parsed:  parsed,
-		rpc:     witRPC{rpc: created.Ok(), target: parsed.AgentType},
-	}, nil
+	return &DynamicAgentClient{agentID: agentID, parsed: parsed, rpc: rpc}, nil
 }
 
-// BindTool binds a tool by name without retaining its metadata.
-func BindTool(toolName string) (*DynamicToolClient, error) {
-	created := toolHost.ToolRpcCreate(toolName)
-	if created.Tag() == witTypes.ResultErr {
-		return nil, fmt.Errorf("golem: tool %s: %s", toolName, toolRPCErrorMessage(created.Err()))
+// MakeAgentID renders the identity of an agent of the given type, constructor
+// record and phantom, without creating it.
+func MakeAgentID(typeName string, constructor TypedValue, phantom Option[UUID]) (string, error) {
+	return makeAgentID(typeName, constructor.wit.Value, phantom)
+}
+
+func makeAgentID(typeName string, ctor types.SchemaValueTree, phantom Option[UUID]) (string, error) {
+	p := witTypes.None[types.Uuid]()
+	if u, has := phantom.Get(); has {
+		p = witTypes.Some(uuidToWit(u))
 	}
-	return &DynamicToolClient{
-		toolName: toolName,
-		rpc:      witToolRPC{rpc: created.Ok(), name: toolName},
-	}, nil
+	res := host.MakeAgentId(typeName, ctor, p)
+	if res.IsErr() {
+		return "", fmt.Errorf("golem: %s: %w", typeName, agentErrorToGo(res.Err()))
+	}
+	return res.Ok(), nil
+}
+
+func bindRPC(parsed RawAgentID) (witRPC, error) {
+	phantom := witTypes.None[types.Uuid]()
+	if id, present := parsed.PhantomID.Get(); present {
+		phantom = witTypes.Some(uuidToWit(id))
+	}
+	created := host.WasmRpcCreate(parsed.TypeName, parsed.Constructor.wit.Value, phantom, nil)
+	if created.Tag() == witTypes.ResultErr {
+		return witRPC{}, rpcErrorToGo(parsed.TypeName, "<bind>", created.Err())
+	}
+	return witRPC{rpc: created.Ok(), target: parsed.TypeName}, nil
 }

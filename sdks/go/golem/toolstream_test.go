@@ -81,7 +81,7 @@ func (f *fakeSink) Fail(reason streams.ByteStreamFailure) witTypes.Result[witTyp
 }
 
 func TestStdinReadsChunksAndEndsWithEOF(t *testing.T) {
-	r := &ToolStdin{src: &fakeSource{items: []streamItem{chunk("hello, "), chunk("world")}}}
+	r := &byteReader{src: &fakeSource{items: []streamItem{chunk("hello, "), chunk("world")}}}
 	got, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
@@ -95,7 +95,7 @@ func TestStdinReadsChunksAndEndsWithEOF(t *testing.T) {
 // caller's buffer may be smaller, so the remainder has to survive to the next
 // Read rather than being dropped.
 func TestStdinSplitsChunksAcrossReads(t *testing.T) {
-	r := &ToolStdin{src: &fakeSource{items: []streamItem{chunk("abcdef")}}}
+	r := &byteReader{src: &fakeSource{items: []streamItem{chunk("abcdef")}}}
 	buf := make([]byte, 4)
 
 	n, err := r.Read(buf)
@@ -114,7 +114,7 @@ func TestStdinSplitsChunksAcrossReads(t *testing.T) {
 // TestStdinReportsAFailureItemAsAnError — a failure arrives as a stream value,
 // so it must be distinguishable from the clean end of input.
 func TestStdinReportsAFailureItemAsAnError(t *testing.T) {
-	r := &ToolStdin{src: &fakeSource{items: []streamItem{
+	r := &byteReader{src: &fakeSource{items: []streamItem{
 		chunk("partial"), failure(StreamResourceExhausted()),
 	}}}
 	_, err := io.ReadAll(r)
@@ -140,7 +140,7 @@ func TestStdinFailureReasonsRoundTrip(t *testing.T) {
 		{StreamResourceExhausted(), "resource exhausted"},
 		{StreamFailed("disk gone"), "failed: disk gone"},
 	} {
-		r := &ToolStdin{src: &fakeSource{items: []streamItem{failure(tc.f)}}}
+		r := &byteReader{src: &fakeSource{items: []streamItem{failure(tc.f)}}}
 		_, err := io.ReadAll(r)
 		var se *StreamError
 		if !errors.As(err, &se) {
@@ -155,7 +155,7 @@ func TestStdinFailureReasonsRoundTrip(t *testing.T) {
 // TestAbsentStreamsExplainThemselves — a command invoked without a stream gets
 // a reader and writer that say so, rather than a nil dereference.
 func TestAbsentStreamsExplainThemselves(t *testing.T) {
-	r := &ToolStdin{absent: absentStdin}
+	r := &byteReader{absent: absentStdin}
 	if _, err := r.Read(make([]byte, 4)); err == nil || !strings.Contains(err.Error(), "without a stdin stream") {
 		t.Errorf("reading an absent stdin gave %v", err)
 	}
@@ -234,8 +234,10 @@ func invokeWithStreams(
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	t.Helper()
 	return d.invokeCommand(e, nil, input,
-		&ToolStdin{src: &fakeSource{items: in}}, &ToolStdout{sink: sink}, nil)
+		&byteReader{src: &fakeSource{items: in}}, &ToolStdout{sink: sink}, nil)
 }
+
+type Pipe struct{}
 
 type PipeArgs struct {
 	Mode string
@@ -245,7 +247,7 @@ type PipeArgs struct {
 // declarePipe registers a command that copies stdin to stdout and reacts to the
 // mode it is given, mirroring the tool-streaming test components.
 func declarePipe(r *toolRegistry, d *definitions) {
-	def := defineToolInto(r, d, "pipe", ToolSpec{Version: "0.1.0"}, false)
+	def := defineToolInto[Pipe](r, d, "pipe", ToolSpec{Version: "0.1.0"}, false)
 	cmd := def.StdoutBody[PipeArgs, uint64](func(a *PipeArgs, s *ToolCommandSpec) {
 		s.Positional(&a.Mode)
 		s.Stdin(&a.In)

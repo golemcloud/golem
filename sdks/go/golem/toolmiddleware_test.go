@@ -16,35 +16,21 @@ package golem
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
-	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-type AuditParams struct{ Channel string }
+type PolicyParams struct{ Block string }
 
-// fakeLayer stands in for the layer beneath a middleware, recording what it was
-// handed and replaying a scripted outcome.
-type fakeLayer struct {
-	calls   int
-	gotPath []string
-	gotJSON any
-	outcome ToolMiddlewareOutcome
-}
-
-func (f *fakeLayer) invoke(commandPath []string, input TypedValue, _ nextStdin) ToolMiddlewareOutcome {
-	f.calls++
-	f.gotPath = commandPath
-	f.gotJSON, _ = input.JSON()
-	return f.outcome
-}
-
-func succeedWith(v TypedValue) ToolMiddlewareOutcome {
-	return ToolMiddlewareOutcome{result: v, hasResult: true}
+type AuditParams struct {
+	Channel string
+	Deny    bool
 }
 
 func mustTypedValue[T any](t *testing.T, v T) TypedValue {
@@ -56,266 +42,322 @@ func mustTypedValue[T any](t *testing.T, v T) TypedValue {
 	return tv
 }
 
-// runMiddleware registers a middleware and invokes it against a fake layer.
-func runMiddleware(
-	t *testing.T, h func(*ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome, next nextLayer, input TypedValue,
-) (witTypes.Result[toolCommon.InvocationResult, types.ToolError], *definitions) {
+// localUnderlying is the layer beneath a middleware: the wrapped tool's own
+// dispatcher, run the way the host runs it.
+func localUnderlying(d *definitions, e *toolEntry) underlyingLayer {
+	return underlyingLayer{start: func(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
+		n := e.root.find(path)
+		wantStdout := n != nil && n.body != nil && n.body.stdout
+		return localCall(d, e, path, input, stdin, wantStdout, AnonymousPrincipal{}), nil
+	}}
+}
+
+type middlewareRun struct {
+	path   []string
+	input  types.TypedSchemaValue
+	params TypedValue
+	stdin  string
+	under  underlyingLayer
+}
+
+// runMiddlewareFor invokes a middleware the way the host would, returning the
+// outcome and what it wrote to standard output.
+func runMiddlewareFor(t *testing.T, r *toolRegistry, d *definitions, name string, run middlewareRun) (
+	witTypes.Result[toolCommon.InvocationResult, types.ToolError], *fakeSink,
+) {
 	t.Helper()
-	saved := toolDefs
-	toolDefs = newToolRegistry()
-	t.Cleanup(func() { toolDefs = saved })
-
-	d := newDefinitions()
-	m := defineToolMiddlewareInto[AuditParams](toolDefs, d, "audit", ToolMiddlewareSpec{
-		Version: "1.0.0", Summary: "Records every invocation",
-	}, nil)
-	handleToolMiddlewareInto(toolDefs, d, m, h)
-
-	got := d.invokeMiddleware(&middlewareCall{
-		middleware:  "audit",
-		toolName:    "greeter",
-		parameters:  mustTypedValue(t, AuditParams{Channel: "ops"}),
-		commandPath: []string{"greet"},
-		input:       input,
-		stdout:      newToolStdout(mwExports.Stdout{}),
-		next:        next,
-	})
-	return got, d
-}
-
-// TestMiddlewareWrapsTheCallAndPassesItOn — the common shape: observe, forward
-// unchanged, return what came back.
-func TestMiddlewareWrapsTheCallAndPassesItOn(t *testing.T) {
-	layer := &fakeLayer{outcome: succeedWith(mustTypedValue(t, "hi ada"))}
-	var sawChannel, sawTool string
-	var sawPath []string
-
-	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		sawChannel, sawTool, sawPath = ctx.Parameters().Channel, ctx.ToolName(), ctx.CommandPath()
-		return ctx.Next(ctx.Input())
-	}, layer, mustTypedValue(t, "ada"))
-
-	if got.Tag() != witTypes.ResultOk {
-		t.Fatalf("invoke failed: %+v", got.Err())
-	}
-	if sawChannel != "ops" || sawTool != "greeter" || strings.Join(sawPath, " ") != "greet" {
-		t.Errorf("context carried %q/%q/%v", sawChannel, sawTool, sawPath)
-	}
-	if layer.calls != 1 || layer.gotJSON != "ada" {
-		t.Errorf("layer saw %d calls with %v", layer.calls, layer.gotJSON)
-	}
-	out, err := TypedValue{wit: got.Ok().Result.Some()}.JSON()
-	if err != nil || out != "hi ada" {
-		t.Errorf("result %v (%v), want hi ada", out, err)
-	}
-}
-
-// TestMiddlewareRewritesInputAndResult — a middleware has no Go types for the
-// tools it wraps, so it works through the schema that travels with the value.
-func TestMiddlewareRewritesInputAndResult(t *testing.T) {
-	layer := &fakeLayer{outcome: succeedWith(mustTypedValue(t, "hi ADA"))}
-
-	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		name, err := ctx.Input().JSON()
-		if err != nil {
-			return ctx.Fail(err)
-		}
-		rewritten, err := ctx.Input().WithJSON(strings.ToUpper(name.(string)))
-		if err != nil {
-			return ctx.Fail(err)
-		}
-		outcome := ctx.Next(rewritten)
-		result, ok := outcome.Result()
-		if !ok {
-			return outcome
-		}
-		text, err := result.JSON()
-		if err != nil {
-			return ctx.Fail(err)
-		}
-		replaced, err := result.WithJSON(text.(string) + "!")
-		if err != nil {
-			return ctx.Fail(err)
-		}
-		return outcome.WithResult(replaced)
-	}, layer, mustTypedValue(t, "ada"))
-
-	if got.Tag() != witTypes.ResultOk {
-		t.Fatalf("invoke failed: %+v", got.Err())
-	}
-	if layer.gotJSON != "ADA" {
-		t.Errorf("layer saw %v, want the rewritten input", layer.gotJSON)
-	}
-	out, _ := TypedValue{wit: got.Ok().Result.Some()}.JSON()
-	if out != "hi ADA!" {
-		t.Errorf("result %v, want the rewritten result", out)
-	}
-}
-
-// TestMiddlewareCanShortCircuit — not calling Next is how a middleware denies
-// or answers a call itself.
-func TestMiddlewareCanShortCircuit(t *testing.T) {
-	layer := &fakeLayer{outcome: succeedWith(mustTypedValue(t, "unreachable"))}
-
-	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		return ctx.Succeed(mustTypedValue(t, "cached"))
-	}, layer, mustTypedValue(t, "ada"))
-
-	if got.Tag() != witTypes.ResultOk {
-		t.Fatalf("invoke failed: %+v", got.Err())
-	}
-	if layer.calls != 0 {
-		t.Error("short-circuiting still reached the layer beneath")
-	}
-	out, _ := TypedValue{wit: got.Ok().Result.Some()}.JSON()
-	if out != "cached" {
-		t.Errorf("result %v, want cached", out)
-	}
-}
-
-// TestMiddlewarePassesTheToolsOwnErrorThrough — a caller should see the tool's
-// error, not a middleware's paraphrase of it.
-func TestMiddlewarePassesTheToolsOwnErrorThrough(t *testing.T) {
-	inner := types.MakeToolErrorCustomError(types.CustomToolError{Name: "not-found"})
-	layer := &fakeLayer{outcome: ToolMiddlewareOutcome{
-		err: &UnderlyingError{Kind: "reported an error", ToolError: &inner},
-	}}
-
-	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		return ctx.Next(ctx.Input())
-	}, layer, mustTypedValue(t, "ada"))
-
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("a failing inner layer produced a successful invocation")
-	}
-	if got.Err().Tag() != types.ToolErrorCustomError {
-		t.Fatalf("error tag %d, want the tool's own custom-error", got.Err().Tag())
-	}
-	if name := got.Err().CustomError().Name; name != "not-found" {
-		t.Errorf("error name %q, want not-found", name)
-	}
-}
-
-// TestMiddlewareReportsRuntimeRefusals — a denial or cancellation is the
-// runtime's, not the tool's, and has to stay distinguishable.
-func TestMiddlewareReportsRuntimeRefusals(t *testing.T) {
-	layer := &fakeLayer{outcome: ToolMiddlewareOutcome{
-		err: &UnderlyingError{Kind: "denied", Message: "quota"},
-	}}
-
-	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		return ctx.Next(ctx.Input())
-	}, layer, mustTypedValue(t, "ada"))
-
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("a denied call produced a successful invocation")
-	}
-	if msg := got.Err().InvalidResult(); !strings.Contains(msg, "denied") {
-		t.Errorf("message %q does not report the denial", msg)
-	}
-}
-
-func TestMiddlewareWithoutALayerBeneathSaysSo(t *testing.T) {
-	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		return ctx.Next(ctx.Input())
-	}, absentNextLayer{}, mustTypedValue(t, "ada"))
-
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("calling an absent layer succeeded")
-	}
-	if msg := got.Err().InvalidResult(); !strings.Contains(msg, "without a layer beneath") {
-		t.Errorf("message %q", msg)
-	}
-}
-
-func TestMiddlewarePanicBecomesAToolError(t *testing.T) {
-	got, _ := runMiddleware(t, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		panic("middleware gave up")
-	}, absentNextLayer{}, mustTypedValue(t, "ada"))
-
-	if got.Tag() != witTypes.ResultErr {
-		t.Fatal("a panicking middleware produced a successful invocation")
-	}
-	if msg := got.Err().InvalidResult(); !strings.Contains(msg, "middleware gave up") {
-		t.Errorf("message %q lost the panic", msg)
-	}
-}
-
-// TestMiddlewareMetadataPublishesItsParameterSchema — an installation's
-// configuration can be checked before the middleware ever runs.
-func TestMiddlewareMetadataPublishesItsParameterSchema(t *testing.T) {
-	saved := toolDefs
-	toolDefs = newToolRegistry()
-	t.Cleanup(func() { toolDefs = saved })
-
-	d := newDefinitions()
-	m := defineToolMiddlewareInto[AuditParams](toolDefs, d, "audit", ToolMiddlewareSpec{
-		Version: "2.0.0", Summary: "Records every invocation", Aliases: []string{"log"},
-	}, nil)
-	handleToolMiddlewareInto(toolDefs, d, m, func(ctx *ToolMiddlewareContext[AuditParams]) ToolMiddlewareOutcome {
-		return ctx.SucceedWithNothing()
-	})
-
-	found, ok := toolDefs.discoverMiddlewares(d)
+	e, ok := r.getMiddleware(name)
 	if !ok {
-		t.Fatalf("discovery failed: %s", allDefErrors(d.errs))
+		t.Fatalf("no middleware %s", name)
 	}
-	if len(found) != 1 {
-		t.Fatalf("discovered %d middlewares, want 1", len(found))
+	stdin := &byteReader{absent: absentStdin}
+	if run.stdin != "" {
+		stdin = &byteReader{src: &fakeSource{items: []streamItem{chunk(run.stdin)}}}
 	}
-	got := found[0]
-	if got.Name != "audit" || got.Version != "2.0.0" || got.Doc.Summary != "Records every invocation" {
-		t.Errorf("metadata is %+v", got)
+	sink := &fakeSink{}
+	inv := &middlewareInvocation{
+		toolName:    "vcs",
+		parameters:  run.params,
+		commandPath: run.path,
+		input:       run.input,
+		stdin:       stdin,
+		stdout:      &ToolStdout{sink: sink},
+		principal:   AnonymousPrincipal{},
+		under:       run.under,
 	}
-	if len(got.Aliases) != 1 || got.Aliases[0] != "log" {
-		t.Errorf("aliases %v, want [log]", got.Aliases)
+	return d.runMiddleware(e, inv), sink
+}
+
+func resultJSON(t *testing.T, res witTypes.Result[toolCommon.InvocationResult, types.ToolError]) any {
+	t.Helper()
+	if res.IsErr() {
+		t.Fatalf("invocation failed: %+v", res.Err())
 	}
-	// No Wraps means it applies to any tool.
-	if got.Scope.Tag() != toolCommon.ToolMiddlewareScopeUniversal {
-		t.Errorf("scope tag %d, want universal", got.Scope.Tag())
+	out, err := TypedValue{wit: res.Ok().Result.Some()}.JSON()
+	if err != nil {
+		t.Fatal(err)
 	}
-	root := got.ParameterSchema.TypeNodes[got.ParameterSchema.Root]
-	if root.Body.Tag() != types.SchemaTypeBodyRecordType {
-		t.Errorf("parameter schema root tag %d, want record", root.Body.Tag())
+	return out
+}
+
+func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
+	v, r, d := newVcs(t)
+	policy := v.tool.Middleware[PolicyParams]("policy", ToolMiddlewareSpec{Version: "1.0.0"})
+	_ = policy.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+		if a.Message == ctx.Parameters().Block {
+			return CommitResult{}, errors.New("blocked by policy")
+		}
+		if _, ok := ctx.Principal().(AnonymousPrincipal); !ok {
+			return CommitResult{}, errors.New("lost the principal")
+		}
+		a.Message += " (audited)"
+		return policy.Underlying(ctx, v.commit).Forward(a)
+	})
+	e, _ := r.get("vcs")
+	under := localUnderlying(d, e)
+
+	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "fix"; a.Paths = []string{"a"} })
+	res, _ := runMiddlewareFor(t, r, d, "policy", middlewareRun{
+		path: []string{"commit"}, input: input, params: mustTypedValue(t, PolicyParams{Block: "nope"}), under: under,
+	})
+	if out := resultJSON(t, res).(map[string]any); out["summary"] != "vcs commit: fix (audited)" {
+		t.Errorf("result %v", out)
+	}
+
+	blocked := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "nope"; a.Paths = []string{"a"} })
+	res, _ = runMiddlewareFor(t, r, d, "policy", middlewareRun{
+		path: []string{"commit"}, input: blocked, params: mustTypedValue(t, PolicyParams{Block: "nope"}), under: under,
+	})
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidResult || !strings.Contains(res.Err().InvalidResult(), "blocked by policy") {
+		t.Errorf("a blocked call gave %+v", res)
+	}
+
+	// A declared error of the tool beneath passes through unchanged.
+	empty := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "empty" })
+	res, _ = runMiddlewareFor(t, r, d, "policy", middlewareRun{
+		path: []string{"commit"}, input: empty, params: mustTypedValue(t, PolicyParams{}), under: under,
+	})
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError || res.Err().CustomError().Name != "nothing-to-commit" {
+		t.Errorf("the tool's declared error did not pass through: %+v", res)
 	}
 }
+
+func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
+	v, r, d := newVcs(t)
+	policy := v.tool.Middleware[PolicyParams]("policy", ToolMiddlewareSpec{})
+	_ = policy.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+		return policy.Underlying(ctx, v.commit).Forward(a)
+	})
+	e, _ := r.get("vcs")
+	input := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "origin" })
+	res, sink := runMiddlewareFor(t, r, d, "policy", middlewareRun{
+		path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, PolicyParams{}), stdin: "abc", under: localUnderlying(d, e),
+	})
+	if out := resultJSON(t, res); fmt.Sprint(out) != "33" {
+		t.Errorf("result %v", out)
+	}
+	if string(sink.written) != "ABC" || !sink.finished {
+		t.Errorf("stdout %q finished=%v", sink.written, sink.finished)
+	}
+}
+
+func TestStdoutMiddlewareForwardsAndRewritesOutput(t *testing.T) {
+	v, r, d := newVcs(t)
+	e, _ := r.get("vcs")
+	quiet := v.tool.Middleware[Unit]("forward", ToolMiddlewareSpec{})
+	_ = quiet.HandleStdout(v.push, func(ctx *ToolMiddlewareStdoutContext[Unit], a PushArgs) (int32, error) {
+		return quiet.UnderlyingStdout(ctx, v.push).Forward(a)
+	})
+	prefix := v.tool.Middleware[Unit]("prefix", ToolMiddlewareSpec{})
+	_ = prefix.HandleStdout(v.push, func(ctx *ToolMiddlewareStdoutContext[Unit], a PushArgs) (int32, error) {
+		inv, err := prefix.UnderlyingStdout(ctx, v.push).Start(a)
+		if err != nil {
+			return 0, err
+		}
+		data, err := io.ReadAll(inv.Stdout())
+		if err != nil {
+			return 0, err
+		}
+		if _, err := io.WriteString(ctx.Stdout(), "> "+string(data)); err != nil {
+			return 0, err
+		}
+		return inv.Wait()
+	})
+
+	input := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "origin" })
+	for name, want := range map[string]string{"forward": "HELLO", "prefix": "> HELLO"} {
+		res, sink := runMiddlewareFor(t, r, d, name, middlewareRun{
+			path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, Unit{}), stdin: "hello", under: localUnderlying(d, e),
+		})
+		if res.IsErr() {
+			t.Fatalf("%s: %+v", name, res.Err())
+		}
+		if string(sink.written) != want || !sink.finished {
+			t.Errorf("%s: stdout %q finished=%v", name, sink.written, sink.finished)
+		}
+	}
+}
+
+type V2 struct{}
+
+type SaveArgs struct{ Text string }
+
+func TestAdapterPresentsOneToolOverAnother(t *testing.T) {
+	v, r, d := newVcs(t)
+	v2 := defineToolInto[V2](r, d, "vcs2", ToolSpec{Version: "2.0.0"}, true)
+	save := v2.Command[SaveArgs, string]("save", func(a *SaveArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
+	adapter := v2.Adapter[Unit]("vcs2-on-vcs", v.tool, ToolMiddlewareSpec{})
+	_ = adapter.Handle(save, func(ctx *ToolMiddlewareContext[Unit], a SaveArgs) (string, error) {
+		res, err := adapter.Underlying(ctx, v.commit).Call(func(b *CommitArgs) {
+			b.Message = a.Text
+			b.Paths = []string{"all"}
+		})
+		return res.Summary, err
+	})
+	e, _ := r.get("vcs")
+	input := encodeArgs(t, save.ce, func(a *SaveArgs) { a.Text = "snapshot" })
+	res, _ := runMiddlewareFor(t, r, d, "vcs2-on-vcs", middlewareRun{
+		path: []string{"save"}, input: input, params: mustTypedValue(t, Unit{}), under: localUnderlying(d, e),
+	})
+	if out := resultJSON(t, res); out != "vcs commit: snapshot" {
+		t.Errorf("result %v", out)
+	}
+
+	m, _ := r.getMiddleware("vcs2-on-vcs")
+	built, ok := d.buildToolMiddleware(m)
+	if !ok {
+		t.Fatalf("metadata: %s", allDefErrors(d.errs))
+	}
+	scope := built.Scope.Monomorphic()
+	if scope.Presented.Version != "2.0.0" || scope.Expected.IsNone() || scope.Expected.Some().Version != "1.2.0" {
+		t.Errorf("scope %+v", scope)
+	}
+}
+
+func TestAdapterMustHandleEveryCommand(t *testing.T) {
+	v, r, d := newVcs(t)
+	v2 := defineToolInto[V2](r, d, "vcs2", ToolSpec{}, true)
+	save := v2.Command[SaveArgs, string]("save", func(a *SaveArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
+	v2.Command[SaveArgs, string]("load", func(a *SaveArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
+	adapter := v2.Adapter[Unit]("partial", v.tool, ToolMiddlewareSpec{})
+	_ = adapter.Handle(save, func(*ToolMiddlewareContext[Unit], SaveArgs) (string, error) { return "", nil })
+	r.discoverMiddlewares(d)
+	mustDefErr(t, d, "does not handle its command load")
+}
+
+func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
+	v, r, d := newVcs(t)
+	var seen []string
+	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", ToolMiddlewareSpec{})
+	_ = audit.Handle(func(ctx *UniversalToolMiddlewareContext[AuditParams]) (Option[TypedValue], error) {
+		seen = append(seen, ctx.Parameters().Channel+":"+ctx.ToolName()+":"+strings.Join(ctx.CommandPath(), " "))
+		if ctx.Parameters().Deny {
+			return None[TypedValue](), errors.New("denied by audit policy")
+		}
+		return ctx.Next(ctx.Input())
+	})
+	e, _ := r.get("vcs")
+	under := localUnderlying(d, e)
+
+	input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "m"; a.Paths = []string{"x"} })
+	res, _ := runMiddlewareFor(t, r, d, "audit", middlewareRun{
+		path: []string{"commit"}, input: input, params: mustTypedValue(t, AuditParams{Channel: "ops"}), under: under,
+	})
+	if out := resultJSON(t, res).(map[string]any); out["summary"] != "vcs commit: m" {
+		t.Errorf("result %v", out)
+	}
+	if len(seen) != 1 || seen[0] != "ops:vcs:commit" {
+		t.Errorf("seen %v", seen)
+	}
+
+	push := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "origin" })
+	res, sink := runMiddlewareFor(t, r, d, "audit", middlewareRun{
+		path: []string{"remote", "push"}, input: push, params: mustTypedValue(t, AuditParams{}), stdin: "hi", under: under,
+	})
+	if res.IsErr() || string(sink.written) != "HI" {
+		t.Errorf("stdout through a universal middleware: %q, %+v", sink.written, res)
+	}
+
+	res, _ = runMiddlewareFor(t, r, d, "audit", middlewareRun{
+		path: []string{"commit"}, input: input, params: mustTypedValue(t, AuditParams{Deny: true}), under: under,
+	})
+	if res.IsOk() || !strings.Contains(res.Err().InvalidResult(), "denied by audit policy") {
+		t.Errorf("denied call gave %+v", res)
+	}
+
+	empty := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = "empty" })
+	res, _ = runMiddlewareFor(t, r, d, "audit", middlewareRun{
+		path: []string{"commit"}, input: empty, params: mustTypedValue(t, AuditParams{}), under: under,
+	})
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError {
+		t.Errorf("the tool's own error did not pass through: %+v", res)
+	}
+}
+
+func TestMiddlewareMetadata(t *testing.T) {
+	v, r, d := newVcs(t)
+	policy := v.tool.Middleware[PolicyParams]("policy", ToolMiddlewareSpec{Version: "2.0.0", Summary: "Caps", Aliases: []string{"p"}})
+	_ = policy.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+		return policy.Underlying(ctx, v.commit).Forward(a)
+	})
+	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", ToolMiddlewareSpec{})
+	_ = audit.Handle(func(ctx *UniversalToolMiddlewareContext[AuditParams]) (Option[TypedValue], error) {
+		return ctx.Next(ctx.Input())
+	})
+	found, ok := r.discoverMiddlewares(d)
+	if !ok || len(found) != 2 {
+		t.Fatalf("discovery: %v %s", ok, allDefErrors(d.errs))
+	}
+	typed, universal := found[0], found[1]
+	if typed.Name != "policy" || typed.Version != "2.0.0" || typed.Doc.Summary != "Caps" ||
+		typed.Scope.Tag() != toolCommon.ToolMiddlewareScopeMonomorphic {
+		t.Errorf("typed middleware: %+v", typed)
+	}
+	if universal.Scope.Tag() != toolCommon.ToolMiddlewareScopeUniversal {
+		t.Errorf("universal scope tag %d", universal.Scope.Tag())
+	}
+	root := universal.ParameterSchema.TypeNodes[universal.ParameterSchema.Root]
+	if root.Body.Tag() != types.SchemaTypeBodyRecordType {
+		t.Errorf("parameter schema root tag %d", root.Body.Tag())
+	}
+}
+
+type Twin struct{}
 
 func TestMiddlewareDeclarationErrors(t *testing.T) {
-	t.Run("missing handler", func(t *testing.T) {
+	t.Run("universal without a handler", func(t *testing.T) {
 		r, d := newToolRegistry(), newDefinitions()
-		defineToolMiddlewareInto[AuditParams](r, d, "bare", ToolMiddlewareSpec{}, nil)
+		defineUniversalToolMiddlewareInto[Unit](r, d, "bare", ToolMiddlewareSpec{})
 		r.discoverMiddlewares(d)
 		mustDefErr(t, d, "has no handler")
 	})
-
+	t.Run("typed without a handler", func(t *testing.T) {
+		v, r, d := newVcs(t)
+		v.tool.Middleware[Unit]("idle", ToolMiddlewareSpec{})
+		r.discoverMiddlewares(d)
+		mustDefErr(t, d, "handles no command")
+	})
 	t.Run("duplicate", func(t *testing.T) {
 		r, d := newToolRegistry(), newDefinitions()
-		defineToolMiddlewareInto[AuditParams](r, d, "dup", ToolMiddlewareSpec{}, nil)
-		defineToolMiddlewareInto[AuditParams](r, d, "dup", ToolMiddlewareSpec{}, nil)
+		defineUniversalToolMiddlewareInto[Unit](r, d, "dup", ToolMiddlewareSpec{})
+		defineUniversalToolMiddlewareInto[Unit](r, d, "dup", ToolMiddlewareSpec{})
 		mustDefErr(t, d, "already defined")
 	})
-
-	t.Run("half a scope", func(t *testing.T) {
-		r, d := newToolRegistry(), newDefinitions()
-		def := defineToolInto(r, d, "greeter", ToolSpec{}, false)
-		defineToolMiddlewareInto[AuditParams](r, d, "half", ToolMiddlewareSpec{},
-			[]ToolMiddlewareOpt{func(o *middlewareOpts) { o.presented = def }})
-		mustDefErr(t, d, "needs both a presented and an expected tool")
+	t.Run("a command handled twice", func(t *testing.T) {
+		v, _, d := newVcs(t)
+		m := v.tool.Middleware[Unit]("twice", ToolMiddlewareSpec{})
+		h := func(*ToolMiddlewareContext[Unit], CommitArgs) (CommitResult, error) { return CommitResult{}, nil }
+		_ = m.Handle(v.commit, h)
+		_ = m.Handle(v.commit, h)
+		mustDefErr(t, d, "handles command commit twice")
 	})
-}
-
-// TestUnderlyingErrorsAreDistinguishable — a middleware may need to tell a
-// denial from a cancellation from the tool's own failure.
-func TestUnderlyingErrorsAreDistinguishable(t *testing.T) {
-	var ue *UnderlyingError
-	err := error(&UnderlyingError{Kind: "cancelled"})
-	if !errors.As(err, &ue) || ue.Kind != "cancelled" {
-		t.Fatalf("errors.As did not recover the kind from %v", err)
-	}
-	if ue.ToolError != nil {
-		t.Error("a cancellation carried a tool error")
-	}
-	if got := err.Error(); got != "golem: underlying tool cancelled" {
-		t.Errorf("message %q", got)
-	}
+	t.Run("a command of another tool sharing the identity type", func(t *testing.T) {
+		_, r, d := newVcs(t)
+		a := defineToolInto[Twin](r, d, "a", ToolSpec{}, true)
+		b := defineToolInto[Twin](r, d, "b", ToolSpec{}, true)
+		cmdB := b.Command[SaveArgs, string]("save", func(x *SaveArgs, s *ToolCommandSpec) { s.Positional(&x.Text) })
+		m := a.Middleware[Unit]("mixed", ToolMiddlewareSpec{})
+		_ = m.Handle(cmdB, func(*ToolMiddlewareContext[Unit], SaveArgs) (string, error) { return "", nil })
+		mustDefErr(t, d, "which it does not present")
+	})
 }

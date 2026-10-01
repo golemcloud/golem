@@ -16,38 +16,42 @@ package golem
 
 import (
 	"fmt"
+	"io"
 	"reflect"
+	"slices"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
-	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // Tool middleware.
 //
-// A middleware wraps one tool invocation: it sees the call on its way in, hands
-// it to the next inner layer, and sees the outcome on its way back.
+// A middleware wraps the invocations of a tool: it sees a call on its way in,
+// hands it to the layer beneath, and sees the outcome on its way back. It is
+// declared on the tool it presents, and handles that tool's commands with
+// their own argument and result types:
 //
-//	type AuditParams struct{ Channel string }
+//	var Policy = inventory.Tool.Middleware[PolicyParams]("inventory-policy", golem.ToolMiddlewareSpec{Version: "1.0.0"})
 //
-//	var Audit = golem.DefineToolMiddleware[AuditParams]("audit", golem.ToolMiddlewareSpec{
-//	    Version: "1.0.0", Summary: "Records every invocation",
+//	var _ = Policy.Handle(inventory.Adjust, func(ctx *golem.ToolMiddlewareContext[PolicyParams], a inventory.AdjustArgs) (int32, error) {
+//	    if a.By > ctx.Parameters().MaxAdjust {
+//	        return 0, errors.New("adjustment too large")
+//	    }
+//	    return Policy.Underlying(ctx, inventory.Adjust).Forward(a)
 //	})
 //
-//	var _ = golem.HandleToolMiddleware(Audit, func(ctx *golem.ToolMiddlewareContext[AuditParams]) golem.ToolMiddlewareOutcome {
-//	    record(ctx.Parameters().Channel, ctx.ToolName(), ctx.CommandPath())
-//	    return ctx.Next(ctx.Input())
-//	})
+// A transparent middleware (Middleware) presents and wraps the same tool, and
+// a command it does not handle goes straight to the tool. An adapter (Adapter)
+// presents one tool over another, so it handles every presented command and
+// calls the wrapped tool's commands beneath.
 //
-// A middleware is generic over the tools it wraps, so it does not have their Go
-// types: the call's arguments and its result arrive as [TypedValue], which
-// carries its own schema. Returning without calling [ToolMiddlewareContext.Next]
-// short-circuits the call.
+// A middleware that applies to any tool, such as an audit log, has no Go types
+// for the tools it wraps; it is declared with [DefineUniversalToolMiddleware]
+// and works with [TypedValue].
 //
-// The middleware's static configuration is the type parameter P, whose schema
-// is published so an installation can be checked before it runs. Use [Unit] for
-// a middleware that takes none.
+// P is the middleware's static configuration, whose schema is published so an
+// installation can be checked before it runs. Use [Unit] for none.
 
 // ToolMiddlewareSpec describes a middleware as a whole.
 type ToolMiddlewareSpec struct {
@@ -57,267 +61,413 @@ type ToolMiddlewareSpec struct {
 	Aliases     []string
 }
 
-// ToolMiddlewareOpt customises a middleware declaration.
-type ToolMiddlewareOpt func(*middlewareOpts)
-
-type middlewareOpts struct {
-	presented *ToolDefinition
-	expected  *ToolDefinition
-}
-
-// Wraps narrows a middleware to one tool shape: it presents presented to its
-// caller and expects expected from the layer beneath. Without it a middleware is
-// universal and applies to any tool.
-func Wraps(presented *ToolDefinition, expected *ToolDefinition) ToolMiddlewareOpt {
-	return func(o *middlewareOpts) { o.presented, o.expected = presented, expected }
-}
-
-// ToolMiddlewareDefinition is a registered middleware, returned by
-// [DefineToolMiddleware].
-type ToolMiddlewareDefinition[P any] struct{ name string }
-
-// Name returns the middleware's canonical name.
-func (m *ToolMiddlewareDefinition[P]) Name() string { return m.name }
-
-// middlewareEntry is one registered middleware and its handler.
+// middlewareEntry is one registered middleware.
 type middlewareEntry struct {
 	name       string
 	spec       ToolMiddlewareSpec
-	opts       middlewareOpts
 	paramsType reflect.Type
-	invoke     func(*middlewareCall) ToolMiddlewareOutcome
+	d          *definitions
+
+	// presented and wrapped are the tools of a typed middleware, the same
+	// tool for a transparent one; nil for a universal one.
+	presented *toolEntry
+	wrapped   *toolEntry
+	adapter   bool
+	handlers  map[*commandEntry]middlewareHandler
+
+	// universal is the handler of a universal middleware.
+	universal func(*middlewareInvocation) (Option[TypedValue], error)
 }
 
-// DefineToolMiddleware registers a middleware. Call it from a package-level var
-// so registration happens before the component is invoked.
-func DefineToolMiddleware[P any](name string, spec ToolMiddlewareSpec, opts ...ToolMiddlewareOpt) *ToolMiddlewareDefinition[P] {
-	return defineToolMiddlewareInto[P](toolDefs, defs, name, spec, opts)
+type middlewareHandler func(*middlewareInvocation, reflect.Value) (reflect.Value, error)
+
+func (e *middlewareEntry) fail(format string, args ...any) {
+	e.d.recordErr("", "", "tool middleware %s: %s", e.name, fmt.Sprintf(format, args...))
 }
 
-func defineToolMiddlewareInto[P any](
-	r *toolRegistry, d *definitions, name string, spec ToolMiddlewareSpec, opts []ToolMiddlewareOpt,
-) *ToolMiddlewareDefinition[P] {
-	m := &ToolMiddlewareDefinition[P]{name: name}
-	if name == "" {
-		d.recordErr("", "", "DefineToolMiddleware requires a name")
-		return m
+func registerMiddleware(r *toolRegistry, d *definitions, e *middlewareEntry) {
+	switch {
+	case e.name == "":
+		d.recordErr("", "", "a tool middleware requires a name")
+	case r.middlewaresByName[e.name] != nil:
+		d.recordErr("", "", "tool middleware already defined: %s", e.name)
+	default:
+		r.middlewareOrder = append(r.middlewareOrder, e.name)
+		r.middlewaresByName[e.name] = e
 	}
-	if _, dup := r.middlewaresByName[name]; dup {
-		d.recordErr("", "", "tool middleware already defined: %s", name)
-		return m
-	}
-	var mo middlewareOpts
-	for _, o := range opts {
-		o(&mo)
-	}
-	if (mo.presented == nil) != (mo.expected == nil) {
-		d.recordErr("", "", "tool middleware %s: golem.Wraps needs both a presented and an expected tool", name)
-	}
-	e := &middlewareEntry{name: name, spec: spec, opts: mo, paramsType: reflect.TypeFor[P]()}
-	r.middlewareOrder = append(r.middlewareOrder, name)
-	r.middlewaresByName[name] = e
-	return m
 }
 
-// HandleToolMiddleware binds a middleware's implementation.
-func HandleToolMiddleware[P any](
-	m *ToolMiddlewareDefinition[P], h func(*ToolMiddlewareContext[P]) ToolMiddlewareOutcome,
-) Registered {
-	return handleToolMiddlewareInto(toolDefs, defs, m, h)
+// ToolMiddleware is a typed middleware presenting tool T, wrapping tool W and
+// configured by P.
+type ToolMiddleware[T any, P any, W any] struct{ e *middlewareEntry }
+
+// Name returns the middleware's name.
+func (m *ToolMiddleware[T, P, W]) Name() string { return m.e.name }
+
+// Middleware declares a transparent middleware on this tool: it presents and
+// wraps the tool, and a command it does not handle goes straight to the tool.
+func (t *ToolDefinition[T]) Middleware[P any](name string, spec ToolMiddlewareSpec) *ToolMiddleware[T, P, T] {
+	return &ToolMiddleware[T, P, T]{e: newTypedMiddleware[P](t.entry, t.entry, name, spec, false)}
 }
 
-func handleToolMiddlewareInto[P any](
-	r *toolRegistry, d *definitions, m *ToolMiddlewareDefinition[P],
-	h func(*ToolMiddlewareContext[P]) ToolMiddlewareOutcome,
-) Registered {
-	e := r.middlewaresByName[m.name]
-	if e == nil {
-		d.recordErr("", "", "handler declared for unregistered tool middleware %q", m.name)
-		return Registered{}
+// Adapter declares a middleware presenting this tool over wraps: it handles
+// every command of this tool, calling the commands of wraps beneath.
+func (t *ToolDefinition[T]) Adapter[P any, W any](name string, wraps *ToolDefinition[W], spec ToolMiddlewareSpec) *ToolMiddleware[T, P, W] {
+	return &ToolMiddleware[T, P, W]{e: newTypedMiddleware[P](t.entry, wraps.entry, name, spec, true)}
+}
+
+func newTypedMiddleware[P any](presented, wrapped *toolEntry, name string, spec ToolMiddlewareSpec, adapter bool) *middlewareEntry {
+	e := &middlewareEntry{
+		name: name, spec: spec, paramsType: reflect.TypeFor[P](), d: presented.d,
+		presented: presented, wrapped: wrapped, adapter: adapter,
+		handlers: map[*commandEntry]middlewareHandler{},
 	}
-	if e.invoke != nil {
-		d.recordErr("", "", "tool middleware %s already has a handler", m.name)
-		return Registered{}
-	}
-	e.invoke = func(call *middlewareCall) ToolMiddlewareOutcome {
-		params, err := DecodeTypedValue[P](call.parameters)
-		if err != nil {
-			return failOutcome(fmt.Errorf("middleware %s: parameters: %w", m.name, err))
-		}
-		return h(&ToolMiddlewareContext[P]{call: call, params: params})
+	registerMiddleware(presented.r, presented.d, e)
+	return e
+}
+
+func (e *middlewareEntry) setHandler(ce *commandEntry, h middlewareHandler) Registered {
+	switch {
+	case ce.node.entry != e.presented:
+		e.fail("handles %s of tool %s, which it does not present", ce.label(), ce.node.entry.name)
+	case e.handlers[ce] != nil:
+		e.fail("handles command %s twice", ce.label())
+	default:
+		e.handlers[ce] = h
 	}
 	return Registered{}
 }
 
-// middlewareCall is the per-invocation state shared by the context, kept apart
-// from the type parameter so the dispatcher can build it without knowing P.
-type middlewareCall struct {
-	middleware  string
+// Handle intercepts a command of the presented tool. The handler returns the
+// command's result as the tool would; a declared error is returned with the
+// case's New, and a failure of the layer beneath is passed on unchanged by
+// returning it.
+func (m *ToolMiddleware[T, P, W]) Handle[A any, O any](
+	cmd *ToolCommand[T, A, O], h func(*ToolMiddlewareContext[P], A) (O, error),
+) Registered {
+	return m.e.setHandler(cmd.ce, func(inv *middlewareInvocation, args reflect.Value) (reflect.Value, error) {
+		ctx, err := newMiddlewareContext[P](inv)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out, err := h(ctx, args.Interface().(A))
+		return reflect.ValueOf(&out).Elem(), err
+	})
+}
+
+// HandleStdout intercepts a command of the presented tool that writes standard
+// output, which the handler writes through [ToolMiddlewareStdoutContext.Stdout].
+func (m *ToolMiddleware[T, P, W]) HandleStdout[A any, O any](
+	cmd *ToolStdoutCommand[T, A, O], h func(*ToolMiddlewareStdoutContext[P], A) (O, error),
+) Registered {
+	return m.e.setHandler(cmd.ce, func(inv *middlewareInvocation, args reflect.Value) (reflect.Value, error) {
+		ctx, err := newMiddlewareContext[P](inv)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		out, err := h(&ToolMiddlewareStdoutContext[P]{ToolMiddlewareContext: ctx}, args.Interface().(A))
+		return reflect.ValueOf(&out).Elem(), err
+	})
+}
+
+// Underlying reaches a command of the wrapped tool for this invocation.
+func (m *ToolMiddleware[T, P, W]) Underlying[A any, O any](ctx ToolMiddlewareCall, cmd *ToolCommand[W, A, O]) *ToolUnderlying[A, O] {
+	return &ToolUnderlying[A, O]{inv: ctx.middlewareInvocation(), ce: cmd.ce, m: m.e}
+}
+
+// UnderlyingStdout reaches a command of the wrapped tool that writes standard
+// output.
+func (m *ToolMiddleware[T, P, W]) UnderlyingStdout[A any, O any](ctx ToolMiddlewareCall, cmd *ToolStdoutCommand[W, A, O]) *ToolUnderlyingStdout[A, O] {
+	return &ToolUnderlyingStdout[A, O]{inv: ctx.middlewareInvocation(), ce: cmd.ce, m: m.e}
+}
+
+// ToolMiddlewareCall is the context of a running middleware handler, which is
+// what reaching the layer beneath needs.
+type ToolMiddlewareCall interface {
+	middlewareInvocation() *middlewareInvocation
+}
+
+// ToolMiddlewareContext is the per-invocation context of a typed middleware.
+type ToolMiddlewareContext[P any] struct {
+	inv    *middlewareInvocation
+	params P
+}
+
+func newMiddlewareContext[P any](inv *middlewareInvocation) (*ToolMiddlewareContext[P], error) {
+	params, err := DecodeTypedValue[P](inv.parameters)
+	if err != nil {
+		return nil, fmt.Errorf("middleware %s: parameters: %w", inv.entry.name, err)
+	}
+	return &ToolMiddlewareContext[P]{inv: inv, params: params}, nil
+}
+
+func (c *ToolMiddlewareContext[P]) middlewareInvocation() *middlewareInvocation { return c.inv }
+
+// Parameters returns the middleware's configuration for this installation.
+func (c *ToolMiddlewareContext[P]) Parameters() P { return c.params }
+
+// Principal returns who invoked the tool.
+func (c *ToolMiddlewareContext[P]) Principal() Principal { return c.inv.principal }
+
+// Name returns the middleware's own name.
+func (c *ToolMiddlewareContext[P]) Name() string { return c.inv.entry.name }
+
+// ToolName returns the name the tool was invoked by.
+func (c *ToolMiddlewareContext[P]) ToolName() string { return c.inv.toolName }
+
+// CommandPath returns the command being invoked, from the tool's root.
+func (c *ToolMiddlewareContext[P]) CommandPath() []string { return slices.Clone(c.inv.commandPath) }
+
+// ToolMiddlewareStdoutContext is the context of a handler for a command that
+// writes standard output.
+type ToolMiddlewareStdoutContext[P any] struct {
+	*ToolMiddlewareContext[P]
+}
+
+// Stdout returns the middleware's standard output. It is finished when the
+// handler succeeds and failed when it returns an error or panics.
+func (c *ToolMiddlewareStdoutContext[P]) Stdout() *ToolStdout { return c.inv.stdout }
+
+// ToolUnderlying is a command of the wrapped tool, reached from a middleware
+// handler.
+type ToolUnderlying[A any, O any] struct {
+	inv *middlewareInvocation
+	ce  *commandEntry
+	m   *middlewareEntry
+}
+
+// Call runs the command beneath, starting from its declared defaults.
+func (u *ToolUnderlying[A, O]) Call(fill func(*A)) (O, error) {
+	return finishUnderlying[O](u.ce, u.inv, u.m, fillArgs(fill))
+}
+
+// Forward runs the command beneath with complete arguments, unchanged.
+func (u *ToolUnderlying[A, O]) Forward(a A) (O, error) {
+	return finishUnderlying[O](u.ce, u.inv, u.m, forwardArgs(a))
+}
+
+// ToolUnderlyingStdout is a command of the wrapped tool that writes standard
+// output, reached from a middleware handler.
+type ToolUnderlyingStdout[A any, O any] struct {
+	inv *middlewareInvocation
+	ce  *commandEntry
+	m   *middlewareEntry
+}
+
+// Call starts the command beneath, starting from its declared defaults.
+func (u *ToolUnderlyingStdout[A, O]) Call(fill func(*A)) (*ToolInvocation[O], error) {
+	return startUnderlying[O](u.ce, u.inv, u.m, fillArgs(fill))
+}
+
+// Start starts the command beneath with complete arguments, unchanged.
+func (u *ToolUnderlyingStdout[A, O]) Start(a A) (*ToolInvocation[O], error) {
+	return startUnderlying[O](u.ce, u.inv, u.m, forwardArgs(a))
+}
+
+// Forward runs the command beneath, writing its output to the middleware's
+// own, and returns its result.
+func (u *ToolUnderlyingStdout[A, O]) Forward(a A) (O, error) {
+	var zero O
+	inv, err := u.Start(a)
+	if err != nil {
+		return zero, err
+	}
+	if _, err := io.Copy(u.inv.stdout, inv.Stdout()); err != nil {
+		inv.Cancel()
+		return zero, err
+	}
+	return inv.Wait()
+}
+
+func forwardArgs[A any](a A) func(reflect.Value) {
+	return func(v reflect.Value) { v.Set(reflect.ValueOf(&a).Elem()) }
+}
+
+func startUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *middlewareEntry, fill func(reflect.Value)) (*ToolInvocation[O], error) {
+	if ce.node.entry != m.wrapped {
+		return nil, fmt.Errorf("golem: middleware %s calls %s of tool %s, which it does not wrap",
+			m.name, ce.label(), ce.node.entry.name)
+	}
+	input, stdin, err := ce.prepare(inv.toolName, fill)
+	if err != nil {
+		return nil, err
+	}
+	call, err := inv.under.start(ce.node.path, input, stdin)
+	if err != nil {
+		return nil, err
+	}
+	return commandInvocation[O](ce, inv.toolName, call), nil
+}
+
+func finishUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *middlewareEntry, fill func(reflect.Value)) (O, error) {
+	var zero O
+	started, err := startUnderlying[O](ce, inv, m, fill)
+	if err != nil {
+		return zero, err
+	}
+	return started.Wait()
+}
+
+// UniversalToolMiddleware is a middleware for any tool, configured by P.
+type UniversalToolMiddleware[P any] struct{ e *middlewareEntry }
+
+// Name returns the middleware's name.
+func (m *UniversalToolMiddleware[P]) Name() string { return m.e.name }
+
+// DefineUniversalToolMiddleware declares a middleware that applies to any tool.
+// It has no Go types for the tools it wraps, so the arguments and the result
+// travel as [TypedValue]. Call it from a package-level var.
+func DefineUniversalToolMiddleware[P any](name string, spec ToolMiddlewareSpec) *UniversalToolMiddleware[P] {
+	return defineUniversalToolMiddlewareInto[P](toolDefs, defs, name, spec)
+}
+
+func defineUniversalToolMiddlewareInto[P any](r *toolRegistry, d *definitions, name string, spec ToolMiddlewareSpec) *UniversalToolMiddleware[P] {
+	e := &middlewareEntry{name: name, spec: spec, paramsType: reflect.TypeFor[P](), d: d}
+	registerMiddleware(r, d, e)
+	return &UniversalToolMiddleware[P]{e: e}
+}
+
+// Handle binds the middleware's implementation. The handler returns the
+// result to hand back, none for a command without one; returning a failure of
+// the layer beneath passes it on unchanged.
+func (m *UniversalToolMiddleware[P]) Handle(h func(*UniversalToolMiddlewareContext[P]) (Option[TypedValue], error)) Registered {
+	if m.e.universal != nil {
+		m.e.fail("already has a handler")
+		return Registered{}
+	}
+	m.e.universal = func(inv *middlewareInvocation) (Option[TypedValue], error) {
+		params, err := DecodeTypedValue[P](inv.parameters)
+		if err != nil {
+			return None[TypedValue](), fmt.Errorf("middleware %s: parameters: %w", inv.entry.name, err)
+		}
+		return h(&UniversalToolMiddlewareContext[P]{inv: inv, params: params})
+	}
+	return Registered{}
+}
+
+// UniversalToolMiddlewareContext is the per-invocation context of a universal
+// middleware.
+type UniversalToolMiddlewareContext[P any] struct {
+	inv    *middlewareInvocation
+	params P
+}
+
+// Parameters returns the middleware's configuration for this installation.
+func (c *UniversalToolMiddlewareContext[P]) Parameters() P { return c.params }
+
+// Principal returns who invoked the tool.
+func (c *UniversalToolMiddlewareContext[P]) Principal() Principal { return c.inv.principal }
+
+// Name returns the middleware's own name.
+func (c *UniversalToolMiddlewareContext[P]) Name() string { return c.inv.entry.name }
+
+// ToolName returns the name the tool was invoked by.
+func (c *UniversalToolMiddlewareContext[P]) ToolName() string { return c.inv.toolName }
+
+// ToolMetadata returns the wrapped tool's published metadata, which is how a
+// universal middleware learns the shape of a tool it was not written for.
+func (c *UniversalToolMiddlewareContext[P]) ToolMetadata() ReflectedTool {
+	return newReflectedTool(c.inv.toolName, c.inv.tool)
+}
+
+// CommandPath returns the command being invoked, from the tool's root.
+func (c *UniversalToolMiddlewareContext[P]) CommandPath() []string {
+	return slices.Clone(c.inv.commandPath)
+}
+
+// Input returns the call's arguments, the command's canonical input record.
+func (c *UniversalToolMiddlewareContext[P]) Input() TypedValue { return TypedValue{wit: c.inv.input} }
+
+// Stdout returns the middleware's standard output. It is finished when the
+// handler succeeds and failed when it returns an error or panics.
+func (c *UniversalToolMiddlewareContext[P]) Stdout() *ToolStdout { return c.inv.stdout }
+
+// Start hands the call to the layer beneath with the given input and the
+// original standard input, and returns the running invocation.
+func (c *UniversalToolMiddlewareContext[P]) Start(input TypedValue) (*ToolInvocation[Option[TypedValue]], error) {
+	var stdin io.Reader
+	if c.inv.stdin.present() {
+		stdin = c.inv.stdin
+	}
+	call, err := c.inv.under.start(c.inv.commandPath, input.wit, stdin)
+	if err != nil {
+		return nil, err
+	}
+	tool, path := c.inv.toolName, c.inv.commandPath
+	return &ToolInvocation[Option[TypedValue]]{call: call, finish: func(call toolCall) (Option[TypedValue], error) {
+		res, rpcErr := call.wait()
+		if rpcErr != nil {
+			return None[TypedValue](), toolCallErrorFromWit(tool, path, *rpcErr)
+		}
+		if res.IsNone() {
+			return None[TypedValue](), nil
+		}
+		return Some(TypedValue{wit: res.Some()}), nil
+	}}, nil
+}
+
+// Next hands the call to the layer beneath, writing its output to the
+// middleware's own, and returns its result.
+func (c *UniversalToolMiddlewareContext[P]) Next(input TypedValue) (Option[TypedValue], error) {
+	inv, err := c.Start(input)
+	if err != nil {
+		return None[TypedValue](), err
+	}
+	if err := relayStdout(c.inv.stdout, inv.call.stdout); err != nil {
+		inv.Cancel()
+		return None[TypedValue](), err
+	}
+	return inv.Wait()
+}
+
+// relayStdout copies the output of the layer beneath into the middleware's
+// own, when both exist.
+func relayStdout(dst *ToolStdout, src *byteReader) error {
+	if src == nil || dst == nil || dst.absent != "" {
+		return nil
+	}
+	_, err := io.Copy(dst, src)
+	return err
+}
+
+// middlewareInvocation is the state of one middleware invocation.
+type middlewareInvocation struct {
+	entry       *middlewareEntry
 	toolName    string
 	tool        toolCommon.Tool
 	parameters  TypedValue
 	commandPath []string
-	input       TypedValue
-	stdin       nextStdin
+	input       types.TypedSchemaValue
+	stdin       *byteReader
 	stdout      *ToolStdout
-	next        nextLayer
+	principal   Principal
+	under       underlyingLayer
 }
 
-// ToolMiddlewareContext is the per-invocation context handed to a middleware.
-type ToolMiddlewareContext[P any] struct {
-	call   *middlewareCall
-	params P
+// underlyingLayer is the layer beneath a middleware. It is a struct of
+// functions so the dispatcher can be tested without a host; the wasm build
+// binds it to the generated resource (see toolmiddleware_wasm.go).
+type underlyingLayer struct {
+	start func(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error)
 }
 
-// Parameters returns the middleware's static configuration for this
-// installation.
-func (c *ToolMiddlewareContext[P]) Parameters() P { return c.params }
-
-// Name returns the middleware's own name.
-func (c *ToolMiddlewareContext[P]) Name() string { return c.call.middleware }
-
-// ToolName returns the name of the tool being invoked.
-func (c *ToolMiddlewareContext[P]) ToolName() string { return c.call.toolName }
-
-// ToolMetadata returns the wrapped tool's published metadata, which is how a
-// universal middleware learns the shape of a tool it was not written for.
-func (c *ToolMiddlewareContext[P]) ToolMetadata() ReflectedTool {
-	return newReflectedTool(c.call.toolName, c.call.tool)
-}
-
-// CommandPath returns the command being invoked, from the tool's root.
-func (c *ToolMiddlewareContext[P]) CommandPath() []string {
-	return append([]string(nil), c.call.commandPath...)
-}
-
-// Input returns the call's arguments. A middleware that does not rewrite them
-// passes this straight to [ToolMiddlewareContext.Next].
-func (c *ToolMiddlewareContext[P]) Input() TypedValue { return c.call.input }
-
-// Stdout returns the middleware's own output stream, which it may write to
-// directly or relay the inner layer's output into.
-func (c *ToolMiddlewareContext[P]) Stdout() *ToolStdout { return c.call.stdout }
-
-// Next hands the call to the layer beneath and returns its outcome. The
-// original standard input is forwarded as-is. Not calling it short-circuits the
-// call, which is how a middleware denies or caches one.
-func (c *ToolMiddlewareContext[P]) Next(input TypedValue) ToolMiddlewareOutcome {
-	return c.call.next.invoke(c.call.commandPath, input, c.call.stdin)
-}
-
-// ToolMiddlewareOutcome is what a middleware returns: the result to hand back,
-// or a failure. Build one with the context's Succeed, SucceedWithNothing or
-// Fail, or pass through what [ToolMiddlewareContext.Next] returned.
-type ToolMiddlewareOutcome struct {
-	result    TypedValue
-	hasResult bool
-	// stdout is the inner layer's output stream when the outcome came from Next,
-	// so a middleware can relay it.
-	stdout *ToolStdin
-	err    error
-}
-
-// Succeed returns a result to the caller.
-func (c *ToolMiddlewareContext[P]) Succeed(result TypedValue) ToolMiddlewareOutcome {
-	return ToolMiddlewareOutcome{result: result, hasResult: true}
-}
-
-// SucceedWithNothing returns success with no value, for a command that has no
-// result.
-func (c *ToolMiddlewareContext[P]) SucceedWithNothing() ToolMiddlewareOutcome {
-	return ToolMiddlewareOutcome{}
-}
-
-// Fail returns a failure to the caller.
-func (c *ToolMiddlewareContext[P]) Fail(err error) ToolMiddlewareOutcome { return failOutcome(err) }
-
-func failOutcome(err error) ToolMiddlewareOutcome { return ToolMiddlewareOutcome{err: err} }
-
-// Result reports the outcome's value, if it has one.
-func (o ToolMiddlewareOutcome) Result() (TypedValue, bool) { return o.result, o.hasResult }
-
-// Err reports the outcome's failure, or nil.
-func (o ToolMiddlewareOutcome) Err() error { return o.err }
-
-// Stdout returns the inner layer's output stream when this outcome came from
-// [ToolMiddlewareContext.Next] and the inner layer produced one.
-func (o ToolMiddlewareOutcome) Stdout() *ToolStdin { return o.stdout }
-
-// WithResult replaces the outcome's value, which is how a middleware rewrites
-// what the inner layer returned.
-func (o ToolMiddlewareOutcome) WithResult(result TypedValue) ToolMiddlewareOutcome {
-	o.result, o.hasResult, o.err = result, true, nil
-	return o
-}
-
-// UnderlyingError reports a failure from the layer beneath a middleware, which
-// distinguishes the tool's own error from the runtime refusing or cancelling
-// the call.
-type UnderlyingError struct {
-	// Kind names the failure as the runtime classified it.
-	Kind string
-	// Message is the accompanying detail, empty for a bare cancellation.
-	Message string
-	// ToolError is the wrapped tool's own error, when the failure was one.
-	ToolError *types.ToolError
-}
-
-func (e *UnderlyingError) Error() string {
-	if e.Message == "" {
-		return "golem: underlying tool " + e.Kind
-	}
-	return "golem: underlying tool " + e.Kind + ": " + e.Message
-}
-
-// underlyingErrorToGo renders the runtime's failure as a Go error.
-//
-//nolint:unused // called from toolmiddleware_wasm.go
-func underlyingErrorToGo(e underlying.UnderlyingError) error {
-	switch e.Tag() {
-	case underlying.UnderlyingErrorToolError:
-		te := e.ToolError()
-		return &UnderlyingError{Kind: "reported an error", ToolError: &te, Message: toolErrorMessage(te)}
-	case underlying.UnderlyingErrorProtocolError:
-		return &UnderlyingError{Kind: "protocol error", Message: e.ProtocolError()}
-	case underlying.UnderlyingErrorDenied:
-		return &UnderlyingError{Kind: "denied", Message: e.Denied()}
-	case underlying.UnderlyingErrorInternalError:
-		return &UnderlyingError{Kind: "internal error", Message: e.InternalError()}
-	case underlying.UnderlyingErrorCancelled:
-		return &UnderlyingError{Kind: "cancelled"}
-	case underlying.UnderlyingErrorResourceExhausted:
-		return &UnderlyingError{Kind: "resource exhausted", Message: e.ResourceExhausted()}
-	}
-	return &UnderlyingError{Kind: "failed"}
-}
-
-// toolErrorMessage renders a tool error for use inside another error's text.
-//
-//nolint:unused // reached only from the wasip1 build's error rendering
-func toolErrorMessage(e types.ToolError) string {
-	switch e.Tag() {
-	case types.ToolErrorInvalidToolName:
-		return "unknown tool " + e.InvalidToolName()
-	case types.ToolErrorInvalidCommandPath:
-		return "unknown command " + commandLabel(e.InvalidCommandPath())
-	case types.ToolErrorInvalidInput:
-		return e.InvalidInput()
-	case types.ToolErrorConstraintViolation:
-		return e.ConstraintViolation()
-	case types.ToolErrorInvalidResult:
-		return e.InvalidResult()
-	case types.ToolErrorCustomError:
-		return e.CustomError().Name
-	}
-	return "failed"
+// absentUnderlyingLayer stands in when there is no layer beneath.
+var absentUnderlyingLayer = underlyingLayer{
+	start: func([]string, types.TypedSchemaValue, io.Reader) (toolCall, error) {
+		return toolCall{}, fmt.Errorf("golem: this middleware was invoked without a layer beneath it")
+	},
 }
 
 // buildToolMiddleware derives the metadata the host discovers for one
 // middleware.
 func (d *definitions) buildToolMiddleware(e *middlewareEntry) (toolCommon.ToolMiddleware, bool) {
 	ok := true
-	if e.invoke == nil {
-		d.recordErr("", "", "tool middleware %s has no handler; call golem.HandleToolMiddleware", e.name)
+	switch {
+	case e.presented == nil && e.universal == nil:
+		e.fail("has no handler; call Handle on it")
+		ok = false
+	case e.presented != nil && len(e.handlers) == 0:
+		e.fail("handles no command; call Handle on it")
 		ok = false
 	}
 
@@ -326,21 +476,29 @@ func (d *definitions) buildToolMiddleware(e *middlewareEntry) (toolCommon.ToolMi
 	paramsGraph := g.build()
 	paramsGraph.Root = paramsRoot
 	for typ, why := range g.invalids {
-		d.recordErr("", "", "tool middleware %s takes parameters of %s, which cannot be represented: %s",
-			e.name, typ, why)
+		e.fail("takes parameters of %s, which cannot be represented: %s", typ, why)
 		ok = false
 	}
 
 	scope := toolCommon.MakeToolMiddlewareScopeUniversal()
-	if e.opts.presented != nil {
-		presented, presentedOK := d.buildScopedTool(e, e.opts.presented, "presented")
-		expected, expectedOK := d.buildScopedTool(e, e.opts.expected, "expected")
-		if presentedOK && expectedOK {
+	if e.presented != nil {
+		if e.adapter {
+			for _, ce := range e.presented.commands() {
+				if e.handlers[ce] == nil {
+					e.fail("adapts %s but does not handle its command %s", e.presented.name, ce.label())
+					ok = false
+				}
+			}
+		}
+		presented, presentedOK := d.buildTool(e.presented)
+		wrapped, wrappedOK := d.buildTool(e.wrapped)
+		if presentedOK && wrappedOK {
 			scope = toolCommon.MakeToolMiddlewareScopeMonomorphic(toolCommon.MonomorphicScope{
 				Presented: presented,
-				Expected:  witTypes.Some(expected),
+				Expected:  witTypes.Some(wrapped),
 			})
 		} else {
+			e.fail("presents or wraps a tool that is not well-defined")
 			ok = false
 		}
 	}
@@ -348,103 +506,116 @@ func (d *definitions) buildToolMiddleware(e *middlewareEntry) (toolCommon.ToolMi
 	return toolCommon.ToolMiddleware{
 		Name:            e.name,
 		Version:         e.spec.Version,
-		Aliases:         append([]string(nil), e.spec.Aliases...),
+		Aliases:         slices.Clone(e.spec.Aliases),
 		Doc:             toolDoc{summary: e.spec.Summary, description: e.spec.Description}.toWit(),
 		Scope:           scope,
 		ParameterSchema: paramsGraph,
 	}, ok
 }
 
-// buildScopedTool derives the metadata of a tool named in a monomorphic scope,
-// which may be one this component defines or one it declares to call.
-func (d *definitions) buildScopedTool(e *middlewareEntry, t *ToolDefinition, role string) (toolCommon.Tool, bool) {
-	tool, ok := d.buildTool(t.entry)
-	if !ok {
-		d.recordErr("", "", "tool middleware %s: its %s tool %q is not well-defined", e.name, role, t.Name())
-	}
-	return tool, ok
-}
-
-// nextStdin is the standard input a middleware forwards to the layer beneath.
-// It is carried opaquely: a middleware may pass it on but cannot rebuild it,
-// since the wire gives no way to construct a stream from the guest.
-type nextStdin struct {
-	//nolint:unused // set by the wasip1 build's newNextStdin
-	wit any
-}
-
-// nextLayer is the layer beneath a middleware. The interface keeps the
-// dispatcher's logic testable without a host; the wasm build binds the
-// generated resource to it (see toolmiddleware_wasm.go).
-type nextLayer interface {
-	invoke(commandPath []string, input TypedValue, stdin nextStdin) ToolMiddlewareOutcome
-}
-
-// absentNextLayer stands in when there is no layer beneath, so calling Next
-// reports that rather than dereferencing nil.
-type absentNextLayer struct{}
-
-func (absentNextLayer) invoke([]string, TypedValue, nextStdin) ToolMiddlewareOutcome {
-	return failOutcome(fmt.Errorf("golem: this middleware was invoked without a layer beneath it"))
-}
-
-// invokeMiddleware runs one middleware layer: decode the parameters, hand the
-// call to the handler, and translate its outcome back to the wire.
-func (d *definitions) invokeMiddleware(call *middlewareCall) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
-	e, known := toolDefs.getMiddleware(call.middleware)
-	if !known {
-		return witTypes.Err[toolCommon.InvocationResult](
-			types.MakeToolErrorInvalidToolName(call.middleware))
-	}
-	if e.invoke == nil {
-		return witTypes.Err[toolCommon.InvocationResult](toolDefinitionError(d))
-	}
-
-	outcome, err := runMiddlewareHandler(e, call)
-	if err != nil {
-		return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidResult(err.Error()))
-	}
-	if outcome.err != nil {
-		// A failure the inner layer already expressed as a tool error is passed
-		// through unchanged, so the caller sees the tool's own error rather than
-		// a middleware's paraphrase of it.
-		var ue *UnderlyingError
-		if errorsAs(outcome.err, &ue) && ue.ToolError != nil {
-			return witTypes.Err[toolCommon.InvocationResult](*ue.ToolError)
+// commands lists the tool's command bodies in tree order.
+func (e *toolEntry) commands() []*commandEntry {
+	var out []*commandEntry
+	var walk func(n *toolNode)
+	walk = func(n *toolNode) {
+		if n.body != nil {
+			out = append(out, n.body)
 		}
-		return witTypes.Err[toolCommon.InvocationResult](
-			types.MakeToolErrorInvalidResult(outcome.err.Error()))
+		for _, c := range n.children {
+			walk(c)
+		}
+	}
+	walk(e.root)
+	return out
+}
+
+// invokeMiddleware runs one middleware layer.
+func (d *definitions) invokeMiddleware(name string, inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
+	e, known := toolDefs.getMiddleware(name)
+	if !known {
+		return fail(types.MakeToolErrorInvalidToolName(name))
+	}
+	return d.runMiddleware(e, inv)
+}
+
+func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
+	inv.entry = e
+	label := "middleware " + e.name
+
+	if e.presented == nil {
+		if e.universal == nil {
+			return fail(toolDefinitionError(d))
+		}
+		out, err := runWithStdout(label, inv.stdout, func() (reflect.Value, error) {
+			res, err := e.universal(inv)
+			return reflect.ValueOf(res), err
+		})
+		if err != nil {
+			return fail(passThroughToolError(err))
+		}
+		result := witTypes.None[types.TypedSchemaValue]()
+		if v, has := out.Interface().(Option[TypedValue]).Get(); has {
+			result = witTypes.Some(v.wit)
+		}
+		return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
+			Result: result, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
+		})
 	}
 
-	result := witTypes.None[types.TypedSchemaValue]()
-	if outcome.hasResult {
-		result = witTypes.Some(outcome.result.wit)
+	n := e.presented.root.find(inv.commandPath)
+	if n == nil || n.body == nil {
+		return fail(types.MakeToolErrorInvalidCommandPath(slices.Clone(inv.commandPath)))
+	}
+	ce := n.body
+	h := e.handlers[ce]
+	if h == nil {
+		if e.adapter {
+			return fail(toolDefinitionError(d))
+		}
+		return d.passThrough(inv)
+	}
+	args, terr := ce.decodeArgs(d, inv.input, inv.stdin, inv.principal)
+	if terr != nil {
+		return fail(*terr)
+	}
+	out, err := runWithStdout(label, inv.stdout, func() (reflect.Value, error) { return h(inv, args) })
+	if err != nil {
+		return fail(d.handlerError(ce, err))
+	}
+	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](d.encodeResult(ce, out))
+}
+
+// passThrough hands a command a transparent middleware does not handle
+// straight to the tool beneath.
+func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
+	var result Option[types.TypedSchemaValue]
+	_, err := runWithStdout("middleware "+inv.entry.name, inv.stdout, func() (reflect.Value, error) {
+		var stdin io.Reader
+		if inv.stdin.present() {
+			stdin = inv.stdin
+		}
+		call, err := inv.under.start(inv.commandPath, inv.input, stdin)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if err := relayStdout(inv.stdout, call.stdout); err != nil {
+			call.cancel()
+			return reflect.Value{}, err
+		}
+		res, rpcErr := call.wait()
+		if rpcErr != nil {
+			return reflect.Value{}, toolCallErrorFromWit(inv.toolName, inv.commandPath, *rpcErr)
+		}
+		result = optionFromWit(res)
+		return reflect.Value{}, nil
+	})
+	if err != nil {
+		return fail(passThroughToolError(err))
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
-		Result: result,
-		Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
+		Result: optionToWit(result), Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
 	})
-}
-
-// runMiddlewareHandler calls the handler, recovering a panic and selecting the
-// output stream's terminal, on the same terms as a command handler.
-func runMiddlewareHandler(e *middlewareEntry, call *middlewareCall) (outcome ToolMiddlewareOutcome, err error) {
-	finished := false
-	defer func() {
-		if r := recover(); r != nil {
-			_ = call.stdout.Fail(StreamFailed(panicMessage(r)))
-			outcome, err = ToolMiddlewareOutcome{}, fmt.Errorf(
-				"middleware %s panicked: %s", e.name, panicMessage(r))
-			return
-		}
-		if !finished {
-			return
-		}
-		if ferr := call.stdout.finish(); ferr != nil && err == nil {
-			err = ferr
-		}
-	}()
-	outcome = e.invoke(call)
-	finished = true
-	return outcome, nil
 }

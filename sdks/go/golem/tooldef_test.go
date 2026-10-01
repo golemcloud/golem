@@ -21,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
@@ -69,18 +68,21 @@ type PushArgs struct {
 
 type Rejected struct{ Reason string }
 
+// Vcs is the vcs tool's identity type.
+type Vcs struct{}
+
 type vcsTool struct {
-	tool       *ToolDefinition
-	commit     *ToolCommand[CommitArgs, CommitResult]
-	push       *ToolStdoutCommand[PushArgs, int32]
-	errNothing *ToolErrorCase[Unit]
-	errReject  *ToolErrorCase[Rejected]
+	tool       *ToolDefinition[Vcs]
+	commit     *ToolCommand[Vcs, CommitArgs, CommitResult]
+	push       *ToolStdoutCommand[Vcs, PushArgs, int32]
+	errNothing *ToolErrorCase[Unit, Vcs]
+	errReject  *ToolErrorCase[Rejected, Vcs]
 	seen       *CommitArgs
 }
 
 func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 	v := &vcsTool{}
-	v.tool = defineToolInto(r, d, "vcs", ToolSpec{Version: "1.2.0", Summary: "A tiny version control tool", RequiresFilesystem: true}, false)
+	v.tool = defineToolInto[Vcs](r, d, "vcs", ToolSpec{Version: "1.2.0", Summary: "A tiny version control tool", RequiresFilesystem: true}, false)
 	v.tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) {
 		s.Option(&g.Dir).Short('C').Default(".").Doc("working directory")
 		s.CountFlag(&g.Verbose).Short('v').Max(3)
@@ -191,41 +193,50 @@ func loopback(t *testing.T, r *toolRegistry, d *definitions, principal Principal
 		if !ok {
 			return toolCall{}, toolCallErrorFromWit(tool, path, types.MakeToolRpcErrorNotFound(tool))
 		}
-		in := &ToolStdin{absent: absentStdin}
-		if stdin != nil {
-			in = &ToolStdin{src: &readerSource{r: stdin}}
-		}
-		sink := &fakeSink{}
-		out := &ToolStdout{absent: absentStdout}
-		if stdout {
-			out = &ToolStdout{sink: sink}
-		}
-		res := d.invokeCommand(e, path, input, in, out, principal)
-
-		var reader *ToolStdin
-		if stdout {
-			items := []streamItem{}
-			if len(sink.written) > 0 {
-				items = append(items, chunk(string(sink.written)))
-			}
-			if sink.failed != nil {
-				items = append(items, failure(*sink.failed))
-			}
-			reader = &ToolStdin{src: &fakeSource{items: items}}
-		}
-		return toolCall{
-			stdout: reader,
-			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
-				if res.Tag() == witTypes.ResultErr {
-					e := types.MakeToolRpcErrorRemoteToolError(res.Err())
-					return witTypes.None[types.TypedSchemaValue](), &e
-				}
-				return res.Ok().Result, nil
-			},
-			cancel: func() {},
-		}, nil
+		return localCall(d, e, path, input, stdin, stdout, principal), nil
 	}
 	return &calls
+}
+
+// localCall runs a command of a local tool the way the host would for a
+// caller, and hands back what the caller sees.
+func localCall(
+	d *definitions, e *toolEntry, path []string, input types.TypedSchemaValue,
+	stdin io.Reader, stdout bool, principal Principal,
+) toolCall {
+	in := &byteReader{absent: absentStdin}
+	if stdin != nil {
+		in = &byteReader{src: &readerSource{r: stdin}}
+	}
+	sink := &fakeSink{}
+	out := &ToolStdout{absent: absentStdout}
+	if stdout {
+		out = &ToolStdout{sink: sink}
+	}
+	res := d.invokeCommand(e, path, input, in, out, principal)
+
+	var reader *byteReader
+	if stdout {
+		items := []streamItem{}
+		if len(sink.written) > 0 {
+			items = append(items, chunk(string(sink.written)))
+		}
+		if sink.failed != nil {
+			items = append(items, failure(*sink.failed))
+		}
+		reader = &byteReader{src: &fakeSource{items: items}}
+	}
+	return toolCall{
+		stdout: reader,
+		wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+			if res.Tag() == witTypes.ResultErr {
+				e := types.MakeToolRpcErrorRemoteToolError(res.Err())
+				return witTypes.None[types.TypedSchemaValue](), &e
+			}
+			return res.Ok().Result, nil
+		},
+		cancel: func() {},
+	}
 }
 
 func newVcs(t *testing.T) (*vcsTool, *toolRegistry, *definitions) {
@@ -436,25 +447,25 @@ func TestToolCallInputIsTheCanonicalRecord(t *testing.T) {
 	if !ok {
 		t.Fatal("reflection does not find commit")
 	}
-	params, err := cmd.Arguments()
+	input, err := cmd.Input()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := names(params, func(p core.Parameter) string { return p.Name }); !slices.Equal(got, want) {
+	if got := recordFieldNames(input); !slices.Equal(got, want) {
 		t.Errorf("reflected fields %v, want %v", got, want)
 	}
 
-	packed, err := cmd.PackJSON(map[string]any{
+	packed, err := cmd.pack(map[string]any{
 		"dir": "/src", "verbose": 1, "branch": "dev", "paths": []any{"z"}, "message": "via reflection",
 		"author": "ann", "include": []any{}, "tags": []any{}, "amend": false, "signoff": false,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root := packed.wit.Graph.TypeNodes[packed.wit.Graph.Root].Body; root.Tag() != types.SchemaTypeBodyRecordType {
+	if root := packed.Graph.TypeNodes[packed.Graph.Root].Body; root.Tag() != types.SchemaTypeBodyRecordType {
 		t.Fatal("reflection's input graph root is not a record")
 	}
-	if got := d.invokeCommand(e, []string{"ci"}, packed.wit, nil, &ToolStdout{absent: absentStdout}, nil); got.IsErr() {
+	if got := d.invokeCommand(e, []string{"ci"}, packed, nil, &ToolStdout{absent: absentStdout}, nil); got.IsErr() {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
 	if s := v.seen; s.Dir != "/src" || s.Branch != "dev" || s.Author.Unwrap() != "ann" || s.Signoff || s.Verbose != 1 {
@@ -540,9 +551,11 @@ func TestStdoutCommandStreamsItsOutput(t *testing.T) {
 
 type CatArgs struct{ In io.Reader }
 
+type Cat struct{}
+
 func TestRequiredStdinIsRefusedBeforeSending(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	tool := defineToolInto(r, d, "cat", ToolSpec{}, false)
+	tool := defineToolInto[Cat](r, d, "cat", ToolSpec{}, false)
 	cat := tool.Body[CatArgs, string](func(a *CatArgs, s *ToolCommandSpec) { s.Stdin(&a.In) })
 	_ = cat.Handle(func(_ *ToolContext, a CatArgs) (string, error) {
 		data, err := io.ReadAll(a.In)
@@ -561,7 +574,7 @@ func TestRequiredStdinIsRefusedBeforeSending(t *testing.T) {
 	}
 
 	e, _ := r.get("cat")
-	res := d.invokeCommand(e, nil, (*calls)[0], &ToolStdin{absent: absentStdin}, &ToolStdout{absent: absentStdout}, nil)
+	res := d.invokeCommand(e, nil, (*calls)[0], &byteReader{absent: absentStdin}, &ToolStdout{absent: absentStdout}, nil)
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput {
 		t.Errorf("a host invocation without the required stdin was accepted")
 	}
@@ -587,6 +600,12 @@ func TestToolInvocationRejectsUnknownCommandsAndMalformedInput(t *testing.T) {
 	}
 }
 
+type (
+	Tst       struct{}
+	Other     struct{}
+	Elsewhere struct{}
+)
+
 type BadArgs struct {
 	Name   string
 	Other  string
@@ -607,51 +626,51 @@ type EmbedArgs struct {
 
 func TestToolDeclarationErrors(t *testing.T) {
 	cases := map[string]struct {
-		declare func(tool *ToolDefinition)
+		declare func(tool *ToolDefinition[Tst])
 		want    string
 	}{
-		"unbound field": {func(tool *ToolDefinition) {
+		"unbound field": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[SingleArgs, string]("x", nil)
 			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
 		}, "field Name is not bound"},
-		"bound twice": {func(tool *ToolDefinition) {
+		"bound twice": {func(tool *ToolDefinition[Tst]) {
 			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
 				s.Option(&a.Name)
 				s.Positional(&a.Name)
 			})
 		}, "field Name is bound twice"},
-		"foreign pointer": {func(tool *ToolDefinition) {
+		"foreign pointer": {func(tool *ToolDefinition[Tst]) {
 			var elsewhere string
 			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
 				s.Option(&elsewhere)
 			})
 		}, "does not address a field"},
-		"optional with default": {func(tool *ToolDefinition) {
+		"optional with default": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
 				s.Option(&a.Opt).Default(Some("x"))
 			})
 			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
 		}, "opt is optional (golem.Option) and cannot also have a default"},
-		"required after optional": {func(tool *ToolDefinition) {
+		"required after optional": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
 				s.Positional(&a.Pos)
 				s.Positional(&a.Req)
 			})
 			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
 		}, "the required positional req follows the optional positional pos"},
-		"two tails": {func(tool *ToolDefinition) {
+		"two tails": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
 				s.Tail(&a.Tail1)
 				s.Tail(&a.Tail2)
 			})
 			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
 		}, "binds 2 tails"},
-		"missing globals embedding": {func(tool *ToolDefinition) {
+		"missing globals embedding": {func(tool *ToolDefinition[Tst]) {
 			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) { s.Option(&g.Dir) })
 			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
 			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
 		}, "must embed golem.VcsGlobals"},
-		"global bound by the command": {func(tool *ToolDefinition) {
+		"global bound by the command": {func(tool *ToolDefinition[Tst]) {
 			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) { s.Option(&g.Dir) })
 			c := tool.Command[EmbedArgs, string]("x", func(a *EmbedArgs, s *ToolCommandSpec) {
 				s.Option(&a.Name)
@@ -659,14 +678,14 @@ func TestToolDeclarationErrors(t *testing.T) {
 			})
 			_ = c.Handle(func(*ToolContext, EmbedArgs) (string, error) { return "", nil })
 		}, "field Dir belongs to the embedded globals"},
-		"formatters on a unit result": {func(tool *ToolDefinition) {
+		"formatters on a unit result": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[SingleArgs, Unit]("x", func(a *SingleArgs, s *ToolCommandSpec) {
 				s.Option(&a.Name)
 				s.Formatters("json")
 			})
 			_ = c.Handle(func(*ToolContext, SingleArgs) (Unit, error) { return Unit{}, nil })
 		}, "declares formatters but returns no result"},
-		"undeclared default formatter": {func(tool *ToolDefinition) {
+		"undeclared default formatter": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
 				s.Option(&a.Name)
 				s.Formatters("json")
@@ -674,13 +693,13 @@ func TestToolDeclarationErrors(t *testing.T) {
 			})
 			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
 		}, `defaults to the formatter "yaml"`},
-		"stdout settings on a plain command": {func(tool *ToolDefinition) {
+		"stdout settings on a plain command": {func(tool *ToolDefinition[Tst]) {
 			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
 				s.Option(&a.Name)
 				s.StdoutMime("text/plain")
 			})
 		}, "declare it with StdoutCommand"},
-		"value-is on a flag": {func(tool *ToolDefinition) {
+		"value-is on a flag": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[CommitArgs, string]("x", func(a *CommitArgs, s *ToolCommandSpec) {
 				s.Option(&a.Message)
 				s.Option(&a.Author)
@@ -694,15 +713,15 @@ func TestToolDeclarationErrors(t *testing.T) {
 			})
 			_ = c.Handle(func(*ToolContext, CommitArgs) (string, error) { return "", nil })
 		}, "compares the flag amend with a value"},
-		"no handler": {func(tool *ToolDefinition) {
+		"no handler": {func(tool *ToolDefinition[Tst]) {
 			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
 		}, "command x has no handler"},
-		"duplicate command": {func(tool *ToolDefinition) {
+		"duplicate command": {func(tool *ToolDefinition[Tst]) {
 			tool.Group("x")
 			tool.Group("x")
 		}, "command already declared: x"},
-		"foreign error case": {func(tool *ToolDefinition) {
-			other := defineToolInto(tool.entry.r, tool.entry.d, "other", ToolSpec{}, false)
+		"foreign error case": {func(tool *ToolDefinition[Tst]) {
+			other := defineToolInto[Other](tool.entry.r, tool.entry.d, "other", ToolSpec{}, false)
 			errOther := DefineToolError[Unit](other, "boom", ToolErrorSpec{})
 			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
 				s.Option(&a.Name)
@@ -714,7 +733,7 @@ func TestToolDeclarationErrors(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			r, d := newToolRegistry(), newDefinitions()
-			tool := defineToolInto(r, d, "t", ToolSpec{}, false)
+			tool := defineToolInto[Tst](r, d, "t", ToolSpec{}, false)
 			tc.declare(tool)
 			if _, ok := r.discover(d); ok && len(d.errs) == 0 {
 				t.Fatalf("no definition error, want %q", tc.want)
@@ -728,7 +747,7 @@ func TestToolDeclarationErrors(t *testing.T) {
 
 func TestRemoteToolsAreDeclaredForCallingOnly(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	remote := defineToolInto(r, d, "elsewhere", ToolSpec{}, true)
+	remote := defineToolInto[Elsewhere](r, d, "elsewhere", ToolSpec{}, true)
 	cmd := remote.Command[SingleArgs, string]("run", func(a *SingleArgs, s *ToolCommandSpec) { s.Positional(&a.Name) })
 	if tools, ok := r.discover(d); !ok || len(tools) != 0 {
 		t.Errorf("a remote tool was exported: %d tools", len(tools))

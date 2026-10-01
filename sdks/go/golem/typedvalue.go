@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 
@@ -105,7 +104,3 @@ func EncodeTypedValue[T any](value T) (TypedValue, error) {
 		Value: encodeWith(c, reflect.ValueOf(&value).Elem()),
 	}}, nil
 }
-
-// errorsAs is errors.As, wrapped so the middleware dispatcher does not have to
-// import errors just for one call.
-func errorsAs(err error, target any) bool { return errors.As(err, target) }

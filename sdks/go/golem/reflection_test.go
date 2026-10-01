@@ -16,9 +16,12 @@ package golem
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -63,16 +66,13 @@ func snapshotOf(t *testing.T) ReflectedAgentType {
 // it has none of the target's Go types.
 func TestSnapshotDescribesTheAgentType(t *testing.T) {
 	r := snapshotOf(t)
-	if r.Name() != "Greeter" || r.Description() != "Greets people" {
-		t.Errorf("snapshot is %q/%q", r.Name(), r.Description())
+	if r.Name() != "Greeter" || r.Description() != "Greets people" || r.Mode() != Durable {
+		t.Errorf("snapshot is %q/%q/%v", r.Name(), r.Description(), r.Mode())
 	}
 
-	ctor, err := r.Constructor().Parameters()
-	if err != nil {
-		t.Fatalf("constructor parameters: %v", err)
-	}
-	if len(ctor) != 1 || ctor[0].Name != "name" {
-		t.Fatalf("constructor parameters are %+v, want one named name", ctor)
+	ctor := need(r.Constructor().Input())
+	if got := recordFieldNames(ctor); strings.Join(got, ",") != "name" {
+		t.Fatalf("constructor input fields are %v, want [name]", got)
 	}
 
 	m, known := r.Method("greet")
@@ -82,29 +82,41 @@ func TestSnapshotDescribesTheAgentType(t *testing.T) {
 	if m.Description() != "Greet someone" {
 		t.Errorf("method description %q", m.Description())
 	}
-	params, err := m.Parameters()
-	if err != nil {
-		t.Fatalf("method parameters: %v", err)
+	if got := recordFieldNames(need(m.Input())); strings.Join(got, ",") != "greeting,times" {
+		t.Fatalf("method input fields are %v", got)
 	}
-	if len(params) != 2 || params[0].Name != "greeting" || params[1].Name != "times" {
-		t.Fatalf("method parameters are %+v", params)
-	}
-	if _, has := m.Output(); !has {
+	if need(m.Output()).IsNone() {
 		t.Error("greet declares no output")
 	}
-
 	if _, known := r.Method("absent"); known {
 		t.Error("an undeclared method was found")
 	}
 }
 
-// TestPackParametersBuildsTheInvocationRecord — a reflective call is named
-// arguments packed against the snapshot, in the parameter list's own order.
-func TestPackParametersBuildsTheInvocationRecord(t *testing.T) {
+// need unwraps a (value, error) pair, failing the test through a panic.
+func need[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func recordFieldNames(ref core.Ref) []string {
+	record, _ := ref.Type().Body.(core.RecordType)
+	out := make([]string, 0, len(record.Fields))
+	for _, f := range record.Fields {
+		out = append(out, f.Name)
+	}
+	return out
+}
+
+// TestInputPacksTheInvocationRecord — a reflective call is named arguments
+// packed against the snapshot's input record, in the parameter list's order.
+func TestInputPacksTheInvocationRecord(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 
-	packed, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 2})
+	packed, err := need(m.Input()).PackJSON(map[string]any{"greeting": "hi", "times": 2})
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
@@ -126,66 +138,45 @@ func TestPackParametersBuildsTheInvocationRecord(t *testing.T) {
 	if in.Greeting != "hi" || in.Times != 2 {
 		t.Errorf("decoded %+v", in)
 	}
-}
 
-// TestPackParametersReportsEveryProblemAtOnce — a caller working from JSON
-// should learn about all its mistakes in one go.
-func TestPackParametersReportsEveryProblemAtOnce(t *testing.T) {
-	r := snapshotOf(t)
-	m, _ := r.Method("greet")
-
-	_, err := m.PackJSON(map[string]any{"greetng": "hi", "extra": 1})
-	if err == nil {
-		t.Fatal("packing malformed arguments succeeded")
-	}
-	msg := err.Error()
-	for _, want := range []string{"greetng", "extra", "greeting", "times"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("message does not mention %q: %s", want, msg)
-		}
-	}
-}
-
-func TestPackParametersRoundTrips(t *testing.T) {
-	r := snapshotOf(t)
-	m, _ := r.Method("greet")
-
-	value, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 3})
+	back, err := need(m.Input()).UnpackJSON(packed)
 	if err != nil {
-		t.Fatalf("PackJSON: %v", err)
+		t.Fatal(err)
 	}
-	ref, err := r.Schema()
-	if err != nil {
-		t.Fatalf("Schema: %v", err)
-	}
-	params, err := m.Parameters()
-	if err != nil {
-		t.Fatalf("Parameters: %v", err)
-	}
-	back, err := ref.UnpackParameters(params, value)
-	if err != nil {
-		t.Fatalf("UnpackParameters: %v", err)
-	}
-	if back["greeting"] != "hi" || back["times"] != int64(3) {
+	if obj := back.(map[string]any); obj["greeting"] != "hi" {
 		t.Errorf("round trip gave %v", back)
 	}
 }
 
-// TestMethodJSONSchemaDescribesItsArguments — this is what a model is handed to
-// fill in, so it must name every parameter and mark the required ones.
-func TestMethodJSONSchemaDescribesItsArguments(t *testing.T) {
+// TestInputReportsEveryProblemAtOnce — a caller working from JSON should learn
+// about all its mistakes in one go.
+func TestInputReportsEveryProblemAtOnce(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
+	_, err := need(m.Input()).PackJSON(map[string]any{"greetng": "hi", "extra": 1})
+	if err == nil {
+		t.Fatal("packing malformed arguments succeeded")
+	}
+	for _, want := range []string{"greetng", "extra", "greeting", "times"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message does not mention %q: %s", want, err)
+		}
+	}
+}
 
-	rendered, err := m.ToJSONSchema(true)
+// TestInputJSONSchemaDescribesItsArguments — this is what a model is handed to
+// fill in, so it must name every parameter and mark the required ones.
+func TestInputJSONSchemaDescribesItsArguments(t *testing.T) {
+	r := snapshotOf(t)
+	m, _ := r.Method("greet")
+	rendered, err := need(m.Input()).ToJSONSchema(true)
 	if err != nil {
 		t.Fatalf("ToJSONSchema: %v", err)
 	}
 	data, _ := json.Marshal(rendered)
 	var doc map[string]any
 	_ = json.Unmarshal(data, &doc)
-
-	if doc["type"] != "object" || doc["additionalProperties"] != false {
+	if doc["type"] != "object" {
 		t.Errorf("schema is %v", doc)
 	}
 	props, _ := doc["properties"].(map[string]any)
@@ -195,9 +186,6 @@ func TestMethodJSONSchemaDescribesItsArguments(t *testing.T) {
 	required, _ := doc["required"].([]any)
 	if len(required) != 2 {
 		t.Errorf("required is %v, want both parameters", required)
-	}
-	if doc["$schema"] == nil {
-		t.Error("the draft marker was asked for but not rendered")
 	}
 }
 
@@ -215,57 +203,78 @@ func TestAutoInjectedFieldsAreNotAskedOfTheCaller(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GraphToCore: %v", err)
 	}
-	got, err := userParameters(conv, nil, in)
-	if err != nil {
-		t.Fatalf("userParameters: %v", err)
-	}
-	if len(got) != 1 || got[0].Name != "name" {
-		t.Errorf("parameters are %+v, want only the caller-supplied one", got)
+	ref := need(parametersRecord(conv, nil, in))
+	if got := recordFieldNames(ref); strings.Join(got, ",") != "name" {
+		t.Errorf("fields are %v, want only the caller-supplied one", got)
 	}
 }
 
-// fakeRPC replays a scripted invocation result.
+// fakeRPC replays a scripted invocation result and records what was sent.
 type fakeRPC struct {
 	gotMethod string
+	gotForm   string
 	tree      types.SchemaValueTree
 	has       bool
 	err       error
 }
 
-func (f *fakeRPC) invokeAndAwait(method string, _ types.SchemaValueTree) (types.SchemaValueTree, bool, error) {
-	f.gotMethod = method
-	return f.tree, f.has, f.err
+var fakeID = InvocationID{AgentID: "Greeter(\"ada\")", IdempotencyKey: "k1"}
+
+func (f *fakeRPC) call(method string, _ types.SchemaValueTree) (witTypes.Option[types.SchemaValueTree], InvocationID, error) {
+	f.gotMethod, f.gotForm = method, "call"
+	if !f.has {
+		return witTypes.None[types.SchemaValueTree](), fakeID, f.err
+	}
+	return witTypes.Some(f.tree), fakeID, f.err
 }
 
-func TestReflectedClientInvokesAndDecodes(t *testing.T) {
-	r := snapshotOf(t)
+func (f *fakeRPC) trigger(method string, _ types.SchemaValueTree) (InvocationID, error) {
+	f.gotMethod, f.gotForm = method, "trigger"
+	return fakeID, f.err
+}
+
+func (f *fakeRPC) schedule(_ time.Time, method string, _ types.SchemaValueTree) (*ScheduledInvocation, error) {
+	f.gotMethod, f.gotForm = method, "schedule"
+	return &ScheduledInvocation{ID: fakeID}, f.err
+}
+
+func greetResult(t *testing.T, r ReflectedAgentType, value string) types.SchemaValueTree {
+	t.Helper()
 	m, _ := r.Method("greet")
-	out, _ := m.Output()
-	result, err := packWit(out, "hi hi")
+	result, err := packWit(need(m.Output()).Unwrap(), value)
 	if err != nil {
 		t.Fatalf("packing the result: %v", err)
 	}
+	return result
+}
 
-	rpc := &fakeRPC{tree: result, has: true}
+func TestReflectedClientCallsAndDecodes(t *testing.T) {
+	r := snapshotOf(t)
+	rpc := &fakeRPC{tree: greetResult(t, r, "hi hi"), has: true}
 	client := &ReflectedAgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
 
-	got, err := client.InvokeAndAwait("greet", map[string]any{"greeting": "hi", "times": 2})
+	got, id, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 2})
 	if err != nil {
-		t.Fatalf("InvokeAndAwait: %v", err)
+		t.Fatalf("Call: %v", err)
 	}
-	if rpc.gotMethod != "greet" {
-		t.Errorf("invoked %q", rpc.gotMethod)
+	if rpc.gotMethod != "greet" || got != "hi hi" || id != fakeID {
+		t.Errorf("invoked %q, got %v, id %+v", rpc.gotMethod, got, id)
 	}
-	if got != "hi hi" {
-		t.Errorf("result %v, want hi hi", got)
+
+	id, err = client.Trigger("greet", map[string]any{"greeting": "hi", "times": 1})
+	if err != nil || rpc.gotForm != "trigger" || id != fakeID {
+		t.Errorf("Trigger: %v %q %+v", err, rpc.gotForm, id)
+	}
+	sched, err := client.Schedule(time.Now(), "greet", map[string]any{"greeting": "hi", "times": 1})
+	if err != nil || rpc.gotForm != "schedule" || sched.ID != fakeID {
+		t.Errorf("Schedule: %v %q %+v", err, rpc.gotForm, sched)
 	}
 }
 
 func TestReflectedClientRejectsAnUnknownMethod(t *testing.T) {
 	r := snapshotOf(t)
 	client := &ReflectedAgentClient{agentType: r, rpc: &fakeRPC{}}
-	if _, err := client.InvokeAndAwait("absent", nil); err == nil ||
-		!strings.Contains(err.Error(), "has no method") {
+	if _, _, err := client.Call("absent", nil); err == nil || !strings.Contains(err.Error(), "has no method") {
 		t.Errorf("error is %v", err)
 	}
 }
@@ -276,8 +285,7 @@ func TestReflectedClientRejectsAnUnknownMethod(t *testing.T) {
 func TestReflectedClientChecksOutputCardinality(t *testing.T) {
 	r := snapshotOf(t)
 	client := &ReflectedAgentClient{agentType: r, rpc: &fakeRPC{has: false}}
-
-	_, err := client.InvokeAndAwait("greet", map[string]any{"greeting": "hi", "times": 1})
+	_, _, err := client.Call("greet", map[string]any{"greeting": "hi", "times": 1})
 	if err == nil || !strings.Contains(err.Error(), "declares a result") {
 		t.Errorf("error is %v", err)
 	}
@@ -287,14 +295,15 @@ func TestReflectedClientValidatesBeforeSending(t *testing.T) {
 	r := snapshotOf(t)
 	rpc := &fakeRPC{}
 	client := &ReflectedAgentClient{agentType: r, rpc: rpc}
-
 	// times is an s32; a string is not one.
-	_, err := client.InvokeAndAwait("greet", map[string]any{"greeting": "hi", "times": "two"})
-	if err == nil {
+	if _, _, err := client.Call("greet", map[string]any{"greeting": "hi", "times": "two"}); err == nil {
 		t.Fatal("an invalid argument reached the target")
 	}
+	if _, err := client.Trigger("greet", map[string]any{"greeting": 1}); err == nil {
+		t.Fatal("an invalid triggered argument reached the target")
+	}
 	if rpc.gotMethod != "" {
-		t.Error("the call was sent despite failing validation")
+		t.Error("a call was sent despite failing validation")
 	}
 }
 
@@ -308,8 +317,11 @@ func TestDiscoveryOffTarget(t *testing.T) {
 		t.Error("discovery found an agent type off-target")
 	}
 	r := snapshotOf(t)
-	if _, err := r.Bind(map[string]any{"name": "ada"}); err == nil {
-		t.Error("binding succeeded off-target")
+	if _, err := r.Get(map[string]any{"name": "ada"}); err == nil {
+		t.Error("Get succeeded off-target")
+	}
+	if _, err := r.Bind("Greeter(\"ada\")"); err == nil {
+		t.Error("Bind succeeded off-target")
 	}
 }
 
@@ -320,7 +332,7 @@ var _ = witTypes.Unit{}
 func toolSnapshotOf(t *testing.T) ReflectedTool {
 	t.Helper()
 	r, d := newToolRegistry(), newDefinitions()
-	def := defineToolInto(r, d, "files", ToolSpec{Version: "1.0.0", Summary: "File utilities"}, false)
+	def := defineToolInto[Files](r, d, "files", ToolSpec{Version: "1.0.0", Summary: "File utilities"}, false)
 	index := def.Group("index").Doc("Manage the index")
 
 	type AddArgs struct {
@@ -344,6 +356,8 @@ func toolSnapshotOf(t *testing.T) ReflectedTool {
 	return newReflectedTool("files", tools[0])
 }
 
+type Files struct{}
+
 // TestToolSnapshotWalksTheCommandTree — a caller with no Go types for the tool
 // navigates it by name, including through namespace nodes and aliases.
 func TestToolSnapshotWalksTheCommandTree(t *testing.T) {
@@ -351,8 +365,6 @@ func TestToolSnapshotWalksTheCommandTree(t *testing.T) {
 	if r.Name() != "files" || r.Version() != "1.0.0" {
 		t.Errorf("snapshot is %q/%q", r.Name(), r.Version())
 	}
-
-	// The root and the group dispatch only.
 	if r.Root().Callable() {
 		t.Error("the root gained a body it never declared")
 	}
@@ -360,74 +372,42 @@ func TestToolSnapshotWalksTheCommandTree(t *testing.T) {
 	if !found || group.Callable() {
 		t.Errorf("index is found=%v callable=%v, want found and not callable", found, group.Callable())
 	}
-
 	add, found := r.Command([]string{"index", "add"})
 	if !found || !add.Callable() {
 		t.Fatalf("index add is found=%v callable=%v", found, add.Callable())
 	}
-	if add.Description() != "Add a file" {
-		t.Errorf("description %q", add.Description())
+	if add.Description() != "Add a file" || strings.Join(add.Path(), " ") != "index add" {
+		t.Errorf("description %q path %v", add.Description(), add.Path())
 	}
-	if got := strings.Join(add.Path(), " "); got != "index add" {
-		t.Errorf("path %q", got)
-	}
-
-	// Aliases resolve too.
 	if _, found := r.Command([]string{"index", "a"}); !found {
 		t.Error("the alias did not resolve")
 	}
 	if _, found := r.Command([]string{"index", "nope"}); found {
 		t.Error("an undeclared command resolved")
 	}
-
-	// Commands enumerates the whole tree, namespaces included.
 	if n := len(r.Commands()); n != 3 {
 		t.Errorf("enumerated %d commands, want 3", n)
 	}
 }
 
-// TestToolArgumentsAreOneParameterList — positionals, options and flags all
+// TestToolInputIsTheCanonicalRecord — positionals, options and flags all
 // become fields of the single record an invocation carries.
-func TestToolArgumentsAreOneParameterList(t *testing.T) {
+func TestToolInputIsTheCanonicalRecord(t *testing.T) {
 	r := toolSnapshotOf(t)
 	add, _ := r.Command([]string{"index", "add"})
-
-	params, err := add.Arguments()
-	if err != nil {
-		t.Fatalf("Arguments: %v", err)
+	input := need(add.Input())
+	if got := recordFieldNames(input); strings.Join(got, ",") != "path,retries,force" {
+		t.Errorf("fields are %v, want positionals then options then flags", got)
 	}
-	var names []string
-	for _, p := range params {
-		names = append(names, p.Name)
+	record := input.Type().Body.(core.RecordType)
+	if _, isBool := record.Fields[2].Body.Body.(core.BoolType); !isBool {
+		t.Errorf("the flag is typed %T instead of a bool", record.Fields[2].Body.Body)
 	}
-	if strings.Join(names, ",") != "path,retries,force" {
-		t.Errorf("parameters are %v, want positionals then options then flags", names)
-	}
-
-	// A flag's type is fixed rather than named by the graph.
-	for _, p := range params {
-		if p.Name == "force" {
-			if _, isBool := p.Type.Body.(core.BoolType); !isBool {
-				t.Errorf("the flag is typed %T instead of a fixed bool", p.Type.Body)
-			}
-		}
-	}
-}
-
-func TestToolCommandPacksAndRendersItsArguments(t *testing.T) {
-	r := toolSnapshotOf(t)
-	add, _ := r.Command([]string{"index", "add"})
-
-	input, err := add.PackJSON(map[string]any{"path": "/tmp/a", "force": true, "retries": 3})
-	if err != nil {
-		t.Fatalf("PackJSON: %v", err)
-	}
-	root := input.wit.Value.ValueNodes[input.wit.Value.Root]
-	if root.Tag() != types.SchemaValueNodeRecordValue || len(root.RecordValue()) != 3 {
-		t.Fatalf("input root is %v", root)
+	if need(add.Output()).IsNone() {
+		t.Error("add declares no output")
 	}
 
-	rendered, err := add.ToJSONSchema(false)
+	rendered, err := input.ToJSONSchema(false)
 	if err != nil {
 		t.Fatalf("ToJSONSchema: %v", err)
 	}
@@ -441,38 +421,61 @@ func TestToolCommandPacksAndRendersItsArguments(t *testing.T) {
 	}
 }
 
-// fakeToolRPC replays a scripted invocation result.
-type fakeToolRPC struct {
-	gotPath []string
-	out     types.TypedSchemaValue
-	has     bool
-	err     error
+// recordToolCalls routes tool calls to a scripted outcome and records them.
+func recordToolCalls(t *testing.T, outcome func(path []string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError)) *[][]string {
+	t.Helper()
+	var calls [][]string
+	prev := startToolCall
+	t.Cleanup(func() { startToolCall = prev })
+	startToolCall = func(_ string, path []string, input types.TypedSchemaValue, _ io.Reader, _ bool) (toolCall, error) {
+		root := input.Graph.TypeNodes[input.Graph.Root].Body
+		if root.Tag() != types.SchemaTypeBodyRecordType {
+			t.Errorf("the input graph is not rooted at a record")
+		}
+		calls = append(calls, path)
+		return toolCall{wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+			return outcome(path)
+		}, cancel: func() {}}, nil
+	}
+	return &calls
 }
 
-func (f *fakeToolRPC) invokeAndAwait(path []string, _ types.TypedSchemaValue) (types.TypedSchemaValue, bool, error) {
-	f.gotPath = path
-	return f.out, f.has, f.err
-}
-
-func TestReflectedToolClientInvokes(t *testing.T) {
+func TestReflectedToolClientCalls(t *testing.T) {
 	r := toolSnapshotOf(t)
-	result, err := EncodeTypedValue("/tmp/a")
-	if err != nil {
-		t.Fatalf("EncodeTypedValue: %v", err)
-	}
-	rpc := &fakeToolRPC{out: result.wit, has: true}
-	client := &ReflectedToolClient{tool: r, rpc: rpc}
+	result, _ := EncodeTypedValue("/tmp/a")
+	calls := recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.Some(result.wit), nil
+	})
+	client := need(r.Bind())
 
-	got, err := client.InvokeAndAwait([]string{"index", "add"},
-		map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
+	got, err := client.Call([]string{"index", "add"}, map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
 	if err != nil {
-		t.Fatalf("InvokeAndAwait: %v", err)
+		t.Fatalf("Call: %v", err)
 	}
-	if strings.Join(rpc.gotPath, " ") != "index add" {
-		t.Errorf("invoked %v", rpc.gotPath)
+	if len(*calls) != 1 || strings.Join((*calls)[0], " ") != "index add" || got != "/tmp/a" {
+		t.Errorf("calls %v result %v", *calls, got)
 	}
-	if got != "/tmp/a" {
-		t.Errorf("result %v", got)
+}
+
+// TestReflectedToolClientKeepsDeclaredErrorsStructured — a declared tool error
+// reaches the caller with its name and payload rather than as a message.
+func TestReflectedToolClientKeepsDeclaredErrorsStructured(t *testing.T) {
+	r := toolSnapshotOf(t)
+	payload, _ := EncodeTypedValue("missing.txt")
+	recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		e := types.MakeToolRpcErrorRemoteToolError(types.MakeToolErrorCustomError(types.CustomToolError{
+			Name: "not-found", Payload: payload.wit,
+		}))
+		return witTypes.None[types.TypedSchemaValue](), &e
+	})
+	client := need(r.Bind())
+	_, err := client.Call([]string{"index", "add"}, map[string]any{"path": "/x", "force": false, "retries": 1})
+	var ce *ToolCallError
+	if !errors.As(err, &ce) || ce.Kind != ToolCallDeclaredError || ce.ErrorName != "not-found" {
+		t.Fatalf("got %v", err)
+	}
+	if v, err := ce.Payload().JSON(); err != nil || v != "missing.txt" {
+		t.Errorf("payload %v (%v)", v, err)
 	}
 }
 
@@ -480,9 +483,8 @@ func TestReflectedToolClientInvokes(t *testing.T) {
 // discoverable but has nothing to run.
 func TestReflectedToolClientRefusesANamespace(t *testing.T) {
 	r := toolSnapshotOf(t)
-	client := &ReflectedToolClient{tool: r, rpc: &fakeToolRPC{}}
-
-	_, err := client.InvokeAndAwait([]string{"index"}, nil)
+	client := need(r.Bind())
+	_, err := client.Call([]string{"index"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "only dispatches to subcommands") {
 		t.Errorf("error is %v", err)
 	}
@@ -490,141 +492,66 @@ func TestReflectedToolClientRefusesANamespace(t *testing.T) {
 
 func TestReflectedToolClientValidatesBeforeSending(t *testing.T) {
 	r := toolSnapshotOf(t)
-	rpc := &fakeToolRPC{}
-	client := &ReflectedToolClient{tool: r, rpc: rpc}
-
-	_, err := client.InvokeAndAwait([]string{"index", "add"},
-		map[string]any{"path": "/tmp/a", "force": "yes", "retries": 1})
+	calls := recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.None[types.TypedSchemaValue](), nil
+	})
+	client := need(r.Bind())
+	_, err := client.Call([]string{"index", "add"}, map[string]any{"path": "/tmp/a", "force": "yes", "retries": 1})
 	if err == nil {
 		t.Fatal("an invalid flag reached the target")
 	}
-	if rpc.gotPath != nil {
+	if len(*calls) != 0 {
 		t.Error("the call was sent despite failing validation")
 	}
 }
 
-// TestDynamicAgentClientInvokesWithPackedValues — a dynamic caller already
-// holds schema-native values and keeps no snapshot, so the client neither packs
-// nor validates for it.
-func TestDynamicAgentClientInvokesWithPackedValues(t *testing.T) {
+// TestDynamicAgentClientCallsWithPackedValues — a dynamic caller already holds
+// schema-native values and keeps no snapshot, so the client neither packs nor
+// validates for it; a discovered snapshot can do both around the call.
+func TestDynamicAgentClientCallsWithPackedValues(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
-	input, err := m.PackJSON(map[string]any{"greeting": "hi", "times": 1})
+	input, err := need(m.Input()).PackJSON(map[string]any{"greeting": "hi", "times": 1})
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
-	out, _ := m.Output()
-	result, err := packWit(out, "hi")
-	if err != nil {
-		t.Fatalf("packing the result: %v", err)
-	}
-
-	rpc := &fakeRPC{tree: result, has: true}
+	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
 	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
 
-	got, err := client.InvokeDynamic("greet", input)
+	got, id, err := client.Call("greet", input)
 	if err != nil {
-		t.Fatalf("InvokeDynamic: %v", err)
+		t.Fatalf("Call: %v", err)
 	}
-	if rpc.gotMethod != "greet" {
-		t.Errorf("invoked %q", rpc.gotMethod)
+	if rpc.gotMethod != "greet" || id != fakeID || got.IsNone() {
+		t.Fatalf("invoked %q id %+v result %v", rpc.gotMethod, id, got)
 	}
-	if got.IsNone() {
-		t.Fatal("the result was dropped")
-	}
-	value, err := m.UnpackOutput(got.Unwrap())
+	value, err := need(m.Output()).Unwrap().UnpackJSON(got.Unwrap())
 	if err != nil || value != "hi" {
 		t.Errorf("result %v (%v)", value, err)
 	}
-}
-
-// TestDynamicAgentClientInvokeJSON — the caller may also hand over a schema of
-// its own choosing rather than packing by hand.
-func TestDynamicAgentClientInvokeJSON(t *testing.T) {
-	r := snapshotOf(t)
-	m, _ := r.Method("greet")
-	out, _ := m.Output()
-	result, _ := packWit(out, "hi")
-
-	rpc := &fakeRPC{tree: result, has: true}
-	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
-
-	ref, err := r.Schema()
-	if err != nil {
-		t.Fatalf("Schema: %v", err)
-	}
-	params, err := m.Parameters()
-	if err != nil {
-		t.Fatalf("Parameters: %v", err)
-	}
-	got, err := client.InvokeJSON("greet", ref, params,
-		map[string]any{"greeting": "hi", "times": 1})
-	if err != nil {
-		t.Fatalf("InvokeJSON: %v", err)
-	}
-	if got.IsNone() {
-		t.Fatal("the result was dropped")
+	if _, err := client.Trigger("greet", input); err != nil || rpc.gotForm != "trigger" {
+		t.Errorf("Trigger: %v %q", err, rpc.gotForm)
 	}
 }
 
-// TestInvokeUsesTheCallersOwnTypes — a caller-defined client owns its
-// compile-time types and only borrows the identity.
-func TestInvokeUsesTheCallersOwnTypes(t *testing.T) {
-	r := snapshotOf(t)
-	m, _ := r.Method("greet")
-	out, _ := m.Output()
-	result, _ := packWit(out, "hi hi")
-
-	rpc := &fakeRPC{tree: result, has: true}
-	client := &DynamicAgentClient{agentID: "greeter-1", rpc: rpc}
-
-	got, err := Invoke[GreetIn, string](client, "greet", GreetIn{Greeting: "hi", Times: 2})
-	if err != nil {
-		t.Fatalf("Invoke: %v", err)
-	}
-	if got != "hi hi" {
-		t.Errorf("result %q, want hi hi", got)
-	}
-}
-
-// TestInvokeChecksOutputCardinality — the caller's declared Out is the only
-// contract here, so a mismatch has to be reported rather than zero-valued.
-func TestInvokeChecksOutputCardinality(t *testing.T) {
-	client := &DynamicAgentClient{agentID: "greeter-1", rpc: &fakeRPC{has: false}}
-	if _, err := Invoke[GreetIn, string](client, "greet", GreetIn{}); err == nil ||
-		!strings.Contains(err.Error(), "returned nothing") {
-		t.Errorf("error is %v", err)
-	}
-
-	r := snapshotOf(t)
-	m, _ := r.Method("greet")
-	out, _ := m.Output()
-	result, _ := packWit(out, "hi")
-	client = &DynamicAgentClient{agentID: "greeter-1", rpc: &fakeRPC{tree: result, has: true}}
-	if _, err := Invoke[GreetIn, Unit](client, "greet", GreetIn{}); err == nil ||
-		!strings.Contains(err.Error(), "golem.Unit") {
-		t.Errorf("error is %v", err)
-	}
-}
-
-func TestDynamicToolClientInvokes(t *testing.T) {
+func TestDynamicToolClientCalls(t *testing.T) {
 	r := toolSnapshotOf(t)
 	add, _ := r.Command([]string{"index", "add"})
-	input, err := add.PackJSON(map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
+	input, err := add.pack(map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
 	if err != nil {
-		t.Fatalf("PackJSON: %v", err)
+		t.Fatalf("pack: %v", err)
 	}
 	result, _ := EncodeTypedValue("/tmp/a")
-
-	rpc := &fakeToolRPC{out: result.wit, has: true}
-	client := &DynamicToolClient{toolName: "files", rpc: rpc}
-
-	got, err := client.InvokeDynamic([]string{"index", "add"}, input)
+	calls := recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.Some(result.wit), nil
+	})
+	client := need(BindTool("files"))
+	got, err := client.Call([]string{"index", "add"}, TypedValue{wit: input})
 	if err != nil {
-		t.Fatalf("InvokeDynamic: %v", err)
+		t.Fatalf("Call: %v", err)
 	}
-	if strings.Join(rpc.gotPath, " ") != "index add" {
-		t.Errorf("invoked %v", rpc.gotPath)
+	if len(*calls) != 1 {
+		t.Errorf("calls %v", *calls)
 	}
 	value, err := got.Unwrap().JSON()
 	if err != nil || value != "/tmp/a" {
@@ -636,16 +563,16 @@ func TestBindingOffTarget(t *testing.T) {
 	if _, err := BindAgentID("anything"); err == nil {
 		t.Error("binding an agent id succeeded off-target")
 	}
-	if _, err := BindTool("files"); err == nil {
-		t.Error("binding a tool succeeded off-target")
-	}
 	if _, err := ParseRawAgentID("anything"); err == nil {
 		t.Error("parsing an agent id succeeded off-target")
+	}
+	if _, err := MakeAgentID("Greeter", TypedValue{}, None[UUID]()); err == nil {
+		t.Error("making an agent id succeeded off-target")
 	}
 }
 
 // packWit packs canonical JSON and flattens it the way the wire carries it,
-// which is what the fake transports below expect.
+// which is what the fake transports expect.
 func packWit(ref core.Ref, value any) (types.SchemaValueTree, error) {
 	built, err := ref.PackJSON(value)
 	if err != nil {

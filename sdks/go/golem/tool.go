@@ -165,19 +165,19 @@ func init() {
 		input types.TypedSchemaValue,
 		stdin mwExports.Stdin,
 		stdout mwExports.Stdout,
-		_ common.Principal,
+		principal common.Principal,
 		wrapped *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
-		return defs.invokeMiddleware(&middlewareCall{
-			middleware:  middlewareName,
+		return defs.invokeMiddleware(middlewareName, &middlewareInvocation{
 			toolName:    toolName,
 			tool:        toolMetadata,
 			parameters:  TypedValue{wit: parameters},
 			commandPath: commandPath,
-			input:       TypedValue{wit: input},
-			stdin:       newNextStdin(stdin),
+			input:       input,
+			stdin:       newToolStdin(toolExports.Stdin(stdin)),
 			stdout:      newToolStdout(toolExports.Stdout(stdout)),
-			next:        newNextLayer(wrapped),
+			principal:   principalFromWit(principal),
+			under:       newUnderlyingLayer(wrapped),
 		})
 	}
 }

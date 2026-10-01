@@ -151,33 +151,49 @@ type globalsDecl struct {
 	ok       bool
 }
 
-// ToolDefinition is a tool, returned by [DefineTool] or [DeclareRemoteTool]. It
+// ToolDefinition is a tool, returned by [DefineTool] or [DefineToolClient]. It
 // is the tool's root command, so commands, groups and globals are declared on it
 // directly.
-type ToolDefinition struct {
-	*ToolGroup
+//
+// T is the tool's identity type, an empty struct of its own, as an agent is
+// identified by its Id type. Commands, error cases, clients and middleware
+// carry it, so one tool's command cannot be used where another's is expected.
+type ToolDefinition[T any] struct {
+	*ToolGroup[T]
 	entry *toolEntry
 }
 
 // Name returns the tool's name, which is also its root command name.
-func (t *ToolDefinition) Name() string { return t.entry.name }
+func (t *ToolDefinition[T]) Name() string { return t.entry.name }
 
 // DefineTool declares a tool this component implements and exports. Call it
 // from a package-level var so the declaration happens before the component is
 // invoked.
-func DefineTool(name string, spec ToolSpec) *ToolDefinition {
-	return defineToolInto(toolDefs, defs, name, spec, false)
+func DefineTool[T any](name string, spec ToolSpec) *ToolDefinition[T] {
+	return defineToolInto[T](toolDefs, defs, name, spec, false)
 }
 
-// DeclareRemoteTool declares the shape of a tool implemented elsewhere, so its
-// commands can be called with typed arguments. The name is the one the tool is
-// looked up by in the environment. A remote tool is never exported, and its
-// commands take no handlers.
-func DeclareRemoteTool(name string) *ToolDefinition {
-	return defineToolInto(toolDefs, defs, name, ToolSpec{}, true)
+// DefineToolClient declares the shape of a tool to call with typed arguments,
+// without implementing it here: a tool of another component, a remote release
+// or an imported MCP server. The name is the one the tool is looked up by in
+// the environment. A tool client is never exported, and its commands take no
+// handlers.
+func DefineToolClient[T any](name string) *ToolDefinition[T] {
+	return defineToolInto[T](toolDefs, defs, name, ToolSpec{}, true)
 }
 
-func defineToolInto(r *toolRegistry, d *definitions, name string, spec ToolSpec, remote bool) *ToolDefinition {
+// ToolClient is a target for a tool's commands: the tool registered under
+// another name than the definition's, with the same shape.
+type ToolClient[T any] struct{ name string }
+
+// Name returns the registration name calls through this client go to.
+func (c *ToolClient[T]) Name() string { return c.name }
+
+// Bind targets the tool registered under name, which must have this
+// definition's shape. Use it with a command's On.
+func (t *ToolDefinition[T]) Bind(name string) *ToolClient[T] { return &ToolClient[T]{name: name} }
+
+func defineToolInto[T any](r *toolRegistry, d *definitions, name string, spec ToolSpec, remote bool) *ToolDefinition[T] {
 	e := &toolEntry{name: name, spec: spec, remote: remote, r: r, d: d, errorsByName: map[string]*toolErrorInfo{}}
 	e.root = &toolNode{
 		entry:   e,
@@ -185,7 +201,7 @@ func defineToolInto(r *toolRegistry, d *definitions, name string, spec ToolSpec,
 		doc:     toolDoc{summary: spec.Summary, description: spec.Description},
 		aliases: slices.Clone(spec.Aliases),
 	}
-	t := &ToolDefinition{ToolGroup: &ToolGroup{node: e.root}, entry: e}
+	t := &ToolDefinition[T]{ToolGroup: &ToolGroup[T]{node: e.root}, entry: e}
 	switch {
 	case name == "":
 		d.recordErr("", "", "DefineTool requires a name")
@@ -202,34 +218,36 @@ func defineToolInto(r *toolRegistry, d *definitions, name string, spec ToolSpec,
 
 // ToolGroup is a command that dispatches to subcommands: the tool's root, or a
 // group declared under it. A group may also have a body of its own.
-type ToolGroup struct{ node *toolNode }
+type ToolGroup[T any] struct{ node *toolNode }
 
 // Path returns the group's path from the tool's root; empty for the root.
-func (g *ToolGroup) Path() []string { return slices.Clone(g.node.path) }
+func (g *ToolGroup[T]) Path() []string { return slices.Clone(g.node.path) }
 
 // Doc sets the group's one-line summary.
-func (g *ToolGroup) Doc(summary string) *ToolGroup { g.node.doc.summary = summary; return g }
+func (g *ToolGroup[T]) Doc(summary string) *ToolGroup[T] { g.node.doc.summary = summary; return g }
 
 // Description sets the group's longer description.
-func (g *ToolGroup) Description(text string) *ToolGroup {
+func (g *ToolGroup[T]) Description(text string) *ToolGroup[T] {
 	g.node.doc.description = text
 	return g
 }
 
 // Example adds a usage example to the group's documentation.
-func (g *ToolGroup) Example(title, body string) *ToolGroup {
+func (g *ToolGroup[T]) Example(title, body string) *ToolGroup[T] {
 	g.node.doc.examples = append(g.node.doc.examples, toolCommon.Example{Title: title, Body: body})
 	return g
 }
 
 // Aliases adds alternative names for the group.
-func (g *ToolGroup) Aliases(names ...string) *ToolGroup {
+func (g *ToolGroup[T]) Aliases(names ...string) *ToolGroup[T] {
 	g.node.aliases = append(g.node.aliases, names...)
 	return g
 }
 
 // Group declares a group of subcommands under this one.
-func (g *ToolGroup) Group(name string) *ToolGroup { return &ToolGroup{node: g.node.child(name)} }
+func (g *ToolGroup[T]) Group(name string) *ToolGroup[T] {
+	return &ToolGroup[T]{node: g.node.child(name)}
+}
 
 // Globals declares options and flags that every command at or below this node
 // inherits. A command's argument struct embeds G to receive them:
@@ -239,7 +257,7 @@ func (g *ToolGroup) Group(name string) *ToolGroup { return &ToolGroup{node: g.no
 //	    GitGlobals
 //	    Message string
 //	}
-func (g *ToolGroup) Globals[G any](spec func(*G, *ToolGlobalsSpec)) *ToolGroup {
+func (g *ToolGroup[T]) Globals[G any](spec func(*G, *ToolGlobalsSpec)) *ToolGroup[T] {
 	n := g.node
 	if n.globals != nil {
 		n.entry.fail("%s declares its globals twice", n.label())
@@ -262,25 +280,25 @@ func (g *ToolGroup) Globals[G any](spec func(*G, *ToolGlobalsSpec)) *ToolGroup {
 }
 
 // Command declares a subcommand of this group that returns a result.
-func (g *ToolGroup) Command[A any, O any](name string, spec func(*A, *ToolCommandSpec)) *ToolCommand[A, O] {
-	return &ToolCommand[A, O]{ce: declareBody[A, O](g.node.child(name), spec, false)}
+func (g *ToolGroup[T]) Command[A any, O any](name string, spec func(*A, *ToolCommandSpec)) *ToolCommand[T, A, O] {
+	return &ToolCommand[T, A, O]{ce: declareBody[A, O](g.node.child(name), spec, false)}
 }
 
 // StdoutCommand declares a subcommand that writes standard output besides
 // returning its result.
-func (g *ToolGroup) StdoutCommand[A any, O any](name string, spec func(*A, *ToolCommandSpec)) *ToolStdoutCommand[A, O] {
-	return &ToolStdoutCommand[A, O]{ce: declareBody[A, O](g.node.child(name), spec, true)}
+func (g *ToolGroup[T]) StdoutCommand[A any, O any](name string, spec func(*A, *ToolCommandSpec)) *ToolStdoutCommand[T, A, O] {
+	return &ToolStdoutCommand[T, A, O]{ce: declareBody[A, O](g.node.child(name), spec, true)}
 }
 
 // Body declares what this group itself does when invoked without a
 // subcommand; on the tool, what the tool does when invoked bare.
-func (g *ToolGroup) Body[A any, O any](spec func(*A, *ToolCommandSpec)) *ToolCommand[A, O] {
-	return &ToolCommand[A, O]{ce: declareBody[A, O](g.node, spec, false)}
+func (g *ToolGroup[T]) Body[A any, O any](spec func(*A, *ToolCommandSpec)) *ToolCommand[T, A, O] {
+	return &ToolCommand[T, A, O]{ce: declareBody[A, O](g.node, spec, false)}
 }
 
 // StdoutBody is [ToolGroup.Body] for a body that writes standard output.
-func (g *ToolGroup) StdoutBody[A any, O any](spec func(*A, *ToolCommandSpec)) *ToolStdoutCommand[A, O] {
-	return &ToolStdoutCommand[A, O]{ce: declareBody[A, O](g.node, spec, true)}
+func (g *ToolGroup[T]) StdoutBody[A any, O any](spec func(*A, *ToolCommandSpec)) *ToolStdoutCommand[T, A, O] {
+	return &ToolStdoutCommand[T, A, O]{ce: declareBody[A, O](g.node, spec, true)}
 }
 
 // commandEntry is one command body: its argument spec, its handler, and the
@@ -342,15 +360,19 @@ func (ce *commandEntry) setHandler(h func(*ToolStdoutContext, reflect.Value) (re
 }
 
 // ToolCommand is a declared command that returns a result.
-type ToolCommand[A any, O any] struct{ ce *commandEntry }
+type ToolCommand[T any, A any, O any] struct {
+	ce *commandEntry
+	// target overrides the registration name a call goes to; see On.
+	target string
+}
 
 // Path returns the command's path from the tool's root.
-func (c *ToolCommand[A, O]) Path() []string { return slices.Clone(c.ce.node.path) }
+func (c *ToolCommand[T, A, O]) Path() []string { return slices.Clone(c.ce.node.path) }
 
 // Handle binds the command's implementation. A declared error is returned as
 // ErrX.New(payload); any other error fails the invocation. Call it from a
 // package-level var so the binding happens before the component is invoked.
-func (c *ToolCommand[A, O]) Handle(h func(*ToolContext, A) (O, error)) Registered {
+func (c *ToolCommand[T, A, O]) Handle(h func(*ToolContext, A) (O, error)) Registered {
 	return c.ce.setHandler(func(ctx *ToolStdoutContext, args reflect.Value) (reflect.Value, error) {
 		out, err := h(&ctx.ToolContext, args.Interface().(A))
 		return reflect.ValueOf(&out).Elem(), err
@@ -359,14 +381,17 @@ func (c *ToolCommand[A, O]) Handle(h func(*ToolContext, A) (O, error)) Registere
 
 // ToolStdoutCommand is a declared command that writes standard output besides
 // returning a result.
-type ToolStdoutCommand[A any, O any] struct{ ce *commandEntry }
+type ToolStdoutCommand[T any, A any, O any] struct {
+	ce     *commandEntry
+	target string
+}
 
 // Path returns the command's path from the tool's root.
-func (c *ToolStdoutCommand[A, O]) Path() []string { return slices.Clone(c.ce.node.path) }
+func (c *ToolStdoutCommand[T, A, O]) Path() []string { return slices.Clone(c.ce.node.path) }
 
 // Handle binds the command's implementation, which writes its output through
 // [ToolStdoutContext.Stdout].
-func (c *ToolStdoutCommand[A, O]) Handle(h func(*ToolStdoutContext, A) (O, error)) Registered {
+func (c *ToolStdoutCommand[T, A, O]) Handle(h func(*ToolStdoutContext, A) (O, error)) Registered {
 	return c.ce.setHandler(func(ctx *ToolStdoutContext, args reflect.Value) (reflect.Value, error) {
 		out, err := h(ctx, args.Interface().(A))
 		return reflect.ValueOf(&out).Elem(), err
@@ -1032,7 +1057,7 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSc
 // handler, and package the result as a self-contained typed value.
 func (d *definitions) invokeCommand(
 	e *toolEntry, commandPath []string, input types.TypedSchemaValue,
-	stdin *ToolStdin, stdout *ToolStdout, principal Principal,
+	stdin *byteReader, stdout *ToolStdout, principal Principal,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
 	n := e.root.find(commandPath)
@@ -1040,14 +1065,35 @@ func (d *definitions) invokeCommand(
 		return fail(types.MakeToolErrorInvalidCommandPath(slices.Clone(commandPath)))
 	}
 	ce := n.body
-	l, ok := ce.resolve()
-	if !ok || ce.invoke == nil {
+	if ce.invoke == nil {
 		return fail(toolDefinitionError(d))
 	}
+	args, terr := ce.decodeArgs(d, input, stdin, principal)
+	if terr != nil {
+		return fail(*terr)
+	}
+	ctx := &ToolStdoutContext{ToolContext: ToolContext{tool: e.name, path: slices.Clone(commandPath)}, stdout: stdout}
+	out, err := runWithStdout(ce.label(), stdout, func() (reflect.Value, error) { return ce.invoke(ctx, args) })
+	if err != nil {
+		return fail(d.handlerError(ce, err))
+	}
+	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](d.encodeResult(ce, out))
+}
 
+// decodeArgs fills a command's argument struct from an invocation: the
+// canonical input record, the principal and standard input.
+func (ce *commandEntry) decodeArgs(
+	d *definitions, input types.TypedSchemaValue, stdin *byteReader, principal Principal,
+) (reflect.Value, *types.ToolError) {
+	l, ok := ce.resolve()
+	if !ok {
+		e := toolDefinitionError(d)
+		return reflect.Value{}, &e
+	}
 	args := reflect.New(ce.argsType).Elem()
 	if err := l.decode(input.Value, args); err != nil {
-		return fail(types.MakeToolErrorInvalidInput(err.Error()))
+		e := types.MakeToolErrorInvalidInput(err.Error())
+		return reflect.Value{}, &e
 	}
 	if l.principal != nil && principal != nil {
 		args.FieldByIndex(l.principal).Set(reflect.ValueOf(&principal).Elem())
@@ -1057,21 +1103,15 @@ func (d *definitions) invokeCommand(
 		case stdin.present():
 			args.FieldByIndex(l.stdin.path).Set(reflect.ValueOf(io.Reader(stdin)))
 		case !l.stdin.optional:
-			return fail(types.MakeToolErrorInvalidInput(
-				fmt.Sprintf("command %s requires standard input", ce.label())))
+			e := types.MakeToolErrorInvalidInput(fmt.Sprintf("command %s requires standard input", ce.label()))
+			return reflect.Value{}, &e
 		}
 	}
+	return args, nil
+}
 
-	ctx := &ToolStdoutContext{ToolContext: ToolContext{tool: e.name, path: slices.Clone(commandPath)}, stdout: stdout}
-	out, err := runCommandHandler(ce, ctx, args)
-	if err != nil {
-		var raised *RaisedToolError
-		if errors.As(err, &raised) {
-			return fail(d.declaredToolError(ce, raised))
-		}
-		return fail(types.MakeToolErrorInvalidResult(err.Error()))
-	}
-
+// encodeResult packages a command's result as a self-contained typed value.
+func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) toolCommon.InvocationResult {
 	res := toolCommon.InvocationResult{
 		Result: witTypes.None[types.TypedSchemaValue](),
 		Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
@@ -1084,37 +1124,59 @@ func (d *definitions) invokeCommand(
 		graph.Root = root
 		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: encodeWith(c, out)})
 	}
-	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](res)
+	return res
 }
 
-// runCommandHandler calls the handler, recovering a panic rather than letting
-// it kill the component, and selects the output stream's terminal: finished
-// when the handler succeeds, failed when it returns an error or panics. The
-// wire accepts exactly one terminal and treats a dropped writer as abandoned,
-// so choosing one here keeps a failing handler from looking like an abandoned
+// handlerError turns what a handler failed with into the wire error: a
+// declared case of the command, a failure of a tool it called passed through
+// unchanged, or an invalid result.
+func (d *definitions) handlerError(ce *commandEntry, err error) types.ToolError {
+	var raised *RaisedToolError
+	if errors.As(err, &raised) {
+		return d.declaredToolError(ce, raised)
+	}
+	return passThroughToolError(err)
+}
+
+// passThroughToolError keeps a failure that a called tool reported as its own
+// error, so the caller sees that error rather than a paraphrase of it.
+func passThroughToolError(err error) types.ToolError {
+	var call *ToolCallError
+	if errors.As(err, &call) && call.wire != nil {
+		return *call.wire
+	}
+	return types.MakeToolErrorInvalidResult(err.Error())
+}
+
+// runWithStdout calls a handler, recovering a panic rather than letting it
+// kill the component, and selects the output stream's terminal: finished when
+// the handler succeeds, failed when it returns an error or panics. The wire
+// accepts exactly one terminal and treats a dropped writer as abandoned, so
+// choosing one here keeps a failing handler from looking like an abandoned
 // transfer.
-func runCommandHandler(ce *commandEntry, ctx *ToolStdoutContext, args reflect.Value) (out reflect.Value, err error) {
+func runWithStdout(label string, stdout *ToolStdout, run func() (reflect.Value, error)) (out reflect.Value, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if re, ok := r.(*RaisedToolError); ok {
 				err = re
 			} else {
-				err = fmt.Errorf("command %s panicked: %s", ce.label(), panicMessage(r))
+				err = fmt.Errorf("command %s panicked: %s", label, panicMessage(r))
 			}
 		}
 		if err != nil {
-			_ = ctx.stdout.Fail(StreamFailed(err.Error()))
+			_ = stdout.Fail(StreamFailed(err.Error()))
 			return
 		}
-		if ferr := ctx.stdout.finish(); ferr != nil {
+		if ferr := stdout.finish(); ferr != nil {
 			err = ferr
 		}
 	}()
-	out, err = ce.invoke(ctx, args)
+	out, err = run()
 	if err != nil {
 		var raised *RaisedToolError
-		if !errors.As(err, &raised) {
-			err = fmt.Errorf("command %s failed: %w", ce.label(), err)
+		var call *ToolCallError
+		if !errors.As(err, &raised) && !errors.As(err, &call) {
+			err = fmt.Errorf("command %s failed: %w", label, err)
 		}
 	}
 	return out, err

@@ -86,22 +86,22 @@ type ToolErrorDef interface{ toolErrorInfo() *toolErrorInfo }
 
 // ToolErrorCase is a declared error case carrying a payload of type P. Use
 // [Unit] for a failure that carries none.
-type ToolErrorCase[P any] struct{ info *toolErrorInfo }
+type ToolErrorCase[P any, T any] struct{ info *toolErrorInfo }
 
-func (c *ToolErrorCase[P]) toolErrorInfo() *toolErrorInfo { return c.info }
+func (c *ToolErrorCase[P, T]) toolErrorInfo() *toolErrorInfo { return c.info }
 
 // Name returns the error case's declared name.
-func (c *ToolErrorCase[P]) Name() string { return c.info.name }
+func (c *ToolErrorCase[P, T]) Name() string { return c.info.name }
 
 // New builds the error a handler returns to fail with this case.
-func (c *ToolErrorCase[P]) New(payload P) error {
+func (c *ToolErrorCase[P, T]) New(payload P) error {
 	return &RaisedToolError{info: c.info, payload: reflect.ValueOf(&payload).Elem()}
 }
 
 // Match reports whether err is this error case, and its payload if so. It
 // recognises both the error a handler returns and the error a typed call
 // reports when the tool failed with the case.
-func (c *ToolErrorCase[P]) Match(err error) (P, bool) {
+func (c *ToolErrorCase[P, T]) Match(err error) (P, bool) {
 	var zero P
 	var raised *RaisedToolError
 	if errors.As(err, &raised) && raised.info == c.info {
@@ -145,19 +145,19 @@ func (e *RaisedToolError) Name() string { return e.info.name }
 // it raisable: each command lists the cases it may return with
 // [ToolCommandSpec.Raises], which is what puts them in that command's published
 // contract.
-func DefineToolError[P any](t *ToolDefinition, name string, spec ToolErrorSpec) *ToolErrorCase[P] {
-	return defineToolErrorOn[P](t.entry, name, spec)
+func DefineToolError[P any, T any](t *ToolDefinition[T], name string, spec ToolErrorSpec) *ToolErrorCase[P, T] {
+	return defineToolErrorOn[P, T](t.entry, name, spec)
 }
 
 // defineToolErrorOn records the case on the tool's own entry, which carries the
 // registry and definitions it was declared into.
-func defineToolErrorOn[P any](e *toolEntry, name string, spec ToolErrorSpec) *ToolErrorCase[P] {
+func defineToolErrorOn[P any, T any](e *toolEntry, name string, spec ToolErrorSpec) *ToolErrorCase[P, T] {
 	payload := reflect.TypeFor[P]()
 	if payload == reflect.TypeFor[Unit]() {
 		payload = nil
 	}
 	info := &toolErrorInfo{tool: e.name, name: name, spec: spec, payload: payload}
-	c := &ToolErrorCase[P]{info: info}
+	c := &ToolErrorCase[P, T]{info: info}
 	switch {
 	case name == "":
 		e.fail("an error case needs a name")

@@ -16,52 +16,50 @@ package golem
 
 import (
 	"fmt"
-	"reflect"
+	"io"
+	"time"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 )
 
-// Dynamic and method-only clients.
+// Fully dynamic clients.
 //
-// These are the surfaces for callers that already hold schema-native values, or
-// that own their own compile-time types and only need an existing identity to
-// aim them at. Neither retains a deployment snapshot, so neither claims the
-// validation a reflected client performs: the host still authorises the call
-// and validates the target-side input.
+// These are for callers that already hold schema-native values — an
+// infrastructure transport, or a caller that packed them with a discovered
+// snapshot — and keep no schema authority. Nothing is validated locally: the
+// host still authorises the call and validates the target-side input.
 //
-//	// Already-packed values, no schema authority retained.
 //	client, err := golem.BindAgentID(id)
-//	out, err := client.InvokeDynamic("greet", input)
+//	out, invocation, err := client.Call("greet", input)
 //
-//	// Caller-owned types against an existing identity.
-//	greeting, err := golem.Invoke[GreetIn, string](client, "greet", GreetIn{Greeting: "hi"})
+// To combine discovery with a dynamic call, pack with the discovered method's
+// Input, call, and read the result with its Output.
 
 // RawAgentID is an agent identity taken apart by the host, with the
 // constructor left as a typed value rather than decoded into a Go type — which
 // is the point: a dynamic caller has no such type. The typed counterpart is
 // [ParseAgentID].
 type RawAgentID struct {
-	// AgentType is the type name the identity names.
-	AgentType string
+	// TypeName is the agent type the identity names.
+	TypeName string
 	// Constructor carries the caller-supplied constructor fields. The host
 	// injects principal fields separately, so a principal-scoped agent can be
 	// rebuilt from an identity returned by invocation metadata.
 	Constructor TypedValue
-	// Phantom is the phantom instance this identity addresses, if any.
-	Phantom Option[UUID]
+	// PhantomID is the phantom instance this identity addresses, if any.
+	PhantomID Option[UUID]
 }
 
 // ConstructorJSON reads the constructor fields as canonical JSON.
 func (p RawAgentID) ConstructorJSON() (any, error) { return p.Constructor.JSON() }
 
 // DynamicAgentClient invokes an existing agent with values the caller packed
-// itself. It keeps no schema, so the caller owns packing and validation policy.
+// itself.
 type DynamicAgentClient struct {
 	agentID string
 	parsed  RawAgentID
-	rpc     reflectedRPC
+	rpc     agentRPC
 }
 
 // AgentID returns the identity this client is bound to.
@@ -70,132 +68,97 @@ func (c *DynamicAgentClient) AgentID() string { return c.agentID }
 // Parsed returns what the host made of the identity.
 func (c *DynamicAgentClient) Parsed() RawAgentID { return c.parsed }
 
-// InvokeDynamic calls a method with an already-packed parameter value and
-// returns the result, which is none for a method that returns nothing.
-func (c *DynamicAgentClient) InvokeDynamic(method string, input core.SchemaValue) (Option[core.SchemaValue], error) {
+// Call invokes a method with an already-packed parameter record and waits for
+// its result, none for a method that returns nothing, together with the
+// invocation's identity.
+func (c *DynamicAgentClient) Call(method string, input core.SchemaValue) (Option[core.SchemaValue], InvocationID, error) {
 	tree, err := witschema.ValueToWit(input)
 	if err != nil {
-		return None[core.SchemaValue](), fmt.Errorf("golem: %s: %w", method, err)
+		return None[core.SchemaValue](), InvocationID{}, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	out, err := c.invokeTree(method, tree)
+	res, id, err := c.rpc.call(method, tree)
 	if err != nil {
-		return None[core.SchemaValue](), err
+		return None[core.SchemaValue](), id, err
 	}
-	result, has := out.Get()
+	result, has := optionFromWit(res).Get()
 	if !has {
-		return None[core.SchemaValue](), nil
+		return None[core.SchemaValue](), id, nil
 	}
 	value, err := witschema.ValueToCore(result)
 	if err != nil {
-		return None[core.SchemaValue](), fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
+		return None[core.SchemaValue](), id, fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
 	}
-	return Some(value), nil
+	return Some(value), id, nil
 }
 
-func (c *DynamicAgentClient) invokeTree(method string, input types.SchemaValueTree) (Option[types.SchemaValueTree], error) {
-	tree, has, err := c.rpc.invokeAndAwait(method, input)
+// Trigger invokes a method without waiting for its result.
+func (c *DynamicAgentClient) Trigger(method string, input core.SchemaValue) (InvocationID, error) {
+	tree, err := witschema.ValueToWit(input)
 	if err != nil {
-		return None[types.SchemaValueTree](), err
+		return InvocationID{}, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	if !has {
-		return None[types.SchemaValueTree](), nil
-	}
-	return Some(tree), nil
+	return c.rpc.trigger(method, tree)
 }
 
-// InvokeJSON calls a method with arguments packed against a schema the caller
-// supplies, which is the shape an infrastructure transport already holds.
-func (c *DynamicAgentClient) InvokeJSON(
-	method string, ref core.Ref, params []core.Parameter, args map[string]any,
-) (Option[core.SchemaValue], error) {
-	built, err := ref.PackParameters(params, args)
+// Schedule arranges for a method to be invoked at the given time.
+func (c *DynamicAgentClient) Schedule(at time.Time, method string, input core.SchemaValue) (*ScheduledInvocation, error) {
+	tree, err := witschema.ValueToWit(input)
 	if err != nil {
-		return None[core.SchemaValue](), fmt.Errorf("golem: %s: %w", method, err)
+		return nil, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	return c.InvokeDynamic(method, built)
-}
-
-// Invoke calls a method using the caller's own compile-time types. The target's
-// type name and constructor are not checked — this client binds an identity, it
-// does not claim to know what is behind it — so a mismatch surfaces as a
-// decoding failure or as the host rejecting the input.
-func Invoke[In any, Out any](c *DynamicAgentClient, method string, in In) (Out, error) {
-	var zero Out
-	inFields, outCodec, err := localMethodCodecs[In, Out]()
-	if err != nil {
-		return zero, err
-	}
-	input := encodeParams(inFields, valueOf(&in))
-
-	tree, err := c.invokeTree(method, input)
-	if err != nil {
-		return zero, err
-	}
-	if outCodec == nil {
-		if tree.IsSome() {
-			return zero, fmt.Errorf("golem: %s returned a value but Out is golem.Unit", method)
-		}
-		return zero, nil
-	}
-	value, present := tree.Get()
-	if !present {
-		return zero, fmt.Errorf("golem: %s returned nothing but Out is %T", method, zero)
-	}
-	out := newOf[Out]()
-	d := decoder{nodes: value.ValueNodes}
-	if err := outCodec.decode(&d, out, value.Root); err != nil {
-		return zero, fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
-	}
-	return out.Interface().(Out), nil
+	return c.rpc.schedule(at, method, tree)
 }
 
 // DynamicToolClient invokes a tool by name and command path, with values the
 // caller packed itself.
 type DynamicToolClient struct {
 	toolName string
-	rpc      reflectedToolRPC
 }
 
 // ToolName returns the tool this client is bound to.
 func (c *DynamicToolClient) ToolName() string { return c.toolName }
 
-// InvokeDynamic runs a command with an already-packed input and returns the raw
-// result, which is none for a command that produces nothing.
-func (c *DynamicToolClient) InvokeDynamic(path []string, input TypedValue) (Option[TypedValue], error) {
-	out, has, err := c.rpc.invokeAndAwait(path, input.wit)
+// Call runs a command with an already-packed input and returns the raw result,
+// none for a command that produces nothing.
+func (c *DynamicToolClient) Call(path []string, input TypedValue) (Option[TypedValue], error) {
+	inv, err := c.Start(path, input, nil, false)
 	if err != nil {
 		return None[TypedValue](), err
 	}
-	if !has {
-		return None[TypedValue](), nil
-	}
-	return Some(TypedValue{wit: out}), nil
+	return inv.Wait()
 }
 
-// localMethodCodecs compiles the caller's own input and output types. A Unit
-// output means the method returns nothing.
-func localMethodCodecs[In any, Out any]() ([]fieldInfo, *codec, error) {
-	inFields := defs.structFields(typeOf[In]())
-	for _, f := range userFields(inFields) {
-		if f.codec.invalid != "" {
-			return nil, nil, fmt.Errorf("golem: parameter %q: %s", f.name, f.codec.invalid)
+// Start starts a command with an already-packed input and the given standard
+// input, which may be nil; stdout asks for the command's standard output.
+func (c *DynamicToolClient) Start(path []string, input TypedValue, stdin io.Reader, stdout bool) (*ToolInvocation[Option[TypedValue]], error) {
+	call, err := startToolCall(c.toolName, path, input.wit, stdin, stdout)
+	if err != nil {
+		return nil, err
+	}
+	name := c.toolName
+	return &ToolInvocation[Option[TypedValue]]{call: call, finish: func(call toolCall) (Option[TypedValue], error) {
+		res, rpcErr := call.wait()
+		if rpcErr != nil {
+			return None[TypedValue](), toolCallErrorFromWit(name, path, *rpcErr)
 		}
-	}
-	if typeOf[Out]() == typeOf[Unit]() {
-		return inFields, nil, nil
-	}
-	outCodec := defs.compile(typeOf[Out]())
-	if outCodec.invalid != "" {
-		return nil, nil, fmt.Errorf("golem: result type: %s", outCodec.invalid)
-	}
-	return inFields, outCodec, nil
+		value, has := optionFromWit(res).Get()
+		if !has {
+			return None[TypedValue](), nil
+		}
+		return Some(TypedValue{wit: value}), nil
+	}}, nil
 }
 
-// typeOf, valueOf and newOf keep the reflect noise out of the client code.
-func typeOf[T any]() reflect.Type { return reflect.TypeFor[T]() }
+// Bind connects to the discovered tool. Nothing is checked until a call: the
+// tool is looked up by name when a command is invoked.
+func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
+	return &ReflectedToolClient{tool: r}, nil
+}
 
-// valueOf addresses through a pointer so an interface-typed value keeps its
-// declared type rather than being unwrapped to the concrete one.
-func valueOf[T any](p *T) reflect.Value { return reflect.ValueOf(p).Elem() }
-
-func newOf[T any]() reflect.Value { return reflect.New(reflect.TypeFor[T]()).Elem() }
+// BindTool binds a tool by name without retaining its metadata.
+func BindTool(toolName string) (*DynamicToolClient, error) {
+	if toolName == "" {
+		return nil, fmt.Errorf("golem: BindTool requires a tool name")
+	}
+	return &DynamicToolClient{toolName: toolName}, nil
+}

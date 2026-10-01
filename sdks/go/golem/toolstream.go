@@ -102,9 +102,9 @@ type byteStreamSink interface {
 	Fail(reason streams.ByteStreamFailure) witTypes.Result[witTypes.Unit, streams.StreamWriteError]
 }
 
-// ToolStdin is a byte stream read as an ordinary io.Reader: a command's
+// byteReader is a byte stream read as an ordinary io.Reader: a command's
 // standard input, or the standard output of a tool it called.
-type ToolStdin struct {
+type byteReader struct {
 	src byteStreamSource
 	// absent explains why there is no stream, so a Read says so rather than
 	// dereferencing nil.
@@ -113,14 +113,18 @@ type ToolStdin struct {
 	// buffer, since the wire delivers whole chunks.
 	pending []byte
 	done    bool
+	// consumed records that reading began, after which the stream can no
+	// longer be handed on whole.
+	consumed bool
 }
 
 // present reports whether the host supplied the stream.
-func (r *ToolStdin) present() bool { return r != nil && r.absent == "" }
+func (r *byteReader) present() bool { return r != nil && r.absent == "" }
 
 // Read fills p from the stream. It returns io.EOF at clean end of input, and a
 // [StreamError] when the producer reports a failure.
-func (r *ToolStdin) Read(p []byte) (int, error) {
+func (r *byteReader) Read(p []byte) (int, error) {
+	r.consumed = true
 	if r.absent != "" {
 		return 0, errors.New(r.absent)
 	}

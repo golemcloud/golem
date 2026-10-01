@@ -440,7 +440,10 @@ func (a *ToolPositionalArg[T]) Description(text string) *ToolPositionalArg[T] {
 func (a *ToolPositionalArg[T]) ValueName(n string) *ToolPositionalArg[T] { a.b.valueName = n; return a }
 
 // AcceptsStdio lets the value be "-", read from standard input.
-func (a *ToolPositionalArg[T]) AcceptsStdio() *ToolPositionalArg[T] { a.b.acceptsStdio = true; return a }
+func (a *ToolPositionalArg[T]) AcceptsStdio() *ToolPositionalArg[T] {
+	a.b.acceptsStdio = true
+	return a
+}
 
 // Default makes the argument optional, taking v when it is left out.
 func (a *ToolPositionalArg[T]) Default(v T) *ToolPositionalArg[T] {
@@ -456,28 +459,28 @@ func (a *ToolPositionalArg[T]) toolRefs() refsDecl  { return single(a) }
 // ToolTailArg is a slice field bound to the variadic positional.
 type ToolTailArg[T any] struct{ b *argBinding }
 
-func (a *ToolTailArg[T]) Name(name string) *ToolTailArg[T]    { a.b.name = name; return a }
-func (a *ToolTailArg[T]) Doc(summary string) *ToolTailArg[T]  { a.b.doc.summary = summary; return a }
-func (a *ToolTailArg[T]) ValueName(n string) *ToolTailArg[T]  { a.b.valueName = n; return a }
-func (a *ToolTailArg[T]) Min(n uint32) *ToolTailArg[T]        { a.b.min = n; return a }
-func (a *ToolTailArg[T]) Max(n uint32) *ToolTailArg[T]        { a.b.max = &n; return a }
-func (a *ToolTailArg[T]) AcceptsStdio() *ToolTailArg[T]       { a.b.acceptsStdio = true; return a }
+func (a *ToolTailArg[T]) Name(name string) *ToolTailArg[T]     { a.b.name = name; return a }
+func (a *ToolTailArg[T]) Doc(summary string) *ToolTailArg[T]   { a.b.doc.summary = summary; return a }
+func (a *ToolTailArg[T]) ValueName(n string) *ToolTailArg[T]   { a.b.valueName = n; return a }
+func (a *ToolTailArg[T]) Min(n uint32) *ToolTailArg[T]         { a.b.min = n; return a }
+func (a *ToolTailArg[T]) Max(n uint32) *ToolTailArg[T]         { a.b.max = &n; return a }
+func (a *ToolTailArg[T]) AcceptsStdio() *ToolTailArg[T]        { a.b.acceptsStdio = true; return a }
 func (a *ToolTailArg[T]) Separator(sep string) *ToolTailArg[T] { a.b.separator = sep; return a }
 
 // Verbatim takes everything after the separator as values, flags included.
 func (a *ToolTailArg[T]) Verbatim() *ToolTailArg[T] { a.b.verbatim = true; return a }
 
 // ValueIs refers to one of the values being v, for a constraint.
-func (a *ToolTailArg[T]) ValueIs(v T) ToolRef   { return valueRef(a.b, v) }
-func (a *ToolTailArg[T]) toolRef() refDecl      { return refDecl{b: a.b} }
-func (a *ToolTailArg[T]) toolRefs() refsDecl    { return single(a) }
+func (a *ToolTailArg[T]) ValueIs(v T) ToolRef { return valueRef(a.b, v) }
+func (a *ToolTailArg[T]) toolRef() refDecl    { return refDecl{b: a.b} }
+func (a *ToolTailArg[T]) toolRefs() refsDecl  { return single(a) }
 
 // ToolOptionArg is a field bound to a named option carrying one value.
 type ToolOptionArg[T any] struct{ b *argBinding }
 
-func (a *ToolOptionArg[T]) Name(name string) *ToolOptionArg[T]  { a.b.name = name; return a }
-func (a *ToolOptionArg[T]) Short(r rune) *ToolOptionArg[T]      { a.b.short = r; return a }
-func (a *ToolOptionArg[T]) Env(name string) *ToolOptionArg[T]   { a.b.env = name; return a }
+func (a *ToolOptionArg[T]) Name(name string) *ToolOptionArg[T]   { a.b.name = name; return a }
+func (a *ToolOptionArg[T]) Short(r rune) *ToolOptionArg[T]       { a.b.short = r; return a }
+func (a *ToolOptionArg[T]) Env(name string) *ToolOptionArg[T]    { a.b.env = name; return a }
 func (a *ToolOptionArg[T]) ValueName(n string) *ToolOptionArg[T] { a.b.valueName = n; return a }
 func (a *ToolOptionArg[T]) Doc(summary string) *ToolOptionArg[T] {
 	a.b.doc.summary = summary
@@ -666,8 +669,10 @@ type refsDecl struct {
 
 type valueRefDecl struct{ r refDecl }
 
-func (v valueRefDecl) toolRef() refDecl   { return v.r }
-func (v valueRefDecl) toolRefs() refsDecl { return refsDecl{quant: toolCommon.QuantifierAll, refs: []refDecl{v.r}} }
+func (v valueRefDecl) toolRef() refDecl { return v.r }
+func (v valueRefDecl) toolRefs() refsDecl {
+	return refsDecl{quant: toolCommon.QuantifierAll, refs: []refDecl{v.r}}
+}
 
 type refSet struct{ d refsDecl }
 

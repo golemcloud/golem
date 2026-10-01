@@ -32,8 +32,10 @@ type LookupArgs struct{ Name string }
 
 // declareLookup registers a command with two declared failures: one carrying a
 // payload and one carrying none.
-func declareLookup(r *toolRegistry, d *definitions) (*ToolCommand[LookupArgs, string], *ToolErrorCase[NotFoundPayload]) {
-	def := defineToolInto(r, d, "lookup", ToolSpec{Version: "1.0.0"}, false)
+type Lookup struct{}
+
+func declareLookup(r *toolRegistry, d *definitions) (*ToolCommand[Lookup, LookupArgs, string], *ToolErrorCase[NotFoundPayload, Lookup]) {
+	def := defineToolInto[Lookup](r, d, "lookup", ToolSpec{Version: "1.0.0"}, false)
 	notFound := DefineToolError[NotFoundPayload](def, "not-found", ToolErrorSpec{
 		Kind: UsageError, ExitCode: 2, Summary: "no such name",
 	})
@@ -257,7 +259,7 @@ func TestSuccessStillWorksAlongsideDeclaredErrors(t *testing.T) {
 
 func TestDuplicateErrorCaseIsADefinitionError(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	def := defineToolInto(r, d, "dupe", ToolSpec{}, false)
+	def := defineToolInto[Lookup](r, d, "dupe", ToolSpec{}, false)
 	DefineToolError[Unit](def, "same", ToolErrorSpec{})
 	DefineToolError[Unit](def, "same", ToolErrorSpec{})
 	mustDefErr(t, d, "error case already declared")
@@ -294,7 +296,7 @@ func TestReflectedCommandErrorsAreDescribed(t *testing.T) {
 		t.Errorf("offline = %+v", offline)
 	}
 
-	ctx := &ToolMiddlewareContext[Unit]{call: &middlewareCall{toolName: "lookup", tool: tools[0]}}
+	ctx := &UniversalToolMiddlewareContext[Unit]{inv: &middlewareInvocation{toolName: "lookup", tool: tools[0]}}
 	if md := ctx.ToolMetadata(); md.Name() != "lookup" || md.Version() != "1.0.0" {
 		t.Errorf("ToolMetadata = %q %q", md.Name(), md.Version())
 	}

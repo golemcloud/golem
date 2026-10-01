@@ -22,11 +22,11 @@ import (
 
 // newToolStdin adapts the host-supplied reader, or produces one that explains
 // its own absence.
-func newToolStdin(stdin toolExports.Stdin) *ToolStdin {
+func newToolStdin(stdin toolExports.Stdin) *byteReader {
 	if stdin.IsNone() {
-		return &ToolStdin{absent: absentStdin}
+		return &byteReader{absent: absentStdin}
 	}
-	return &ToolStdin{src: stdin.Some()}
+	return &byteReader{src: stdin.Some()}
 }
 
 // newToolStdout adapts the host-supplied writer, or produces one that explains

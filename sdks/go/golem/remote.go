@@ -18,99 +18,148 @@ import (
 	"reflect"
 )
 
-// Remote agents.
+// Agent clients.
 //
-// A [RemoteAgent] is a handle to an agent this component CALLS but does not
-// implement. It is what a generated cross-component client declares, and what a
-// hand-written one should use too:
+// An agent client definition lets a component call agents whose Go definition
+// it does not share. It comes in two forms.
 //
-//	var Counter = golem.DeclareRemoteAgent[CounterId]("CounterAgent")
+// A method-only client declares only methods, so it can call any existing
+// agent that has them, whatever its type — a shape many agent types share:
+//
+//	type Pingable struct{}
+//
+//	var Pinger = golem.DefineAgentClient[Pingable]()
+//	var Ping   = Pinger.Method[golem.Unit, string]("ping")
+//
+//	c, err := Pinger.Bind(agentID)
+//	reply := Ping.Call(c, golem.Unit{})
+//
+// A full client also declares the target type's name, constructor (Id) and
+// lifecycle, so it creates and addresses instances like the agent's own
+// definition. Generated guest clients use it:
+//
+//	var Counter = golem.DefineFullAgentClient[CounterId]("CounterAgent", golem.AgentClientSpec{})
 //	var Add     = Counter.Method[AddIn, int64]("add")
 //
-//	client := Counter.Get(CounterId{Name: "c1"})
-//	total := Add.Call(client, AddIn{By: 3})
+//	total := Add.Call(Counter.Get(CounterId{Name: "c1"}), AddIn{By: 3})
 //
-// [DefineAgent] cannot be used for this. It registers an agent type the
-// component *provides*: the name is published by discover-agent-types, and an
-// agent that is defined but never implemented is a definition error. Declaring
-// a call target that way would make the caller advertise an agent it cannot
-// run, and fail its own definition check.
-//
-// A remote declaration therefore records only what a call needs — the target's
-// name and the shape of its id — and stays out of everything the component
-// publishes about itself.
+// Neither is published by the component: [DefineAgent] declares an agent the
+// component provides, which is a different thing.
 
-// Remote is a call target: an agent implemented by some other component.
-type Remote[Id any] struct{ name string }
-
-// Name returns the target agent type's name.
-func (a *Remote[Id]) Name() string { return a.name }
-
-// DeclareRemoteAgent declares an agent this component calls but does not
-// implement. Call it from a package-level var so the declaration is in place
-// before the component is invoked.
-func DeclareRemoteAgent[Id any](name string) *Remote[Id] {
-	return declareRemoteAgentInto[Id](defs, name)
+// AgentClientSpec describes the target of a full agent client.
+type AgentClientSpec struct {
+	// Mode is the target's lifecycle. An ephemeral target has no durable
+	// identity, so its client offers NewPhantom only.
+	Mode Mode
 }
 
-// declareRemoteAgentInto is the instance-scoped implementation behind
-// [DeclareRemoteAgent].
-func declareRemoteAgentInto[Id any](d *definitions, name string) *Remote[Id] {
+// AgentClient is a method-only agent client definition; Shape is its identity
+// type, which its methods and clients carry.
+type AgentClient[Shape any] struct{}
+
+// DefineAgentClient declares a method-only agent client.
+func DefineAgentClient[Shape any]() *AgentClient[Shape] { return &AgentClient[Shape]{} }
+
+// Method declares a method the client calls.
+func (a *AgentClient[Shape]) Method[In any, Out any](name string, opts ...MethodOpt) MethodDef[Shape, In, Out] {
+	return newMethodDef[Shape, In, Out](name, opts)
+}
+
+// Bind addresses the existing agent agentID names, of any type. Binding checks
+// nothing about the target, which this definition does not describe; a
+// mismatch is reported by the host or when the result is decoded. Binding does
+// not create the agent, but the first call to a durable identity does.
+func (a *AgentClient[Shape]) Bind(agentID string) (Client[Shape], error) {
+	return bindClient[Shape](agentID)
+}
+
+// FullAgentClient is a full agent client definition: the target type's name,
+// constructor (Id), lifecycle and configuration (Cfg).
+type FullAgentClient[Id any, Cfg any] struct {
+	name string
+	mode Mode
+}
+
+// DefineFullAgentClient declares a full agent client for the agent type name.
+// Call it from a package-level var.
+func DefineFullAgentClient[Id any](name string, spec AgentClientSpec) *FullAgentClient[Id, NoConfig] {
+	return defineFullAgentClientInto[Id, NoConfig](defs, name, spec)
+}
+
+// DefineConfiguredFullAgentClient declares a full agent client whose target
+// takes configuration Cfg, so a caller can pass typed creation-time overrides
+// with [WithConfig].
+func DefineConfiguredFullAgentClient[Id any, Cfg any](name string, spec AgentClientSpec) *FullAgentClient[Id, Cfg] {
+	return defineFullAgentClientInto[Id, Cfg](defs, name, spec)
+}
+
+func defineFullAgentClientInto[Id any, Cfg any](d *definitions, name string, spec AgentClientSpec) *FullAgentClient[Id, Cfg] {
 	idType := reflect.TypeFor[Id]()
-	a := &Remote[Id]{name: name}
+	a := &FullAgentClient[Id, Cfg]{name: name, mode: spec.Mode}
 	if name == "" {
-		d.recordErr("", "", "DeclareRemoteAgent requires a non-empty name (Id type %s)", idType)
+		d.recordErr("", "", "DefineFullAgentClient requires a non-empty name (Id type %s)", idType)
 		return a
 	}
 	if existing, dup := d.agents[name]; dup {
 		if existing.remote {
-			d.recordErr(name, "", "remote agent already declared")
+			d.recordErr(name, "", "agent client already defined")
 		} else {
-			d.recordErr(name, "", "%s is defined by this component; call it with its own definition rather than DeclareRemoteAgent", name)
+			d.recordErr(name, "", "%s is defined by this component; call it with its own definition rather than a client definition", name)
 		}
 		return a
 	}
 	if idType.Kind() != reflect.Struct {
 		d.recordErr(name, "", "Id must be a struct, got %s", idType)
 	}
-	// Registered in d.agents so Get can resolve the id fields, but deliberately
-	// NOT in d.order: that list is what discover() publishes, and this component
-	// does not implement this agent. The Id type is likewise not claimed in
-	// idToAgent — that guard exists so two *local* agents cannot share an Id
-	// type, which says nothing about a target someone else implements.
-	d.agents[name] = &agentEntry{
+	// Registered in d.agents so Get can resolve the id fields and config
+	// overrides, but deliberately NOT in d.order: that list is what discover()
+	// publishes, and this component does not implement this agent. The Id type
+	// is likewise not claimed in idToAgent — that guard exists so two *local*
+	// agents cannot share an Id type, which says nothing about a target someone
+	// else implements.
+	e := &agentEntry{
 		name:     name,
 		remote:   true,
+		mode:     spec.Mode.toWit(),
 		idType:   idType,
 		idFields: d.structFields(idType),
 		methods:  map[string]*methodEntry{},
 	}
+	d.agents[name] = e
+	flattenConfigStruct(d, e, name, reflect.TypeFor[Cfg]())
 	return a
 }
 
-// Method declares a typed method descriptor on the remote agent, exactly as
-// [AgentDefinition.Method] does for a local one. It registers nothing: the
-// descriptor is the contract [MethodDef.Call] and friends invoke through.
-func (a *Remote[Id]) Method[In any, Out any](name string, opts ...MethodOpt) MethodDef[Id, In, Out] {
-	var o methodOpts
-	for _, f := range opts {
-		f(&o)
-	}
-	return MethodDef[Id, In, Out]{
-		name: name, desc: o.desc, descCount: o.descCount, endpoints: o.endpoints,
-		readOnly: o.readOnly, readOnlyCount: o.readOnlyCount, cacheCount: o.cacheCount,
-	}
+// Name returns the target agent type's name.
+func (a *FullAgentClient[Id, Cfg]) Name() string { return a.name }
+
+// Method declares a typed method descriptor on the target, exactly as
+// [AgentDefinition.Method] does for a local agent.
+func (a *FullAgentClient[Id, Cfg]) Method[In any, Out any](name string, opts ...MethodOpt) MethodDef[Id, In, Out] {
+	return newMethodDef[Id, In, Out](name, opts)
 }
 
-// Get returns a client for the remote agent with the given id, creating the
-// agent if it does not exist yet — the same contract as
-// [AgentDefinition.Get], and it panics on the same failures.
-func (a *Remote[Id]) Get(id Id, opts ...ClientOpt) Client[Id] {
+// Get returns a client for the agent with the given id, creating it if it does
+// not exist yet — the same contract as [AgentDefinition.Get], and it panics on
+// the same failures.
+func (a *FullAgentClient[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
 	return getClient[Id](defs, a.name, id, opts)
 }
 
-// NewPhantom allocates a fresh phantom instance of the remote agent and returns
-// a client for it, mirroring [AgentDefinition.NewPhantom].
-func (a *Remote[Id]) NewPhantom(id Id) Client[Id] {
-	return newPhantomClient[Id](defs, a.name, id)
+// NewPhantom allocates a fresh phantom instance and returns a client for it,
+// mirroring [AgentDefinition.NewPhantom].
+func (a *FullAgentClient[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) Client[Id] {
+	return newPhantomClient[Id](defs, a.name, id, opts)
+}
+
+// Bind addresses an existing agent by its id, which must name this client's
+// agent type and carry a constructor of shape Id.
+func (a *FullAgentClient[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
+	return bindTypedClient[Id](defs, a.name, agentID)
+}
+
+// AgentID renders the identity of the instance id (and phantom, if any)
+// names, without creating it.
+func (a *FullAgentClient[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) (string, error) {
+	return makeTypedAgentID[Id](defs, a.name, id, phantom)
 }

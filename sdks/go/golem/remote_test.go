@@ -15,19 +15,23 @@
 package golem
 
 import (
+	"reflect"
+	"strings"
 	"testing"
+
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 )
 
 type RemoteCounterID struct{ Name string }
 
 type RemoteAddIn struct{ By int64 }
 
-// TestRemoteAgentIsNotPublished — the whole reason DeclareRemoteAgent exists: a
+// TestRemoteAgentIsNotPublished — the whole reason a full agent client exists: a
 // component that CALLS an agent must not advertise it as one it provides, and
 // must not fail its own definition check for not implementing it.
 func TestRemoteAgentIsNotPublished(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		declareRemoteAgentInto[RemoteCounterID](d, "CounterAgent")
+		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
@@ -53,7 +57,7 @@ func TestRemoteAgentDoesNotDisturbALocalOne(t *testing.T) {
 			simpleNewState[LocalID, St](func(LocalID) *St { return &St{} }), false)
 		impl.Handle(m, func(*Context[St], RemoteAddIn) int64 { return 0 })
 
-		declareRemoteAgentInto[RemoteCounterID](d, "CounterAgent")
+		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
@@ -69,7 +73,7 @@ func TestRemoteAgentDoesNotDisturbALocalOne(t *testing.T) {
 // from the registry, so the declaration has to carry them.
 func TestRemoteAgentRecordsWhatACallNeeds(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		declareRemoteAgentInto[RemoteCounterID](d, "CounterAgent")
+		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
 
 		e := d.agents["CounterAgent"]
 		if e == nil {
@@ -89,33 +93,33 @@ func TestRemoteAgentRecordsWhatACallNeeds(t *testing.T) {
 // component's own types.
 func TestRemoteAgentDoesNotClaimItsIdType(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		declareRemoteAgentInto[RemoteCounterID](d, "CounterAgent")
-		if _, claimed := d.idToAgent[typeOf[RemoteCounterID]()]; claimed {
+		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
+		if _, claimed := d.idToAgent[reflect.TypeFor[RemoteCounterID]()]; claimed {
 			t.Error("a remote declaration claimed its Id type")
 		}
 	})
 }
 
-func TestDeclareRemoteAgentErrors(t *testing.T) {
+func TestFullAgentClientErrors(t *testing.T) {
 	t.Run("empty name", func(t *testing.T) {
 		withDefs(t, func(d *definitions) {
-			declareRemoteAgentInto[RemoteCounterID](d, "")
+			defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "", AgentClientSpec{})
 			mustDefErr(t, d, "requires a non-empty name")
 		})
 	})
 
 	t.Run("non-struct id", func(t *testing.T) {
 		withDefs(t, func(d *definitions) {
-			declareRemoteAgentInto[string](d, "CounterAgent")
+			defineFullAgentClientInto[string, NoConfig](d, "CounterAgent", AgentClientSpec{})
 			mustDefErr(t, d, "Id must be a struct")
 		})
 	})
 
 	t.Run("declared twice", func(t *testing.T) {
 		withDefs(t, func(d *definitions) {
-			declareRemoteAgentInto[RemoteCounterID](d, "CounterAgent")
-			declareRemoteAgentInto[RemoteCounterID](d, "CounterAgent")
-			mustDefErr(t, d, "remote agent already declared")
+			defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
+			defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
+			mustDefErr(t, d, "agent client already defined")
 		})
 	})
 
@@ -124,7 +128,7 @@ func TestDeclareRemoteAgentErrors(t *testing.T) {
 	t.Run("shadowing a local agent", func(t *testing.T) {
 		withDefs(t, func(d *definitions) {
 			defineAgentInto[RemoteCounterID, NoConfig](d, Spec{Name: "Local"})
-			declareRemoteAgentInto[RemoteCounterID](d, "Local")
+			defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "Local", AgentClientSpec{})
 			mustDefErr(t, d, "is defined by this component")
 		})
 	})
@@ -133,7 +137,7 @@ func TestDeclareRemoteAgentErrors(t *testing.T) {
 // TestRemoteMethodDescriptorMatchesTheLocalOne — the descriptor is the contract
 // Call invokes through, so it must carry the same fields either way.
 func TestRemoteMethodDescriptorMatchesTheLocalOne(t *testing.T) {
-	remote := &Remote[RemoteCounterID]{name: "CounterAgent"}
+	remote := &FullAgentClient[RemoteCounterID, NoConfig]{name: "CounterAgent"}
 	m := remote.Method[RemoteAddIn, int64]("add", Desc("Add to the counter"))
 	if m.Name() != "add" {
 		t.Errorf("name %q", m.Name())
@@ -149,17 +153,63 @@ func TestRemoteMethodDescriptorMatchesTheLocalOne(t *testing.T) {
 func TestLocalAndRemoteClashIsReportedEitherWay(t *testing.T) {
 	t.Run("remote first", func(t *testing.T) {
 		withDefs(t, func(d *definitions) {
-			declareRemoteAgentInto[RemoteCounterID](d, "Both")
+			defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "Both", AgentClientSpec{})
 			defineAgentInto[RemoteCounterID, NoConfig](d, Spec{Name: "Both"})
-			mustDefErr(t, d, "rather than DeclareRemoteAgent")
+			mustDefErr(t, d, "rather than a client definition")
 		})
 	})
 
 	t.Run("local first", func(t *testing.T) {
 		withDefs(t, func(d *definitions) {
 			defineAgentInto[RemoteCounterID, NoConfig](d, Spec{Name: "Both"})
-			declareRemoteAgentInto[RemoteCounterID](d, "Both")
-			mustDefErr(t, d, "rather than DeclareRemoteAgent")
+			defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "Both", AgentClientSpec{})
+			mustDefErr(t, d, "rather than a client definition")
 		})
 	})
+}
+
+type RemoteCounterConfig struct{ Threshold int32 }
+
+// TestConfiguredFullAgentClientDeclaresItsConfig — overrides are checked
+// against the declared configuration before anything is sent.
+func TestConfiguredFullAgentClientDeclaresItsConfig(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		defineFullAgentClientInto[RemoteCounterID, RemoteCounterConfig](d, "CounterAgent", AgentClientSpec{})
+		e := d.agents["CounterAgent"]
+		if !configDeclared(e, []string{"threshold"}) {
+			t.Errorf("config declarations are %+v", e.configs)
+		}
+		if _, err := buildAgentConfig(d, e, []configOverrideFn{func(*definitions) ([]common.TypedAgentConfigValue, error) {
+			return []common.TypedAgentConfigValue{{Path: []string{"nope"}}}, nil
+		}}); err == nil || !strings.Contains(err.Error(), "not a declared config key") {
+			t.Errorf("an undeclared override was accepted: %v", err)
+		}
+	})
+}
+
+// TestEphemeralTargetsHaveNoGet — an ephemeral agent has no durable identity
+// to get or bind; only a phantom addresses one.
+func TestEphemeralTargetsHaveNoGet(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "Request", AgentClientSpec{Mode: Ephemeral})
+		e := d.agents["Request"]
+		if err := requireIdentity(e, false); err == nil || !strings.Contains(err.Error(), "use NewPhantom") {
+			t.Errorf("Get on an ephemeral target gave %v", err)
+		}
+		if err := requireIdentity(e, true); err != nil {
+			t.Errorf("a phantom of an ephemeral target was refused: %v", err)
+		}
+	})
+}
+
+type Pingable struct{}
+
+// TestMethodOnlyClientDeclaresDescriptorsOnly — a method-only client registers
+// nothing: its methods are descriptors on its shape type.
+func TestMethodOnlyClientDeclaresDescriptorsOnly(t *testing.T) {
+	pinger := DefineAgentClient[Pingable]()
+	ping := pinger.Method[Unit, string]("ping", Desc("Ping"))
+	if ping.Name() != "ping" || ping.desc != "Ping" {
+		t.Errorf("descriptor %+v", ping)
+	}
 }

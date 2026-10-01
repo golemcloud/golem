@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -659,9 +661,17 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		if !ok {
 			return nil, typeErr(path, "object", value)
 		}
+		// Every problem with the record is reported together, so a caller
+		// working from JSON learns about all its mistakes at once.
+		var issues []Issue
+		keys := make([]string, 0, len(obj))
 		for key := range obj {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
 			if !hasField(b.Fields, key) {
-				return nil, fmt.Errorf("%s: unknown field %q", pathOrRoot(path), key)
+				issues = append(issues, Issue{Path: child(path, key), Message: fmt.Sprintf("unknown field %q", key)})
 			}
 		}
 		fields := make([]SchemaValue, 0, len(b.Fields))
@@ -675,13 +685,23 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 						continue
 					}
 				}
-				return nil, fmt.Errorf("%s: missing field %q", pathOrRoot(path), f.Name)
+				issues = append(issues, Issue{Path: child(path, f.Name), Message: fmt.Sprintf("missing field %q", f.Name)})
+				continue
 			}
 			built, err := p.build(f.Body, raw, child(path, f.Name))
 			if err != nil {
-				return nil, err
+				var ve *ValidationError
+				if errors.As(err, &ve) {
+					issues = append(issues, ve.Issues...)
+				} else {
+					issues = append(issues, Issue{Path: child(path, f.Name), Message: err.Error()})
+				}
+				continue
 			}
 			fields = append(fields, built)
+		}
+		if len(issues) > 0 {
+			return nil, &ValidationError{Issues: issues}
 		}
 		return RecordValue{Fields: fields}, nil
 

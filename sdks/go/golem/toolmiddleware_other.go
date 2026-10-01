@@ -17,15 +17,9 @@
 package golem
 
 import (
-	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
 	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
 )
 
-// Off the wasm target there is no runtime to invoke, and binding the generated
-// resource to the layer interface would drag its //go:wasmimport methods into a
-// native link that has no bodies for them. The dispatcher and the handler
-// protocol are target-independent and tested directly against a fake layer.
-
-func newNextLayer(_ *underlying.UnderlyingTool) nextLayer { return absentNextLayer{} }
-
-func newNextStdin(_ mwExports.Stdin) nextStdin { return nextStdin{} }
+// Off the wasm target there is no layer beneath to bind; see
+// toolmiddleware_wasm.go.
+func newUnderlyingLayer(_ *underlying.UnderlyingTool) underlyingLayer { return absentUnderlyingLayer }

@@ -51,7 +51,7 @@ type methodEntry struct {
 type agentEntry struct {
 	name string
 	// remote marks a call target this component does not implement, declared
-	// with DeclareRemoteAgent. A remote entry is never published by discover()
+	// with DefineFullAgentClient. A remote entry is never published by discover()
 	// and never claims an Id type.
 	remote   bool
 	desc     string
@@ -182,7 +182,7 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 		if existing.remote {
 			// Package-level var init order across packages is unspecified, so this
 			// clash can surface from either side; both say the same thing.
-			d.recordErr(spec.Name, "", "%s is declared as a remote agent by this component; call it with its own definition rather than DeclareRemoteAgent", spec.Name)
+			d.recordErr(spec.Name, "", "%s is also declared as an agent client by this component; call it with its own definition rather than a client definition", spec.Name)
 		} else {
 			d.recordErr(spec.Name, "", "agent type already defined")
 		}
@@ -230,13 +230,17 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 // to invoke the method ([MethodDef.Call] and friends), and the implementation
 // package binds a handler to it with [AgentImpl.Handle].
 func (a *AgentDefinition[Id, Cfg]) Method[In any, Out any](name string, opts ...MethodOpt) MethodDef[Id, In, Out] {
+	return newMethodDef[Id, In, Out](name, opts)
+}
+
+// newMethodDef builds a method descriptor. The option counts are carried on the
+// descriptor and validated at Implement time, where the target definitions are
+// known; the descriptor itself is instance independent.
+func newMethodDef[Id any, In any, Out any](name string, opts []MethodOpt) MethodDef[Id, In, Out] {
 	var o methodOpts
 	for _, f := range opts {
 		f(&o)
 	}
-	// descCount is carried on the descriptor and validated at Implement time,
-	// where the target definitions is known — DefineMethod itself is instance
-	// independent (it just returns a descriptor).
 	return MethodDef[Id, In, Out]{
 		name: name, desc: o.desc, descCount: o.descCount, endpoints: o.endpoints,
 		readOnly: o.readOnly, readOnlyCount: o.readOnlyCount, cacheCount: o.cacheCount,

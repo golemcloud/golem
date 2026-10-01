@@ -23,36 +23,36 @@ import "fmt"
 // a native link that has no bodies for them. The snapshot handling itself is
 // target-independent and tested directly.
 
+var errOutsideComponent = fmt.Errorf("golem: agent discovery and binding are only available inside a component")
+
 func DiscoverAgentTypes() []ReflectedAgentType { return nil }
 
 func DiscoverAgentType(string) (ReflectedAgentType, bool) { return ReflectedAgentType{}, false }
 
 func DiscoverAgentTypeByID(string) (ReflectedAgentType, bool) { return ReflectedAgentType{}, false }
 
-func (r ReflectedAgentType) Bind(map[string]any, ...ClientOpt) (*ReflectedAgentClient, error) {
-	return nil, fmt.Errorf("golem: agent discovery is only available inside a component")
+func (r ReflectedAgentType) Get(map[string]any, ...ClientOpt) (*ReflectedAgentClient, error) {
+	return nil, errOutsideComponent
 }
 
-func (r ReflectedAgentType) BindPhantom(map[string]any, UUID, ...ClientOpt) (*ReflectedAgentClient, error) {
-	return nil, fmt.Errorf("golem: agent discovery is only available inside a component")
+func (r ReflectedAgentType) NewPhantom(map[string]any, ...ClientOpt) (*ReflectedAgentClient, error) {
+	return nil, errOutsideComponent
+}
+
+func (r ReflectedAgentType) Bind(string) (*ReflectedAgentClient, error) {
+	return nil, errOutsideComponent
+}
+
+func (r ReflectedAgentType) AgentID(map[string]any, Option[UUID]) (string, error) {
+	return "", errOutsideComponent
 }
 
 func DiscoverTools() []ReflectedTool { return nil }
 
 func DiscoverTool(string) (ReflectedTool, bool) { return ReflectedTool{}, false }
 
-func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
-	return nil, fmt.Errorf("golem: tool discovery is only available inside a component")
-}
+func ParseRawAgentID(string) (RawAgentID, error) { return RawAgentID{}, errOutsideComponent }
 
-func ParseRawAgentID(string) (RawAgentID, error) {
-	return RawAgentID{}, fmt.Errorf("golem: parsing an agent id is only available inside a component")
-}
+func BindAgentID(string) (*DynamicAgentClient, error) { return nil, errOutsideComponent }
 
-func BindAgentID(string) (*DynamicAgentClient, error) {
-	return nil, fmt.Errorf("golem: binding an agent id is only available inside a component")
-}
-
-func BindTool(string) (*DynamicToolClient, error) {
-	return nil, fmt.Errorf("golem: binding a tool is only available inside a component")
-}
+func MakeAgentID(string, TypedValue, Option[UUID]) (string, error) { return "", errOutsideComponent }

@@ -17,6 +17,7 @@ package golem
 import (
 	"fmt"
 	"reflect"
+	"slices"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
@@ -77,8 +78,8 @@ func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
 }
 
 // getClient builds a client for an agent registered under name. It is shared by
-// the local ([AgentDefinition.Get]) and remote ([Remote.Get]) paths, which
-// differ only in how the target was declared, never in how it is called.
+// the local ([AgentDefinition.Get]) and client ([FullAgentClient.Get]) paths,
+// which differ only in how the target was declared, never in how it is called.
 func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Client[Id] {
 	e := d.agents[name]
 	if e == nil {
@@ -89,6 +90,9 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Cli
 	o.phantomID = witTypes.None[types.Uuid]()
 	for _, f := range opts {
 		f(&o)
+	}
+	if err := requireIdentity(e, o.phantomID.IsSome()); err != nil {
+		panic(err)
 	}
 
 	idVal := reflect.ValueOf(&id).Elem()
@@ -121,11 +125,88 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Cli
 	}
 }
 
+// requireIdentity refuses to address an ephemeral agent without a phantom: it
+// has no durable identity to get.
+func requireIdentity(e *agentEntry, phantom bool) error {
+	if e.mode == common.AgentModeEphemeral && !phantom {
+		return fmt.Errorf("golem: Get %s: an ephemeral agent has no durable identity; use NewPhantom", e.name)
+	}
+	return nil
+}
+
 // newPhantomClient allocates a fresh phantom instance and returns a client for
 // it, shared by the local and remote paths.
-func newPhantomClient[Id any](d *definitions, name string, id Id) Client[Id] {
+func newPhantomClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Client[Id] {
 	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
-	return getClient[Id](d, name, id, []ClientOpt{WithPhantomID(phantom)})
+	return getClient[Id](d, name, id, append(slices.Clone(opts), WithPhantomID(phantom)))
+}
+
+// Bind addresses an existing agent by its id, which must name this agent type
+// and carry a constructor of shape Id. Binding does not create the agent, but
+// the first call to a durable identity does. An ephemeral agent's id cannot be
+// bound: it named one invocation.
+func (a *AgentDefinition[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
+	return bindTypedClient[Id](defs, a.name, agentID)
+}
+
+// AgentID renders the identity of the instance id (and phantom, if any)
+// names, without creating it.
+func (a *AgentDefinition[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) (string, error) {
+	return makeTypedAgentID[Id](defs, a.name, id, phantom)
+}
+
+// bindTypedClient binds an agent id to a definition: the id must name the
+// type, its constructor must decode into Id, and the type must be durable.
+func bindTypedClient[Id any](d *definitions, name, agentID string) (Client[Id], error) {
+	parsed, err := ParseAgentID[Id](agentID)
+	if err != nil {
+		return Client[Id]{}, err
+	}
+	if parsed.TypeName != name {
+		return Client[Id]{}, fmt.Errorf("golem: agent id %q names %s, not %s", agentID, parsed.TypeName, name)
+	}
+	if e := d.agents[name]; e != nil && e.mode == common.AgentModeEphemeral {
+		return Client[Id]{}, fmt.Errorf("golem: %s is ephemeral; an ephemeral agent id cannot be bound", name)
+	}
+	return bindClient[Id](agentID)
+}
+
+// bindClient addresses the agent agentID names. The host parses the id;
+// nothing about the target is checked here.
+func bindClient[Id any](agentID string) (Client[Id], error) {
+	res := host.ParseAgentId(agentID)
+	if res.IsErr() {
+		return Client[Id]{}, fmt.Errorf("golem: parsing agent id %q: %w", agentID, agentErrorToGo(res.Err()))
+	}
+	t := res.Ok()
+	phantomID := None[UUID]()
+	if t.F2.IsSome() {
+		phantomID = Some(uuidFromWit(t.F2.Some()))
+	}
+	return Client[Id]{
+		rpc:       host.MakeWasmRpc(t.F0, t.F1.Value, t.F2, nil),
+		agentType: t.F0,
+		agentID:   agentID,
+		phantomID: phantomID,
+	}, nil
+}
+
+// makeTypedAgentID renders an agent id from a typed constructor value.
+func makeTypedAgentID[Id any](d *definitions, name string, id Id, phantom Option[UUID]) (string, error) {
+	e := d.agents[name]
+	if e == nil {
+		return "", fmt.Errorf("golem: unknown agent %s", name)
+	}
+	ctor := encodeParams(e.idFields, reflect.ValueOf(&id).Elem())
+	p := witTypes.None[types.Uuid]()
+	if u, has := phantom.Get(); has {
+		p = witTypes.Some(uuidToWit(u))
+	}
+	res := host.MakeAgentId(name, ctor, p)
+	if res.IsErr() {
+		return "", fmt.Errorf("golem: %s: %w", name, agentErrorToGo(res.Err()))
+	}
+	return res.Ok(), nil
 }
 
 // NewPhantom allocates a fresh phantom instance of the target agent and returns
@@ -135,8 +216,8 @@ func newPhantomClient[Id any](d *definitions, name string, id Id) Client[Id] {
 //
 // Ephemeral agents have no durable identity, so this is the only way to obtain
 // a client for one.
-func (a *AgentDefinition[Id, Cfg]) NewPhantom(id Id) Client[Id] {
-	return newPhantomClient[Id](defs, a.name, id)
+func (a *AgentDefinition[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) Client[Id] {
+	return newPhantomClient[Id](defs, a.name, id, opts)
 }
 
 // AgentErrorKind classifies an [AgentError].

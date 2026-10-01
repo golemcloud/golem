@@ -26,8 +26,8 @@ import (
 // adapters themselves are target-independent and tested directly; only these
 // two constructors are not (see toolstream_wasm.go).
 
-func newToolStdin(_ toolExports.Stdin) *ToolStdin {
-	return &ToolStdin{absent: absentStdin}
+func newToolStdin(_ toolExports.Stdin) *byteReader {
+	return &byteReader{absent: absentStdin}
 }
 
 func newToolStdout(_ toolExports.Stdout) *ToolStdout {

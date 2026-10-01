@@ -46,11 +46,11 @@ func startToolCallHost(
 		go pumpToolStdin(writer, closed, stdin)
 	}
 	stdoutArg := witTypes.None[*toolHost.ToolStdout]()
-	var out *ToolStdin
+	var out *byteReader
 	if stdout {
 		handle, reader := toolHost.CreateStdout()
 		stdoutArg = witTypes.Some(handle)
-		out = &ToolStdin{src: reader}
+		out = &byteReader{src: reader}
 	}
 
 	future := rpc.AsyncInvokeAndAwait(slices.Clone(path), input, stdinArg, stdoutArg)

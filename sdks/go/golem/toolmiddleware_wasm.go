@@ -17,44 +17,109 @@
 package golem
 
 import (
-	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
+	"errors"
+	"io"
+	"slices"
+
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
 	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// witNextLayer invokes the runtime-owned resource standing for the layer
-// beneath a middleware.
-type witNextLayer struct{ tool *underlying.UnderlyingTool }
+type byteStream = witTypes.StreamReader[witTypes.Result[[]uint8, streams.ByteStreamFailure]]
 
-func (n witNextLayer) invoke(commandPath []string, input TypedValue, stdin nextStdin) ToolMiddlewareOutcome {
-	forwarded := witTypes.None[*witTypes.StreamReader[witTypes.Result[[]uint8, streams.ByteStreamFailure]]]()
-	if s, ok := stdin.wit.(mwExports.Stdin); ok {
-		forwarded = s
-	}
-	call, out := n.tool.Invoke(commandPath, input.wit, forwarded)
-	// The result is awaited after the stdout reader is in hand, which is what
-	// lets a middleware relay output while the inner layer is still running.
-	res := call.Get()
-	outcome := ToolMiddlewareOutcome{}
-	if out.IsSome() {
-		outcome.stdout = &ToolStdin{src: out.Some()}
-	}
-	if res.Tag() == witTypes.ResultErr {
-		outcome.err = underlyingErrorToGo(res.Err())
-		return outcome
-	}
-	if v := res.Ok(); v.IsSome() {
-		outcome.result, outcome.hasResult = TypedValue{wit: v.Some()}, true
-	}
-	return outcome
-}
-
-func newNextLayer(tool *underlying.UnderlyingTool) nextLayer {
+// newUnderlyingLayer binds the layer beneath a middleware to the host's
+// resource.
+func newUnderlyingLayer(tool *underlying.UnderlyingTool) underlyingLayer {
 	if tool == nil {
-		return absentNextLayer{}
+		return absentUnderlyingLayer
 	}
-	return witNextLayer{tool: tool}
+	return underlyingLayer{start: func(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
+		res, out := tool.Invoke(slices.Clone(path), input, underlyingStdin(stdin))
+		var reader *byteReader
+		if out.IsSome() {
+			reader = &byteReader{src: out.Some()}
+		}
+		return toolCall{
+			stdout: reader,
+			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+				r := res.Get()
+				res.Drop()
+				if r.Tag() == witTypes.ResultErr {
+					e := underlyingErrorToRPC(r.Err())
+					return witTypes.None[types.TypedSchemaValue](), &e
+				}
+				return r.Ok(), nil
+			},
+			cancel: res.Cancel,
+		}, nil
+	}}
 }
 
-func newNextStdin(stdin mwExports.Stdin) nextStdin { return nextStdin{wit: stdin} }
+// underlyingStdin hands an unread standard input on whole, and otherwise
+// streams whatever the reader yields.
+func underlyingStdin(stdin io.Reader) witTypes.Option[*byteStream] {
+	if stdin == nil {
+		return witTypes.None[*byteStream]()
+	}
+	if br, ok := stdin.(*byteReader); ok && !br.consumed {
+		if raw, ok := br.src.(*byteStream); ok {
+			br.consumed = true
+			return witTypes.Some(raw)
+		}
+	}
+	writer, reader := underlying.MakeStreamResultListU8GolemToolStreamsByteStreamFailure()
+	go pumpStream(writer, stdin)
+	return witTypes.Some(reader)
+}
+
+// pumpStream copies a reader into a byte stream, ending it at io.EOF and with
+// a failure item on a read error.
+func pumpStream(w *witTypes.StreamWriter[witTypes.Result[[]uint8, streams.ByteStreamFailure]], src io.Reader) {
+	defer w.Drop()
+	buf := make([]byte, 64*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			item := witTypes.Ok[[]uint8, streams.ByteStreamFailure](slices.Clone(buf[:n]))
+			if w.WriteAll([]witTypes.Result[[]uint8, streams.ByteStreamFailure]{item}) == 0 {
+				return
+			}
+		}
+		switch {
+		case errors.Is(err, io.EOF):
+			return
+		case err != nil:
+			failure := StreamFailed(err.Error())
+			var se *StreamError
+			if errors.As(err, &se) {
+				failure = se.Failure
+			}
+			w.WriteAll([]witTypes.Result[[]uint8, streams.ByteStreamFailure]{
+				witTypes.Err[[]uint8](failure.wit),
+			})
+			return
+		}
+	}
+}
+
+// underlyingErrorToRPC classifies a failure of the layer beneath the same way
+// as a failed tool call.
+func underlyingErrorToRPC(e underlying.UnderlyingError) types.ToolRpcError {
+	switch e.Tag() {
+	case underlying.UnderlyingErrorToolError:
+		return types.MakeToolRpcErrorRemoteToolError(e.ToolError())
+	case underlying.UnderlyingErrorProtocolError:
+		return types.MakeToolRpcErrorProtocolError(e.ProtocolError())
+	case underlying.UnderlyingErrorDenied:
+		return types.MakeToolRpcErrorDenied(e.Denied())
+	case underlying.UnderlyingErrorInternalError:
+		return types.MakeToolRpcErrorRemoteInternalError(e.InternalError())
+	case underlying.UnderlyingErrorCancelled:
+		return types.MakeToolRpcErrorCancelled()
+	case underlying.UnderlyingErrorResourceExhausted:
+		return types.MakeToolRpcErrorResourceExhausted(e.ResourceExhausted())
+	}
+	return types.MakeToolRpcErrorProtocolError("unknown failure of the layer beneath")
+}

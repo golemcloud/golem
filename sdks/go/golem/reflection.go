@@ -16,6 +16,8 @@ package golem
 
 import (
 	"fmt"
+	"io"
+	"time"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
@@ -33,8 +35,8 @@ import (
 //
 //	agentType, found := golem.DiscoverAgentType("Greeter")
 //	if !found { ... }
-//	client, err := agentType.Bind(map[string]any{"name": "ada"})
-//	result, err := client.InvokeAndAwait("greet", map[string]any{"greeting": "hi"})
+//	client, err := agentType.Get(map[string]any{"name": "ada"})
+//	result, id, err := client.Call("greet", map[string]any{"greeting": "hi"})
 //
 // Arguments and results are canonical JSON — ordinary Go values read against
 // the snapshot's schema — because the caller has none of the target's types.
@@ -69,8 +71,16 @@ func (r ReflectedAgentType) Description() string { return r.wit.Description }
 // SourceLanguage returns the language the agent type was written in.
 func (r ReflectedAgentType) SourceLanguage() string { return r.wit.SourceLanguage }
 
+// Mode returns the agent type's lifecycle.
+func (r ReflectedAgentType) Mode() Mode {
+	if r.wit.Mode == common.AgentModeEphemeral {
+		return Ephemeral
+	}
+	return Durable
+}
+
 // Schema returns the snapshot's type graph. Its root is a placeholder: the
-// meaningful roots are the per-parameter and per-output nodes.
+// meaningful roots are the constructor's and the methods' inputs and outputs.
 func (r ReflectedAgentType) Schema() (core.Ref, error) {
 	if r.convErr != nil {
 		return core.Ref{}, r.convErr
@@ -102,6 +112,17 @@ func (r ReflectedAgentType) Method(name string) (ReflectedMethod, bool) {
 	return ReflectedMethod{}, false
 }
 
+// packConstructor validates and packs constructor arguments.
+//
+//nolint:unused // called from reflection_wasm.go
+func (r ReflectedAgentType) packConstructor(args map[string]any) (types.SchemaValueTree, error) {
+	input, err := r.Constructor().Input()
+	if err != nil {
+		return types.SchemaValueTree{}, err
+	}
+	return packJSONTree(input, args)
+}
+
 // ReflectedConstructor is a snapshot of an agent type's constructor.
 type ReflectedConstructor struct {
 	conv    witschema.Converted
@@ -112,39 +133,12 @@ type ReflectedConstructor struct {
 // Description returns the constructor's documentation.
 func (c ReflectedConstructor) Description() string { return c.wit.Description }
 
-// Parameters returns the constructor's caller-supplied parameters. Fields the
-// host injects, such as the principal, are left out: a caller neither supplies
-// nor can override them.
-func (c ReflectedConstructor) Parameters() ([]core.Parameter, error) {
-	return userParameters(c.conv, c.convErr, c.wit.InputSchema)
-}
-
-// PackJSON builds the constructor's parameter value from named arguments,
-// validating each against the snapshot before anything is sent.
-func (c ReflectedConstructor) PackJSON(args map[string]any) (core.SchemaValue, error) {
-	params, err := c.Parameters()
-	if err != nil {
-		return nil, err
-	}
-	return core.NewRef(c.conv.Graph).PackParameters(params, args)
-}
-
-//nolint:unused // called from reflection_wasm.go
-func (c ReflectedConstructor) packTree(args map[string]any) (types.SchemaValueTree, error) {
-	built, err := c.PackJSON(args)
-	if err != nil {
-		return types.SchemaValueTree{}, err
-	}
-	return witschema.ValueToWit(built)
-}
-
-// ToJSONSchema renders the constructor's parameters as a JSON Schema object.
-func (c ReflectedConstructor) ToJSONSchema(includeDraftMarker bool) (any, error) {
-	params, err := c.Parameters()
-	if err != nil {
-		return nil, err
-	}
-	return core.NewRef(c.conv.Graph).ParametersJSONSchema(params, includeDraftMarker)
+// Input returns the constructor's parameters as a record type. Fields the host
+// injects, such as the principal, are left out: a caller neither supplies nor
+// can override them. Pack canonical JSON with its PackJSON, and render it with
+// ToJSONSchema.
+func (c ReflectedConstructor) Input() (core.Ref, error) {
+	return parametersRecord(c.conv, c.convErr, c.wit.InputSchema)
 }
 
 // ReflectedMethod is a snapshot of one agent method.
@@ -172,98 +166,57 @@ func (m ReflectedMethod) PromptHint() (string, bool) {
 // effects, which is what makes its result cacheable.
 func (m ReflectedMethod) ReadOnly() bool { return m.wit.ReadOnly.IsSome() }
 
-// Parameters returns the method's caller-supplied parameters.
-func (m ReflectedMethod) Parameters() ([]core.Parameter, error) {
-	return userParameters(m.conv, m.convErr, m.wit.InputSchema)
+// Input returns the method's caller-supplied parameters as a record type.
+func (m ReflectedMethod) Input() (core.Ref, error) {
+	return parametersRecord(m.conv, m.convErr, m.wit.InputSchema)
 }
 
-// Output returns the method's result type, or false when it returns nothing.
-func (m ReflectedMethod) Output() (core.Ref, bool) {
-	if m.wit.OutputSchema.Tag() != common.OutputSchemaSingle || m.convErr != nil {
-		return core.Ref{}, false
+// Output returns the method's result type, none when it returns nothing.
+func (m ReflectedMethod) Output() (Option[core.Ref], error) {
+	if m.convErr != nil {
+		return None[core.Ref](), m.convErr
+	}
+	if m.wit.OutputSchema.Tag() != common.OutputSchemaSingle {
+		return None[core.Ref](), nil
 	}
 	ref, err := m.conv.Ref(m.wit.OutputSchema.Single())
 	if err != nil {
-		return core.Ref{}, false
+		return None[core.Ref](), err
 	}
-	return ref, true
+	return Some(ref), nil
 }
 
-// PackJSON builds the method's parameter value from named arguments.
-func (m ReflectedMethod) PackJSON(args map[string]any) (core.SchemaValue, error) {
-	params, err := m.Parameters()
-	if err != nil {
-		return nil, err
-	}
-	return core.NewRef(m.conv.Graph).PackParameters(params, args)
-}
-
-func (m ReflectedMethod) packTree(args map[string]any) (types.SchemaValueTree, error) {
-	built, err := m.PackJSON(args)
-	if err != nil {
-		return types.SchemaValueTree{}, err
-	}
-	return witschema.ValueToWit(built)
-}
-
-// UnpackOutput reads a returned value as canonical JSON.
-func (m ReflectedMethod) UnpackOutput(value core.SchemaValue) (any, error) {
-	out, has := m.Output()
-	if !has {
-		return nil, fmt.Errorf("golem: method %q returns nothing", m.wit.Name)
-	}
-	return out.UnpackJSON(value)
-}
-
-func (m ReflectedMethod) unpackTree(tree types.SchemaValueTree) (any, error) {
-	value, err := witschema.ValueToCore(tree)
-	if err != nil {
-		return nil, err
-	}
-	return m.UnpackOutput(value)
-}
-
-// ToJSONSchema renders the method's parameters as a JSON Schema object.
-func (m ReflectedMethod) ToJSONSchema(includeDraftMarker bool) (any, error) {
-	params, err := m.Parameters()
-	if err != nil {
-		return nil, err
-	}
-	return core.NewRef(m.conv.Graph).ParametersJSONSchema(params, includeDraftMarker)
-}
-
-// OutputJSONSchema renders the method's result type, or false when it returns
-// nothing.
-func (m ReflectedMethod) OutputJSONSchema(includeDraftMarker bool) (any, bool, error) {
-	out, has := m.Output()
-	if !has {
-		return nil, false, nil
-	}
-	rendered, err := out.ToJSONSchema(includeDraftMarker)
-	return rendered, true, err
-}
-
-// userParameters keeps the fields a caller supplies. An auto-injected field —
-// the principal, today — is filled in by the host, so asking a caller for it
-// would be wrong twice over: it cannot know the value, and supplying one would
-// not be honoured.
-func userParameters(conv witschema.Converted, convErr error, in common.InputSchema) ([]core.Parameter, error) {
+// parametersRecord is a parameter list as one record type: the caller-supplied
+// fields, in order. An auto-injected field — the principal, today — is filled
+// in by the host, so asking a caller for it would be wrong twice over: it
+// cannot know the value, and supplying one would not be honoured.
+func parametersRecord(conv witschema.Converted, convErr error, in common.InputSchema) (core.Ref, error) {
 	if convErr != nil {
-		return nil, convErr
+		return core.Ref{}, convErr
 	}
-	fields := in.Parameters()
-	out := make([]core.Parameter, 0, len(fields))
-	for _, f := range fields {
+	params := in.Parameters()
+	fields := make([]core.NamedField, 0, len(params))
+	for _, f := range params {
 		if f.Source.Tag() != common.FieldSourceUserSupplied {
 			continue
 		}
 		t, err := conv.At(f.Schema)
 		if err != nil {
-			return nil, fmt.Errorf("golem: parameter %q: %w", f.Name, err)
+			return core.Ref{}, fmt.Errorf("golem: parameter %q: %w", f.Name, err)
 		}
-		out = append(out, core.Parameter{Name: f.Name, Type: t})
+		fields = append(fields, core.NamedField{Name: f.Name, Body: t})
 	}
-	return out, nil
+	return core.NewRefAt(conv.Graph, core.SchemaType{Body: core.RecordType{Fields: fields}}), nil
+}
+
+// packJSONTree validates canonical JSON against a type and renders it for the
+// wire.
+func packJSONTree(ref core.Ref, value any) (types.SchemaValueTree, error) {
+	built, err := ref.PackJSON(value)
+	if err != nil {
+		return types.SchemaValueTree{}, err
+	}
+	return witschema.ValueToWit(built)
 }
 
 // ReflectedAgentClient invokes a discovered agent. Every call is packed and
@@ -272,13 +225,16 @@ func userParameters(conv witschema.Converted, convErr error, in common.InputSche
 type ReflectedAgentClient struct {
 	agentType ReflectedAgentType
 	agentID   string
-	rpc       reflectedRPC
+	rpc       agentRPC
 }
 
-// reflectedRPC is the host connection a reflected client invokes through. The
-// interface keeps packing, validation and decoding testable without a host.
-type reflectedRPC interface {
-	invokeAndAwait(method string, input types.SchemaValueTree) (types.SchemaValueTree, bool, error)
+// agentRPC is the host connection a reflected or dynamic agent client invokes
+// through. The interface keeps packing, validation and decoding testable
+// without a host.
+type agentRPC interface {
+	call(method string, input types.SchemaValueTree) (witTypes.Option[types.SchemaValueTree], InvocationID, error)
+	trigger(method string, input types.SchemaValueTree) (InvocationID, error)
+	schedule(at time.Time, method string, input types.SchemaValueTree) (*ScheduledInvocation, error)
 }
 
 // AgentType returns the snapshot this client was built from.
@@ -287,41 +243,77 @@ func (c *ReflectedAgentClient) AgentType() ReflectedAgentType { return c.agentTy
 // AgentID returns the target's agent id, as resolved by the host.
 func (c *ReflectedAgentClient) AgentID() string { return c.agentID }
 
-// InvokeAndAwait calls a method with named arguments and returns its result as
-// canonical JSON, or nil when the method returns nothing.
-func (c *ReflectedAgentClient) InvokeAndAwait(method string, args map[string]any) (any, error) {
+func (c *ReflectedAgentClient) pack(method string, args map[string]any) (ReflectedMethod, types.SchemaValueTree, error) {
 	m, known := c.agentType.Method(method)
 	if !known {
-		return nil, fmt.Errorf("golem: agent type %q has no method %q", c.agentType.Name(), method)
+		return m, types.SchemaValueTree{}, fmt.Errorf("golem: agent type %q has no method %q", c.agentType.Name(), method)
 	}
-	input, err := m.packTree(args)
-	if err != nil {
-		return nil, fmt.Errorf("golem: %s.%s: %w", c.agentType.Name(), method, err)
+	input, err := m.Input()
+	if err == nil {
+		var tree types.SchemaValueTree
+		tree, err = packJSONTree(input, args)
+		if err == nil {
+			return m, tree, nil
+		}
 	}
-	tree, has, err := c.rpc.invokeAndAwait(method, input)
-	if err != nil {
-		return nil, err
-	}
+	return m, types.SchemaValueTree{}, fmt.Errorf("golem: %s.%s: %w", c.agentType.Name(), method, err)
+}
 
-	_, declared := m.Output()
+// Call invokes a method with named arguments and waits for its result, as
+// canonical JSON (nil when the method returns nothing), together with the
+// invocation's identity.
+func (c *ReflectedAgentClient) Call(method string, args map[string]any) (any, InvocationID, error) {
+	m, input, err := c.pack(method, args)
+	if err != nil {
+		return nil, InvocationID{}, err
+	}
+	res, id, err := c.rpc.call(method, input)
+	if err != nil {
+		return nil, id, err
+	}
+	output, err := m.Output()
+	if err != nil {
+		return nil, id, err
+	}
+	out, declared := output.Get()
+	tree, has := optionFromWit(res).Get()
 	switch {
 	case has && !declared:
 		// Cardinality is part of the contract, so an unexpected value is a
 		// remote output error rather than something to quietly drop.
-		return nil, fmt.Errorf("golem: %s.%s returned a value but declares none",
-			c.agentType.Name(), method)
+		return nil, id, fmt.Errorf("golem: %s.%s returned a value but declares none", c.agentType.Name(), method)
 	case !has && declared:
-		return nil, fmt.Errorf("golem: %s.%s returned nothing but declares a result",
-			c.agentType.Name(), method)
+		return nil, id, fmt.Errorf("golem: %s.%s returned nothing but declares a result", c.agentType.Name(), method)
 	case !has:
-		return nil, nil
+		return nil, id, nil
 	}
-	out, err := m.unpackTree(tree)
+	value, err := witschema.ValueToCore(tree)
+	if err == nil {
+		var unpacked any
+		unpacked, err = out.UnpackJSON(value)
+		if err == nil {
+			return unpacked, id, nil
+		}
+	}
+	return nil, id, fmt.Errorf("golem: %s.%s returned an unreadable result: %w", c.agentType.Name(), method, err)
+}
+
+// Trigger invokes a method without waiting for its result.
+func (c *ReflectedAgentClient) Trigger(method string, args map[string]any) (InvocationID, error) {
+	_, input, err := c.pack(method, args)
 	if err != nil {
-		return nil, fmt.Errorf("golem: %s.%s returned an unreadable result: %w",
-			c.agentType.Name(), method, err)
+		return InvocationID{}, err
 	}
-	return out, nil
+	return c.rpc.trigger(method, input)
+}
+
+// Schedule arranges for a method to be invoked at the given time.
+func (c *ReflectedAgentClient) Schedule(at time.Time, method string, args map[string]any) (*ScheduledInvocation, error) {
+	_, input, err := c.pack(method, args)
+	if err != nil {
+		return nil, err
+	}
+	return c.rpc.schedule(at, method, input)
 }
 
 // ReflectedTool is an immutable snapshot of a tool deployed in the caller's
@@ -540,39 +532,40 @@ func (c ReflectedCommand) canonicalFields() ([]canonicalField, error) {
 	return out, nil
 }
 
-// Arguments returns the command's arguments as a parameter list, in the order
-// and with the types of its canonical input record.
-func (c ReflectedCommand) Arguments() ([]core.Parameter, error) {
+// Input returns the command's canonical input record: inherited globals,
+// positionals, the tail, options and flags. Pack canonical JSON with its
+// PackJSON, and render it with ToJSONSchema.
+func (c ReflectedCommand) Input() (core.Ref, error) {
 	if c.convErr != nil {
-		return nil, c.convErr
+		return core.Ref{}, c.convErr
 	}
 	fields, err := c.canonicalFields()
 	if err != nil {
-		return nil, err
+		return core.Ref{}, err
 	}
-	out := make([]core.Parameter, 0, len(fields))
+	record := make([]core.NamedField, 0, len(fields))
 	for _, f := range fields {
+		var t core.SchemaType
 		switch f.wrap {
 		case wrapBool:
-			out = append(out, core.BoolParameter(f.name))
-			continue
+			t = core.SchemaType{Body: core.BoolType{}}
 		case wrapCount:
-			out = append(out, core.Parameter{Name: f.name, Type: core.SchemaType{Body: core.U32Type{}}})
-			continue
+			t = core.SchemaType{Body: core.U32Type{}}
+		default:
+			t, err = c.conv.At(f.node)
+			if err != nil {
+				return core.Ref{}, fmt.Errorf("golem: argument %q: %w", f.name, err)
+			}
+			switch f.wrap {
+			case wrapOption:
+				t = core.SchemaType{Body: core.OptionType{Inner: t}}
+			case wrapList:
+				t = core.SchemaType{Body: core.ListType{Element: t}}
+			}
 		}
-		t, err := c.conv.At(f.node)
-		if err != nil {
-			return nil, fmt.Errorf("golem: argument %q: %w", f.name, err)
-		}
-		switch f.wrap {
-		case wrapOption:
-			t = core.SchemaType{Body: core.OptionType{Inner: t}}
-		case wrapList:
-			t = core.SchemaType{Body: core.ListType{Element: t}}
-		}
-		out = append(out, core.Parameter{Name: f.name, Type: t})
+		record = append(record, core.NamedField{Name: f.name, Body: t})
 	}
-	return out, nil
+	return core.NewRefAt(c.conv.Graph, core.SchemaType{Body: core.RecordType{Fields: record}}), nil
 }
 
 // inputGraph is the tool's wire schema extended with the command's canonical
@@ -603,20 +596,23 @@ func (c ReflectedCommand) inputGraph(fields []canonicalField) types.SchemaGraph 
 	return types.SchemaGraph{TypeNodes: nodes, Defs: c.witGraph.Defs, Root: root}
 }
 
-// Result returns the command's result type, or false when it produces none.
-func (c ReflectedCommand) Result() (core.Ref, bool) {
-	if !c.Callable() || c.convErr != nil {
-		return core.Ref{}, false
+// Output returns the command's result type, none when it produces none.
+func (c ReflectedCommand) Output() (Option[core.Ref], error) {
+	if c.convErr != nil {
+		return None[core.Ref](), c.convErr
+	}
+	if !c.Callable() {
+		return None[core.Ref](), fmt.Errorf("golem: command %q has no body", c.Name())
 	}
 	body := c.node().Body.Some()
 	if body.Result.IsNone() {
-		return core.Ref{}, false
+		return None[core.Ref](), nil
 	}
 	ref, err := c.conv.Ref(body.Result.Some().Type)
 	if err != nil {
-		return core.Ref{}, false
+		return None[core.Ref](), err
 	}
-	return ref, true
+	return Some(ref), nil
 }
 
 // ReflectedError is a failure a command declares.
@@ -658,116 +654,109 @@ func (c ReflectedCommand) Errors() []ReflectedError {
 	return out
 }
 
-// PackJSON builds the command's invocation input from named arguments, one per
-// field of its canonical input record.
-func (c ReflectedCommand) PackJSON(args map[string]any) (TypedValue, error) {
-	params, err := c.Arguments()
+// pack validates named arguments against the command's input record and
+// renders them with a graph rooted at that record, which is what the host
+// checks an invocation against.
+func (c ReflectedCommand) pack(args map[string]any) (types.TypedSchemaValue, error) {
+	input, err := c.Input()
 	if err != nil {
-		return TypedValue{}, err
+		return types.TypedSchemaValue{}, err
+	}
+	tree, err := packJSONTree(input, args)
+	if err != nil {
+		return types.TypedSchemaValue{}, err
 	}
 	fields, err := c.canonicalFields()
 	if err != nil {
-		return TypedValue{}, err
+		return types.TypedSchemaValue{}, err
 	}
-	built, err := core.NewRef(c.conv.Graph).PackParameters(params, args)
-	if err != nil {
-		return TypedValue{}, err
-	}
-	tree, err := witschema.ValueToWit(built)
-	if err != nil {
-		return TypedValue{}, err
-	}
-	return TypedValue{wit: types.TypedSchemaValue{Graph: c.inputGraph(fields), Value: tree}}, nil
-}
-
-// ToJSONSchema renders the command's arguments as a JSON Schema object.
-func (c ReflectedCommand) ToJSONSchema(includeDraftMarker bool) (any, error) {
-	params, err := c.Arguments()
-	if err != nil {
-		return nil, err
-	}
-	return core.NewRef(c.conv.Graph).ParametersJSONSchema(params, includeDraftMarker)
+	return types.TypedSchemaValue{Graph: c.inputGraph(fields), Value: tree}, nil
 }
 
 // ReflectedToolClient invokes a discovered tool. Arguments are packed and
 // validated against the snapshot before anything is sent.
 type ReflectedToolClient struct {
 	tool ReflectedTool
-	rpc  reflectedToolRPC
-}
-
-// reflectedToolRPC is the host connection a reflected tool client invokes
-// through.
-type reflectedToolRPC interface {
-	invokeAndAwait(commandPath []string, input types.TypedSchemaValue) (types.TypedSchemaValue, bool, error)
 }
 
 // Tool returns the snapshot this client was built from.
 func (c *ReflectedToolClient) Tool() ReflectedTool { return c.tool }
 
-// InvokeAndAwait runs a command with named arguments and returns its result as
-// canonical JSON, or nil when the command produces none.
-func (c *ReflectedToolClient) InvokeAndAwait(path []string, args map[string]any) (any, error) {
+func (c *ReflectedToolClient) command(path []string) (ReflectedCommand, error) {
 	cmd, found := c.tool.Command(path)
 	if !found {
-		return nil, fmt.Errorf("golem: tool %q has no command %s", c.tool.Name(), commandLabel(path))
+		return cmd, fmt.Errorf("golem: tool %q has no command %s", c.tool.Name(), commandLabel(path))
 	}
 	if !cmd.Callable() {
 		// A namespace node stays discoverable so a caller can walk to its
 		// children, but it has nothing to run.
-		return nil, fmt.Errorf("golem: tool %q command %s only dispatches to subcommands",
+		return cmd, fmt.Errorf("golem: tool %q command %s only dispatches to subcommands",
 			c.tool.Name(), commandLabel(path))
 	}
-	input, err := cmd.PackJSON(args)
-	if err != nil {
-		return nil, fmt.Errorf("golem: %s %s: %w", c.tool.Name(), commandLabel(path), err)
-	}
+	return cmd, nil
+}
 
-	out, has, err := c.rpc.invokeAndAwait(path, input.wit)
+// Call runs a command with named arguments and returns its result as canonical
+// JSON, or nil when the command produces none. A command that writes standard
+// output is started with Start instead.
+func (c *ReflectedToolClient) Call(path []string, args map[string]any) (any, error) {
+	inv, err := c.Start(path, args, nil)
 	if err != nil {
 		return nil, err
 	}
-	_, declared := cmd.Result()
-	switch {
-	case has && !declared:
-		return nil, fmt.Errorf("golem: %s %s returned a value but declares none",
-			c.tool.Name(), commandLabel(path))
-	case !has && declared:
-		return nil, fmt.Errorf("golem: %s %s returned nothing but declares a result",
-			c.tool.Name(), commandLabel(path))
-	case !has:
-		return nil, nil
-	}
-	value, err := TypedValue{wit: out}.JSON()
-	if err != nil {
-		return nil, fmt.Errorf("golem: %s %s returned an unreadable result: %w",
-			c.tool.Name(), commandLabel(path), err)
-	}
-	return value, nil
+	return inv.Wait()
 }
 
-// toolRPCErrorMessage renders the host's tool RPC failure. The remote tool's
-// own error stays structured — it is rendered through the same helper the
-// middleware layer uses — so a caller can still tell a denial from the tool
-// having reported a declared failure.
-//
-//nolint:unused // called from reflection_wasm.go
-func toolRPCErrorMessage(e types.ToolRpcError) string {
-	switch e.Tag() {
-	case types.ToolRpcErrorProtocolError:
-		return "protocol error: " + e.ProtocolError()
-	case types.ToolRpcErrorDenied:
-		return "denied: " + e.Denied()
-	case types.ToolRpcErrorNotFound:
-		return "not found"
-	case types.ToolRpcErrorRemoteInternalError:
-		return "remote internal error: " + e.RemoteInternalError()
-	case types.ToolRpcErrorRemoteToolError:
-		return "the tool reported: " + toolErrorMessage(e.RemoteToolError())
-	case types.ToolRpcErrorCancelled:
-		return "cancelled"
-	case types.ToolRpcErrorResourceExhausted:
-		return "resource exhausted: " + e.ResourceExhausted()
+// Start starts a command with named arguments and the given standard input,
+// which may be nil, and returns the running invocation.
+func (c *ReflectedToolClient) Start(path []string, args map[string]any, stdin io.Reader) (*ToolInvocation[any], error) {
+	cmd, err := c.command(path)
+	if err != nil {
+		return nil, err
 	}
-	return "failed"
+	input, err := cmd.pack(args)
+	if err != nil {
+		return nil, fmt.Errorf("golem: %s %s: %w", c.tool.Name(), commandLabel(path), err)
+	}
+	body := cmd.node().Body.Some()
+	if body.Stdin.IsSome() && body.Stdin.Some().Required && stdin == nil {
+		return nil, &ToolCallError{Tool: c.tool.Name(), CommandPath: path, Kind: ToolCallInvalidInput,
+			Message: "the command requires standard input"}
+	}
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	name := c.tool.Name()
+	call, err := startToolCall(name, path, input, stdin, body.Stdout.IsSome())
+	if err != nil {
+		return nil, err
+	}
+	return &ToolInvocation[any]{call: call, finish: func(call toolCall) (any, error) {
+		res, rpcErr := call.wait()
+		if rpcErr != nil {
+			return nil, toolCallErrorFromWit(name, path, *rpcErr)
+		}
+		out, declared := output.Get()
+		value, has := optionFromWit(res).Get()
+		switch {
+		case has && !declared:
+			return nil, &ToolCallError{Tool: name, CommandPath: path, Kind: ToolCallInvalidResult,
+				Message: "the command returned a value but declares none"}
+		case !has && declared:
+			return nil, &ToolCallError{Tool: name, CommandPath: path, Kind: ToolCallInvalidResult,
+				Message: "the command returned nothing but declares a result"}
+		case !has:
+			return nil, nil
+		}
+		v, err := witschema.ValueToCore(value.Value)
+		if err == nil {
+			var unpacked any
+			unpacked, err = out.UnpackJSON(v)
+			if err == nil {
+				return unpacked, nil
+			}
+		}
+		return nil, &ToolCallError{Tool: name, CommandPath: path, Kind: ToolCallInvalidResult, Message: err.Error()}
+	}}, nil
 }
