@@ -137,6 +137,9 @@ flowchart TD
   readers. A synchronous builtin (`declare -p`, `type`, `set`) cannot be suspended, so its output
   goes into the buffer whole, up to 64 MiB. This path has no sequential pipeline fallback. Closing a reader does not cancel a
   sleeping producer or an accepted tool call; an actual failed write follows SIGPIPE disposition.
+  A stage runs until it waits or has run a few dozen commands, so a short writer whose output fits
+  the pipe finishes before a reader that exits early, as in bash: under `set -o pipefail`,
+  `for i in 1 2 3; do echo $i; done | head -n 1` succeeds, while `seq 100000 | head -1` gets SIGPIPE.
 - Bound commands collect stdin, await the RPC, then forward the completed output. Input pumping,
   output draining and terminal waiting run together; independent local stages can progress. Each
   attachment is limited to 16 MiB, the host's `max_tool_attachment_bytes`. The call's own output and substitutions are bounded too; see
@@ -443,6 +446,13 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   expression parser nests once per real `(` or `!`/`-not`, so an expression with more than 1,000
   of those nested (not a flat `-a`/`-o`/`,` chain, which parses as a loop) is refused the same way
   (`find: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool`, status 2).
+  `test` and `[` read `-a` and `-o` lists and runs of `!` of any length, but parentheses nested at
+  most 64 deep (bash: no fixed limit); deeper fails with `test: maximum nesting level exceeded:
+  deeper nesting is unsupported in bash-tool` (status 2). `[[ ]]` reads a run of `!` of any
+  length. An extended glob built at run time nests at most 24 levels, and nested `!( )` stop after
+  about a dozen, as each repeats its body; deeper fails with the same error (status 1, ending that
+  command line) wherever it is matched (`[[ ]]`, `case`, `${x#…}`, pathname expansion), where bash
+  matches it. `globstar` walks a tree of any depth.
 - **Output.** A call returns at most 2 MiB of stdout and 2 MiB of stderr, counted as the text it
   returns: a byte that is not UTF-8 counts as the three bytes of the U+FFFD that replaces it. Golem
   carries a result to its caller (and to `--lookup`) in one gRPC message of at most 32 MiB, and
