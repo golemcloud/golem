@@ -546,8 +546,8 @@ workspace `[patch.crates-io]`; no local dependency overrides are required.
 
 | Dependency | Repository | Revision |
 |---|---|---|
-| Brush | `golemcloud/brush` | `48b0f75d9b52b929d75f82131fd3868f29693caf` |
-| Coreutils | `golemcloud/coreutils` | `6e5c298f65a5e9f7a582bdc358a00c448cb10189` |
+| Brush | `golemcloud/brush` | `9549479d688721d6ae10a0b5fdc413d617fe5f03` |
+| Coreutils | `golemcloud/coreutils` | `3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620` |
 | sed | `golemcloud/sed` | `794cb2bc9b00ba17432fda74f1bc74d0965e46dc` |
 | jaq-json, jaq-core, jaq-std | `golemcloud/jaq` | `c26f142e19128acda39f0c6668b38a581193b388` |
 | diffutils (upstream, past the wasip2 build fix) | `uutils/diffutils` | `3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8` |

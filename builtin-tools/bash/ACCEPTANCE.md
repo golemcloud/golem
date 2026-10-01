@@ -15,8 +15,8 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Item | Value |
 |---|---|
 | Port source | Clank `2b4024a25bab5b9e046090152f87b13ea666cc69` |
-| Brush | `48b0f75d9b52b929d75f82131fd3868f29693caf` (upstream `737dd57e`) |
-| Coreutils | `6e5c298f65a5e9f7a582bdc358a00c448cb10189` (upstream `406e5a8bd`) |
+| Brush | `9549479d688721d6ae10a0b5fdc413d617fe5f03` (upstream `737dd57e`) |
+| Coreutils | `3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620` (upstream `406e5a8bd`) |
 | sed | `794cb2bc9b00ba17432fda74f1bc74d0965e46dc` (uutils/sed `c46dd6d`) |
 | jaq-json, jaq-core, jaq-std | `c26f142e19128acda39f0c6668b38a581193b388` (jaq-json 2.0.3, `4229c5f`) |
 | diffutils | uutils/diffutils `3f7a9a6ff3ee584d1cedbe013ebdebb437ad33b8` |

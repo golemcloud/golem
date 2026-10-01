@@ -386,7 +386,7 @@ dependencies = [
 [[package]]
 name = "brush-builtins"
 version = "0.2.0"
-source = "git+https://github.com/golemcloud/brush?rev=48b0f75d9b52b929d75f82131fd3868f29693caf#48b0f75d9b52b929d75f82131fd3868f29693caf"
+source = "git+https://github.com/golemcloud/brush?rev=9549479d688721d6ae10a0b5fdc413d617fe5f03#9549479d688721d6ae10a0b5fdc413d617fe5f03"
 dependencies = [
  "brush-core",
  "brush-parser",
@@ -410,7 +410,7 @@ dependencies = [
 [[package]]
 name = "brush-core"
 version = "0.5.0"
-source = "git+https://github.com/golemcloud/brush?rev=48b0f75d9b52b929d75f82131fd3868f29693caf#48b0f75d9b52b929d75f82131fd3868f29693caf"
+source = "git+https://github.com/golemcloud/brush?rev=9549479d688721d6ae10a0b5fdc413d617fe5f03#9549479d688721d6ae10a0b5fdc413d617fe5f03"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "brush-parser"
 version = "0.4.0"
-source = "git+https://github.com/golemcloud/brush?rev=48b0f75d9b52b929d75f82131fd3868f29693caf#48b0f75d9b52b929d75f82131fd3868f29693caf"
+source = "git+https://github.com/golemcloud/brush?rev=9549479d688721d6ae10a0b5fdc413d617fe5f03#9549479d688721d6ae10a0b5fdc413d617fe5f03"
 dependencies = [
  "bon",
  "cached",
@@ -3977,7 +3977,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "uu_b2sum"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -3988,7 +3988,7 @@ dependencies = [
 [[package]]
 name = "uu_base32"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -3999,7 +3999,7 @@ dependencies = [
 [[package]]
 name = "uu_base64"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4010,7 +4010,7 @@ dependencies = [
 [[package]]
 name = "uu_basename"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4020,7 +4020,7 @@ dependencies = [
 [[package]]
 name = "uu_basenc"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4031,7 +4031,7 @@ dependencies = [
 [[package]]
 name = "uu_cat"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4045,7 +4045,7 @@ dependencies = [
 [[package]]
 name = "uu_checksum_common"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4055,7 +4055,7 @@ dependencies = [
 [[package]]
 name = "uu_cksum"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4066,7 +4066,7 @@ dependencies = [
 [[package]]
 name = "uu_comm"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4076,7 +4076,7 @@ dependencies = [
 [[package]]
 name = "uu_cp"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "filetime",
@@ -4094,7 +4094,7 @@ dependencies = [
 [[package]]
 name = "uu_csplit"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4106,7 +4106,7 @@ dependencies = [
 [[package]]
 name = "uu_cut"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "bstr",
  "clap",
@@ -4118,7 +4118,7 @@ dependencies = [
 [[package]]
 name = "uu_date"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4135,7 +4135,7 @@ dependencies = [
 [[package]]
 name = "uu_dd"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4149,7 +4149,7 @@ dependencies = [
 [[package]]
 name = "uu_dirname"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4159,7 +4159,7 @@ dependencies = [
 [[package]]
 name = "uu_du"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4173,7 +4173,7 @@ dependencies = [
 [[package]]
 name = "uu_env"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4185,7 +4185,7 @@ dependencies = [
 [[package]]
 name = "uu_expand"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4197,7 +4197,7 @@ dependencies = [
 [[package]]
 name = "uu_expr"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fancy-regex 0.19.2",
@@ -4211,7 +4211,7 @@ dependencies = [
 [[package]]
 name = "uu_factor"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4224,7 +4224,7 @@ dependencies = [
 [[package]]
 name = "uu_fmt"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4235,7 +4235,7 @@ dependencies = [
 [[package]]
 name = "uu_fold"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4246,7 +4246,7 @@ dependencies = [
 [[package]]
 name = "uu_head"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4258,7 +4258,7 @@ dependencies = [
 [[package]]
 name = "uu_join"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4270,7 +4270,7 @@ dependencies = [
 [[package]]
 name = "uu_link"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4280,7 +4280,7 @@ dependencies = [
 [[package]]
 name = "uu_ln"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4292,7 +4292,7 @@ dependencies = [
 [[package]]
 name = "uu_ls"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "ansi-width",
  "clap",
@@ -4310,7 +4310,7 @@ dependencies = [
 [[package]]
 name = "uu_md5sum"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4321,7 +4321,7 @@ dependencies = [
 [[package]]
 name = "uu_mkdir"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4332,7 +4332,7 @@ dependencies = [
 [[package]]
 name = "uu_mktemp"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4345,7 +4345,7 @@ dependencies = [
 [[package]]
 name = "uu_mv"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4362,7 +4362,7 @@ dependencies = [
 [[package]]
 name = "uu_nl"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4374,7 +4374,7 @@ dependencies = [
 [[package]]
 name = "uu_nproc"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4386,7 +4386,7 @@ dependencies = [
 [[package]]
 name = "uu_numfmt"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4398,7 +4398,7 @@ dependencies = [
 [[package]]
 name = "uu_od"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4411,7 +4411,7 @@ dependencies = [
 [[package]]
 name = "uu_paste"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4421,7 +4421,7 @@ dependencies = [
 [[package]]
 name = "uu_printf"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4431,7 +4431,7 @@ dependencies = [
 [[package]]
 name = "uu_readlink"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4441,7 +4441,7 @@ dependencies = [
 [[package]]
 name = "uu_realpath"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4451,7 +4451,7 @@ dependencies = [
 [[package]]
 name = "uu_rm"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4464,7 +4464,7 @@ dependencies = [
 [[package]]
 name = "uu_rmdir"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4475,7 +4475,7 @@ dependencies = [
 [[package]]
 name = "uu_sha1sum"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4486,7 +4486,7 @@ dependencies = [
 [[package]]
 name = "uu_sha256sum"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4497,7 +4497,7 @@ dependencies = [
 [[package]]
 name = "uu_sha512sum"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4508,7 +4508,7 @@ dependencies = [
 [[package]]
 name = "uu_shuf"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4523,7 +4523,7 @@ dependencies = [
 [[package]]
 name = "uu_sleep"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4533,7 +4533,7 @@ dependencies = [
 [[package]]
 name = "uu_sort"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "bigdecimal",
  "clap",
@@ -4555,7 +4555,7 @@ dependencies = [
 [[package]]
 name = "uu_split"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4568,7 +4568,7 @@ dependencies = [
 [[package]]
 name = "uu_tail"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4583,7 +4583,7 @@ dependencies = [
 [[package]]
 name = "uu_tee"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4594,7 +4594,7 @@ dependencies = [
 [[package]]
 name = "uu_touch"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "filetime",
@@ -4611,7 +4611,7 @@ dependencies = [
 [[package]]
 name = "uu_tr"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "bytecount",
  "clap",
@@ -4623,7 +4623,7 @@ dependencies = [
 [[package]]
 name = "uu_truncate"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4633,7 +4633,7 @@ dependencies = [
 [[package]]
 name = "uu_tsort"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4649,7 +4649,7 @@ dependencies = [
 [[package]]
 name = "uu_uname"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4660,7 +4660,7 @@ dependencies = [
 [[package]]
 name = "uu_unexpand"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4672,7 +4672,7 @@ dependencies = [
 [[package]]
 name = "uu_uniq"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4682,7 +4682,7 @@ dependencies = [
 [[package]]
 name = "uu_unlink"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "clap",
  "fluent",
@@ -4692,7 +4692,7 @@ dependencies = [
 [[package]]
 name = "uu_wc"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "bytecount",
  "clap",
@@ -4732,7 +4732,7 @@ dependencies = [
 [[package]]
 name = "uucore"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "base64-simd",
  "bigdecimal",
@@ -4797,7 +4797,7 @@ dependencies = [
 [[package]]
 name = "uucore_procs"
 version = "0.13.0"
-source = "git+https://github.com/golemcloud/coreutils?rev=6e5c298f65a5e9f7a582bdc358a00c448cb10189#6e5c298f65a5e9f7a582bdc358a00c448cb10189"
+source = "git+https://github.com/golemcloud/coreutils?rev=3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620#3b0f34b05e7ba4accb51bb9e9a0c1e502bd04620"
 dependencies = [
  "proc-macro2",
  "quote",
