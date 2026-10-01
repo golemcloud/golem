@@ -41,6 +41,8 @@ export default {
   "golem-tools-middleware-rust": "Tool middleware in Rust",
   "golem-trigger-agent-rust": "Triggering a Fire-and-Forget Agent Invocation",
   "golem-add-ignite-rust": "Using Apache Ignite from a Rust Agent",
+  "golem-add-sqlite-rust": "Using Embedded SQLite from Rust",
+  "golem-add-turso-rust": "Using In-Memory Turso from Rust",
   "golem-add-mysql-rust": "Using MySQL from a Rust Agent",
   "golem-add-postgres-rust": "Using PostgreSQL from a Rust Agent",
   "golem-add-webhook-rust": "Using Webhooks in a Rust Golem Agent",

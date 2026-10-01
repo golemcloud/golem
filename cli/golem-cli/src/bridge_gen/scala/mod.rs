@@ -1532,7 +1532,7 @@ impl ScalaBridgeGenerator {
         let uses_streams = method.uses_streams(&self.agent_type.schema);
 
         // apply (await) returns metadata for ephemeral agents.
-        let (ret_ty, decode_block) = self.output_return(&method.output_schema)?;
+        let (ret_ty, decode_block) = self.output_return(&method.output_schema, !uses_streams)?;
         let awaited_ty = if self.agent_type.mode == AgentMode::Ephemeral {
             format!("_root_.golem.bridge.runtime.InvocationResult[{ret_ty}]")
         } else {
@@ -1945,8 +1945,9 @@ impl ScalaBridgeGenerator {
             writer.line(format!("{name}.map {{ value =>"));
             writer.indent();
             writer.line(format!("val configValue = {enc}"));
+            let codec = self.public_codec(&config.value_type)?;
             writer.line(format!(
-                "{AGENT_CONFIG_ENTRY}({LIST}({path_lit}), configValue)"
+                "{AGENT_CONFIG_ENTRY}({LIST}({path_lit}), {codec}.encodeApplication(configValue))"
             ));
             writer.dedent();
             writer.line(format!("}}{comma}"));
@@ -2291,14 +2292,28 @@ impl ScalaBridgeGenerator {
     /// The `(returnType, decodeBlock)` for a method's output. The decode block
     /// is a Scala expression operating on `__result` (the
     /// `AgentInvocationResult`) producing a value of `returnType`.
-    fn output_return(&self, output: &OutputSchema) -> anyhow::Result<(String, String)> {
+    fn output_return(
+        &self,
+        output: &OutputSchema,
+        validate_expected: bool,
+    ) -> anyhow::Result<(String, String)> {
         // A multimodal output (`list<variant<… Role::Multimodal>>`) is surfaced
         // as `List[Multimodal<N>]`, decoded through the generated list codec.
         if let Some(cases) = output_multimodal_cases(self.type_naming.graph(), output)? {
             let name = self.multimodal_name(&cases)?;
             let ret_ty = self.multimodal_list_type(&name);
+            let validation = if validate_expected {
+                let codec = self.public_codec(
+                    output
+                        .schema()
+                        .expect("multimodal output always has a schema"),
+                )?;
+                format!("{codec}.encode(__value)\n")
+            } else {
+                String::new()
+            };
             let block = format!(
-                "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{}.{CODECS_OBJECT}.decode{name}List(__value)",
+                "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{validation}{}.{CODECS_OBJECT}.decode{name}List(__value)",
                 self.client_pkg()
             );
             return Ok((ret_ty, block));
@@ -2308,8 +2323,13 @@ impl ScalaBridgeGenerator {
             OutputSchema::Single(ty) => {
                 let ret_ty = self.type_reference(ty)?;
                 let decode = self.decode_expr("__value", ty, 0)?;
+                let validation = if validate_expected {
+                    format!("{}.encode(__value)\n", self.public_codec(ty)?)
+                } else {
+                    String::new()
+                };
                 let block = format!(
-                    "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{decode}"
+                    "val __value = __result.result.getOrElse(throw {BRIDGE_EXCEPTION}(\"Missing result value for an await invocation\"))\n{validation}{decode}"
                 );
                 Ok((ret_ty, block))
             }
@@ -2877,6 +2897,10 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Path { .. } => format!("{SV}.PathValue({val_expr})"),
             SchemaType::Url { .. } => format!("{SV}.UrlValue({val_expr})"),
+            SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {
+                format!("{GUEST_SV}.UuidValue({val_expr})")
+            }
+            SchemaType::Uuid { .. } => format!("{SV}.UuidValue({val_expr})"),
             SchemaType::Datetime { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
                 "{GUEST_SV}.DatetimeValue(_root_.golem.schema.Datetime({val_expr}.getEpochSecond, {val_expr}.getNano))"
             ),
@@ -3057,6 +3081,12 @@ impl ScalaBridgeGenerator {
             }
             SchemaType::Path { .. } => format!("{CODEC}.asPath({val_expr})"),
             SchemaType::Url { .. } => format!("{CODEC}.asUrl({val_expr})"),
+            SchemaType::Uuid { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
+                "{val_expr} match {{ case {GUEST_SV}.UuidValue(value) => value; case other => throw {GUEST_CLIENT_ERROR}(s\"Expected UUID value, got $other\") }}"
+            ),
+            SchemaType::Uuid { .. } => format!(
+                "{val_expr} match {{ case {SV}.UuidValue(value) => value; case other => throw {BRIDGE_EXCEPTION}(s\"Expected UUID value, got $other\") }}"
+            ),
             SchemaType::Datetime { .. } => format!("{CODEC}.asDatetime({val_expr})"),
             SchemaType::Duration { .. } => format!("{CODEC}.asDuration({val_expr})"),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => format!(
@@ -3292,6 +3322,10 @@ impl ScalaBridgeGenerator {
             SchemaType::Path { .. } | SchemaType::Url { .. } => {
                 Ok("_root_.scala.Predef.String".to_string())
             }
+            SchemaType::Uuid { .. } => Ok(match self.mode {
+                ScalaBridgeMode::ExternalRest => UUID.to_string(),
+                ScalaBridgeMode::GuestWasmRpc => GUEST_UUID.to_string(),
+            }),
             SchemaType::Datetime { .. } => Ok("_root_.java.time.Instant".to_string()),
             SchemaType::Duration { .. } => Ok("_root_.scala.Long".to_string()),
             SchemaType::Secret { .. } if self.mode == ScalaBridgeMode::GuestWasmRpc => {

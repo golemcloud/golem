@@ -1695,6 +1695,30 @@ impl ComponentCommandHandler {
                             })
                             .collect(),
                         bindings,
+                        environment_middleware_binding: manifest_config
+                            .environment_binding
+                            .as_ref()
+                            .map(diff::ToolMiddlewareBindingInput::from),
+                        component_middleware_bindings: manifest_config
+                            .component_bindings
+                            .iter()
+                            .map(|(component, binding)| {
+                                (
+                                    component.0.clone(),
+                                    diff::ToolMiddlewareBindingInput::from(binding),
+                                )
+                            })
+                            .collect(),
+                        agent_middleware_bindings: manifest_config
+                            .agent_bindings
+                            .iter()
+                            .map(|(agent, binding)| {
+                                (
+                                    agent.clone(),
+                                    diff::ToolMiddlewareBindingInput::from(binding),
+                                )
+                            })
+                            .collect(),
                     }
                     .into(),
                 );
@@ -3830,6 +3854,7 @@ mod tool_binding_tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
         };
@@ -3872,6 +3897,7 @@ mod tool_binding_tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
         };
@@ -3904,6 +3930,7 @@ mod tool_binding_tests {
         let tool_name = ToolName::try_from("grep").unwrap();
         let definition = Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree { nodes: Vec::new() },
             schema: SchemaGraph::empty(),
         };

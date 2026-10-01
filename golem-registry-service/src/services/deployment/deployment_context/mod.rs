@@ -58,7 +58,7 @@ use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseSource, tool_middleware_metadata_digest,
 };
 use golem_common::model::tool_release::ToolReleaseId;
-use golem_common::schema::agent::reachable_defs;
+use golem_common::schema::agent::agent_secret_value_schema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::tool::validation::validate_tool;
@@ -302,8 +302,13 @@ impl DeploymentContext {
         published_tool_middlewares: &[ToolMiddlewareName],
         universal_tool_middlewares: &[golem_common::model::tool_middleware::ToolMiddlewareInstallation],
         tool_compatibility_mode: golem_common::schema::tool::compatibility::ToolCompatibilityMode,
-        environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
-        agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+        effective_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        effective_agent_tool_bindings: &BTreeMap<
+            AgentTypeName,
+            BTreeMap<ToolName, ToolBindingInput>,
+        >,
+        dynamic_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        dynamic_agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     ) -> Result<diff::Hash, diff::DiffError> {
         let published_tools = published_tools.iter().map(ToString::to_string).collect();
         let published_tool_middlewares = published_tool_middlewares
@@ -311,7 +316,10 @@ impl DeploymentContext {
             .map(ToString::to_string)
             .collect();
         let (environment_tool_middleware_bindings, agent_tool_middleware_bindings) =
-            diff::tool_middleware_binding_inputs(environment_tool_bindings, agent_tool_bindings);
+            diff::tool_middleware_binding_inputs(
+                dynamic_environment_tool_bindings,
+                dynamic_agent_tool_bindings,
+            );
         let diffable = diff::Deployment {
             components: self
                 .components
@@ -331,6 +339,8 @@ impl DeploymentContext {
             remote_tools: diff::remote_tool_deployments(
                 compiled_tools.registered_tools.clone(),
                 compiled_tools.agent_tool_bindings.clone(),
+                effective_environment_tool_bindings,
+                effective_agent_tool_bindings,
                 &self
                     .components
                     .values()
@@ -759,6 +769,22 @@ impl DeploymentContext {
             }
         }
 
+        for binding in &agent_tool_bindings {
+            if let Some(tool) = registered_tools.iter().find(|tool| {
+                tool.definition.name() == Some(binding.tool_name.as_str())
+                    && tool.deployment_revision == binding.deployment_revision
+            }) && let Err(error) = golem_common::model::tool::filesystem_capability(
+                binding.filesystem_access,
+                &tool.provision,
+                tool.definition.requires_filesystem,
+            ) {
+                errors.push(DeployValidationError::ToolFilesystemRequirement {
+                    tool_name: binding.tool_name.clone(),
+                    error,
+                });
+            }
+        }
+
         CompiledTools {
             registered_tools,
             agent_tool_bindings,
@@ -1007,13 +1033,6 @@ impl DeploymentContext {
             let mut registered_agent_types = Vec::new();
             let mut native_tools = Vec::new();
 
-            if mcp_deployment.agents.is_empty() && mcp_deployment.tools.is_empty() {
-                errors.push(DeployValidationError::McpDeploymentEmpty {
-                    mcp_deployment_domain: domain.clone(),
-                });
-                continue;
-            }
-
             let mut unique_scheme_names: HashSet<&SecuritySchemeName> = HashSet::new();
             for (agent_type, agent_options) in &mcp_deployment.agents {
                 let registered_agent_type = ok_or_continue!(
@@ -1025,6 +1044,12 @@ impl DeploymentContext {
                     ),
                     errors
                 );
+
+                if registered_agent_type.agent_type.kind
+                    == golem_common::schema::AgentTypeKind::HttpRouter
+                {
+                    continue;
+                }
 
                 registered_agent_types.push(RegisteredAgentTypeSchema {
                     agent_type: registered_agent_type.agent_type.clone(),
@@ -1118,10 +1143,15 @@ impl DeploymentContext {
                 }
             }
 
-            let mut names = mcp_deployment
-                .agents
-                .keys()
-                .filter_map(|agent_name| self.registered_agent_types.get(agent_name))
+            if registered_agent_types.is_empty() && native_tools.is_empty() {
+                errors.push(DeployValidationError::McpDeploymentEmpty {
+                    mcp_deployment_domain: domain.clone(),
+                });
+                continue;
+            }
+
+            let mut names = registered_agent_types
+                .iter()
                 .flat_map(|agent| {
                     agent.agent_type.methods.iter().filter_map(|method| {
                         let has_user_input = method.input_schema.fields().iter().any(|field| {
@@ -1585,45 +1615,10 @@ fn stored_agent_secret_schema(
     agent_graph: &SchemaGraph,
     config_type: &SchemaType,
 ) -> Result<SchemaGraph, DeployValidationError> {
-    let root = match resolve_schema_ref(agent_graph, config_type) {
-        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-        SchemaType::Option { inner, .. } => match resolve_schema_ref(agent_graph, inner) {
-            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-            _ => {
-                return Err(DeployValidationError::AgentSecretInvalidConfigType {
-                    path: path.clone(),
-                });
-            }
-        },
-        _ => {
-            return Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() });
-        }
-    };
-
-    let schema = SchemaGraph {
-        defs: reachable_defs(agent_graph, &root),
-        root,
-    };
-
-    if schema_contains_host_managed_capability(&schema) {
-        Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() })
-    } else {
-        Ok(schema)
+    match agent_secret_value_schema(agent_graph, config_type) {
+        Some(schema) if !schema_contains_host_managed_capability(&schema) => Ok(schema),
+        _ => Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() }),
     }
-}
-
-fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
-    let mut seen = std::collections::HashSet::new();
-    while let SchemaType::Ref { id, .. } = ty {
-        if !seen.insert(id.clone()) {
-            break;
-        }
-        match graph.lookup(id) {
-            Some(def) => ty = &def.body,
-            None => break,
-        }
-    }
-    ty
 }
 
 pub fn extract_registered_agent_types(

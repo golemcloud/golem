@@ -92,18 +92,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         self.figment().extract::<T>()
     }
 
-    fn default_dump_source(&self) -> dump::Source {
-        dump::Source::Default {
-            default: self.default_figment(),
-            examples: self.example_figments(),
-        }
-    }
-
-    fn loaded_dump_source(&self) -> dump::Source {
-        dump::Source::Loaded(self.figment())
-    }
-
-    /// Parses command line arguments looking for config dump flags
+    /// Parses command line arguments looking for default config dump flags
     /// If found, dumps the config and returns None
     /// Otherwise it tries to load the configuration, and returns it.
     /// If loading the configuration fails, it prints a user-friendly error and
@@ -111,14 +100,9 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     pub fn load_or_dump_config(&self) -> Option<T> {
         let args: Vec<String> = std::env::args().collect();
         match args.get(1).map_or("", |a| a.as_str()) {
-            "--dump-config-default" => self.dump(self.default_dump_source(), &dump::print(false)),
-            "--dump-config-default-env-var" => {
-                self.dump(self.default_dump_source(), &dump::env_var())
-            }
-            "--dump-config-default-toml" => self.dump(self.default_dump_source(), &dump::toml()),
-            "--dump-config" => self.dump(self.loaded_dump_source(), &dump::print(true)),
-            "--dump-config-env-var" => self.dump(self.loaded_dump_source(), &dump::env_var()),
-            "--dump-config-toml" => self.dump(self.loaded_dump_source(), &dump::toml()),
+            "--dump-config-default" => self.dump(&dump::print()),
+            "--dump-config-default-env-var" => self.dump(&dump::env_var()),
+            "--dump-config-default-toml" => self.dump(&dump::toml()),
             other => {
                 if other.starts_with("--dump-config") {
                     panic!("Unknown dump config parameter: {other}");
@@ -135,7 +119,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
         }
     }
 
-    fn dump<U>(&self, source: dump::Source, dump: &dump::Dump) -> Option<U> {
+    fn dump<U>(&self, dump: &dump::Dump) -> Option<U> {
         let extract =
             |figment: &Figment| -> Value { figment.extract().expect("Failed to extract config") };
 
@@ -153,20 +137,17 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
             }
         };
 
-        match source {
-            dump::Source::Default { default, examples } => {
-                dump_figment("Generated from default config", false, &default);
-                for (name, example) in examples {
-                    dump_figment(
-                        &format!("Generated from example config: {name}"),
-                        true,
-                        &example,
-                    );
-                }
-            }
-            dump::Source::Loaded(loaded) => {
-                dump_figment("Generated from loaded config", false, &loaded);
-            }
+        dump_figment(
+            "Generated from default config",
+            false,
+            &self.default_figment(),
+        );
+        for (name, example) in self.example_figments() {
+            dump_figment(
+                &format!("Generated from example config: {name}"),
+                true,
+                &example,
+            );
         }
 
         None
@@ -203,19 +184,11 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
 
 pub(crate) mod dump {
     use crate::config::{ENV_VAR_NESTED_SEPARATOR, ENV_VAR_PREFIX};
+    use figment::Metadata;
     use figment::value::Value;
-    use figment::{Figment, Metadata};
 
-    pub enum Source {
-        Default {
-            default: Figment,
-            examples: Vec<(&'static str, Figment)>,
-        },
-        Loaded(Figment),
-    }
-
-    pub fn print(show_source: bool) -> Dump {
-        Dump::Visitor(Box::new(Print { show_source }))
+    pub fn print() -> Dump {
+        Dump::Visitor(Box::new(Print))
     }
 
     pub fn env_var() -> Dump {
@@ -240,9 +213,7 @@ pub(crate) mod dump {
         fn value(&self, path: &[&str], name: &str, metadata: Option<&Metadata>, value: &Value);
     }
 
-    struct Print {
-        pub show_source: bool,
-    }
+    struct Print;
 
     impl VisitorDump for Print {
         fn begin(&self, header: &str, is_example: bool) {
@@ -252,7 +223,7 @@ pub(crate) mod dump {
             println!(":: {header}\n")
         }
 
-        fn value(&self, path: &[&str], name: &str, metadata: Option<&Metadata>, value: &Value) {
+        fn value(&self, path: &[&str], name: &str, _metadata: Option<&Metadata>, value: &Value) {
             if !path.is_empty() {
                 for elem in path {
                     print!("{elem}.");
@@ -267,15 +238,7 @@ pub(crate) mod dump {
                 serde_json::to_string(value).expect("Failed to pretty print value")
             );
 
-            if self.show_source {
-                let name = metadata.map_or("unknown", |m| &m.name);
-                let source = metadata
-                    .and_then(|m| m.source.as_ref())
-                    .map_or("unknown".to_owned(), |s| s.to_string());
-                println!(" ({name} - {source})");
-            } else {
-                println!()
-            }
+            println!()
         }
     }
 

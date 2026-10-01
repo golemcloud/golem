@@ -327,6 +327,17 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_replace_secret_with_different_type(&self, path: &str) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Secret {} already exists with a different type. Delete it and create it again with the new type and value?",
+                path.log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_update_to_current(
         &self,
         component_name: &ComponentName,
@@ -358,6 +369,17 @@ impl InteractiveHandler {
                 "Are you sure you want to delete the requested account? ({}, {})",
                 account.name.log_color_highlight(),
                 account.email.as_str().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_delete_secret(&self, path: &str) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Are you sure you want to delete secret {}? Agents using it will fail to read it.",
+                path.log_color_highlight()
             ),
             None,
         )
@@ -522,6 +544,40 @@ impl InteractiveHandler {
                 target: ShowClapHelpTarget::ProfileNew,
                 error: "In non-interactive mode, --auth static requires --static-token <TOKEN>"
                     .to_string(),
+            }),
+        }
+    }
+
+    /// Prompts (masked) for a secret value when no value option was given. In a
+    /// non-interactive environment it is reported as a usage error listing the
+    /// value options of the target command.
+    pub fn prompt_secret_value(
+        &self,
+        path: &str,
+        target: ShowClapHelpTarget,
+        value_options: &str,
+    ) -> anyhow::Result<String> {
+        let value = Password::new(&format!("Value of secret {path}:"))
+            .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
+            .with_help_message(&format!("Or use one of {value_options}"))
+            .with_validator(|value: &str| {
+                if value.is_empty() {
+                    Ok(Validation::Invalid(ErrorMessage::from(
+                        "The value cannot be empty",
+                    )))
+                } else {
+                    Ok(Validation::Valid)
+                }
+            })
+            .prompt()
+            .none_if_not_interactive()?;
+
+        match value {
+            Some(value) => Ok(value),
+            None => bail!(HintError::ShowClapHelp {
+                target,
+                error: format!("In non-interactive mode one of {value_options} is required"),
             }),
         }
     }

@@ -63,6 +63,9 @@ use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{Instrument, debug, info};
 
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
@@ -2082,6 +2085,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2107,6 +2111,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             // round trip does not depend on timing.
             revision: 1,
             number_of_shards: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();

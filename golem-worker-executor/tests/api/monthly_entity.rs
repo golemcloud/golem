@@ -440,7 +440,7 @@ async fn pending_receive(
         loop {
             let oplog = worker.oplog();
             let observed_tip = oplog.current_oplog_index().await;
-            oplog.commit(CommitLevel::Always).await;
+            oplog.commit(CommitLevel::Always).await?;
             let entries = oplog
                 .read_exact(OplogIndex::INITIAL, observed_tip.as_u64())
                 .await;

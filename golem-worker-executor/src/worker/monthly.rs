@@ -93,6 +93,7 @@ impl ExecutionWindow {
     pub(super) async fn new<Ctx: WorkerCtx>(
         worker: &Arc<Worker<Ctx>>,
         window: ResourceUsageMeteringWindow,
+        start_attempt: uuid::Uuid,
     ) -> Self {
         if !worker.resource_entry.monthly_metering_enabled() {
             return Self {
@@ -101,12 +102,6 @@ impl ExecutionWindow {
                 stop_progress: worker.stop_progress.clone(),
             };
         }
-        let start_attempt = match &*worker.instance.lock().await {
-            WorkerInstance::Running(running) => running.start_attempt,
-            _ => worker
-                .pending_startup_attempt()
-                .expect("metered startup has an attempt"),
-        };
         let monitor = worker.resource_entry.monthly_metering_enabled().then(|| {
             if let Some(flusher) = window.usage_flusher() {
                 worker

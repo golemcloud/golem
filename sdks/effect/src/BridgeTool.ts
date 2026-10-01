@@ -32,7 +32,8 @@ export type ToolRequirements = ToolClient
 
 /** Started streaming invocation exposed by generated clients. @since 1.6.0 @category streams */
 export interface StartedToolInvocation<A, E, R = never> {
-  readonly stdout: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
+  readonly stdout?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
+  readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E>, R>
   readonly cancel: Effect.Effect<void>
 }
@@ -44,9 +45,11 @@ export interface ToolClientRuntime {
     input: TypedSchemaValue,
     stdin: ToolInputStream<unknown, any> | undefined,
     stdout: boolean,
+    stderr: boolean,
   ): Effect.Effect<
     {
       readonly stdout?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
+      readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
       readonly result: Effect.Effect<ToolInvocationResult, ToolRuntimeError<E>>
       readonly cancel: Effect.Effect<void>
     },
@@ -70,14 +73,14 @@ const runtimeError = <E>(context: string, error: unknown): ToolRuntimeError<E> =
     : (protocol(context, error) as ToolRuntimeError<E>)
 }
 
-const byteStream = <E>(source: AsyncIterator<Host.ByteStreamItem>) =>
+const byteStream = <E>(source: AsyncIterator<Host.ByteStreamItem>, channel: "stdout" | "stderr") =>
   Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => source }, (error) =>
-    protocol("tool stdout failed", error),
+    protocol(`tool ${channel} failed`, error),
   ).pipe(
     Stream.mapEffect((item) =>
       item.tag === "ok"
         ? Effect.succeed(item.val)
-        : Effect.fail(protocol("tool stdout failed", item.val)),
+        : Effect.fail(protocol(`tool ${channel} failed`, item.val)),
     ),
   ) as Stream.Stream<Uint8Array, ToolRuntimeError<E>>
 
@@ -88,6 +91,7 @@ export const createToolClientRuntime = (tool: string, reflected = false): ToolCl
     input: TypedSchemaValue,
     stdin: ToolInputStream<unknown, any> | undefined,
     stdout: boolean,
+    stderr: boolean,
   ) =>
     Effect.gen(function* () {
       const transport = yield* Effect.serviceOption(ToolTransport)
@@ -106,16 +110,18 @@ export const createToolClientRuntime = (tool: string, reflected = false): ToolCl
       const invocation = yield* Effect.acquireRelease(
         Option.isSome(transport)
           ? transport.value
-              .start(tool, path, wireInput, inputStream, stdout)
+              .start(tool, path, wireInput, inputStream, stdout, stderr)
               .pipe(Effect.mapError((error) => runtimeError<E>("tool invocation failed", error)))
-          : liveToolStart(tool, path, wireInput, inputStream, stdout, reflected).pipe(
+          : liveToolStart(tool, path, wireInput, inputStream, stdout, stderr, reflected).pipe(
               Effect.mapError((error) => runtimeError<E>("tool invocation failed", error)),
             ),
         (started) => started.cancel.pipe(Effect.ignoreCause),
       )
       const stdoutIterator = invocation.stdout?.[Symbol.asyncIterator]()
+      const stderrIterator = invocation.stderr?.[Symbol.asyncIterator]()
       return {
-        stdout: stdoutIterator ? byteStream<E>(stdoutIterator) : undefined,
+        stdout: stdoutIterator ? byteStream<E>(stdoutIterator, "stdout") : undefined,
+        stderr: stderrIterator ? byteStream<E>(stderrIterator, "stderr") : undefined,
         result: invocation.result.pipe(
           Effect.map((result) => ({ result: result.result })),
           Effect.mapError((error) => runtimeError<E>("tool result failed", error)),
@@ -131,10 +137,11 @@ export const client = <C>(root: { create(runtime: ToolClientRuntime): C }, tool:
 
 /** Construct a streaming generated invocation. @since 1.6.0 @category constructors */
 export const startedToolInvocation = <A, E, R>(
-  stdout: Stream.Stream<Uint8Array, ToolRuntimeError<E>>,
+  stdout: Stream.Stream<Uint8Array, ToolRuntimeError<E>> | undefined,
+  stderr: Stream.Stream<Uint8Array, ToolRuntimeError<E>> | undefined,
   result: Effect.Effect<A, ToolRuntimeError<E>, R>,
   cancel: Effect.Effect<void>,
-): StartedToolInvocation<A, E, R> => ({ stdout, result, cancel })
+): StartedToolInvocation<A, E, R> => ({ stdout, stderr, result, cancel })
 
 /** Check the exact graph shape before generated decoding. @since 1.6.0 @category codecs */
 export const typedSchemaValueConforms = (expected: Bridge.SchemaGraph, actual: TypedSchemaValue) =>

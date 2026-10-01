@@ -22,6 +22,16 @@ pub enum StoreGetValueError<L: Layer> {
     LayerApplyError(L::Id, L::ApplyError),
     #[error("circular parent layers detected: {0:?}")]
     CircularParents(Vec<L::Id>),
+    /// A layer is reachable through multiple parent paths (diamond inheritance). Both paths start
+    /// with the requested layer and end with the shared layer.
+    #[error(
+        "layer {layer:?} is inherited through multiple paths: {first_path:?} and {second_path:?}"
+    )]
+    MultipleParentPaths {
+        layer: L::Id,
+        first_path: Vec<L::Id>,
+        second_path: Vec<L::Id>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -86,17 +86,14 @@ pub(super) fn caller(
     )
     .map_err(anyhow::Error::msg)?;
     ensure!(&request.remote_agent_id == target && request.method_name == "inc_after_promise");
-    // Sync appends Start immediately after begin; async appends its invocation span
-    // between begin and Start. Both keys use the original pre-call position.
+    // The invocation span is embedded in Start. Both keys use the pre-call position.
     if asynchronous {
         ensure!(
-            entries
-                .iter()
-                .any(|entry| entry.oplog_index.as_u64() + 1 == start.as_u64()
-                    && matches!(entry.entry, PublicOplogEntry::StartSpan(_)))
+            call.span_started.is_some(),
+            "async RPC Start must carry its span"
         );
     }
-    let begin = OplogIndex::from_u64(start.as_u64() - if asynchronous { 2 } else { 1 });
+    let begin = OplogIndex::from_u64(start.as_u64() - 1);
     ensure!(
         request.idempotency_key == IdempotencyKey::derived(key, begin),
         "unexpected derived key: {request:?}, {start}"

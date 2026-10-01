@@ -196,6 +196,7 @@ impl ProjectedTool {
             })
             .transpose()?;
         let definition = Tool {
+            requires_filesystem: false,
             version: "0.0.0".into(),
             schema: graph,
             commands: CommandTree {
@@ -224,6 +225,7 @@ impl ProjectedTool {
                             mime: vec!["*/*".into()],
                             required: false,
                         }),
+                        stderr: None,
                         result: Some(ResultSpec {
                             type_: result_type,
                             doc: Doc::default(),

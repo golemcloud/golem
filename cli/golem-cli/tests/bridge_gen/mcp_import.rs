@@ -99,7 +99,7 @@ async fn consume(client: &{client}) {{
     let result = invocation.result().await.unwrap();
     {fields}
     let _ = result.content;
-    let _: golem_rust::agentic::ToolInvocationStdout = invocation.stdout;
+    let _: Option<golem_rust::agentic::ToolInvocationOutput> = invocation.stdout;
 }}
 "#
             ),
@@ -142,7 +142,7 @@ fn mcp_projections_compile_with_typescript_generator() {
 async function consume(client: {client}) {{
     const invocation = client.{name}_lookup(undefined, "query", new Map());
     void client.{name}_lookup(3n, "query", new Map([["region", "west"]]));
-    const stdout: ReadableStream<Uint8Array> = invocation.stdout;
+    const stdout: ReadableStream<Uint8Array> | undefined = invocation.stdout;
     const result = await invocation.result;
     {fields}
     void result.content; void stdout;

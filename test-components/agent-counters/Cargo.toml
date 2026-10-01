@@ -8,6 +8,7 @@ version = "0.0.1"
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "symbols"
 
 [lib]
 crate-type = ["cdylib"]

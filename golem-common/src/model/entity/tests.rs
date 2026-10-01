@@ -26,6 +26,7 @@ use test_r::test;
 fn tool_definition() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: Vec::new() },
         schema: crate::schema::SchemaGraph::empty(),
     }
@@ -210,6 +211,8 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
+            has_stderr: true,
+            declares_stderr: true,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -455,6 +458,8 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
             has_stdin: true,
             has_stdout: false,
             declares_stdout: false,
+            has_stderr: false,
+            declares_stderr: false,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -486,6 +491,7 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
             .unwrap()
             .args;
     descriptor.declares_stdout = true;
+    descriptor.declares_stderr = true;
 
     assert!(identity.matches(&differently_pinned, &input));
 
@@ -501,6 +507,10 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
     let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
     descriptor.command_path.pop();
     descriptor.has_stdout = true;
+    assert!(!identity.matches(&differently_pinned, &input));
+    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
+    descriptor.has_stdout = false;
+    descriptor.has_stderr = true;
     assert!(!identity.matches(&differently_pinned, &input));
 
     let different_input = TypedSchemaValue::new(
@@ -645,6 +655,8 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
             has_stdin: false,
             has_stdout: false,
             declares_stdout: false,
+            has_stderr: false,
+            declares_stderr: false,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),

@@ -54,6 +54,11 @@ golem deploy --yes
 - **Logs**: Open [Grafana](http://localhost:3000), go to Explore → Loki,
   and query `{exporter="OTLP"}` or browse labels.
 
+The Golem exporter sends each signal on a best-effort basis. Accepted oplog batches advance its
+lifecycle state even when this local collector is unavailable, and failed requests are not a
+reliable retry queue. Exactly-once plugin batch delivery does not imply exactly-once collector
+delivery.
+
 ## Tear down
 
 ```bash

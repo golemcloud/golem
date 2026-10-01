@@ -56,6 +56,9 @@ fn unreachable_config() -> EtcdConfig {
         endpoints: vec![UNREACHABLE_ENDPOINT.to_string()],
         connect_timeout: TEST_CONNECT_TIMEOUT,
         request_timeout: TEST_REQUEST_TIMEOUT,
+        read_retry_timeout: Duration::from_secs(10),
+        retry_min_delay: Duration::from_millis(100),
+        retry_max_delay: Duration::from_secs(5),
         leader_lease_ttl: TEST_LEASE_TTL,
         compaction_retention_revisions: 0,
     }

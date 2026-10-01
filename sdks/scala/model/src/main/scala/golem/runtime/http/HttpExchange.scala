@@ -153,7 +153,7 @@ object HttpHandler {
   }
 }
 
-private[http] object HttpExchangeCodec {
+private[runtime] object HttpExchangeCodec {
   private val bytesType         = t.list(t.u8)
   private val headerType        = t.record(List(NamedFieldType("name", t.string), NamedFieldType("value", bytesType)))
   private val bodyType          = SchemaType(SchemaTypeBody.StreamType(Some(bytesType)))

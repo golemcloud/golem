@@ -431,6 +431,37 @@ return 1
         self.record(start, "EVAL", result)
     }
 
+    /// Runs a Lua script, which Redis executes atomically. `keys` get the pool's key prefix.
+    pub async fn eval<K>(
+        &self,
+        script: &'static str,
+        keys: &[K],
+        args: Vec<Value>,
+        options: Option<&Options>,
+    ) -> RedisResult<Value>
+    where
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let options = options.cloned().unwrap_or_default();
+        let mut command_args: Vec<Value> = Vec::with_capacity(2 + keys.len() + args.len());
+        command_args.push(script.into());
+        command_args.push((keys.len() as i64).into());
+        for key in keys {
+            command_args.push(self.prefixed_key(key).into());
+        }
+        command_args.extend(args);
+        let result = self
+            .pool
+            .next()
+            .with_options(&options)
+            .custom_raw(cmd!("EVAL"), command_args)
+            .await
+            .and_then(|frame| frame.try_into());
+        self.record(start, "EVAL", result)
+    }
+
     pub async fn compare_and_mutate_many_hash<K>(
         &self,
         key: K,
@@ -869,6 +900,29 @@ return 1
             "XTRIM",
             self.pool.xtrim(self.prefixed_key(key), cap).await,
         )
+    }
+
+    pub async fn xtrim_and_delete_if_empty<K>(&self, key: K, min_id: u64) -> RedisResult<u64>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = "redis.call('XTRIM', KEYS[1], 'MINID', ARGV[1]); if redis.call('XLEN', KEYS[1]) == 0 then redis.call('DEL', KEYS[1]) end; return 1";
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            SCRIPT.into(),
+            1.into(),
+            self.prefixed_key(key).into(),
+            min_id.to_string().into(),
+        ];
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<u64>());
+        self.record(start, "EVAL", result)
     }
 
     pub async fn zadd<R, K, V>(

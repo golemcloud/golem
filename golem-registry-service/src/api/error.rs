@@ -235,7 +235,8 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
             api::error_code::deployment_validation::TOOL_DEFINITION_NAME_MISMATCH
         }
         DeployValidationError::InvalidTool { .. }
-        | DeployValidationError::ToolMetadataSerialization { .. } => {
+        | DeployValidationError::ToolMetadataSerialization { .. }
+        | DeployValidationError::ToolFilesystemRequirement { .. } => {
             api::error_code::deployment_validation::INVALID_TOOL
         }
         DeployValidationError::DuplicateToolImplementation { .. } => {

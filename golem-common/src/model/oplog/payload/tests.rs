@@ -15,8 +15,9 @@
 use test_r::test;
 
 use super::{
-    HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke,
-    HostResponseGolemApiAgents,
+    HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent,
+    HostRequestGolemContextSpanAttributes, HostRequestGolemContextSpanResource,
+    HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
 };
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
@@ -160,6 +161,7 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
         input: SchemaValue::Tuple {
             elements: Vec::new(),
         },
+        local_denial: Some("agent:invoke denied at admission".to_string()),
         logical_streaming_origin: Some(StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
             callee: AgentId {
@@ -179,6 +181,25 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
     let decoded: HostRequestGolemRpcInvoke = desert_rust::deserialize(&first).unwrap();
 
     assert_eq!(first, second);
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn async_rpc_rejection_request_roundtrips_stable_identity() {
+    let request = HostRequestGolemRpcAsyncInvokeRejection {
+        remote_agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "counter-1".to_string(),
+        },
+        idempotency_key: IdempotencyKey::new("rejected-at-42".to_string()),
+        method_name: "increment".to_string(),
+        error: SerializableRpcError::ProtocolError {
+            details: "invalid input".to_string(),
+        },
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let decoded: HostRequestGolemRpcAsyncInvokeRejection =
+        desert_rust::deserialize(&bytes).unwrap();
     assert_eq!(decoded, request);
 }
 
@@ -1371,6 +1392,7 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
         lookup_name: name.to_string(),
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
@@ -1609,6 +1631,7 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
         input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
         has_stdin: true,
         has_stdout: false,
+        has_stderr: true,
         call_mode: EntityCallMode::Asynchronous,
         error,
     };
@@ -1641,6 +1664,7 @@ fn named_custom_tool_error_payload_roundtrips() {
         input_decode_failure: None,
         has_stdin: false,
         has_stdout: false,
+        has_stderr: false,
         call_mode: EntityCallMode::Synchronous,
         error: error.clone(),
     };
@@ -1659,7 +1683,7 @@ fn named_custom_tool_error_payload_roundtrips() {
 }
 
 #[test]
-fn tool_operation_terminal_is_schema_native_and_excludes_stdout() {
+fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
     let terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(SerializableToolRpcError::ResourceExhausted(
@@ -2048,6 +2072,27 @@ proptest! {
         let serializable: SerializableStreamError = original.into();
         let roundtripped: StreamError = serializable.into();
         prop_assert!(matches!(roundtripped, StreamError::Closed));
+    }
+
+    #[test]
+    fn guest_span_lifecycle_requests_roundtrip(_dummy in Just(())) {
+        let resource = HostRequestGolemContextSpanResource {
+            creation_index: Some(OplogIndex::from_u64(42)),
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&resource).unwrap();
+        let decoded: HostRequestGolemContextSpanResource = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, resource);
+
+        let attributes = HostRequestGolemContextSpanAttributes {
+            creation_index: None,
+            attributes: vec![(
+                "key".to_string(),
+                AttributeValue::String("value".to_string()),
+            )],
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&attributes).unwrap();
+        let decoded: HostRequestGolemContextSpanAttributes = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, attributes);
     }
 
 }

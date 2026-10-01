@@ -29,6 +29,7 @@
 //     (ArkType branch nodes / Effect AST members) rather than Standard Schemas.
 
 import { SchemaCodec } from './codec';
+import { Uuid } from '../uuid';
 import {
   mergeGraphDefs,
   SchemaType,
@@ -109,6 +110,8 @@ export function matchesSchemaType(
     case 'string':
     case 'url':
       return typeof value === 'string';
+    case 'uuid':
+      return value instanceof Uuid;
     case 'enum':
       return typeof value === 'string';
     case 'binary':
@@ -130,7 +133,10 @@ export function matchesSchemaType(
       // distinct required keys.
       return (
         isPlainObject(value) &&
-        body.fields.every((f) => f.body.body.tag === 'option' || f.name in value)
+        body.fields.every(
+          (f) =>
+            f.body.body.tag === 'option' || Object.prototype.hasOwnProperty.call(value, f.name),
+        )
       );
     case 'secret':
     case 'quota-token':
@@ -166,6 +172,7 @@ export function buildUnionVariantCodec(
   );
   return {
     graph: { defs, root: t.variant(cases) },
+    concrete: { tag: 'variant', cases: memberCodecs.map((codec) => ({ codec })) },
     toValue: (value) => {
       const i = pick(value);
       if (i < 0 || i >= memberCodecs.length) {

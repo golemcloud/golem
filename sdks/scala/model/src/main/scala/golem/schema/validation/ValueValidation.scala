@@ -155,6 +155,8 @@ object ValueError {
 
 object ValueValidation {
   import ValueError._
+  private val MaxUuidHalf = (BigInt(1) << 64) - 1
+
   def validateValue(graph: SchemaGraph, tpe: SchemaType, value: SchemaValue): Either[List[ValueError], Unit] = {
     val e = mutable.ListBuffer.empty[ValueError]; check(graph, tpe, value, Nil, e);
     if (e.isEmpty) Right(()) else Left(e.toList)
@@ -170,6 +172,9 @@ object ValueValidation {
       case (BoolType, BoolValue(_)) | (CharType, CharValue(_)) | (StringType, StringValue(_)) |
           (DatetimeType, DatetimeValue(_)) | (DurationType, DurationValue(_)) =>
         ()
+      case (UuidType, UuidValue(uuid)) =>
+        if (uuid.highBits < 0 || uuid.highBits > MaxUuidHalf || uuid.lowBits < 0 || uuid.lowBits > MaxUuidHalf)
+          e += NumericOutOfRange(path(p), "uuid halves must be unsigned 64-bit integers")
       case (S8Type(r), S8Value(x))   => checkNum(r, NumericBound.Signed(x), p, e);
       case (S16Type(r), S16Value(x)) => checkNum(r, NumericBound.Signed(x), p, e);
       case (S32Type(r), S32Value(x)) => checkNum(r, NumericBound.Signed(x), p, e);
@@ -276,18 +281,19 @@ object ValueValidation {
   }
   private def path(p: List[ValuePathSegment]) = ValuePath(p)
   private def typeName(b: SchemaTypeBody)     = b match {
-    case RefType(_)            => "ref"; case BoolType          => "bool"; case S8Type(_)           => "s8"; case S16Type(_)   => "s16";
-    case S32Type(_)            => "s32"; case S64Type(_)        => "s64"; case U8Type(_)            => "u8"; case U16Type(_)   => "u16";
-    case U32Type(_)            => "u32"; case U64Type(_)        => "u64"; case F32Type(_)           => "f32"; case F64Type(_)  => "f64";
-    case CharType              => "char"; case StringType       => "string"; case RecordType(_)     => "record";
-    case VariantType(_)        => "variant"; case EnumType(_)   => "enum"; case FlagsType(_)        => "flags";
-    case TupleType(_)          => "tuple"; case ListType(_)     => "list"; case FixedListType(_, _) => "fixed-list";
-    case MapType(_, _)         => "map"; case OptionType(_)     => "option"; case ResultType(_, _)  => "result";
-    case TextType(_)           => "text"; case BinaryType(_)    => "binary"; case PathType(_)       => "path"; case UrlType(_) => "url";
-    case DatetimeType          => "datetime"; case DurationType => "duration"; case QuantityType(_) => "quantity";
-    case UnionType(_)          => "union"; case SecretType(_)   => "secret"; case QuotaTokenType(_) => "quota-token";
+    case RefType(_)            => "ref"; case BoolType         => "bool"; case S8Type(_)           => "s8"; case S16Type(_)   => "s16";
+    case S32Type(_)            => "s32"; case S64Type(_)       => "s64"; case U8Type(_)            => "u8"; case U16Type(_)   => "u16";
+    case U32Type(_)            => "u32"; case U64Type(_)       => "u64"; case F32Type(_)           => "f32"; case F64Type(_)  => "f64";
+    case CharType              => "char"; case StringType      => "string"; case RecordType(_)     => "record";
+    case VariantType(_)        => "variant"; case EnumType(_)  => "enum"; case FlagsType(_)        => "flags";
+    case TupleType(_)          => "tuple"; case ListType(_)    => "list"; case FixedListType(_, _) => "fixed-list";
+    case MapType(_, _)         => "map"; case OptionType(_)    => "option"; case ResultType(_, _)  => "result";
+    case TextType(_)           => "text"; case BinaryType(_)   => "binary"; case PathType(_)       => "path"; case UrlType(_) => "url";
+    case UuidType              => "uuid"; case DatetimeType    => "datetime"; case DurationType    => "duration";
+    case QuantityType(_)       => "quantity";
+    case UnionType(_)          => "union"; case SecretType(_)  => "secret"; case QuotaTokenType(_) => "quota-token";
     case PermissionCardType(_) => "permission-card"
-    case FutureType(_)         => "future"; case StreamType(_)  => "stream"
+    case FutureType(_)         => "future"; case StreamType(_) => "stream"
   }
   private def shapeName(v: SchemaValue) =
     v.getClass.getSimpleName.stripSuffix("Value").replace("ValueNode", "").toLowerCase

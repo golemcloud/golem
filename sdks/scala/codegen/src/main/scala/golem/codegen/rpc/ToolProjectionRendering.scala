@@ -46,9 +46,9 @@ object ToolProjectionRendering {
     else if (param.isStdin && policy == InvocationUnderlying)
       "_root_.golem.tool.ToolMiddlewareInputHandle"
     else if (param.isStdin) "_root_.golem.tool.ToolInputStream"
-    else if (param.isStdout && policy == InvocationUnderlying)
+    else if ((param.isStdout || param.isStderr) && policy == InvocationUnderlying)
       "_root_.golem.tool.ToolMiddlewareOutputHandle"
-    else if (param.isStdout) "_root_.golem.tool.ToolOutputStream"
+    else if (param.isStdout || param.isStderr) "_root_.golem.tool.ToolOutputStream"
     else if (policy.useProjectedTypes) param.projectedTypeExpr
     else param.typeExpr
 
@@ -58,7 +58,8 @@ object ToolProjectionRendering {
         policy == InvocationUnderlying &&
         !projected.param.isPrincipal &&
         !projected.param.isStdin &&
-        !projected.param.isStdout
+        !projected.param.isStdout &&
+        !projected.param.isStderr
       ) {
         val countFlag = ToolProjectionIR.isCountFlag(projected.param)
         s"""@_root_.golem.runtime.annotations.internalToolMiddlewareField("${projected.canonicalName}", $countFlag) """
@@ -67,16 +68,11 @@ object ToolProjectionRendering {
   }
 
   def successType(codec: LeafReturn, policy: Policy): String = {
-    val okType     = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
-    val stdoutType =
-      if (policy == InvocationUnderlying) "_root_.golem.tool.ToolMiddlewareOutputHandle"
-      else "_root_.golem.tool.ToolOutputStream"
-    (okType, codec.hasStdout) match {
-      case (Some(ok), true)  => s"($ok, $stdoutType)"
-      case (None, true)      => stdoutType
-      case (Some(ok), false) => ok
-      case (None, false)     => "_root_.scala.Unit"
-    }
+    val okType    = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
+    val valueType = okType.getOrElse("_root_.scala.Unit")
+    if (codec.hasStdout || codec.hasStderr)
+      s"_root_.golem.tool.ToolMiddlewareOutputs[$valueType]"
+    else valueType
   }
 
   def returnType(codec: LeafReturn, policy: Policy): String = {
@@ -133,14 +129,16 @@ object ToolProjectionRendering {
     result: String
   ): String = {
     val okType = if (policy.useProjectedTypes) codec.projectedOkType else codec.okType
-    (okType, codec.hasStdout) match {
-      case (Some(ok), true) =>
+    (okType, codec.hasStdout, codec.hasStderr) match {
+      case (Some(ok), true, false) =>
         s"${policy.runtime}.decodeValueStdoutResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
-      case (None, true) =>
+      case (None, true, false) =>
         s"${policy.runtime}.decodeStdoutResult($result)"
-      case (Some(ok), false) =>
+      case (_, _, true) =>
+        sys.error("stderr projection decoding is performed by ToolCallBackend.startOutputs")
+      case (Some(ok), false, false) =>
         s"${policy.runtime}.decodeValueResult($result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
-      case (None, false) =>
+      case (None, false, false) =>
         s"${policy.runtime}.decodeUnitResult($result)"
     }
   }

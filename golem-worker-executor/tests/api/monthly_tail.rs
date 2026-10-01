@@ -299,7 +299,7 @@ async fn pending_tail(
         loop {
             let oplog = worker.oplog();
             let observed_tip = oplog.current_oplog_index().await;
-            oplog.commit(CommitLevel::Always).await;
+            oplog.commit(CommitLevel::Always).await?;
             let entries = oplog.read_exact(OplogIndex::INITIAL, observed_tip.as_u64()).await;
             let starts = entries.iter().filter_map(|(index, entry)| match entry {
                 OplogEntry::AgentInvocationStarted { idempotency_key, .. } if idempotency_key == key => Some(*index),

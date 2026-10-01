@@ -1,9 +1,12 @@
 ## Generated from default config
 http_port = 8081
+initial_health_check_timeout = "15s"
 number_of_shards = 1024
 rebalance_threshold = 0.1
 runtime_metrics_sampling_interval = "5s"
 shard_lease_duration = "1m"
+state_read_timeout = "30s"
+state_write_timeout = "4s"
 
 [grpc]
 port = 9092
@@ -147,10 +150,13 @@ type = "Disabled"
 
 ## Generated from example config: with k8s healthcheck
 # http_port = 8081
+# initial_health_check_timeout = "15s"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
 # shard_lease_duration = "1m"
+# state_read_timeout = "30s"
+# state_write_timeout = "4s"
 #
 # [grpc]
 # port = 9092
@@ -295,10 +301,13 @@ type = "Disabled"
 
 ## Generated from example config: with etcd persistence (distributed mode)
 # http_port = 8081
+# initial_health_check_timeout = "15s"
 # number_of_shards = 1024
 # rebalance_threshold = 0.1
 # runtime_metrics_sampling_interval = "5s"
 # shard_lease_duration = "1m"
+# state_read_timeout = "30s"
+# state_write_timeout = "4s"
 #
 # [grpc]
 # port = 9092
@@ -325,7 +334,10 @@ type = "Disabled"
 # connect_timeout = "10s"
 # endpoints = ["http://localhost:2379"]
 # leader_lease_ttl = "10s"
+# read_retry_timeout = "10s"
 # request_timeout = "5s"
+# retry_max_delay = "5s"
+# retry_min_delay = "100ms"
 #
 # [quota]
 # definition_staleness_ttl = "5m"

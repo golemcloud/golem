@@ -26,18 +26,21 @@ use crate::model::public_oplog::{
 };
 use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;
-use crate::services::rpc::DurableStreamReadError;
+use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplog,
+    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
+    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::{ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode};
+use crate::worker::{
+    ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
+    retired_by_assignment,
+};
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
@@ -201,12 +204,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!(assignment = %shard_assignment, "Received initial shard assignment");
 
-        worker_executor.shard_service().register(
-            shard_assignment.number_of_shards,
-            &shard_assignment.shard_epochs,
-            shard_assignment.expires_at,
-            shard_assignment.revision,
-        );
+        match shard_assignment.revision {
+            Some(revision) => worker_executor.shard_service().register(
+                shard_assignment.number_of_shards,
+                &shard_assignment.shard_epochs,
+                shard_assignment.expires_at,
+                revision,
+            ),
+            // The single-shard executor: no shard manager delivered this assignment, so there is
+            // nothing to order it against.
+            None => worker_executor.shard_service().install_unexpiring(
+                shard_assignment.number_of_shards,
+                &shard_assignment.shard_epochs,
+            ),
+        };
 
         // Deliberately fatal to startup, unlike the same failure on a running executor.
         //
@@ -497,7 +508,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn control_durable_stream_attachment_internal(
         &self,
         request: DurableStreamAttachmentControlRequest,
-    ) -> Result<durable_stream_attachment_control_response::Result, WorkerExecutorError> {
+    ) -> Result<
+        durable_stream_attachment_control_response::Result,
+        DurableStreamRemoteError<WorkerExecutorError>,
+    > {
         let owned_agent_id = extract_owned_agent_id(
             &request,
             |request| &request.producer_agent_id,
@@ -512,7 +526,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if !matches!(auth_ctx, AuthCtx::System | AuthCtx::Agent(_)) {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment control requires an authenticated internal caller",
-            ));
+            )
+            .into());
         }
         if let Some(control) = request.export_control {
             if !matches!(auth_ctx, AuthCtx::System)
@@ -523,7 +538,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return Err(WorkerExecutorError::invalid_request(
                     "export stream control requires a system caller and no attachment fields",
-                ));
+                )
+                .into());
             }
             let result =
                 match Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id).await? {
@@ -573,26 +589,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment target does not match the routed worker",
-            ));
+            )
+            .into());
         }
         let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        // A producer that is being deleted is unavailable rather than failed: the caller retries
+        // until the deletion either finishes (the producer is then not found, which completes a
+        // consumer-side finalization) or fails and leaves the producer resident again. A consumer
+        // that is being deleted no longer accepts overlays; its own deletion settles its topology.
+        let targets_consumer = control.operation.targets_consumer();
+        let deleting = |message: &str| {
+            if targets_consumer {
+                DurableStreamRemoteError::Other(WorkerExecutorError::invalid_request(message))
+            } else {
+                DurableStreamRemoteError::Unavailable
+            }
+        };
         let scope = crate::worker::tasks::TaskScope::default();
-        scope
-            .bind(&worker.tasks)
-            .map_err(WorkerExecutorError::invalid_request)?;
+        scope.bind(&worker.tasks).map_err(deleting)?;
         scope
             .run(worker.control_durable_stream_attachment(control))
             .await
-            .ok_or_else(|| WorkerExecutorError::invalid_request("Worker is being deleted"))?
+            .ok_or_else(|| deleting("Worker is being deleted"))?
             .map(durable_stream_attachment_control_response::Result::Replayed)
     }
 
     async fn read_durable_stream_segment_internal(
         &self,
         request: DurableStreamSegmentReadRequest,
-    ) -> Result<Vec<u8>, DurableStreamReadError<WorkerExecutorError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerExecutorError>> {
         let owned_agent_id = extract_owned_agent_id(
             &request,
             |request| &request.producer_agent_id,
@@ -1233,35 +1260,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
-        let revision = ShardLeaseRevision(request.revision);
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("RevokeShardsRequest.{error}"))
+            })?;
 
-        if let ShardDeliveryOutcome::Stale { delivered, applied } =
-            self.shard_service().revoke_shards(&shard_ids, revision)?
-        {
-            // A newer delivery has already been applied and its set is the
-            // authority; taking shards out of it would be acting on stale news.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring a RevokeShards older than the last delivery applied"
-            );
-            return Ok(());
-        }
-
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err() {
-                worker_details
-                    .interrupt_and_retire(InterruptKind::Restart)
-                    .await?;
+        match self.shard_service().revoke_shards(&shard_ids, revision)? {
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // A newer delivery has already been applied and its set is the
+                // authority; taking shards out of it would be acting on stale news.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring a RevokeShards older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("RevokeShards", delivered, applied);
+                return Ok(());
             }
         }
+
+        // Given up, not restarted: a restart in place would reopen each agent's oplog with the
+        // epoch this executor no longer holds. They are dropped from here and recovered by the
+        // shards' new owners.
+        let shard_service = self.shard_service();
+        self.active_agents()
+            .give_up_matching(
+                |agent_id| shard_service.check_worker(agent_id).is_err(),
+                RetirementReason::ShardRevoked,
+            )
+            .await;
 
         Ok(())
     }
 
     /// Full replace: the request carries this executor's complete shard set
     /// with epochs and the cluster's shard count. Anything absent from the
-    /// set is dropped, and any agent whose shard went away is restarted.
+    /// set is dropped, and any agent whose shard went away is given up.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
@@ -1282,28 +1320,58 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let revision = ShardLeaseRevision(request.revision);
-        if let ShardDeliveryOutcome::Stale { delivered, applied } = self
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
+            })?;
+        match self
             .shard_service()
             .assign_shards(number_of_shards, &shard_epochs, revision)?
         {
-            // Crossed on the network with a newer delivery, which has already
-            // been applied; applying this one would put the older set back.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring an AssignShards push older than the last delivery applied"
-            );
-            return Ok(());
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // Crossed on the network with a newer delivery, which has already
+                // been applied; applying this one would put the older set back.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring an AssignShards push older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("AssignShards", delivered, applied);
+                return Ok(());
+            }
         }
 
         Self::apply_shard_assignment_effects(self).await?;
         Ok(())
     }
 
+    /// A push from a shard manager process this executor does not follow is either a deposed
+    /// manager still sending, or a new one this executor has not heard a reply from yet. The
+    /// push cannot say which, so it is ignored either way and the renewal asks: its answer names
+    /// the process in charge and carries that process's set.
+    fn renew_after_a_push_from_another_manager(
+        &self,
+        push: &'static str,
+        delivered: ShardLeaseRevision,
+        applied: ShardLeaseRevision,
+    ) {
+        tracing::warn!(
+            push,
+            %delivered,
+            %applied,
+            "Ignoring a push from a shard manager process other than the one followed; renewing the lease to hear from the one in charge"
+        );
+        self.shard_manager_service().renew_now();
+    }
+
     /// The one receipt path for a delivered shard set, whichever way it came:
     /// a registration, an `AssignShards` push, or a renewal reply that
-    /// corrected the set. Sweeps the agents whose shard went away, then hands
+    /// corrected the set. Sweeps the agents whose shard went away or came back
+    /// at a higher epoch, then hands
     /// the executor the new set to recover agents for. The sweep runs for
     /// every path, because a renewal can narrow the set as well as widen it:
     /// a path without it would leave agents running on shards this executor
@@ -1325,16 +1393,40 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
         let ticket = this.shard_manager_service().recovery_deferred();
-
-        // Pure set membership on purpose: a lapsed lease must not restart every
-        // running agent: a lapsed lease refuses new work and leaves running work alone.
-        for (agent_id, worker_details) in this.active_agents().snapshot().await {
-            if this.shard_service().check_worker(&agent_id).is_err() {
-                worker_details
-                    .interrupt_and_retire(InterruptKind::Restart)
-                    .await?;
-            }
-        }
+        // Membership and epochs, never the lease: a lapsed lease must not give up every running
+        // agent - a lapsed lease refuses new work and leaves running work alone.
+        //
+        // Given up rather than restarted: a narrowing delivery means these shards have another
+        // owner now, and a restart in place would reopen their oplogs at the stale epoch. A
+        // delivery that raises the epoch of a shard this executor kept means the shard left and
+        // came back, so another executor may have written to its agents. Those are given up the
+        // same way, and the recovery below or their next invocation reopens them at the new epoch.
+        //
+        // The epochs come from one snapshot and the assignment from one read, both taken just
+        // before the sweep selects. An agent created after the snapshot read its epoch from the
+        // delivered assignment, so only membership applies to it. An agent given up and reopened
+        // at the new epoch between the snapshot and the selection is given up once more, which
+        // the same reopen repairs.
+        let held_epochs: HashMap<AgentId, Option<ShardEpoch>> = this
+            .active_agents()
+            .snapshot()
+            .await
+            .into_iter()
+            .map(|(agent_id, worker)| (agent_id, worker.oplog().shard_epoch()))
+            .collect();
+        let assignment = this.shard_service().try_get_current_assignment();
+        this.active_agents()
+            .give_up_matching(
+                |agent_id| {
+                    retired_by_assignment(
+                        assignment.as_ref(),
+                        agent_id,
+                        held_epochs.get(agent_id).copied().flatten(),
+                    )
+                },
+                RetirementReason::ShardNotAssigned,
+            )
+            .await;
 
         if !this.shard_service().is_ready() {
             tracing::info!(
@@ -3115,7 +3207,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     result: Some(result),
                 })))
             }
-            Err(mut error) => record.fail(
+            Err(DurableStreamRemoteError::Unavailable) => {
+                let message = "durable stream producer is unavailable";
+                record.fail(
+                    Err(Status::unavailable(message)),
+                    &mut WorkerExecutorError::runtime(message),
+                )
+            }
+            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamAttachmentControlResponse {
                     result: Some(durable_stream_attachment_control_response::Result::Failure(
                         error.clone().into(),
@@ -3145,14 +3244,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     payload,
                 )),
             }))),
-            Err(DurableStreamReadError::Unavailable) => {
+            Err(DurableStreamRemoteError::Unavailable) => {
                 let message = "durable stream producer is unavailable";
                 record.fail(
                     Err(Status::unavailable(message)),
                     &mut WorkerExecutorError::runtime(message),
                 )
             }
-            Err(DurableStreamReadError::Other(mut error)) => record.fail(
+            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamSegmentReadResponse {
                     result: Some(durable_stream_segment_read_response::Result::Failure(
                         error.clone().into(),
@@ -3198,15 +3297,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let result = match worker {
             Ok(worker) => match request.try_into() {
                 Ok(request) => worker.read_stream_slot(request).await,
-                Err(error) => Err(DurableStreamReadError::Other(error)),
+                Err(error) => Err(DurableStreamRemoteError::Other(error)),
             },
             Err(error) => Err(error.into()),
         };
         let result = match result {
             Ok(Some(value)) => Outcome::Success(value.into()),
             Ok(None) => Outcome::NotFound(golem::common::Empty {}),
-            Err(DurableStreamReadError::Other(error)) => Outcome::Failure(error.into()),
-            Err(DurableStreamReadError::Unavailable) => {
+            Err(DurableStreamRemoteError::Other(error)) => Outcome::Failure(error.into()),
+            Err(DurableStreamRemoteError::Unavailable) => {
                 return Err(Status::unavailable(
                     "durable stream producer is unavailable",
                 ));

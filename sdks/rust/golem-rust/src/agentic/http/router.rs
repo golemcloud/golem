@@ -2,17 +2,17 @@
 // Licensed under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
 
 use crate::agentic::{AgentStream, Config, ConfigSchema};
-use crate::{FromSchema, IntoSchema};
+use crate::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema};
 
 /// One canonical header occurrence. Values are bytes, not UTF-8 strings.
-#[derive(Clone, IntoSchema, FromSchema)]
+#[derive(Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct Header {
     pub name: String,
     pub value: Vec<u8>,
 }
 
 /// The original public request. Bodies are lazy native streams and must not be logged.
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct HttpRequest {
     pub method: String,
     pub scheme: String,
@@ -27,7 +27,7 @@ pub struct HttpRequest {
 ///
 /// Keep repeated headers as separate entries, including `set-cookie`. Dropping
 /// the body disposes its producer; this is distinct from invocation cancellation.
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct HttpResponse {
     pub status: u16,
     pub headers: Vec<Header>,

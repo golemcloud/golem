@@ -51,7 +51,15 @@ describe("registered tool guest runtime", () => {
         Layer.succeed(Suffix, { value: "!" }),
       )
 
-    const result = await invokeRegistered("layer-codec", [], input(), undefined, undefined, {})
+    const result = await invokeRegistered(
+      "layer-codec",
+      [],
+      input(),
+      undefined,
+      undefined,
+      undefined,
+      {},
+    )
     const codec = Effect.runSync(compile(Schema.String))
     await expect(Effect.runPromise(codec.decode(result.result!.value))).resolves.toBe("value!")
   })
@@ -78,7 +86,7 @@ describe("registered tool guest runtime", () => {
         layer,
       )
 
-    await invokeRegistered("scoped", [], input(), undefined, undefined, {})
+    await invokeRegistered("scoped", [], input(), undefined, undefined, undefined, {})
     expect(finalized).toBe(true)
   })
 
@@ -88,7 +96,7 @@ describe("registered tool guest runtime", () => {
       .implement({ failure: () => Effect.fail(err("rejected", { reason: "no" })) })
 
     await expect(
-      invokeRegistered("failure", [], input(), undefined, undefined, {}),
+      invokeRegistered("failure", [], input(), undefined, undefined, undefined, {}),
     ).rejects.toMatchObject({
       tag: "custom-error",
       val: { name: "rejected" },
@@ -101,7 +109,7 @@ describe("registered tool guest runtime", () => {
       .body((body) => body.input({ required: true }).output({ required: true }))
       .implement({ requiredStreams: requiredHandler })
     await expect(
-      invokeRegistered("required-streams", [], input(), undefined, undefined, {}),
+      invokeRegistered("required-streams", [], input(), undefined, undefined, undefined, {}),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(requiredHandler).not.toHaveBeenCalled()
 
@@ -112,7 +120,15 @@ describe("registered tool guest runtime", () => {
     const supplied = iterator()
     const stdout = writer()
     await expect(
-      invokeRegistered("absent-streams", [], input(), supplied.value, stdout as never, {}),
+      invokeRegistered(
+        "absent-streams",
+        [],
+        input(),
+        supplied.value,
+        stdout as never,
+        undefined,
+        {},
+      ),
     ).rejects.toMatchObject({ tag: "invalid-input" })
     expect(absentHandler).not.toHaveBeenCalled()
     expect(supplied.return_).toHaveBeenCalledOnce()
@@ -124,16 +140,79 @@ describe("registered tool guest runtime", () => {
       .body((body) => body.input())
       .implement({ streams: () => Effect.void })
     const unused = iterator()
-    await invokeRegistered("streams", [], input(), unused.value, undefined, {})
+    await invokeRegistered("streams", [], input(), unused.value, undefined, undefined, {})
     expect(unused.return_).toHaveBeenCalledOnce()
 
     const rejected = iterator()
     const stdout = writer()
     await expect(
-      invokeRegistered("streams", ["missing"], input(), rejected.value, stdout as never, {}),
+      invokeRegistered(
+        "streams",
+        ["missing"],
+        input(),
+        rejected.value,
+        stdout as never,
+        undefined,
+        {},
+      ),
     ).rejects.toMatchObject({ tag: "invalid-command-path" })
     expect(rejected.return_).toHaveBeenCalledOnce()
     expect(stdout.finish).toHaveBeenCalledOnce()
     expect(stdout.fail).not.toHaveBeenCalled()
   })
+
+  it.each([false, true])(
+    "settles both output terminals before returning when one finish fails (declared error: %s)",
+    async (declaredError) => {
+      toolDefinition("settle-output-terminals")
+        .body((body) => body.output().stderr().error("rejected", Schema.String))
+        .implement({
+          settleOutputTerminals: () =>
+            declaredError ? Effect.fail(err("rejected", "no")) : Effect.void,
+        })
+      let releaseStderr!: () => void
+      const stderrGate = new Promise<void>((resolve) => (releaseStderr = resolve))
+      let terminalCount = 0
+      let terminalStarted!: () => void
+      const bothTerminalsStarted = new Promise<void>((resolve) => (terminalStarted = resolve))
+      const markTerminalStarted = () => {
+        terminalCount += 1
+        if (terminalCount === 2) terminalStarted()
+      }
+      const stdout = {
+        write: vi.fn(),
+        finish: vi.fn(async () => {
+          markTerminalStarted()
+          throw new Error("stdout finish failed")
+        }),
+        fail: vi.fn(),
+      }
+      const stderr = {
+        write: vi.fn(),
+        finish: vi.fn(() => {
+          markTerminalStarted()
+          return stderrGate
+        }),
+        fail: vi.fn(),
+      }
+      let settled = false
+      const invocation = invokeRegistered(
+        "settle-output-terminals",
+        [],
+        input(),
+        undefined,
+        stdout as never,
+        stderr as never,
+        {},
+      ).finally(() => (settled = true))
+      await bothTerminalsStarted
+      expect(stdout.finish).toHaveBeenCalledOnce()
+      expect(stderr.finish).toHaveBeenCalledOnce()
+      expect(settled).toBe(false)
+      releaseStderr()
+      if (declaredError) await expect(invocation).rejects.toMatchObject({ tag: "custom-error" })
+      else await expect(invocation).rejects.toThrow("stdout finish failed")
+      expect(settled).toBe(true)
+    },
+  )
 })

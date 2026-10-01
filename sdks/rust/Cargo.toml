@@ -9,3 +9,4 @@ members = [
 debug = false
 lto = true
 opt-level = 's'
+strip = "symbols"

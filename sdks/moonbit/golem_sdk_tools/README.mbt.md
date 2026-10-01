@@ -88,12 +88,14 @@ struct Search {}
 #derive.arg("case_sensitive", name="case-sensitive", scope="global", short="i", kind="flag")
 #derive.arg("pattern", scope="positional", regex="^.+$")
 #derive.arg("files", scope="tail", kind="file", direction="input", accepts_stdio=true)
+#derive.arg("stderr", channel="stderr")
 pub fn Search::search(
   case_sensitive : Bool,
   pattern : String,
   files : Array[@schema.Path],
   stdin : @asyncCore.Stream[Byte],
-  stdout : @tool.ProviderStdout,
+  stdout : @tool.ProviderOutput,
+  stderr : @tool.ProviderOutput,
 ) -> Result[Array[String], SearchError] {
   // ...
 }
@@ -125,15 +127,17 @@ Without an explicit mapping, `Bool` is a flag, a final `Array[T]` is a tail posi
 arrays and maps are repeatable options, and other values are positionals. Explicit annotations are
 recommended whenever the command-line surface matters.
 
-The exact qualified runtime types `@tool.Principal`, `@asyncCore.Stream[Byte]`, and
-`@tool.ProviderStdout` are hidden invocation parameters. Principal and provider-stdout parameters
-are not exposed by generated clients; input streams are accepted as client inputs. Provider stdout
-streams are returned either alone or paired with the command's typed result. A provider can write,
-finish successfully, or select a typed failure terminal through `ProviderStdout`.
+The exact qualified runtime types `@tool.Principal` and `@tool.ProviderOutput` are hidden invocation
+parameters; annotate a provider output with `channel="stderr"` to select stderr, while an
+unannotated output selects stdout. Principal and provider-output parameters are not exposed by
+generated clients; `@asyncCore.Stream[Byte]` inputs are accepted as client inputs. Either output
+selects the started-invocation client shape with independent optional stdout/stderr streams,
+structured result, collection, and cancellation. A provider can write, finish successfully, or
+select a typed failure terminal through `ProviderOutput`.
 
 Tool middleware remains transfer-oriented: middleware methods that consume or replace the
-underlying invocation's stdout use an exact `@asyncCore.Sink[Byte]`. Raw sinks are not a provider
-authoring API.
+underlying invocation's stdout or stderr use exact `@asyncCore.Sink[Byte]` values. Raw sinks are not
+a provider authoring API.
 
 ### Constraints and errors
 
@@ -213,10 +217,12 @@ The generated `<ExpectedTool>Underlying` has no public constructor. It wraps the
 for this invocation and exposes async typed methods projected from the expected shape. Handlers may
 short-circuit with zero calls, forward once, or retry with multiple awaited calls. Overlapping calls
 use the generated `start_<command>` methods. Each returns an independent `UnderlyingInvocation`
-with `get()`, `stdout()`, `cancel()`, and `drop()`, so results and stdout can be observed in either
-order. `drop()` releases only the observer; it does not cancel the call. After the handler returns,
-new admissions are rejected, but admitted calls are not implicitly cancelled. This is runtime
-enforcement, not a MoonBit affine type guarantee.
+with `get()`, `stdout()`, `stderr()`, `cancel()`, and `drop()`. Drain every declared output
+concurrently with observing the result, or use `get_buffering_outputs()` to settle the result and
+both outputs and receive replayable stdout and stderr streams. `drop()` releases only the observer;
+it does not cancel the call. After the handler returns, new admissions are rejected, but admitted
+calls are not implicitly cancelled. This is runtime enforcement, not a MoonBit affine type
+guarantee.
 
 For nested commands, handler and underlying method names flatten the full canonical path with
 `__`, such as `admin__run`. Generation rejects flattened-name collisions.

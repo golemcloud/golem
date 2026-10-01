@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Regenerate the WIT bindings for the Golem MoonBit SDK and apply the required
-# post-processing fixes. Regeneration requires the pinned Golem wit-bindgen fork
+# post-processing fixes. Regeneration requires the Golem wit-bindgen fork branch
 # documented in ../AGENTS.md; stock wit-bindgen does not support this SDK's P3
 # async WIT surface.
 #
@@ -28,18 +28,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readonly WIT_BINDGEN_COMMIT="36866deb07e878430f61d02a28c52fac0fab5355"
-readonly WIT_BINDGEN_SHORT_COMMIT="${WIT_BINDGEN_COMMIT:0:9}"
-
 wit_bindgen_version="$(wit-bindgen --version)"
-if [[ "$wit_bindgen_version" != *"$WIT_BINDGEN_SHORT_COMMIT"* ]]; then
+expected_wit_bindgen_version="$(cat .wit-bindgen-version 2>/dev/null || true)"
+if [[ ! "$wit_bindgen_version" =~ 0\.59\.0\ \([0-9a-f]{9,40}\ [0-9]{4}-[0-9]{2}-[0-9]{2}\) ]] ||
+  [[ "$wit_bindgen_version" != "$expected_wit_bindgen_version" ]]; then
   cat >&2 <<EOF
-ERROR: bindings must be regenerated with Golem's pinned wit-bindgen fork at
-$WIT_BINDGEN_COMMIT, but found: $wit_bindgen_version
+ERROR: bindings must be regenerated with the Golem wit-bindgen build installed
+from the wit-bindgen-golem-1.6 branch, but found: $wit_bindgen_version
 
-Install the pinned generator with:
-  cargo install --locked --git https://github.com/golemcloud/wit-bindgen \\
-    --rev $WIT_BINDGEN_COMMIT wit-bindgen-cli
+Install the generator with:
+  scripts/install-wit-bindgen.sh
 EOF
   exit 1
 fi
@@ -86,10 +84,6 @@ generate_world() {
 }
 
 generate_world default agent-guest gen
-
-echo "==> Validating middleware argument lifts"
-python3 scripts/split-middleware-lift.py \
-  "$tmp_root/default/gen/interface/golem/tool/tool-middleware-guest/ffi.mbt"
 
 echo "==> Assembling generated roots"
 rm -rf "${GENERATED_ROOTS[@]}" gen-tool-middleware gen-agent-tool-middleware \

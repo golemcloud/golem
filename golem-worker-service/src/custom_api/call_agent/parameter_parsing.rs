@@ -113,6 +113,13 @@ pub fn parse_path_segment_value(
             }
         }),
 
+        PathSegmentType::Uuid => value.parse().map(SchemaValue::Uuid).map_err(|_| {
+            RequestHandlerError::ValueParsingFailed {
+                value,
+                expected: "uuid",
+            }
+        }),
+
         PathSegmentType::Enum(inner) => {
             let case_index = inner.iter().position(|c| *c == value).ok_or_else(|| {
                 RequestHandlerError::ValueParsingFailed {
@@ -249,6 +256,17 @@ mod path_segment_tests {
         let value = parse_path_segment_value("true".to_string(), &PathSegmentType::Bool).unwrap();
 
         assert_eq!(value, SchemaValue::Bool(true));
+    }
+
+    #[test]
+    fn parse_uuid_success_and_rejects_invalid_input() {
+        let text = "dd00721b-3329-4621-a01d-c71f02cd78c6";
+        let value = parse_path_segment_value(text.to_string(), &PathSegmentType::Uuid).unwrap();
+
+        assert_eq!(value, SchemaValue::Uuid(text.parse().unwrap()));
+        assert!(
+            parse_path_segment_value("not-a-uuid".to_string(), &PathSegmentType::Uuid).is_err()
+        );
     }
 
     #[test]

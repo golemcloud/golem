@@ -27,9 +27,10 @@ returns the selected arguments, input schema, result schema, and declared errors
 Use `ToolCommand.invokeJson` for canonical JSON or `invokeValue` for schema-native values. Both
 validate inputs before opening RPC and check declared results after invocation.
 
-`startValue` and `startJson` return pending invocations with stdout, result, `collect`, and
-`cancel`. Use them when a command requires caller-readable stdout. `collect` drains stdout while
-awaiting the result. `triggerValue` and `triggerJson` reject commands with required stdout.
+`startValue` and `startJson` return pending invocations with independent stdout, stderr, result,
+`collect`, and `cancel`. Use them when a command requires either caller-readable output. `collect`
+drains both outputs concurrently while awaiting the result. `triggerValue` and `triggerJson`
+reject commands with required stdout or stderr.
 `DynamicToolClient` accepts a caller-packed `TypedSchemaValue` and a command path when no
 descriptor is available; it does not infer or validate a deployed schema. Reflected and dynamic
 calls return recoverable `ToolError` values, including malformed remote output.

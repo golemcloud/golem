@@ -65,7 +65,7 @@ use crate::durable_host::{
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
 use crate::services::{HasShutdownToken, HasWorker};
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
+use crate::workerctx::WorkerCtx;
 use std::fmt::Display;
 
 mod access;
@@ -91,6 +91,8 @@ use call::{
 };
 pub use delivery::*;
 pub(crate) use demand_stream::*;
+#[cfg(test)]
+pub(crate) use drop_events::tests::cleanup_recorder;
 pub use drop_events::*;
 pub use replay::*;
 

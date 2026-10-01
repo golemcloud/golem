@@ -9,9 +9,9 @@ use golem_rust::tool::{
     ToolMiddlewareInvokeFuture, ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaType, SchemaValue, TypedSchemaValue,
-    decode_schema_value, encode_schema_graph, tool_definition, tool_middleware,
-    universal_tool_middleware,
+    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaType, SchemaValue,
+    TypedSchemaValue, WireSchema, decode_schema_value, encode_schema_graph, tool_definition,
+    tool_middleware, universal_tool_middleware,
 };
 use std::convert::Infallible;
 
@@ -20,7 +20,7 @@ pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyObservation {
     pub label: String,
     pub config_resolved: bool,
@@ -28,7 +28,7 @@ pub struct SecretPolicyObservation {
     pub input_secret_revealed: bool,
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
@@ -109,7 +109,7 @@ impl SecretPolicyProbeMiddleware for SecretPolicyAudit {
 mod expected_mcp_probe {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
     pub struct Evidence {
         pub evidence: String,
     }
@@ -148,25 +148,33 @@ impl presented_mcp_probe::MiddlewareProbeMiddleware<expected_mcp_probe::Middlewa
         value: String,
         mut stdout: Option<OutputStream>,
     ) -> Result<presented_mcp_probe::Evidence, ToolInvokeError<Infallible>> {
-        let (result, mut underlying_stdout) = underlying.middleware_probe(value).await?;
-        while let Some(item) = underlying_stdout.next().await {
-            match item {
-                Ok(bytes) => {
-                    if let Some(stdout) = &mut stdout {
-                        let _ = stdout.write(bytes).await;
+        let mut invocation = underlying.start_middleware_probe(value).await?;
+        let mut underlying_stdout = invocation
+            .stdout
+            .take()
+            .expect("declared stdout is validated by generated start method");
+        let forward = async move {
+            while let Some(item) = underlying_stdout.next().await {
+                match item {
+                    Ok(bytes) => {
+                        if let Some(stdout) = &mut stdout {
+                            let _ = stdout.write(bytes).await;
+                        }
                     }
-                }
-                Err(failure) => {
-                    if let Some(stdout) = stdout.take() {
-                        let _ = stdout.fail(failure).await;
+                    Err(failure) => {
+                        if let Some(stdout) = stdout.take() {
+                            let _ = stdout.fail(failure).await;
+                        }
+                        return;
                     }
-                    break;
                 }
             }
-        }
-        if let Some(stdout) = stdout {
-            let _ = stdout.finish().await;
-        }
+            if let Some(stdout) = stdout {
+                let _ = stdout.finish().await;
+            }
+        };
+        let (result, ()) = (invocation.get(), forward).join().await;
+        let result = result?;
         Ok(presented_mcp_probe::Evidence {
             evidence: format!("monomorphic({})", result.evidence),
         })
@@ -181,6 +189,7 @@ fn invoke_mcp_projection(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
     underlying: UnderlyingTool,
 ) -> ToolMiddlewareInvokeFuture {
@@ -194,11 +203,12 @@ fn invoke_mcp_projection(
         };
         *argument = format!("monomorphic({argument})");
         let mut completed = underlying
-            .invoke_forwarding_stdout(
+            .invoke_forwarding_outputs(
                 command_path,
                 TypedSchemaValue::new(graph, value),
                 stdin,
                 stdout,
+                stderr,
             )
             .await?;
         completed.result = None;
@@ -248,7 +258,7 @@ golem_rust::ctor::__support::ctor_parse!(
 mod expected_typed_output {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub ordinal: u32,
         pub label: String,
@@ -264,7 +274,7 @@ mod expected_typed_output {
 mod presented_typed_output {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub label: String,
         pub ordinal: u32,
@@ -315,14 +325,14 @@ impl
 mod expected_typed_input {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub ordinal: u32,
         pub caller_extra: u64,
         pub label: String,
     }
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Evidence {
         pub label: String,
         pub ordinal: u32,
@@ -375,11 +385,12 @@ async fn universal_pass_through(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     underlying
-        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
         .await
 }
 
@@ -391,12 +402,13 @@ async fn universal_secret_policy_audit(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     if tool_name != "secret-policy-probe" {
         return underlying
-            .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+            .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
             .await;
     }
 
@@ -406,13 +418,13 @@ async fn universal_secret_policy_audit(
         .as_ref()
         .is_ok_and(|configured| reveal_string(configured).is_ok());
     let input_secret_revealed = match input.value() {
-        SchemaValue::Record { fields } => fields.first().is_some_and(|value| {
-            matches!(value, SchemaValue::Secret(handle) if reveal_string(handle).is_ok())
-        }),
+        SchemaValue::Record { fields } => fields.first().is_some_and(
+            |value| matches!(value, SchemaValue::Secret(handle) if reveal_string(handle).is_ok()),
+        ),
         _ => false,
     };
     let mut result = underlying
-        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
         .await?;
     let value = result.result.take().ok_or_else(|| {
         ToolInvokeError::InvalidResult("secret policy probe returned no value".to_string())
@@ -441,6 +453,7 @@ async fn universal_transform_input(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
@@ -453,11 +466,12 @@ async fn universal_transform_input(
     };
     *argument = format!("middleware({argument})");
     underlying
-        .invoke_forwarding_stdout(
+        .invoke_forwarding_outputs(
             command_path,
             TypedSchemaValue::new(graph, value),
             stdin,
             stdout,
+            stderr,
         )
         .await
 }
@@ -470,6 +484,7 @@ async fn universal_mcp_fanout(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
@@ -489,11 +504,12 @@ async fn universal_mcp_fanout(
         .invoke(command_path.clone(), with_suffix(&input, "first"), None)
         .await?;
     let completed = underlying
-        .invoke_forwarding_stdout(
+        .invoke_forwarding_outputs(
             command_path.clone(),
             with_suffix(&input, "second"),
             stdin,
             stdout,
+            stderr,
         )
         .await?;
     let pending = underlying

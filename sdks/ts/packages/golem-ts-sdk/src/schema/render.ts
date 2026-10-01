@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  SchemaGraph,
-  SchemaType,
-  SchemaTypeBody,
-  SchemaValue,
+import {
+  floatFromBits,
+  type NumericRestrictions,
+  type SchemaGraph,
+  type SchemaType,
+  type SchemaTypeBody,
+  type SchemaValue,
 } from '../internal/schema-model';
+import { Uuid } from '../uuid';
 import { datetimeFromISOString, datetimeToISOString } from '../bridge/schema';
 import { SchemaRenderError, type JsonValue } from './ref';
 
@@ -77,6 +80,14 @@ export function fromCanonicalJson(
     }
     case 'string':
       return { tag: 'string', value: expectString(json, path) };
+    case 'uuid': {
+      const input = expectString(json, path);
+      try {
+        return { tag: 'uuid', value: Uuid.parse(input) };
+      } catch {
+        fail(path, 'expected a UUID');
+      }
+    }
     case 'text':
       return decodeText(json, path);
     case 'binary':
@@ -99,7 +110,10 @@ export function fromCanonicalJson(
       return {
         tag: 'record',
         fields: body.fields.map((field) => {
-          if (!(field.name in object)) fail([...path, field.name], 'missing field');
+          if (!Object.prototype.hasOwnProperty.call(object, field.name)) {
+            if (resolve(graph, field.body).body.tag === 'option') return { tag: 'option' };
+            fail([...path, field.name], 'missing field');
+          }
           return fromCanonicalJson(graph, field.body, object[field.name], [...path, field.name]);
         }),
       };
@@ -233,6 +247,7 @@ export function toCanonicalJson(
     fail(path, `expected ${body.tag} schema value, found ${value.tag}`);
   switch (value.tag) {
     case 'bool':
+      return value.value;
     case 's8':
     case 's16':
     case 's32':
@@ -252,16 +267,21 @@ export function toCanonicalJson(
     case 'path':
     case 'url':
       return value.value;
+    case 'uuid':
+      return value.value.toString();
     case 'text':
       return {
         text: value.text,
         ...(value.language === undefined ? {} : { language: value.language }),
       };
-    case 'binary':
+    case 'binary': {
+      if (value.mimeType !== undefined && !MIME_TYPE_PATTERN.test(value.mimeType))
+        fail([...path, 'mimeType'], 'invalid MIME type');
       return {
         bytes: bytesToBase64(value.bytes),
         ...(value.mimeType === undefined ? {} : { mimeType: value.mimeType }),
       };
+    }
     case 'datetime':
       return datetimeToISOString(value.value);
     case 'duration':
@@ -436,7 +456,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(-(2 ** 31), 2 ** 31 - 1);
       break;
     case 's64':
-      rendered = integerStringSchema(I64_MIN, I64_MAX, true, 'int64');
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, I64_MIN, 'min'),
+        restrictedIntegerBound(body.restrictions?.max, I64_MAX, 'max'),
+        true,
+        'int64',
+      );
       break;
     case 'u8':
       rendered = integerSchema(0, 255);
@@ -448,7 +473,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(0, 2 ** 32 - 1);
       break;
     case 'u64':
-      rendered = integerStringSchema(0n, U64_MAX, false, 'uint64');
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, 0n, 'min'),
+        restrictedIntegerBound(body.restrictions?.max, U64_MAX, 'max'),
+        false,
+        'uint64',
+      );
       break;
     case 'f32':
     case 'f64':
@@ -460,6 +490,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case 'string':
       rendered = { type: 'string' };
       break;
+    case 'uuid':
+      rendered = { type: 'string', format: 'uuid' };
+      break;
     case 'text': {
       const text: Record<string, JsonValue> = { type: 'string' };
       if (body.restrictions.minLength !== undefined) text.minLength = body.restrictions.minLength;
@@ -467,12 +500,17 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       if (body.restrictions.regex !== undefined) text.pattern = body.restrictions.regex;
       rendered = {
         type: 'object',
-        properties: { text, language: { type: 'string' } },
+        properties: {
+          text,
+          language: {
+            type: 'string',
+            ...(body.restrictions.languages === undefined
+              ? {}
+              : { enum: body.restrictions.languages }),
+          },
+        },
         required: ['text'],
         additionalProperties: false,
-        ...(body.restrictions.languages === undefined
-          ? {}
-          : { description: `Allowed languages: ${body.restrictions.languages.join(', ')}` }),
       };
       break;
     }
@@ -484,6 +522,7 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
           bytes: {
             type: 'string',
             contentEncoding: 'base64url',
+            pattern: BASE64URL_PATTERN,
             ...(body.restrictions.minBytes === undefined
               ? {}
               : { minLength: base64UrlLength(body.restrictions.minBytes) }),
@@ -491,12 +530,15 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
               ? {}
               : { maxLength: base64UrlLength(body.restrictions.maxBytes) }),
           },
-          mimeType: { type: 'string', pattern: MIME_TYPE_PATTERN.source },
+          mimeType: {
+            type: 'string',
+            pattern: MIME_TYPE_PATTERN.source,
+            ...(body.restrictions.mimeTypes === undefined
+              ? {}
+              : { enum: body.restrictions.mimeTypes }),
+          },
         },
         additionalProperties: false,
-        ...(body.restrictions.mimeTypes === undefined
-          ? {}
-          : { description: `Allowed MIME types: ${body.restrictions.mimeTypes.join(', ')}` }),
       };
       break;
     case 'path': {
@@ -570,7 +612,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
             attachMetadata(renderSchema(graph, field.body), field.metadata),
           ]),
         ),
-        required: body.fields.map((field) => field.name),
+        required: body.fields
+          .filter((field) => resolve(graph, field.body).body.tag !== 'option')
+          .map((field) => field.name),
         additionalProperties: false,
       };
       break;
@@ -658,12 +702,23 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case 'secret':
     case 'quota-token':
     case 'permission-card':
-      rendered = { writeOnly: true, 'x-golem-capability': body.tag };
-      break;
     case 'future':
     case 'stream':
-      rendered = { type: 'null', description: 'WASI P3 placeholder' };
+      rendered = { not: {} };
       break;
+  }
+  if ((rendered.type === 'integer' || rendered.type === 'number') && 'restrictions' in body) {
+    const bounds = body.restrictions as NumericRestrictions | undefined;
+    if (bounds?.min !== undefined)
+      rendered.minimum = Math.max(
+        bounds.min.tag === 'float-bits' ? floatFromBits(bounds.min.val)! : Number(bounds.min.val),
+        body.tag === 'f32' ? -F32_MAX : ((rendered.minimum as number | undefined) ?? -Infinity),
+      );
+    if (bounds?.max !== undefined)
+      rendered.maximum = Math.min(
+        bounds.max.tag === 'float-bits' ? floatFromBits(bounds.max.val)! : Number(bounds.max.val),
+        body.tag === 'f32' ? F32_MAX : ((rendered.maximum as number | undefined) ?? Infinity),
+      );
   }
   return attachMetadata(rendered, type.metadata);
 }
@@ -825,6 +880,7 @@ function decodeQuantity(value: JsonValue, path: Path): SchemaValue {
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
 const U64_MAX = 2n ** 64n - 1n;
+const F32_MAX = 3.4028234663852886e38;
 const CANONICAL_SIGNED_PATTERN = '^(?:0|-[1-9][0-9]*|[1-9][0-9]*)$';
 const CANONICAL_UNSIGNED_PATTERN = '^(?:0|[1-9][0-9]*)$';
 
@@ -871,6 +927,8 @@ function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonV
   return false;
 }
 const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+\-]+\/[A-Za-z0-9!#$&^_.+\-]+$/u;
+const BASE64URL_PATTERN =
+  '^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$';
 
 function bytesToBase64(bytes: Uint8Array): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
@@ -901,7 +959,9 @@ function base64UrlToBytes(value: string, path: Path): Uint8Array {
     if (value[index + 2] !== undefined) bytes.push(((b & 15) << 4) | (c >> 2));
     if (value[index + 3] !== undefined) bytes.push(((c & 3) << 6) | d);
   }
-  return Uint8Array.from(bytes);
+  const result = Uint8Array.from(bytes);
+  if (bytesToBase64(result) !== value) fail(path, 'invalid base64url without padding');
+  return result;
 }
 
 function rejectUnknownFields(
@@ -954,4 +1014,20 @@ function integerStringSchema(
     'x-golem-minimum': min.toString(),
     'x-golem-maximum': max.toString(),
   };
+}
+
+function restrictedIntegerBound(
+  bound: NumericRestrictions['min'] | undefined,
+  fallback: bigint,
+  side: 'min' | 'max',
+): bigint {
+  if (bound === undefined || bound.tag === 'float-bits') return fallback;
+  const value = bound.val;
+  return side === 'min'
+    ? value > fallback
+      ? value
+      : fallback
+    : value < fallback
+      ? value
+      : fallback;
 }

@@ -18,8 +18,13 @@ use wasmtime_wasi::StreamError;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DropPolicy, DurableCallSession, NotCancellable,
 };
-use crate::durable_host::durability::{HostFailureKind, SemanticTrapRetryOverride};
-use crate::durable_host::http::inline_retry::{HttpStreamInlineRetryOutcome, ResumeBodyError};
+use crate::durable_host::durability::{
+    ClassifiedHostError, DurableRecoveryFailure, DurableRecoveryFailureKind, HostFailureKind,
+    SemanticTrapRetryOverride,
+};
+use crate::durable_host::http::inline_retry::{
+    HttpStreamInlineRetryOutcome, HttpStreamResumeError,
+};
 use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpOutputStreamState};
@@ -41,7 +46,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestHttpRequest, HostRequestNoInput,
     HostResponseStreamCheckWrite, HostResponseStreamChunk, HostResponseStreamSkip,
     HostResponseStreamWriteResult, HostResponseStreamWriteWithBytes, HostResponseStreamWriteZeroes,
-    OplogIndex,
+    OplogIndex, SpanOutcome,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use wasmtime_wasi::p2::bindings::io::streams::{
@@ -103,6 +108,81 @@ async fn interruptible_http_body_input<T>(
     }
 }
 
+enum RepairedHttpBodyRead {
+    Resumed,
+    ContentFailure(StreamError),
+}
+
+async fn repair_incomplete_http_body_read<Ctx, Pair>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    stream_handle: u32,
+    call: &mut DurableCallSession<Pair, NotCancellable>,
+) -> Result<RepairedHttpBodyRead, StreamError>
+where
+    Ctx: WorkerCtx,
+    Pair: HostPayloadPair,
+{
+    match crate::durable_host::http::inline_retry::repair_resuming_response_body_after_recovery(
+        ctx,
+        stream_handle,
+        #[cfg(feature = "test-utils")]
+        call.start_index(),
+    )
+    .await
+    {
+        Ok(HttpStreamInlineRetryOutcome::Retried) => Ok(RepairedHttpBodyRead::Resumed),
+        Ok(HttpStreamInlineRetryOutcome::Ineligible(reason)) => Err(StreamError::Trap(
+            wasmtime::Error::from_anyhow(call.trap(DurableRecoveryFailure::new(
+                DurableRecoveryFailureKind::Permanent,
+                anyhow::anyhow!("incomplete HTTP body read cannot be resumed: {reason:?}"),
+            ))),
+        )),
+        Ok(HttpStreamInlineRetryOutcome::NotRetried) => Err(StreamError::Trap(
+            wasmtime::Error::from_anyhow(call.trap(DurableRecoveryFailure::new(
+                DurableRecoveryFailureKind::Permanent,
+                anyhow::anyhow!("incomplete HTTP body read resumption was not retried"),
+            ))),
+        )),
+        Ok(HttpStreamInlineRetryOutcome::FallBackToTrapWithoutOverride(error)) => {
+            Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(
+                ClassifiedHostError {
+                    kind: HostFailureKind::Transient,
+                    message: error.to_string(),
+                },
+            ))))
+        }
+        Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(semantic_override)) => {
+            Err(StreamError::Trap(wasmtime::Error::from_anyhow(
+                call.trap_semantic_retry_override(
+                    semantic_override,
+                    HostFailureKind::Transient,
+                    "HTTP body repair failed while resending the request",
+                ),
+            )))
+        }
+        Err(HttpStreamResumeError::HttpContent(error)) => Ok(RepairedHttpBodyRead::ContentFailure(
+            StreamError::LastOperationFailed(wasmtime::Error::from_anyhow(error)),
+        )),
+        Err(HttpStreamResumeError::Lifecycle(interrupt)) => {
+            call.abandon_for_trap();
+            Err(StreamError::Trap(wasmtime::Error::from_anyhow(interrupt)))
+        }
+        Err(HttpStreamResumeError::NativeTrap(error)) => Err(StreamError::Trap(
+            wasmtime::Error::from_anyhow(call.trap(error)),
+        )),
+        Err(error @ HttpStreamResumeError::PayloadBackend(_)) => {
+            Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(
+                DurableRecoveryFailure::new(DurableRecoveryFailureKind::Retryable, error),
+            ))))
+        }
+        Err(error @ HttpStreamResumeError::CorruptHistory(_)) => {
+            Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(
+                DurableRecoveryFailure::new(DurableRecoveryFailureKind::Permanent, error),
+            ))))
+        }
+    }
+}
+
 impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
     async fn read(
         &mut self,
@@ -114,13 +194,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let begin_idx = get_http_request_begin_idx(self, handle)?;
 
             let request = get_http_stream_request(self, handle)?;
-            let mut call =
-                DurableCallSession::<HttpTypesIncomingBodyStreamRead, NotCancellable>::start(
-                    self,
-                    request,
-                    DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-                )
-                .await?;
+            let mut call = DurableCallSession::<
+                HttpTypesIncomingBodyStreamRead,
+                NotCancellable,
+            >::start_repairable_in_scope(self, request, begin_idx)
+            .await?;
 
             let result = if call.is_live() {
                 let first_try = propagate_http_body_native_trap(
@@ -148,30 +226,55 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                                 )?,
                             )
                         }
-                        Ok(HttpStreamInlineRetryOutcome::NotRetried) => {
+                        Ok(HttpStreamInlineRetryOutcome::Ineligible(_))
+                        | Ok(HttpStreamInlineRetryOutcome::NotRetried)
+                        | Ok(HttpStreamInlineRetryOutcome::FallBackToTrapWithoutOverride(_)) => {
                             HttpStreamOperationResult::without_override(first_try)
                         }
                         Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(semantic_override)) => {
                             HttpStreamOperationResult::with_override(first_try, semantic_override)
                         }
-                        Err(ResumeBodyError::Interrupt(interruption)) => {
-                            call.abandon_for_trap();
-                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
-                                interruption,
-                            )));
-                        }
-                        Err(ResumeBodyError::Infrastructure(error)) => {
-                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
-                                call.trap(error),
-                            )));
-                        }
-                        Err(ResumeBodyError::Terminal(recorded)) => {
-                            return call
-                                .complete(self, HostResponseStreamChunk { result: Err(recorded) })
+                        Err(HttpStreamResumeError::HttpContent(error)) => {
+                            let stream_error = StreamError::LastOperationFailed(
+                                wasmtime::Error::from_anyhow(error),
+                            );
+                            let recorded_result =
+                                Err(SerializableStreamError::from(&stream_error));
+                            call.complete_forced(
+                                self,
+                                HostResponseStreamChunk {
+                                    result: recorded_result.clone(),
+                                },
+                            )
+                            .await
+                            .map_err(StreamError::from)?;
+                            end_http_request_if_closed(self, handle, &recorded_result)
                                 .await
-                                .map_err(StreamError::from)?
-                                .result
-                                .map_err(StreamError::from);
+                                .map_err(StreamError::from)?;
+                            return Err(stream_error);
+                        }
+                        Err(HttpStreamResumeError::Lifecycle(interrupt)) => {
+                            call.abandon_for_trap();
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(interrupt)));
+                        }
+                        Err(HttpStreamResumeError::NativeTrap(error)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(error))));
+                        }
+                        Err(error @ HttpStreamResumeError::PayloadBackend(_)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
+                                call.trap(DurableRecoveryFailure::new(
+                                    DurableRecoveryFailureKind::Retryable,
+                                    error,
+                                )),
+                            )));
+                        }
+                        Err(error @ HttpStreamResumeError::CorruptHistory(_)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
+                                call.trap(DurableRecoveryFailure::new(
+                                    DurableRecoveryFailureKind::Permanent,
+                                    error,
+                                )),
+                            )));
                         }
                     }
                 } else {
@@ -186,7 +289,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
 
-                call.complete(
+                call.complete_forced(
                     self,
                     HostResponseStreamChunk {
                         result: read_result.result.map_err(SerializableStreamError::from),
@@ -195,9 +298,50 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self)
-                    .await
-                    .map_err(StreamError::from)
+                match call.replay(self).await.map_err(StreamError::from)? {
+                    CallReplayOutcome::Replayed(result) => Ok(result),
+                    CallReplayOutcome::Incomplete(mut call) => {
+                        let read_result = match repair_incomplete_http_body_read(
+                            self, handle, &mut call,
+                        )
+                        .await?
+                        {
+                            RepairedHttpBodyRead::Resumed => {
+                                let self_ = Resource::<InputStream>::new_borrow(handle);
+                                HostInputStream::read(self.table(), self_, len).await
+                            }
+                            RepairedHttpBodyRead::ContentFailure(stream_error) => {
+                                let recorded_result =
+                                    Err(SerializableStreamError::from(&stream_error));
+                                call.complete_forced(
+                                    self,
+                                    HostResponseStreamChunk {
+                                        result: recorded_result.clone(),
+                                    },
+                                )
+                                .await
+                                .map_err(StreamError::from)?;
+                                end_http_request_if_closed(self, handle, &recorded_result)
+                                    .await
+                                    .map_err(StreamError::from)?;
+                                return Err(stream_error);
+                            }
+                        };
+                        call.try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
+                            HostFailureKind::Transient
+                        })
+                        .await
+                        .map_err(|error| StreamError::Trap(wasmtime::Error::from_anyhow(error)))?;
+                        call.complete_forced(
+                            self,
+                            HostResponseStreamChunk {
+                                result: read_result.map_err(SerializableStreamError::from),
+                            },
+                        )
+                        .await
+                        .map_err(StreamError::from)
+                    }
+                }
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -274,11 +418,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             let mut call = DurableCallSession::<
                 HttpTypesIncomingBodyStreamBlockingRead,
                 NotCancellable,
-            >::start(
-                self,
-                request,
-                DurableFunctionType::WriteRemoteBatched(Some(begin_idx)),
-            )
+            >::start_repairable_in_scope(self, request, begin_idx)
             .await?;
             let result = if call.is_live() {
                 #[cfg(feature = "test-utils")]
@@ -340,30 +480,55 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                             };
                             HttpStreamOperationResult::without_override(result)
                         }
-                        Ok(HttpStreamInlineRetryOutcome::NotRetried) => {
+                        Ok(HttpStreamInlineRetryOutcome::Ineligible(_))
+                        | Ok(HttpStreamInlineRetryOutcome::NotRetried)
+                        | Ok(HttpStreamInlineRetryOutcome::FallBackToTrapWithoutOverride(_)) => {
                             HttpStreamOperationResult::without_override(first_try)
                         }
                         Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(semantic_override)) => {
                             HttpStreamOperationResult::with_override(first_try, semantic_override)
                         }
-                        Err(ResumeBodyError::Interrupt(interruption)) => {
-                            call.abandon_for_trap();
-                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
-                                interruption,
-                            )));
-                        }
-                        Err(ResumeBodyError::Infrastructure(error)) => {
-                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
-                                call.trap(error),
-                            )));
-                        }
-                        Err(ResumeBodyError::Terminal(recorded)) => {
-                            return call
-                                .complete(self, HostResponseStreamChunk { result: Err(recorded) })
+                        Err(HttpStreamResumeError::HttpContent(error)) => {
+                            let stream_error = StreamError::LastOperationFailed(
+                                wasmtime::Error::from_anyhow(error),
+                            );
+                            let recorded_result =
+                                Err(SerializableStreamError::from(&stream_error));
+                            call.complete_forced(
+                                self,
+                                HostResponseStreamChunk {
+                                    result: recorded_result.clone(),
+                                },
+                            )
+                            .await
+                            .map_err(StreamError::from)?;
+                            end_http_request_if_closed(self, handle, &recorded_result)
                                 .await
-                                .map_err(StreamError::from)?
-                                .result
-                                .map_err(StreamError::from);
+                                .map_err(StreamError::from)?;
+                            return Err(stream_error);
+                        }
+                        Err(HttpStreamResumeError::Lifecycle(interrupt)) => {
+                            call.abandon_for_trap();
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(interrupt)));
+                        }
+                        Err(HttpStreamResumeError::NativeTrap(error)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(error))));
+                        }
+                        Err(error @ HttpStreamResumeError::PayloadBackend(_)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
+                                call.trap(DurableRecoveryFailure::new(
+                                    DurableRecoveryFailureKind::Retryable,
+                                    error,
+                                )),
+                            )));
+                        }
+                        Err(error @ HttpStreamResumeError::CorruptHistory(_)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
+                                call.trap(DurableRecoveryFailure::new(
+                                    DurableRecoveryFailureKind::Permanent,
+                                    error,
+                                )),
+                            )));
                         }
                     }
                 } else {
@@ -377,7 +542,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 })
                 .await
                 .map_err(|e| StreamError::Trap(wasmtime::Error::from_anyhow(e)))?;
-                call.complete(
+                call.complete_forced(
                     self,
                     HostResponseStreamChunk {
                         result: read_result.result.map_err(SerializableStreamError::from),
@@ -386,9 +551,67 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 .await
                 .map_err(StreamError::from)
             } else {
-                call.replay_expecting_completion(self)
-                    .await
-                    .map_err(StreamError::from)
+                match call.replay(self).await.map_err(StreamError::from)? {
+                    CallReplayOutcome::Replayed(result) => Ok(result),
+                    CallReplayOutcome::Incomplete(mut call) => {
+                        let read_result = match repair_incomplete_http_body_read(
+                            self, handle, &mut call,
+                        )
+                        .await?
+                        {
+                            RepairedHttpBodyRead::Resumed => {
+                                let self_ = Resource::<InputStream>::new_borrow(handle);
+                                let interrupt = self
+                                    .execution_status
+                                    .read()
+                                    .unwrap()
+                                    .create_await_interrupt_signal();
+                                let native =
+                                    HostInputStream::blocking_read(self.table(), self_, len);
+                                match interruptible_http_body_input(native, interrupt).await {
+                                    Ok(result) => {
+                                        propagate_http_body_native_trap(&mut call, result)?
+                                    }
+                                    Err(kind) => {
+                                        call.abandon_for_trap();
+                                        return Err(StreamError::Trap(
+                                            wasmtime::Error::from_anyhow(kind.into()),
+                                        ));
+                                    }
+                                }
+                            }
+                            RepairedHttpBodyRead::ContentFailure(stream_error) => {
+                                let recorded_result =
+                                    Err(SerializableStreamError::from(&stream_error));
+                                call.complete_forced(
+                                    self,
+                                    HostResponseStreamChunk {
+                                        result: recorded_result.clone(),
+                                    },
+                                )
+                                .await
+                                .map_err(StreamError::from)?;
+                                end_http_request_if_closed(self, handle, &recorded_result)
+                                    .await
+                                    .map_err(StreamError::from)?;
+                                return Err(stream_error);
+                            }
+                        };
+                        call.try_trigger_retry(self, &ignore_closed_error(&read_result), |_| {
+                            HostFailureKind::Transient
+                        })
+                        .await
+                        .map_err(|error| StreamError::Trap(wasmtime::Error::from_anyhow(error)))?;
+                        call.complete_forced(
+                            self,
+                            HostResponseStreamChunk {
+                                result: read_result.map_err(SerializableStreamError::from),
+                            },
+                        )
+                        .await
+                        .map_err(StreamError::from)
+                    }
+                }
             }?;
 
             end_http_request_if_closed(self, handle, &result.result).await?;
@@ -946,7 +1169,11 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                                 blocking_write_and_flush_chunked(self.table(), self2, &contents)
                                     .await;
                         }
-                        Ok(HttpStreamInlineRetryOutcome::NotRetried) => break,
+                        Ok(HttpStreamInlineRetryOutcome::Ineligible(_))
+                        | Ok(HttpStreamInlineRetryOutcome::NotRetried)
+                        | Ok(HttpStreamInlineRetryOutcome::FallBackToTrapWithoutOverride(_)) => {
+                            break;
+                        }
                         Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(payload)) => {
                             semantic_override = Some(payload);
                             break;
@@ -1600,6 +1827,17 @@ async fn end_http_request_if_closed<Ctx: WorkerCtx, T>(
     handle: u32,
     result: &Result<T, SerializableStreamError>,
 ) -> Result<(), WorkerExecutorError> {
+    if let Err(error) = result
+        && let Some(state) = ctx.state.open_http_requests.get(&handle)
+    {
+        state
+            .session
+            .record_outcome(if matches!(error, SerializableStreamError::Closed) {
+                SpanOutcome::Completed
+            } else {
+                SpanOutcome::Failed
+            });
+    }
     if matches!(result, Err(SerializableStreamError::Closed))
         && let Some(state) = ctx.state.open_http_requests.get(&handle)
     {
@@ -1766,7 +2004,9 @@ where
                 Ok(HttpStreamInlineRetryOutcome::Retried) => {
                     HttpStreamOperationResult::without_override(op(ctx).await)
                 }
-                Ok(HttpStreamInlineRetryOutcome::NotRetried) => {
+                Ok(HttpStreamInlineRetryOutcome::Ineligible(_))
+                | Ok(HttpStreamInlineRetryOutcome::NotRetried)
+                | Ok(HttpStreamInlineRetryOutcome::FallBackToTrapWithoutOverride(_)) => {
                     HttpStreamOperationResult::without_override(first_try)
                 }
                 Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(semantic_override)) => {

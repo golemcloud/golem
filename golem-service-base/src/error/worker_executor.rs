@@ -20,7 +20,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::AgentError;
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{AgentId, PromiseId, ShardId, Timestamp};
+use golem_common::model::{AgentId, OplogIndex, PromiseId, ShardId, Timestamp};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -92,6 +92,12 @@ pub enum WorkerExecutorError {
     Runtime {
         details: String,
     },
+    /// Durable recovery data was temporarily unavailable. The worker must discard the current
+    /// runtime and reconstruct the same invocation without consuming its semantic retry budget.
+    RecoveryRequired {
+        details: String,
+        retry_from: Option<OplogIndex>,
+    },
     InvalidShardId {
         shard_id: ShardId,
         shard_ids: Vec<ShardId>,
@@ -131,6 +137,16 @@ pub enum WorkerExecutorError {
     },
     PermissionDenied {
         details: String,
+    },
+    /// A write to the agent's oplog was refused by the storage because the shard epoch this
+    /// executor asserted is behind the one recorded for the oplog: another executor owns the
+    /// shard now. Typed so the invocation loop can stop the agent cleanly instead of treating
+    /// it as a runtime failure to retry; crosses the wire as `ShardingNotReady`, which the
+    /// worker service already answers by refreshing its routing table and retrying.
+    OplogFenced {
+        agent_id: AgentId,
+        expected_epoch: u64,
+        actual_epoch: Option<u64>,
     },
 }
 
@@ -185,6 +201,14 @@ impl WorkerExecutorError {
         }
     }
 
+    pub fn oplog_fenced(agent_id: AgentId, expected_epoch: u64, actual_epoch: Option<u64>) -> Self {
+        Self::OplogFenced {
+            agent_id,
+            expected_epoch,
+            actual_epoch,
+        }
+    }
+
     pub fn invalid_shard_id(shard_id: ShardId, shard_ids: HashSet<ShardId>) -> Self {
         Self::InvalidShardId {
             shard_id,
@@ -195,6 +219,20 @@ impl WorkerExecutorError {
     pub fn runtime(details: impl Into<String>) -> Self {
         Self::Runtime {
             details: details.into(),
+        }
+    }
+
+    pub fn recovery_required(details: impl Into<String>) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: None,
+        }
+    }
+
+    pub fn recovery_required_from(details: impl Into<String>, retry_from: OplogIndex) -> Self {
+        Self::RecoveryRequired {
+            details: details.into(),
+            retry_from: Some(retry_from),
         }
     }
 
@@ -295,6 +333,9 @@ impl Display for WorkerExecutorError {
             Self::Runtime { details } => {
                 write!(f, "Runtime error: {details}")
             }
+            Self::RecoveryRequired { details, .. } => {
+                write!(f, "Runtime reconstruction required: {details}")
+            }
             Self::InvalidShardId {
                 shard_id,
                 shard_ids,
@@ -337,6 +378,22 @@ impl Display for WorkerExecutorError {
             Self::PermissionDenied { details } => {
                 write!(f, "Permission denied: {details}")
             }
+            Self::OplogFenced {
+                agent_id,
+                expected_epoch,
+                actual_epoch,
+            } => match actual_epoch {
+                Some(actual) => write!(
+                    f,
+                    "Oplog write for {agent_id} fenced: this executor asserted shard epoch \
+                     {expected_epoch}, the stored epoch is {actual}"
+                ),
+                None => write!(
+                    f,
+                    "Oplog write for {agent_id} fenced: this executor asserted shard epoch \
+                     {expected_epoch}, but no epoch is stored for the oplog"
+                ),
+            },
         }
     }
 }
@@ -373,6 +430,7 @@ impl Error for WorkerExecutorError {
             Self::InvalidShardId { .. } => "Invalid shard",
             Self::InvalidAccount => "Invalid account",
             Self::Runtime { .. } => "Runtime error",
+            Self::RecoveryRequired { .. } => "Runtime reconstruction required",
             Self::InvocationFailed { .. } => "The invoked function failed",
             Self::PreviousInvocationFailed { .. } => "The previously invoked function failed",
             Self::PreviousInvocationExited => "The previously invoked function exited",
@@ -381,6 +439,7 @@ impl Error for WorkerExecutorError {
             Self::FileSystemError { .. } => "File system error",
             Self::ReadOnlyViolation { .. } => "Read-only agent method attempted a side effect",
             Self::PermissionDenied { .. } => "Permission denied",
+            Self::OplogFenced { .. } => "Oplog write fenced: the shard has a new owner",
         }
     }
 }
@@ -409,6 +468,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::InvalidShardId { .. } => "InvalidShardId",
             Self::InvalidAccount => "InvalidAccount",
             Self::Runtime { .. } => "Runtime",
+            Self::RecoveryRequired { .. } => "RecoveryRequired",
             Self::InvocationFailed { .. } => "InvocationFailed",
             Self::PreviousInvocationFailed { .. } => "PreviousInvocationFailed",
             Self::PreviousInvocationExited => "PreviousInvocationExited",
@@ -417,6 +477,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::FileSystemError { .. } => "FileSystemError",
             Self::ReadOnlyViolation { .. } => "ReadOnlyViolation",
             Self::PermissionDenied { .. } => "PermissionDenied",
+            Self::OplogFenced { .. } => "OplogFenced",
         }
     }
 
@@ -429,6 +490,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::PromiseAlreadyCompleted { .. }
             | Self::Interrupted { .. }
             | Self::InvalidShardId { .. }
+            | Self::OplogFenced { .. }
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
@@ -443,6 +505,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::UnexpectedOplogEntry { .. }
             | Self::InvalidAccount
             | Self::Runtime { .. }
+            | Self::RecoveryRequired { .. }
             | Self::InvocationFailed { .. }
             | Self::PreviousInvocationFailed { .. }
             | Self::PreviousInvocationExited
@@ -720,6 +783,11 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::RuntimeError { details },
                 )),
             },
+            WorkerExecutorError::RecoveryRequired { details, .. } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::RuntimeError(
+                    golem::worker::v1::RuntimeError { details },
+                )),
+            },
             WorkerExecutorError::InvalidShardId {
                 shard_id,
                 shard_ids,
@@ -805,6 +873,18 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PermissionDenied(
                         golem::worker::v1::PermissionDenied { details },
+                    ),
+                ),
+            },
+            // The client cannot act on the epochs; what it can do is what it does for a lapsed
+            // lease - refresh its routing table and retry on the owner. A fence can land in the
+            // middle of an invocation, and the retry is still one invocation, not a second: the
+            // worker service sends it under the same idempotency key, the new owner finds the key
+            // in the oplog it took over if the invocation got that far, and answers from it.
+            WorkerExecutorError::OplogFenced { .. } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ShardingNotReady(
+                        golem::worker::v1::ShardingNotReady {},
                     ),
                 ),
             },
@@ -1102,6 +1182,11 @@ pub enum InterruptKind {
     Restart,
     Suspend(Timestamp),
     Jump,
+    /// This executor no longer owns the agent's shard. Terminal here: the agent is stopped
+    /// without writing to its oplog or its status, dropped from the executor, and left for the
+    /// worker service to resume on the shard's owner. Never a restart in place - that would
+    /// reopen the oplog with the same stale epoch.
+    ShardLost,
 }
 
 impl Display for InterruptKind {
@@ -1111,6 +1196,9 @@ impl Display for InterruptKind {
             InterruptKind::Restart => write!(f, "Simulated crash via the Golem API"),
             InterruptKind::Suspend(_) => write!(f, "Suspended"),
             InterruptKind::Jump => write!(f, "Jumping back in time"),
+            InterruptKind::ShardLost => {
+                write!(f, "This executor no longer owns the agent's shard")
+            }
         }
     }
 }

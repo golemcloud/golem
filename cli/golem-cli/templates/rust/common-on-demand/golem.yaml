@@ -2,6 +2,7 @@
 
 componentTemplates:
   rust:
+    guestLanguage: rust
     presets:
       debug:
         default: true

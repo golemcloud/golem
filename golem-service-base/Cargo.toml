@@ -91,6 +91,7 @@ tonic = { workspace = true, features = [ "_tls-any" ] }
 tonic-tracing-opentelemetry = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
+typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
@@ -101,8 +102,6 @@ assert2.workspace = true
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
-testcontainers = { workspace = true }
-tryhard = { workspace = true }
 uuid = { workspace = true }
 
 [[test]]

@@ -258,7 +258,7 @@ The Golem CLI also uses TypeScript names and values for Effect components:
 
 ```shell
 golem agent invoke --no-stream 'CounterAgent("ext-test")' increment
-golem agent invoke --no-stream 'CounterAgent("ext-test")' add '{"by": 2}'
+golem agent invoke --no-stream 'CounterAgent("ext-test")' add 2
 ```
 
 Use exact `defineAgent` and method names, including camelCase. CLI invocation is useful for manual

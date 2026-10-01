@@ -45,6 +45,7 @@ use golem_worker_executor::services::golem_config::{
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
+use golem_worker_executor::services::shutdown::Shutdown;
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
     RouteResolverConfig, SqliteSessionStoreConfig, WorkerServiceConfig,
@@ -117,7 +118,7 @@ pub struct StartupPorts {
 
 pub async fn launch_golem_services(
     args: &LaunchArgs,
-) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts)> {
+) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     args.validate()?;
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -153,6 +154,7 @@ pub async fn launch_golem_services(
     write_registry_db_compat(&args.data_dir).await?;
     let custom_request_port = started_components.worker_service.custom_request_port;
     let mcp_port = started_components.worker_service.mcp_port;
+    let worker_shutdown = started_components.worker_executor.shutdown.clone();
 
     let router_port = start_router(
         &args.router_addr,
@@ -176,7 +178,7 @@ pub async fn launch_golem_services(
         custom_request_port, mcp_port, "Started Golem services"
     );
 
-    Ok((join_set, startup_ports))
+    Ok((join_set, startup_ports, worker_shutdown))
 }
 
 async fn write_startup_ports_file(path: &PathBuf, ports: &StartupPorts) -> anyhow::Result<()> {
@@ -721,6 +723,15 @@ mod tests {
                 },
             )
             .unwrap();
+            let shard_manager = golem_shard_manager::RunDetails {
+                http_port: 0,
+                grpc_port: 0,
+                leadership: None,
+            };
+            let registry = golem_registry_service::SingleExecutableRunDetails {
+                grpc_port: 0,
+                endpoint: poem::EndpointExt::boxed(poem::Route::new()),
+            };
             let worker_config = worker_service_config(&args, &shard_manager, &registry).unwrap();
             let BlobStorageConfig::LocalFileSystem(registry_blobs) = registry_config.blob_storage
             else {

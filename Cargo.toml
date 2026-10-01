@@ -270,7 +270,7 @@ tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.12", default-features = true }
 testcontainers = { version = "0.27.1" }
-testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "minio", "mysql", ] }
+testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
 textwrap = "0.16.1"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
@@ -330,7 +330,7 @@ webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console"] }
 which = "8.0.0"
-wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "golem-outline-lift-v0.58.0", version = "=0.59.0" }
+wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0" }
 wit-bindgen-rust = "0.58.0"
 wit-component = "0.248"
 wit-encoder = "0.248"

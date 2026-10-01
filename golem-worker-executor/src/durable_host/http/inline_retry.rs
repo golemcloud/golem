@@ -40,12 +40,12 @@ use crate::durable_host::http::policy::{
 use crate::durable_host::http::types::classify_http_error_code;
 use crate::durable_host::{HttpOutgoingBodyState, HttpRequestState, PendingStatusRetryDecision};
 use crate::services::environment_state::EnvironmentStateService;
-use crate::services::oplog::{Oplog, OplogOps};
+use crate::services::oplog::{Oplog, OplogOps, OplogPayloadDownloadError};
 use crate::services::{HasOplog, HasWorker};
+use anyhow::Context;
 use bytes::Bytes;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::payload::HostPayloadPair;
-use golem_common::model::oplog::types::SerializableStreamError;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
 };
@@ -63,7 +63,7 @@ use wasmtime_wasi::OutputStream;
 use wasmtime_wasi_http::HttpConnectionPool;
 use wasmtime_wasi_http::p2::bindings::http::types as wasi_http_types;
 use wasmtime_wasi_http::p2::body::{
-    HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
+    FailingStream, HostIncomingBody, HostOutgoingBody, HyperOutgoingBody, StreamContext,
 };
 use wasmtime_wasi_http::p2::default_send_request_with_pool;
 use wasmtime_wasi_http::p2::types::{
@@ -135,61 +135,143 @@ pub(crate) fn take_http_background_retry_fallback(
     None
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum HttpStreamInlineRetryOutcome {
     Retried,
+    Ineligible(InlineRetryIneligible),
     NotRetried,
+    FallBackToTrapWithoutOverride(anyhow::Error),
     FallBackToTrap(SemanticTrapRetryOverride),
 }
 
-pub(crate) enum ResumeBodyError {
-    Terminal(SerializableStreamError),
-    Infrastructure(anyhow::Error),
-    Interrupt(anyhow::Error),
+fn retire_failed_response_body_transport<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    stream_handle: u32,
+    body_handle: u32,
+) -> Result<(), anyhow::Error> {
+    use wasmtime::component::Resource;
+    use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
+    use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
+
+    let retired_error = Arc::<str>::from("HTTP response body transport retired for retry");
+    let old_stream = {
+        let stream_entry: &mut wasmtime_wasi::DynInputStream =
+            ctx.table()
+                .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))?;
+        std::mem::replace(
+            stream_entry,
+            Box::new(FailingStream(Arc::clone(&retired_error))),
+        )
+    };
+    drop(old_stream);
+
+    let old_body = {
+        let body_entry: &mut HostIncomingBody = ctx
+            .table()
+            .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))?;
+        std::mem::replace(
+            body_entry,
+            HostIncomingBody::failing(retired_error.to_string()),
+        )
+    };
+    drop(old_body);
+
+    Ok(())
 }
 
-impl ResumeBodyError {
+#[derive(Debug)]
+pub enum HttpStreamResumeError {
+    PayloadBackend(anyhow::Error),
+    CorruptHistory(anyhow::Error),
+    Lifecycle(anyhow::Error),
+    NativeTrap(anyhow::Error),
+    HttpContent(anyhow::Error),
+}
+
+impl HttpStreamResumeError {
     fn native_trap(error: wasmtime::Error) -> Self {
         if error.root_cause().downcast_ref::<InterruptKind>().is_some() {
-            Self::Interrupt(error.into())
+            Self::Lifecycle(error.into())
         } else {
-            Self::Infrastructure(error.into())
+            Self::NativeTrap(error.into())
         }
     }
 
-    fn into_anyhow(self) -> anyhow::Error {
+    fn payload(error: OplogPayloadDownloadError, context: &'static str) -> Self {
+        match error {
+            OplogPayloadDownloadError::Backend(error) => {
+                Self::PayloadBackend(error.context(context))
+            }
+            OplogPayloadDownloadError::Corrupt(error) => {
+                Self::CorruptHistory(error.context(context))
+            }
+        }
+    }
+
+    fn corrupt(error: impl Into<anyhow::Error>) -> Self {
+        Self::CorruptHistory(error.into())
+    }
+
+    fn http_content(error: impl Into<anyhow::Error>) -> Self {
+        Self::HttpContent(error.into())
+    }
+}
+
+impl std::fmt::Display for HttpStreamResumeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Terminal(_) => unreachable!("sending has no response-body terminal"),
-            Self::Infrastructure(error) | Self::Interrupt(error) => error,
+            Self::PayloadBackend(error) => {
+                write!(formatter, "response-body recovery payload failure: {error}")
+            }
+            Self::CorruptHistory(error) => {
+                write!(formatter, "corrupt response-body recovery history: {error}")
+            }
+            Self::Lifecycle(interrupt) => write!(formatter, "{interrupt}"),
+            Self::NativeTrap(error) => write!(formatter, "HTTP native transport trapped: {error}"),
+            Self::HttpContent(error) => {
+                write!(formatter, "HTTP response resumption failed: {error}")
+            }
         }
     }
 }
 
-fn range_not_satisfiable_error() -> ResumeBodyError {
-    ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(
-        "HTTP retry failed: server returned 416 Range Not Satisfiable".to_string(),
+impl std::error::Error for HttpStreamResumeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PayloadBackend(error)
+            | Self::CorruptHistory(error)
+            | Self::HttpContent(error)
+            | Self::NativeTrap(error) => Some(error.as_ref()),
+            Self::Lifecycle(interrupt) => Some(interrupt.as_ref()),
+        }
+    }
+}
+
+fn range_not_satisfiable_error() -> HttpStreamResumeError {
+    HttpStreamResumeError::http_content(anyhow::anyhow!(
+        "HTTP retry failed: server returned 416 Range Not Satisfiable"
     ))
 }
 
-fn classify_resume_prefix_error(error: wasmtime_wasi::StreamError) -> ResumeBodyError {
+fn classify_resume_prefix_error(error: wasmtime_wasi::StreamError) -> HttpStreamResumeError {
     match error {
-        wasmtime_wasi::StreamError::Closed => {
-            ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(
-                "HTTP retry failed: response shorter than previously consumed bytes".to_string(),
-            ))
-        }
+        wasmtime_wasi::StreamError::Closed => HttpStreamResumeError::http_content(anyhow::anyhow!(
+            "HTTP retry failed: response shorter than previously consumed bytes"
+        )),
         wasmtime_wasi::StreamError::LastOperationFailed(error) => {
-            ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(format!(
-                "HTTP retry failed: error reading prefix for skip: {error}"
-            )))
+            HttpStreamResumeError::http_content(error)
         }
-        wasmtime_wasi::StreamError::Trap(error) => ResumeBodyError::native_trap(error),
+        wasmtime_wasi::StreamError::Trap(error) => HttpStreamResumeError::native_trap(error),
     }
 }
 
 /// Reasons why an HTTP request is not eligible for transparent inline retry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InlineRetryIneligible {
+    /// The stream is not associated with a tracked HTTP request.
+    UntrackedRequest,
+    /// The tracked response has no incoming-body resource to replace.
+    MissingIncomingBody,
     /// Worker is in replay mode (not live).
     NotLive,
     /// Worker is executing a snapshot load/save function.
@@ -211,6 +293,8 @@ pub enum InlineRetryIneligible {
     HadBodySkip,
     /// The output stream had subscribe() called, so pollable may be stale after replacement.
     OutputStreamSubscribed,
+    /// The guest supplied its own Range header, which cannot be composed safely.
+    GuestRangeHeader,
 }
 
 /// Which inline retry phase is being attempted.
@@ -315,7 +399,7 @@ pub enum BodyChunk {
 pub async fn reconstruct_outgoing_body_chunks(
     oplog: &Arc<dyn Oplog>,
     begin_index: OplogIndex,
-) -> Result<Vec<BodyChunk>, anyhow::Error> {
+) -> Result<Vec<BodyChunk>, HttpStreamResumeError> {
     reconstruct_outgoing_body_chunks_after(oplog, begin_index, None).await
 }
 
@@ -323,7 +407,7 @@ async fn reconstruct_outgoing_body_chunks_after(
     oplog: &Arc<dyn Oplog>,
     begin_index: OplogIndex,
     after_index: Option<OplogIndex>,
-) -> Result<Vec<BodyChunk>, anyhow::Error> {
+) -> Result<Vec<BodyChunk>, HttpStreamResumeError> {
     let current_idx = oplog.current_oplog_index().await;
 
     if current_idx < begin_index {
@@ -372,38 +456,65 @@ async fn reconstruct_outgoing_body_chunks_after(
                 if let Some(function_name) = pending_starts.remove(start_index) {
                     if function_name == write_fn_name {
                         let response_value = oplog
-                            .download_payload(response.clone())
+                            .download_payload_classified(response.clone())
                             .await
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "failed to download outgoing body chunk payload: {err}"
+                            .map_err(|error| {
+                                HttpStreamResumeError::payload(
+                                    error,
+                                    "failed to download outgoing body chunk payload",
                                 )
                             })?;
 
-                        if let HostResponse::StreamWriteWithBytes(payload) = response_value
-                            && let Ok(data) = &payload.result
-                            && !data.is_empty()
-                        {
-                            chunks.push(BodyChunk::Data(Bytes::from(data.clone())));
+                        match response_value {
+                            HostResponse::StreamWriteWithBytes(payload) => {
+                                if let Ok(data) = payload.result
+                                    && !data.is_empty()
+                                {
+                                    chunks.push(BodyChunk::Data(Bytes::from(data)));
+                                }
+                            }
+                            response => {
+                                return Err(HttpStreamResumeError::corrupt(anyhow::anyhow!(
+                                    "outgoing body write at {start_index} has unexpected response {response:?}"
+                                )));
+                            }
                         }
                     } else if function_name == write_zeroes_fn_name {
                         let response_value = oplog
-                            .download_payload(response.clone())
+                            .download_payload_classified(response.clone())
                             .await
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "failed to download outgoing body chunk payload: {err}"
+                            .map_err(|error| {
+                                HttpStreamResumeError::payload(
+                                    error,
+                                    "failed to download outgoing body zeroes payload",
                                 )
                             })?;
 
-                        if let HostResponse::StreamWriteZeroes(payload) = response_value
-                            && let Ok(len) = &payload.result
-                            && *len > 0
-                        {
-                            chunks.push(BodyChunk::Zeroes(*len));
+                        match response_value {
+                            HostResponse::StreamWriteZeroes(payload) => {
+                                if let Ok(len) = payload.result
+                                    && len > 0
+                                {
+                                    chunks.push(BodyChunk::Zeroes(len));
+                                }
+                            }
+                            response => {
+                                return Err(HttpStreamResumeError::corrupt(anyhow::anyhow!(
+                                    "outgoing body write-zeroes at {start_index} has unexpected response {response:?}"
+                                )));
+                            }
                         }
                     }
                 }
+            }
+            OplogEntry::End {
+                start_index,
+                response: None,
+                ..
+            } if pending_starts.contains_key(start_index) => {
+                return Err(HttpStreamResumeError::corrupt(anyhow::anyhow!(
+                    "outgoing body operation at {start_index} has no recorded response"
+                )));
             }
             _ => {}
         }
@@ -419,7 +530,7 @@ async fn reconstruct_outgoing_body_chunks_after(
 pub async fn count_incoming_body_bytes(
     oplog: &Arc<dyn Oplog>,
     begin_index: OplogIndex,
-) -> Result<u64, anyhow::Error> {
+) -> Result<u64, HttpStreamResumeError> {
     let current_idx = oplog.current_oplog_index().await;
 
     if current_idx < begin_index {
@@ -451,9 +562,14 @@ pub async fn count_incoming_body_bytes(
         match entry {
             OplogEntry::Start {
                 function_name,
-                durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(batch_begin)),
+                parent_start_index,
+                durable_function_type,
                 ..
-            } if *batch_begin == begin_index
+            } if (matches!(
+                durable_function_type,
+                DurableFunctionType::WriteRemoteBatched(Some(batch_begin)) if *batch_begin == begin_index
+            ) || (*durable_function_type == DurableFunctionType::ReadRemote
+                && *parent_start_index == Some(begin_index)))
                 && (*function_name == read_fn_name || *function_name == blocking_read_fn_name) =>
             {
                 pending_starts.insert(*idx, function_name.clone());
@@ -464,19 +580,37 @@ pub async fn count_incoming_body_bytes(
                 ..
             } if pending_starts.contains_key(start_index) => {
                 pending_starts.remove(start_index);
-                let response_value =
-                    oplog
-                        .download_payload(response.clone())
-                        .await
-                        .map_err(|err| {
-                            anyhow::anyhow!("failed to download incoming body chunk payload: {err}")
-                        })?;
+                let response_value = oplog
+                    .download_payload_classified(response.clone())
+                    .await
+                    .map_err(|error| {
+                        HttpStreamResumeError::payload(
+                            error,
+                            "failed to download incoming body chunk payload",
+                        )
+                    })?;
 
-                if let HostResponse::StreamChunk(payload) = response_value
-                    && let Ok(data) = &payload.result
-                {
-                    total += data.len() as u64;
+                match response_value {
+                    HostResponse::StreamChunk(payload) => {
+                        if let Ok(data) = payload.result {
+                            total += data.len() as u64;
+                        }
+                    }
+                    response => {
+                        return Err(HttpStreamResumeError::corrupt(anyhow::anyhow!(
+                            "incoming body read at {start_index} has unexpected response {response:?}"
+                        )));
+                    }
                 }
+            }
+            OplogEntry::End {
+                start_index,
+                response: None,
+                ..
+            } if pending_starts.contains_key(start_index) => {
+                return Err(HttpStreamResumeError::corrupt(anyhow::anyhow!(
+                    "incoming body read at {start_index} has no recorded response"
+                )));
             }
             _ => {}
         }
@@ -502,7 +636,7 @@ pub fn reconstruct_http_request(
     let uri: hyper::Uri = request
         .uri
         .parse()
-        .map_err(|e| anyhow::anyhow!("failed to parse stored URI '{}': {e}", request.uri))?;
+        .with_context(|| format!("failed to parse stored URI '{}'", request.uri))?;
 
     let authority = uri.authority().map(|a| a.to_string());
 
@@ -513,9 +647,9 @@ pub fn reconstruct_http_request(
     // Replay stored headers exactly
     for (name, value) in &request.headers {
         let header_name = HeaderName::from_str(name)
-            .map_err(|e| anyhow::anyhow!("invalid stored header name '{name}': {e}"))?;
+            .with_context(|| format!("invalid stored header name '{name}'"))?;
         let header_value = HeaderValue::from_str(value)
-            .map_err(|e| anyhow::anyhow!("invalid stored header value for '{name}': {e}"))?;
+            .with_context(|| format!("invalid stored header value for '{name}'"))?;
         if header_name == http::header::HOST {
             has_host_header = true;
         }
@@ -525,9 +659,9 @@ pub fn reconstruct_http_request(
     // Add any extra headers (e.g., Range for response-body resumption)
     for (name, value) in extra_headers {
         let header_name = HeaderName::from_str(name)
-            .map_err(|e| anyhow::anyhow!("invalid extra header name '{name}': {e}"))?;
+            .with_context(|| format!("invalid extra header name '{name}'"))?;
         let header_value = HeaderValue::from_str(value)
-            .map_err(|e| anyhow::anyhow!("invalid extra header value for '{name}': {e}"))?;
+            .with_context(|| format!("invalid extra header value for '{name}'"))?;
         if header_name == http::header::HOST {
             has_host_header = true;
         }
@@ -552,7 +686,7 @@ pub fn reconstruct_http_request(
 
     builder
         .body(body)
-        .map_err(|e| anyhow::anyhow!("failed to build reconstructed HTTP request: {e}"))
+        .context("failed to build reconstructed HTTP request")
 }
 
 /// Converts a `Vec<BodyChunk>` into a `HyperOutgoingBody` for use with hyper.
@@ -609,18 +743,21 @@ pub fn send_reconstructed_request(
 /// spawned background tasks without interrupt awareness).
 enum InterruptAwareSendOutcome {
     Response(IncomingResponse),
-    NotRetried,
+    NotRetried(anyhow::Error),
+    FallBackToTrapWithoutOverride(anyhow::Error),
     FallBackToTrap(SemanticTrapRetryOverride),
 }
 
 fn classify_interrupt_aware_send_decision(
     decision: AsyncRetryDecision,
+    failure: anyhow::Error,
 ) -> Result<Duration, InterruptAwareSendOutcome> {
     match decision {
         AsyncRetryDecision::RetryAfterDelay(delay) => Ok(delay),
-        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(None) => {
-            Err(InterruptAwareSendOutcome::NotRetried)
-        }
+        AsyncRetryDecision::Exhausted => Err(InterruptAwareSendOutcome::NotRetried(failure)),
+        AsyncRetryDecision::FallBackToTrap(None) => Err(
+            InterruptAwareSendOutcome::FallBackToTrapWithoutOverride(failure),
+        ),
         AsyncRetryDecision::FallBackToTrap(Some(semantic_override)) => {
             Err(InterruptAwareSendOutcome::FallBackToTrap(semantic_override))
         }
@@ -635,7 +772,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     retry_function_name: Option<&'static str>,
     connection_pool: Option<HttpConnectionPool>,
     #[cfg(feature = "test-utils")] retry_observation: Option<(u32, OplogIndex)>,
-) -> Result<InterruptAwareSendOutcome, ResumeBodyError> {
+) -> Result<InterruptAwareSendOutcome, HttpStreamResumeError> {
     let mut retry_state = retry_function_name.map(|_| InFunctionRetryState::new());
     let reconstructed_body_len: u64 = body_chunks
         .iter()
@@ -665,7 +802,7 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
 
         let http_request =
             reconstruct_http_request(&request_state.request, hyper_body, &merged_extra_headers)
-                .map_err(ResumeBodyError::Infrastructure)?;
+                .map_err(HttpStreamResumeError::corrupt)?;
         let config = request_state.outgoing_request_config();
 
         let mut future_resp =
@@ -719,16 +856,18 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
             });
         }
         if let Some(kind) = interrupted {
-            return Err(ResumeBodyError::Interrupt(kind.into()));
+            return Err(HttpStreamResumeError::Lifecycle(kind.into()));
         }
 
         match future_resp.unwrap_ready() {
             Ok(Ok(resp)) => return Ok(InterruptAwareSendOutcome::Response(resp)),
-            Err(trap) => return Err(ResumeBodyError::native_trap(trap)),
+            Err(trap) => return Err(HttpStreamResumeError::native_trap(trap)),
             Ok(Err(ref error_code))
                 if classify_http_error_code(error_code) == HostFailureKind::Permanent =>
             {
-                return Ok(InterruptAwareSendOutcome::NotRetried);
+                return Ok(InterruptAwareSendOutcome::NotRetried(anyhow::anyhow!(
+                    "replacement HTTP request failed permanently: {error_code:?}"
+                )));
             }
             Ok(Err(error_code)) => {
                 if let (Some(retry_state), Some(function_name)) =
@@ -744,6 +883,9 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                         retry_state
                             .decide_retry_with_properties(ctx, function_name, &retry_properties)
                             .await,
+                        anyhow::anyhow!(
+                            "replacement HTTP request failed transiently: {error_code:?}"
+                        ),
                     ) {
                         Ok(delay) => {
                             // Interrupt-aware sleep
@@ -761,14 +903,18 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
                                     );
                                 }
                                 futures::future::Either::Right((interrupt_kind, _)) => {
-                                    return Err(ResumeBodyError::Interrupt(interrupt_kind.into()));
+                                    return Err(HttpStreamResumeError::Lifecycle(
+                                        interrupt_kind.into(),
+                                    ));
                                 }
                             }
                         }
                         Err(outcome) => return Ok(outcome),
                     }
                 } else {
-                    return Ok(InterruptAwareSendOutcome::NotRetried);
+                    return Ok(InterruptAwareSendOutcome::NotRetried(anyhow::anyhow!(
+                        "replacement HTTP request failed transiently: {error_code:?}"
+                    )));
                 }
             }
         }
@@ -1479,15 +1625,47 @@ fn incoming_body_from_response(response: IncomingResponse) -> HostIncomingBody {
 /// 5. Swaps the InputStream to the new response's body stream
 ///
 /// Returns `Retried` if retry succeeded (stream swapped, caller should re-attempt read),
-/// `NotRetried` if retry is not eligible or conditions are not met, and `FallBackToTrap` when the
-/// already-evaluated policy decision must be preserved by the caller's trap path.
-/// `Err` distinguishes guest-visible prefix/range failures from infrastructure
-/// failures and typed interruptions.
-pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
+/// `Ineligible` if the request cannot be reconstructed safely, `NotRetried` if retry policy or the
+/// replacement response prevents retry, and `FallBackToTrap` when the already-evaluated policy
+/// decision must be preserved by the caller's trap path. Errors retain the distinction between
+/// lifecycle interruption, payload-backend outage, corrupt durable history, and HTTP content
+/// mismatch.
+pub async fn try_resuming_response_body_inline_retry<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     stream_handle: u32,
     #[cfg(feature = "test-utils")] child_start_index: OplogIndex,
-) -> Result<HttpStreamInlineRetryOutcome, ResumeBodyError> {
+) -> Result<HttpStreamInlineRetryOutcome, HttpStreamResumeError> {
+    try_resuming_response_body_inline_retry_impl(
+        ctx,
+        stream_handle,
+        true,
+        #[cfg(feature = "test-utils")]
+        child_start_index,
+    )
+    .await
+}
+
+pub async fn repair_resuming_response_body_after_recovery<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    stream_handle: u32,
+    #[cfg(feature = "test-utils")] child_start_index: OplogIndex,
+) -> Result<HttpStreamInlineRetryOutcome, HttpStreamResumeError> {
+    try_resuming_response_body_inline_retry_impl(
+        ctx,
+        stream_handle,
+        false,
+        #[cfg(feature = "test-utils")]
+        child_start_index,
+    )
+    .await
+}
+
+async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::WorkerCtx>(
+    ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
+    stream_handle: u32,
+    apply_semantic_retry_policy: bool,
+    #[cfg(feature = "test-utils")] child_start_index: OplogIndex,
+) -> Result<HttpStreamInlineRetryOutcome, HttpStreamResumeError> {
     use wasmtime::component::Resource;
     use wasmtime_wasi::p2::bindings::io::streams::InputStream as WasiInputStream;
     use wasmtime_wasi_http::p2::bindings::http::types::IncomingBody as WasiIncomingBody;
@@ -1496,101 +1674,118 @@ pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerct
     //    The stream rep IS the request tracking handle for incoming body streams.
     let request_state = match ctx.state.open_http_requests.get(&stream_handle) {
         Some(s) => s.clone(),
-        None => return Ok(HttpStreamInlineRetryOutcome::NotRetried),
+        None => {
+            return Ok(HttpStreamInlineRetryOutcome::Ineligible(
+                InlineRetryIneligible::UntrackedRequest,
+            ));
+        }
     };
 
     // Response-body resumption requires a tracked IncomingBody handle to properly
     // swap body+stream.
     let body_handle = match request_state.body_handle {
         Some(h) => h,
-        None => return Ok(HttpStreamInlineRetryOutcome::NotRetried),
+        None => {
+            return Ok(HttpStreamInlineRetryOutcome::Ineligible(
+                InlineRetryIneligible::MissingIncomingBody,
+            ));
+        }
     };
 
     // 2. Check response-body resumption eligibility
     let exec_state = ctx.durable_execution_state();
-    if is_http_inline_retry_eligible(
+    if let Err(reason) = is_http_inline_retry_eligible(
         &exec_state,
         &request_state,
         InlineRetryPhase::ResumingResponseBody,
         ctx.in_atomic_region(),
-    )
-    .is_err()
-    {
-        return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+    ) {
+        return Ok(HttpStreamInlineRetryOutcome::Ineligible(reason));
+    }
+
+    // A guest Range request cannot be composed safely with Golem's resume Range. Reject it before
+    // reading any recorded payload so a payload-backend outage cannot turn this known HTTP
+    // ineligibility into infrastructure Recovery.
+    if has_guest_range_header(request_state.request.headers.keys().map(|k| k.as_str())) {
+        return Ok(HttpStreamInlineRetryOutcome::Ineligible(
+            InlineRetryIneligible::GuestRangeHeader,
+        ));
     }
 
     // 3. Count bytes already delivered to the guest from the oplog
     let oplog = ctx.public_state.oplog();
-    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index())
-        .await
-        .map_err(ResumeBodyError::Infrastructure)?;
+    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index()).await?;
 
     // 4. Reconstruct the outgoing request body chunks from the oplog
-    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index())
-        .await
-        .map_err(ResumeBodyError::Infrastructure)?;
+    let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index()).await?;
 
     // 5. Build the request, adding a Range header if bytes were already consumed.
-    //    If the original request already has a Range header, response-body
-    //    resumption is not supported because composing Range headers correctly is
-    //    complex.
-    if has_guest_range_header(request_state.request.headers.keys().map(|k| k.as_str())) {
-        return Ok(HttpStreamInlineRetryOutcome::NotRetried);
-    }
+    ctx.state
+        .set_ambient_retry_point(request_state.begin_index());
 
-    // Record and budget this response-body resumption as an in-function retry
-    // attempt
-    // so oplog/error accounting reflects that we recovered from a transient read
-    // failure by reconstructing and resuming the request.
-    let mut retry_state = InFunctionRetryState::new();
-    let retry_properties = golem_common::model::RetryContext::http_with_response(
-        &request_state.request.method.to_string(),
-        &request_state.request.uri,
-        None,
-        "transient",
-    );
-    match retry_state
-        .decide_retry_with_properties(ctx, "http-zone2-read", &retry_properties)
-        .await
-    {
-        AsyncRetryDecision::RetryAfterDelay(delay) => {
-            let interrupt = ctx.create_interrupt_signal();
-            let sleep = tokio::time::sleep(delay);
-            tokio::pin!(sleep);
+    // A live response-body retry uses the semantic retry policy. Repair of an incomplete read
+    // after infrastructure reconstruction bypasses that budget: the accepted invocation is
+    // continuing recovery, not retrying an application-visible HTTP failure.
+    if apply_semantic_retry_policy {
+        let mut retry_state = InFunctionRetryState::new();
+        let retry_properties = golem_common::model::RetryContext::http_with_response(
+            &request_state.request.method.to_string(),
+            &request_state.request.uri,
+            None,
+            "transient",
+        );
+        match retry_state
+            .decide_retry_with_properties(ctx, "http-zone2-read", &retry_properties)
+            .await
+        {
+            AsyncRetryDecision::RetryAfterDelay(delay) => {
+                let interrupt = ctx.create_interrupt_signal();
+                let sleep = tokio::time::sleep(delay);
+                tokio::pin!(sleep);
 
-            #[cfg(feature = "test-utils")]
-            let observer = ctx.public_state.worker().p2_native_input_observer_for_test(
-                ctx.state.get_current_idempotency_key(),
-                stream_handle,
-                "http_body_retry_delay_sleep",
-                Some(child_start_index),
-            );
-            #[cfg(feature = "test-utils")]
-            let sleep = async {
-                match observer {
-                    Some(observer) => observer.observe(sleep).await,
-                    None => sleep.await,
-                }
-            };
-            #[cfg(feature = "test-utils")]
-            tokio::pin!(sleep);
+                #[cfg(feature = "test-utils")]
+                let observer = ctx.public_state.worker().p2_native_input_observer_for_test(
+                    ctx.state.get_current_idempotency_key(),
+                    stream_handle,
+                    "http_body_retry_delay_sleep",
+                    Some(child_start_index),
+                );
+                #[cfg(feature = "test-utils")]
+                let sleep = async {
+                    match observer {
+                        Some(observer) => observer.observe(sleep).await,
+                        None => sleep.await,
+                    }
+                };
+                #[cfg(feature = "test-utils")]
+                tokio::pin!(sleep);
 
-            match futures::future::select(sleep, interrupt).await {
-                futures::future::Either::Left(_) => {}
-                futures::future::Either::Right((interrupt_kind, _)) => {
-                    return Err(ResumeBodyError::Interrupt(interrupt_kind.into()));
+                match futures::future::select(sleep, interrupt).await {
+                    futures::future::Either::Left(_) => {}
+                    futures::future::Either::Right((interrupt_kind, _)) => {
+                        return Err(HttpStreamResumeError::Lifecycle(interrupt_kind.into()));
+                    }
                 }
             }
-        }
-        AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(None) => {
-            return Ok(HttpStreamInlineRetryOutcome::NotRetried);
-        }
-        AsyncRetryDecision::FallBackToTrap(Some(semantic_override)) => {
-            return Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(
-                semantic_override,
-            ));
+            AsyncRetryDecision::Exhausted | AsyncRetryDecision::FallBackToTrap(None) => {
+                return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+            }
+            AsyncRetryDecision::FallBackToTrap(Some(semantic_override)) => {
+                return Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(
+                    semantic_override,
+                ));
+            }
         }
     }
+
+    // The failed stream no longer owns an active Hyper body: a terminal body
+    // error closes HostIncomingBodyStream and destroys that transport. Replace
+    // the stream before its parent body so it cannot return a transport into a
+    // retired body, then drop the parent to release its worker and pool permits
+    // before replacement admission. Resource IDs and table relationships stay
+    // unchanged.
+    retire_failed_response_body_transport(ctx, stream_handle, body_handle)
+        .map_err(HttpStreamResumeError::corrupt)?;
 
     let extra_headers = resume_range_headers(consumed_len);
     // 6. Send the reconstructed request (with interrupt-aware retries)
@@ -1608,8 +1803,21 @@ pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerct
     .await?
     {
         InterruptAwareSendOutcome::Response(resp) => resp,
-        InterruptAwareSendOutcome::NotRetried => {
-            return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+        InterruptAwareSendOutcome::NotRetried(error) => {
+            if apply_semantic_retry_policy {
+                return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+            } else {
+                return Err(HttpStreamResumeError::http_content(error));
+            }
+        }
+        InterruptAwareSendOutcome::FallBackToTrapWithoutOverride(error) => {
+            if apply_semantic_retry_policy {
+                return Ok(HttpStreamInlineRetryOutcome::NotRetried);
+            } else {
+                return Ok(HttpStreamInlineRetryOutcome::FallBackToTrapWithoutOverride(
+                    error,
+                ));
+            }
         }
         InterruptAwareSendOutcome::FallBackToTrap(semantic_override) => {
             return Ok(HttpStreamInlineRetryOutcome::FallBackToTrap(
@@ -1642,7 +1850,7 @@ pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerct
             // Prepare the detached response before replacing either guest resource.
             let mut new_body = incoming_body_from_response(response);
             let mut new_stream = new_body.take_stream().ok_or_else(|| {
-                ResumeBodyError::Infrastructure(anyhow::anyhow!(
+                HttpStreamResumeError::NativeTrap(anyhow::anyhow!(
                     "HTTP retry failed: could not take stream from new body"
                 ))
             })?;
@@ -1652,7 +1860,7 @@ pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerct
                 let entry: &wasmtime_wasi::DynInputStream = ctx
                     .table()
                     .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
-                    .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+                    .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
                 (&**entry as *const dyn wasmtime_wasi::InputStream) as *const () as usize
             };
             let mut skipped = 0u64;
@@ -1721,7 +1929,7 @@ pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerct
                             "original guest body must remain installed on prefix interruption"
                         );
                     }
-                    return Err(ResumeBodyError::Interrupt(interrupt_kind.into()));
+                    return Err(HttpStreamResumeError::Lifecycle(interrupt_kind.into()));
                 }
 
                 let remaining = (skip_len - skipped) as usize;
@@ -1738,19 +1946,19 @@ pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerct
             // can mutate the table while this call has exclusive access to ctx.
             ctx.table()
                 .get(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
-                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+                .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
             ctx.table()
                 .get(&Resource::<WasiInputStream>::new_borrow(stream_handle))
-                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+                .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
             let body_entry: &mut HostIncomingBody = ctx
                 .table()
                 .get_mut(&Resource::<WasiIncomingBody>::new_borrow(body_handle))
-                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+                .map_err(|error| HttpStreamResumeError::NativeTrap(error.into()))?;
             *body_entry = new_body;
             let stream_entry: &mut wasmtime_wasi::DynInputStream = ctx
                 .table()
                 .get_mut(&Resource::<WasiInputStream>::new_borrow(stream_handle))
-                .map_err(|error| ResumeBodyError::Infrastructure(error.into()))?;
+                .map_err(|error| HttpStreamResumeError::corrupt(anyhow::Error::new(error)))?;
             *stream_entry = new_stream;
 
             tracing::debug!(
@@ -1774,7 +1982,13 @@ pub(crate) async fn try_resuming_response_body_inline_retry<Ctx: crate::workerct
                 consumed_len = consumed_len,
                 "Resuming response body inline retry: resume response not usable, falling back"
             );
-            Ok(HttpStreamInlineRetryOutcome::NotRetried)
+            if apply_semantic_retry_policy {
+                Ok(HttpStreamInlineRetryOutcome::NotRetried)
+            } else {
+                Err(HttpStreamResumeError::http_content(anyhow::anyhow!(
+                    "replacement response cannot resume status {original_status:?}: status {status}, content-range {content_range:?}"
+                )))
+            }
         }
     }
 }
@@ -2080,10 +2294,11 @@ pub(crate) async fn try_awaiting_response_inline_retry<Ctx: crate::workerctx::Wo
         None,
     )
     .await
-    .map_err(ResumeBodyError::into_anyhow)?
+    .map_err(anyhow::Error::from)?
     {
         InterruptAwareSendOutcome::Response(response) => Ok(Some(response)),
-        InterruptAwareSendOutcome::NotRetried => Ok(None),
+        InterruptAwareSendOutcome::NotRetried(_) => Ok(None),
+        InterruptAwareSendOutcome::FallBackToTrapWithoutOverride(_) => Ok(None),
         InterruptAwareSendOutcome::FallBackToTrap(_) => {
             unreachable!("awaiting-response resend does not evaluate a retry policy")
         }
@@ -2321,8 +2536,8 @@ mod tests {
     fn body_retry_interrupt_retains_context_and_typed_cause() {
         let kind = InterruptKind::Suspend(Timestamp::now_utc());
         let error = anyhow::Error::new(kind).context("response-body retry delay");
-        let ResumeBodyError::Interrupt(error) =
-            ResumeBodyError::native_trap(wasmtime::Error::from_anyhow(error))
+        let HttpStreamResumeError::Lifecycle(error) =
+            HttpStreamResumeError::native_trap(wasmtime::Error::from_anyhow(error))
         else {
             panic!("typed native trap must interrupt the incomplete child")
         };
@@ -2336,15 +2551,16 @@ mod tests {
     #[test]
     fn body_retry_infrastructure_preserves_original_cause() {
         let error = anyhow::anyhow!("payload unavailable").context("download outgoing body");
-        let ResumeBodyError::Infrastructure(error) = ResumeBodyError::Infrastructure(error) else {
+        let HttpStreamResumeError::NativeTrap(error) = HttpStreamResumeError::NativeTrap(error)
+        else {
             panic!("payload download must trap, not complete a guest child")
         };
         assert_eq!(error.to_string(), "download outgoing body");
         assert_eq!(error.root_cause().to_string(), "payload unavailable");
 
         let native = anyhow::anyhow!("missing body table slot").context("HTTP body table");
-        let ResumeBodyError::Infrastructure(error) =
-            ResumeBodyError::native_trap(wasmtime::Error::from_anyhow(native))
+        let HttpStreamResumeError::NativeTrap(error) =
+            HttpStreamResumeError::native_trap(wasmtime::Error::from_anyhow(native))
         else {
             panic!("native table trap must not be recorded as a guest error")
         };
@@ -2357,30 +2573,32 @@ mod tests {
             classify_resume_response(416, None, 1, Some(200)),
             ResumeResponseAction::RangeNotSatisfiable
         );
-        let ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(message)) =
-            range_not_satisfiable_error()
-        else {
+        let HttpStreamResumeError::HttpContent(message) = range_not_satisfiable_error() else {
             panic!("416 must be a guest-visible terminal error")
         };
-        assert!(message.contains("416 Range Not Satisfiable"));
+        assert!(message.to_string().contains("416 Range Not Satisfiable"));
 
-        let ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(message)) =
+        let HttpStreamResumeError::HttpContent(message) =
             classify_resume_prefix_error(StreamError::Closed)
         else {
             panic!("short prefix must be a guest-visible terminal error")
         };
-        assert!(message.contains("shorter than previously consumed bytes"));
+        assert!(
+            message
+                .to_string()
+                .contains("shorter than previously consumed bytes")
+        );
 
-        let ResumeBodyError::Terminal(SerializableStreamError::LastOperationFailed(message)) =
+        let HttpStreamResumeError::HttpContent(message) =
             classify_resume_prefix_error(StreamError::LastOperationFailed(
                 wasmtime::Error::from_anyhow(anyhow::anyhow!("peer failed")),
             ))
         else {
             panic!("native prefix error must be a guest-visible terminal error")
         };
-        assert!(message.contains("peer failed"));
+        assert!(message.to_string().contains("peer failed"));
 
-        let ResumeBodyError::Infrastructure(error) =
+        let HttpStreamResumeError::NativeTrap(error) =
             classify_resume_prefix_error(StreamError::Trap(wasmtime::Error::from_anyhow(
                 anyhow::anyhow!("prefix stream trap"),
             )))
@@ -2388,6 +2606,24 @@ mod tests {
             panic!("native prefix trap must remain infrastructure")
         };
         assert_eq!(error.root_cause().to_string(), "prefix stream trap");
+    }
+
+    #[test]
+    fn payload_backend_classification_preserves_the_original_error_source() {
+        let error = HttpStreamResumeError::payload(
+            OplogPayloadDownloadError::Backend(anyhow::Error::new(std::io::Error::other(
+                "backend unavailable",
+            ))),
+            "failed to download incoming body chunk payload",
+        );
+
+        let mut source = std::error::Error::source(&error);
+        let mut found_original = false;
+        while let Some(current) = source {
+            found_original |= current.downcast_ref::<std::io::Error>().is_some();
+            source = current.source();
+        }
+        assert!(found_original, "original backend error was lost");
     }
 
     #[test]
@@ -2399,14 +2635,15 @@ mod tests {
                 RetryPolicyState::Counter(2),
             ))),
         };
-        let outcome = classify_interrupt_aware_send_decision(AsyncRetryDecision::FallBackToTrap(
-            Some(SemanticTrapRetryOverride {
+        let outcome = classify_interrupt_aware_send_decision(
+            AsyncRetryDecision::FallBackToTrap(Some(SemanticTrapRetryOverride {
                 retry_from: OplogIndex::from_u64(42),
                 policy_name: "method-and-uri-time-box".to_string(),
                 verdict: SemanticTrapRetryVerdict::Retry(Duration::from_secs(2)),
                 retry_policy_state: retry_policy_state.clone(),
-            }),
-        ))
+            })),
+            anyhow::anyhow!("replacement send failed"),
+        )
         .expect_err("the nested resend must hand its evaluated decision to the trap path");
 
         let InterruptAwareSendOutcome::FallBackToTrap(semantic_override) = outcome else {
@@ -2421,12 +2658,26 @@ mod tests {
         assert_eq!(semantic_override.retry_policy_state, retry_policy_state);
     }
 
+    #[test]
+    fn delayed_response_resend_fallback_remains_distinct_from_exhaustion() {
+        let outcome = classify_interrupt_aware_send_decision(
+            AsyncRetryDecision::FallBackToTrap(None),
+            anyhow::anyhow!("replacement send failed"),
+        )
+        .expect_err("an over-threshold retry must leave inline execution");
+
+        let InterruptAwareSendOutcome::FallBackToTrapWithoutOverride(error) = outcome else {
+            panic!("trap fallback must not be collapsed into exhausted retry")
+        };
+        assert_eq!(error.to_string(), "replacement send failed");
+    }
+
     fn make_request_state() -> HttpRequestState {
         use crate::durable_host::{HttpRequestSession, HttpRetryEligibility};
         use golem_common::model::invocation_context::SpanId;
 
         HttpRequestState {
-            session: HttpRequestSession::new(OplogIndex::INITIAL, SpanId::generate(), None),
+            session: HttpRequestSession::new(OplogIndex::INITIAL, SpanId::generate(), true, None),
             request: HostRequestHttpRequest {
                 uri: "http://localhost:8080/".to_string(),
                 method: SerializableHttpMethod::Get,

@@ -50,6 +50,7 @@ fn empty_body() -> CommandBody {
         constraints: Vec::new(),
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: Vec::new(),
         annotations: None,
@@ -105,6 +106,7 @@ fn variant_case(name: &str, payload: Option<SchemaType>) -> VariantCaseType {
 fn tool_with_root(node: CommandNode) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![node] },
         schema: SchemaGraph::empty(),
     }
@@ -260,6 +262,15 @@ fn kitchen_sink_tool() -> Tool {
         mime: Vec::new(),
         required: true,
     });
+    body.stderr = Some(StreamSpec {
+        doc: Doc {
+            summary: "diagnostics".to_string(),
+            description: String::new(),
+            examples: Vec::new(),
+        },
+        mime: vec!["application/octet-stream".to_string()],
+        required: false,
+    });
 
     let mut node = root("tool");
     node.aliases = vec!["t".to_string()];
@@ -274,6 +285,7 @@ fn kitchen_sink_tool() -> Tool {
 
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![node, child],
         },
@@ -514,6 +526,7 @@ fn value_is_into_map_value_of_scalar_option_is_accepted() {
 fn empty_command_tree_is_rejected() {
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: Vec::new() },
         schema: SchemaGraph::empty(),
     };
@@ -541,6 +554,7 @@ fn duplicate_subcommand_alias_is_rejected() {
     b.aliases = vec!["b".to_string()]; // collides with build's alias
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![parent, a, b],
         },
@@ -804,6 +818,7 @@ fn variant_reachable_through_named_ref_is_rejected() {
     node.body = Some(body);
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1520,6 +1535,7 @@ fn dangling_ref_in_definition_does_not_hide_independent_definition_schema_error(
     }];
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1622,6 +1638,7 @@ fn duplicate_type_ids_in_tool_schema_are_rejected() {
 
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1646,6 +1663,7 @@ fn dangling_ref_in_definition_is_rejected() {
     }];
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1688,6 +1706,7 @@ fn constructor_def_nested_alias_dangling_ref_is_reported_once_at_constructor_def
 
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1732,6 +1751,7 @@ fn repeated_alias_dangling_ref_in_one_constructor_def_is_reported_once() {
 
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root("tool")],
         },
@@ -1788,6 +1808,7 @@ fn covered_alias_id_does_not_skip_later_duplicate_def_body_validation() {
 
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1841,6 +1862,7 @@ fn covered_alias_id_does_not_skip_later_duplicate_pure_alias_body_validation() {
 
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1880,6 +1902,7 @@ fn unused_dangling_def_is_not_suppressed_by_same_missing_ref_at_input_position()
 
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![node] },
         schema,
     };
@@ -1936,6 +1959,7 @@ fn duplicate_global_short_across_levels_is_rejected() {
 
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![parent, child],
         },
@@ -1955,6 +1979,7 @@ fn orphan_command_node_is_rejected() {
     let orphan = root("orphan");
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![parent, orphan],
         },
@@ -1977,6 +2002,7 @@ fn command_tree_cycle_is_rejected() {
     b.subcommands = vec![CommandIndex(0)];
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![a, b] },
         schema: SchemaGraph::empty(),
     };
@@ -2000,6 +2026,7 @@ fn shared_subcommand_is_rejected() {
     let c = root("gamma");
     let tool = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![r, a, b, c],
         },
@@ -2381,6 +2408,7 @@ fn arb_command_body() -> impl Strategy<Value = CommandBody> {
         prop::collection::vec(arb_constraint(), 0..2),
         prop::option::of(arb_stream_spec()),
         prop::option::of(arb_stream_spec()),
+        prop::option::of(arb_stream_spec()),
         prop::option::of(arb_result_spec()),
         prop::collection::vec(arb_error_case(), 0..2),
         prop::option::of(arb_command_annotations()),
@@ -2393,6 +2421,7 @@ fn arb_command_body() -> impl Strategy<Value = CommandBody> {
                 constraints,
                 stdin,
                 stdout,
+                stderr,
                 result,
                 errors,
                 annotations,
@@ -2404,6 +2433,7 @@ fn arb_command_body() -> impl Strategy<Value = CommandBody> {
                     constraints,
                     stdin,
                     stdout,
+                    stderr,
                     result,
                     errors,
                     annotations,
@@ -2440,6 +2470,7 @@ fn arb_command_tree() -> impl Strategy<Value = CommandTree> {
 fn arb_tool() -> impl Strategy<Value = Tool> {
     (arb_text(), arb_command_tree()).prop_map(|(version, commands)| Tool {
         version,
+        requires_filesystem: false,
         commands,
         schema: SchemaGraph::empty(),
     })
@@ -2458,6 +2489,15 @@ fn arb_tool() -> impl Strategy<Value = Tool> {
 fn rt(tool: &Tool) -> Tool {
     let wire = wire::Tool::try_from(tool).expect("native -> wire");
     Tool::try_from(&wire).expect("wire -> native")
+}
+
+#[test]
+fn native_wire_round_trip_preserves_filesystem_requirement() {
+    for requires_filesystem in [false, true] {
+        let mut tool = tool_with_root(root("tool"));
+        tool.requires_filesystem = requires_filesystem;
+        assert_eq!(rt(&tool), tool);
+    }
 }
 
 /// A single-root tool whose body is produced by `f`.
@@ -2614,6 +2654,7 @@ proptest! {
     fn command_tree_round_trip(ct in arb_command_tree()) {
         let tool = Tool {
             version: "1.0.0".to_string(),
+        requires_filesystem: false,
             commands: ct,
             schema: SchemaGraph::empty(),
         };
@@ -2650,6 +2691,7 @@ proptest! {
         node.body = Some(body);
         let tool = Tool {
             version: "1.0.0".to_string(),
+        requires_filesystem: false,
             commands: CommandTree { nodes: vec![node] },
             schema,
         };

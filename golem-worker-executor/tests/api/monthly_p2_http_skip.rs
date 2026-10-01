@@ -708,8 +708,14 @@ fn assert_body_child(
             && start.parent_start_index == Some(scope)
             && start.observational_owner.is_none()
             && start.request.is_some()
-            && matches!(&start.durable_function_type,
-            PublicDurableFunctionType::WriteRemoteBatched(params) if params.index == Some(scope)),
+            && if start.function_name == BODY_READ {
+                matches!(
+                    &start.durable_function_type,
+                    PublicDurableFunctionType::ReadRemote(_)
+                )
+            } else {
+                matches!(&start.durable_function_type, PublicDurableFunctionType::WriteRemoteBatched(params) if params.index == Some(scope))
+            },
         "wrong P2 body child: {record:?}"
     );
     Ok(())

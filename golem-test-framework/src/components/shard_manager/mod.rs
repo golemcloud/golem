@@ -18,7 +18,7 @@ pub mod unavailable;
 
 use super::rdb::Rdb;
 use super::registry_service::RegistryService;
-use crate::components::{EnvVarBuilder, wait_for_startup_grpc};
+use crate::components::EnvVarBuilder;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::shardmanager;
@@ -26,7 +26,6 @@ use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RoutingTable;
 use std::collections::HashMap;
-use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -77,17 +76,9 @@ async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Cha
         .accept_compressed(CompressionEncoding::Gzip)
 }
 
-async fn wait_for_startup(
-    host: &str,
-    grpc_port: u16,
-    timeout: Duration,
-    child: Option<&mut Child>,
-) {
-    wait_for_startup_grpc(host, grpc_port, "golem-shard-manager", timeout, child).await
-}
-
 async fn env_vars(
     number_of_shards_override: Option<usize>,
+    state_write_timeout_override: Option<Duration>,
     http_port: u16,
     grpc_port: u16,
     rdb: &Arc<dyn Rdb>,
@@ -126,6 +117,12 @@ async fn env_vars(
 
     if let Some(number_of_shards) = number_of_shards_override {
         builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
+    }
+    if let Some(state_write_timeout) = state_write_timeout_override {
+        builder = builder.with(
+            "GOLEM__STATE_WRITE_TIMEOUT",
+            format!("{}ms", state_write_timeout.as_millis()),
+        );
     }
 
     builder.build()

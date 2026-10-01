@@ -38,6 +38,7 @@ impl From<Tool> for proto::Tool {
     fn from(value: Tool) -> Self {
         Self {
             version: value.version,
+            requires_filesystem: value.requires_filesystem,
             commands: Some(value.commands.into()),
             schema: Some(value.schema.into()),
         }
@@ -50,6 +51,7 @@ impl TryFrom<proto::Tool> for Tool {
     fn try_from(value: proto::Tool) -> Result<Self, Self::Error> {
         Ok(Self {
             version: value.version,
+            requires_filesystem: value.requires_filesystem,
             commands: required(value.commands, "Tool.commands")?.try_into()?,
             schema: required(value.schema, "Tool.schema")?.try_into()?,
         })
@@ -216,6 +218,7 @@ impl From<CommandBody> for proto::CommandBody {
             constraints: value.constraints.into_iter().map(Into::into).collect(),
             stdin: value.stdin.map(Into::into),
             stdout: value.stdout.map(Into::into),
+            stderr: value.stderr.map(Into::into),
             result: value.result.map(Into::into),
             errors: value.errors.into_iter().map(Into::into).collect(),
             annotations: value.annotations.map(Into::into),
@@ -246,6 +249,7 @@ impl TryFrom<proto::CommandBody> for CommandBody {
                 .collect::<Result<_, _>>()?,
             stdin: value.stdin.map(TryInto::try_into).transpose()?,
             stdout: value.stdout.map(TryInto::try_into).transpose()?,
+            stderr: value.stderr.map(TryInto::try_into).transpose()?,
             result: value.result.map(TryInto::try_into).transpose()?,
             errors: value
                 .errors
@@ -929,6 +933,20 @@ mod tests {
     use super::*;
     use crate::schema::graph::SchemaGraph;
     use test_r::test;
+
+    #[test]
+    fn tool_protobuf_roundtrip_preserves_filesystem_requirement() {
+        for requires_filesystem in [false, true] {
+            let tool = Tool {
+                version: "1".into(),
+                requires_filesystem,
+                commands: CommandTree { nodes: vec![] },
+                schema: SchemaGraph::empty(),
+            };
+            let proto: proto::Tool = tool.clone().into();
+            assert_eq!(Tool::try_from(proto).unwrap(), tool);
+        }
+    }
 
     #[test]
     fn tool_middleware_protobuf_roundtrip_preserves_parameter_schema() {

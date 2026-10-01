@@ -114,7 +114,7 @@ impl DurableStreamStore {
     pub async fn persisted_control_metadata(
         &self,
         key: &StreamSessionKey,
-    ) -> Result<Option<SessionControlMetadata>, String> {
+    ) -> Result<Option<SessionControlMetadata>, SessionError> {
         self.ensure_healthy()?;
         let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
@@ -128,6 +128,7 @@ impl DurableStreamStore {
             .scope(service.lookup_durable_stream_control_metadata(&owner, *mode, *fingerprint, key))
             .await
             .map(Some)
+            .map_err(SessionError::from)
     }
 
     /// Refreshes a disposable control projection from this owner's complete local journal.
@@ -135,7 +136,7 @@ impl DurableStreamStore {
         &self,
         session_key: &StreamSessionKey,
         metadata: &mut SessionControlMetadata,
-    ) -> Result<(), String> {
+    ) -> Result<(), SessionError> {
         if !metadata.is_loaded()
             && let Some(persisted) = self.persisted_control_metadata(session_key).await?
         {
@@ -192,7 +193,7 @@ impl DurableStreamStore {
                 }
             }
         }
-        metadata.ensure_valid()
+        metadata.ensure_valid().map_err(SessionError::from)
     }
 
     /// Loads committed per-stream consumer ordinals and source offsets.
@@ -200,7 +201,7 @@ impl DurableStreamStore {
         &self,
         key: &StreamSessionKey,
         reader: LocalStreamReaderId,
-    ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, String> {
+    ) -> Result<Option<(OplogIndex, Vec<OplogIndex>)>, SessionError> {
         self.ensure_healthy()?;
         let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() else {
             return Ok(None);
@@ -365,14 +366,14 @@ impl DurableStreamStore {
                     .collect()
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
         for (position, key) in result_keys {
             staged
                 .invocation_results
                 .entry(key)
                 .or_insert(entries[position].0);
         }
-        self.commit(context).await;
+        self.commit(context).await?;
         *index = staged;
         drop(index);
         self.notify_session_records_changed(Some(context));
@@ -424,8 +425,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         self.notify_session_records_changed(Some(context));
         Ok(())
     }
@@ -663,7 +664,7 @@ impl DurableStreamStore {
                         .stream_mappings
                         .iter()
                         .zip(handles)
-                        .filter(|(binding, _)| binding.role == SessionStreamRole::Input)
+                        .filter(|(binding, _)| binding.role.direction() == SessionStreamRole::Input)
                         .map(|(_, handle)| handle)
                         .collect();
                     prepared
@@ -706,7 +707,7 @@ impl DurableStreamStore {
                 result
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(StreamStoreError::from)?;
 
         let mut prepared = None;
         let mut topologies = Vec::new();
@@ -796,7 +797,7 @@ impl DurableStreamStore {
             )?;
         }
 
-        self.commit_notifying(context, committed).await;
+        self.commit_notifying(context, committed).await?;
         *index = updated_index;
         self.buses
             .write()
@@ -834,8 +835,11 @@ impl DurableStreamStore {
             })
             .collect::<Result<HashSet<_>, StreamStoreError>>()?;
         Ok(streams.iter().any(|(stream_id, role)| {
-            *role == SessionStreamRole::Input
-                && streams.contains(&(*stream_id, SessionStreamRole::Output))
+            role.direction() == SessionStreamRole::Input
+                && streams.iter().any(|(candidate_id, candidate_role)| {
+                    candidate_id == stream_id
+                        && candidate_role.direction() == SessionStreamRole::Output
+                })
                 && index
                     .streams
                     .get(stream_id)
@@ -949,7 +953,7 @@ impl DurableStreamStore {
                     |(position, (stream_id, role, sequence, stream_attribution))| {
                         let oplog_index =
                             OplogIndex::from_u64(first_index.as_u64() + position as u64);
-                        match role {
+                        match role.direction() {
                             SessionStreamRole::Input => DurableStreamOplogRecord::Cancel(
                                 stream_attribution,
                                 StreamCancelRecord {
@@ -983,6 +987,9 @@ impl DurableStreamStore {
                                     },
                                 )
                             }
+                            SessionStreamRole::ToolStdin
+                            | SessionStreamRole::ToolStdout
+                            | SessionStreamRole::ToolStderr => unreachable!(),
                         }
                     },
                 );
@@ -998,8 +1005,8 @@ impl DurableStreamStore {
                 records
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
 
         let mut terminal_events = Vec::new();
         for (oplog_index, entry) in entries {

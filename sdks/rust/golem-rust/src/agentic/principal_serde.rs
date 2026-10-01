@@ -224,3 +224,73 @@ impl<'de> Deserialize<'de> for Principal {
         deserializer.deserialize_map(PrincipalVisitor)
     }
 }
+
+pub(super) fn from_json_bytes(bytes: &[u8]) -> Result<Principal, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct Envelope<'a> {
+        tag: String,
+        #[serde(borrow)]
+        val: Option<&'a serde_json::value::RawValue>,
+    }
+
+    let envelope: Envelope<'_> = serde_json::from_slice(bytes)?;
+    if envelope.tag == "anonymous" {
+        return Ok(Principal::Anonymous);
+    }
+    let value = envelope
+        .val
+        .ok_or_else(|| de::Error::missing_field("val"))?;
+    match envelope.tag.as_str() {
+        "oidc" => serde_json::from_str(value.get()).map(Principal::Oidc),
+        "agent" => serde_json::from_str(value.get()).map(Principal::Agent),
+        "golem-user" => serde_json::from_str(value.get()).map(Principal::GolemUser),
+        other => Err(de::Error::unknown_variant(
+            other,
+            &["anonymous", "oidc", "agent", "golem-user"],
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Principal, from_json_bytes};
+    use test_r::test;
+
+    #[test]
+    fn principal_payloads_decode_in_either_field_order() {
+        let cases = [
+            r#"{"tag":"anonymous"}"#,
+            r#"{"val":{"componentId":"10203040-5060-7080-9012-3456789abcde","agentId":"worker(7)"},"tag":"agent"}"#,
+            r#"{"tag":"golem-user","val":{"accountId":"fedcba98-7654-3210-9876-543210abcdef"}}"#,
+            r#"{"val":{"sub":"subject","issuer":"https://issuer","email":"a@example.test","emailVerified":false,"name":null,"givenName":null,"familyName":"Family","picture":null,"preferredUsername":"login","claims":"{\"role\":\"reader\"}"},"tag":"oidc"}"#,
+        ];
+        for json in cases {
+            let expected: serde_json::Value = serde_json::from_str(json).unwrap();
+            let from_text: Principal = serde_json::from_str(json).unwrap();
+            let from_value: Principal = serde_json::from_value(expected.clone()).unwrap();
+            let from_bytes = from_json_bytes(json.as_bytes()).unwrap();
+            assert_eq!(serde_json::to_value(&from_text).unwrap(), expected);
+            assert_eq!(serde_json::to_value(&from_value).unwrap(), expected);
+            assert_eq!(serde_json::to_value(&from_bytes).unwrap(), expected);
+        }
+        let anonymous: Principal =
+            serde_json::from_str(r#"{"val":{"ignored":true},"extra":7,"tag":"anonymous"}"#)
+                .unwrap();
+        assert!(matches!(anonymous, Principal::Anonymous));
+    }
+
+    #[test]
+    fn principal_payloads_reject_missing_or_invalid_typed_fields() {
+        for json in [
+            r#"{"val":{}}"#,
+            r#"{"tag":"missing"}"#,
+            r#"{"tag":"agent"}"#,
+            r#"{"tag":"oidc","val":null}"#,
+            r#"{"tag":"golem-user","val":{"accountId":"not-a-uuid"}}"#,
+            r#"{"tag":"agent","val":{"componentId":"10203040-5060-7080-9012-3456789abcde","agentId":4}}"#,
+        ] {
+            assert!(serde_json::from_str::<Principal>(json).is_err(), "{json}");
+            assert!(from_json_bytes(json.as_bytes()).is_err(), "{json}");
+        }
+    }
+}

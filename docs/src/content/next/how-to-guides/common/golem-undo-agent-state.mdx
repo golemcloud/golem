@@ -23,10 +23,12 @@ golem agent revert <AGENT_ID> [OPTIONS]
 
 Revert the last invocation:
 ```shell
-golem agent revert <AGENT_ID> --number-of-invocations 1
+golem agent revert <AGENT_ID> --number-of-invocations 1 --yes
 ```
 
 Revert to a specific oplog index (use `agent oplog` to find the index):
 ```shell
-golem agent revert <AGENT_ID> --last-oplog-index 42
+golem agent revert <AGENT_ID> --last-oplog-index 42 --yes
 ```
+
+Reverting is destructive and asks for interactive confirmation; pass `--yes` (`-Y`) when running non-interactively.

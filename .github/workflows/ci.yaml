@@ -113,7 +113,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
@@ -138,6 +138,8 @@ jobs:
         run: cargo make --profile ci check-openapi
       - name: Check how-to-guides docs are in sync with golem-skills/
         run: cargo make --profile ci check-docs-skills
+      - name: Check reflection conformance corpus embeds
+        run: cargo make --profile ci check-reflection-conformance
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
       - name: Check WIT deps are synced
@@ -417,7 +419,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -435,6 +437,14 @@ jobs:
       - name: Install MoonBit SDK tools dependencies
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
+
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -584,7 +594,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -691,7 +701,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -724,6 +734,9 @@ jobs:
       - name: Run Golem tests (Scala 3.8.2)
         working-directory: sdks/scala
         run: sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
+
+      - name: Check linked Scala capability fixtures
+        run: cargo make check-sdk-scala-capability-fixtures
 
       - name: Compile sbt plugin
         working-directory: sdks/scala
@@ -776,6 +789,12 @@ jobs:
       - name: Update MoonBit workspace dependencies
         run: moon update
         working-directory: sdks/moonbit
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Generate and verify MoonBit WIT bindings
+        run: ./scripts/check-generated-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
       - name: Check SDK
         run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
@@ -789,10 +808,10 @@ jobs:
         run: moon test cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
 
-  # The Rust SDK test suite is dominated by three integration test targets that each shell out to
-  # cargo (tool: one `cargo check` per test, tool_middleware_component: a full wasm component
-  # build, ui: trybuild). They run as separate matrix entries; the `check` entry runs lint and every
-  # other test target and fails if a test target is added without being assigned to an entry.
+  # The Rust SDK test suite is dominated by two integration test targets that each shell out to
+  # cargo (tool: one `cargo check` per test, ui: trybuild). They run as separate matrix entries;
+  # the `check` entry runs lint and every other test target, and fails if a test target is added
+  # without being assigned to an entry.
   build-golem-rust:
     name: build-golem-rust (${{ matrix.part.name }})
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -804,8 +823,6 @@ jobs:
             test-args: --lib --bins --test agent --test http_router --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
-          - name: tool-middleware-component
-            test-args: --test tool_middleware_component
           - name: ui
             test-args: --test ui
     steps:
@@ -836,7 +853,6 @@ jobs:
           schema_reexport
           tool
           tool_canonical
-          tool_middleware_component
           ui'
           actual=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[].targets[] | select(.kind | index("test")) | .name' | sort)
@@ -1000,43 +1016,6 @@ jobs:
           overwrite: true
           retention-days: 7
 
-      - name: Upload Effect SDK for Windows package checks
-        uses: actions/upload-artifact@v4
-        with:
-          name: golem-effect-sdk-windows
-          path: |
-            sdks/effect/dist
-            sdks/effect/wasm
-            sdks/effect/golem-types
-          if-no-files-found: error
-
-  check-golem-effect-package-windows:
-    runs-on: windows-latest
-    needs: build-golem-effect
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: sdks/effect/package-lock.json
-      - name: Install dependencies
-        working-directory: sdks/effect
-        run: npm ci
-      - name: Download built Effect SDK
-        uses: actions/download-artifact@v4
-        with:
-          name: golem-effect-sdk-windows
-          path: sdks/effect
-      - name: Build package declarations
-        working-directory: sdks/effect
-        run: npm run build
-      - name: Smoke-test cross-platform package tooling
-        working-directory: sdks/effect
-        run: npm run check:package
-
   list-test-component-groups:
     runs-on: blacksmith
     outputs:
@@ -1100,6 +1079,16 @@ jobs:
         run: moon update
         working-directory: sdks/moonbit
 
+      - name: Install Golem MoonBit wit-bindgen
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
+
       - name: Install wasm-tools
         if: matrix.chunk.needs-moonbit
         run: cargo binstall --force --locked wasm-tools@1.248.0
@@ -1135,7 +1124,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT for Scala components
         if: matrix.chunk.needs-scala

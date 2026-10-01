@@ -129,15 +129,15 @@ impl CounterWithSnapshotAgent for CounterImpl {
         let arr: [u8; 4] = bytes
             .try_into()
             .map_err(|_| "Expected a 4-byte long snapshot")?;
-        let golem_rust::SchemaValue::Record { fields } = context.parameters else {
-            return Err("Invalid agent identity".to_string());
-        };
-        let [golem_rust::SchemaValue::String(name)] = fields.as_slice() else {
-            return Err("Invalid agent identity".to_string());
-        };
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|error| error.to_string())?;
+        let name: String = parameters
+            .take()
+            .map_err(|error| error.to_string())?;
+        parameters.finish().map_err(|error| error.to_string())?;
 
         Ok(Self {
-            _name: name.clone(),
+            _name: name,
             count: u32::from_be_bytes(arr),
         })
     }
@@ -155,6 +155,7 @@ impl CounterWithSnapshotAgent for CounterImpl {
 - `save_snapshot` returns `Result<Vec<u8>, String>` — the bytes are the snapshot payload.
 - `load_snapshot` is an associated restoration factory. It receives `Vec<u8>` and `SnapshotRestoreContext`, then returns a complete `Self` in `Result<Self, String>`.
 - Restoration does not call `new`. Use the context's `parameters`, `principal`, `agent_type`, and `phantom_id` fields to reconstruct identity-dependent state. Agent config can be read through `Config::<T>::new().get()` while restoring.
+- `parameters` is a `SchemaValueTree`. Pass it to `DirectAgentInput::new`, call `take::<T>()` once for each constructor parameter in declaration order, then call `finish()` to reject extra values and incomplete wire data. Each method returns a `WireError` on malformed input.
 - Both methods are `async` — they can perform asynchronous operations during serialization/deserialization.
 - Returning `Err` from `load_snapshot` rejects the incomplete instance. A manual update fails and remains on the previous component version. During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does not try an older automatic snapshot.
 
@@ -190,5 +191,5 @@ Do not initialize an ordinary instance and mutate it after loading. Construct an
 A ready-made project with snapshotting can be created using:
 
 ```shell
-golem new --yes --language rust --template snapshotting my-project
+golem new --yes --template rust/snapshotting my-project
 ```

@@ -88,7 +88,11 @@ describe("reflection", () => {
     const ref = new SchemaRef(schemaGraphToWit(recursive))
     const json = { label: "first", next: { label: "last", next: null } }
     expect(ref.unpackJson(ref.packJson(json))).toEqual(json)
-    expect(ref.validateJson({ label: "missing-next" })).toMatchObject({ success: false })
+    expect(ref.validateJson({ label: "missing-next" })).toMatchObject({ success: true })
+    expect(ref.unpackJson(ref.packJson({ label: "missing-next" }))).toEqual({
+      label: "missing-next",
+      next: null,
+    })
     expect(ref.validateValue(ref.packJson(json))).toMatchObject({ success: true })
     expect(ref.toJsonSchema()).toMatchObject({ $schema: expect.any(String) })
     expect(Object.isFrozen(ref.graph)).toBe(true)

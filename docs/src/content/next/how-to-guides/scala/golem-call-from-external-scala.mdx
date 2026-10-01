@@ -11,15 +11,20 @@ bridge:
   scala:
     external:
       agents: "*"
+      outputDir: ./scala-bridge   # Optional custom output directory
 ```
 
-Or generate a bridge directly:
+Then let `golem build` produce the bridge as part of the normal build:
 
 ```shell
-golem generate-bridge --language scala --agent-type-name MyAgent --output-dir scala-bridge
+golem build --yes
 ```
 
-The generated output is a self-contained sbt project. For an agent type named `CounterAgent`, the client package is `golem.bridge.client.counter_agent` and the generated client object is `CounterAgentClient`.
+Without `outputDir`, the bridge is generated under `golem-temp/bridge-sdk/scala/`. Re-running `golem build` after agent changes keeps the generated client in sync automatically.
+
+Avoid invoking `golem generate-bridge` manually — it exists as a low-level escape hatch, but the manifest-driven flow above is the supported way to keep bridges configured, reproducible, and up to date.
+
+The generated output is a self-contained sbt project per agent type (e.g., `counter-agent-client/`). For an agent type named `CounterAgent`, the client package is `golem.bridge.client.counter_agent` and the generated client object is `CounterAgentClient`.
 
 ### Setup
 

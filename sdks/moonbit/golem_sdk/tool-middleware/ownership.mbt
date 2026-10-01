@@ -461,8 +461,8 @@ priv struct OwnedInvocationResultState {
 }
 
 ///|
-/// Opaque owner of a decoded underlying result. The value and stdout remain a
-/// single cleanup unit until projection, final transfer, or abandonment.
+/// Opaque owner of a decoded underlying result. The value and output streams
+/// remain a single cleanup unit until projection, final transfer, or abandonment.
 pub struct OwnedInvocationResult {
   priv context : OwnershipContext
   priv state : Ref[OwnedInvocationResultState]
@@ -528,7 +528,7 @@ fn OwnedInvocationResult::take(
 }
 
 ///|
-fn transfer_aware_stdout(
+fn transfer_aware_output(
   source : @async-core.Stream[Byte],
 ) -> @async-core.Stream[Byte] {
   @async-core.Stream::produce(
@@ -570,7 +570,11 @@ pub fn OwnedInvocationResult::take_for_projection(
   let projected : @toolCore.InvocationResult = {
     result: result.result,
     stdout: match result.stdout {
-      Some(stdout) => Some(transfer_aware_stdout(stdout))
+      Some(stdout) => Some(transfer_aware_output(stdout))
+      None => None
+    },
+    stderr: match result.stderr {
+      Some(stderr) => Some(transfer_aware_output(stderr))
       None => None
     },
   }
