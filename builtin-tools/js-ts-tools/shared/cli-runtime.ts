@@ -2,6 +2,17 @@ import { mkdirSync } from 'node:fs';
 
 class CapturedExit {
   readonly name = 'CapturedExit';
+  readonly __isProcessExit = true;
+}
+
+function isProcessExit(error: unknown): boolean {
+  return (
+    error instanceof CapturedExit ||
+    (typeof error === 'object' &&
+      error !== null &&
+      '__isProcessExit' in error &&
+      error.__isProcessExit === true)
+  );
 }
 
 function callbackFromWriteArgs(
@@ -94,7 +105,15 @@ export async function runCli(
       process.chdir(cwd);
       process.exit = ((code?: string | number | null) => {
         if (code !== undefined && code !== null) process.exitCode = Number(code);
-        if (options.stopOnExit) throw capturedExit;
+        if (options.stopOnExit) {
+          const awaitRuntimeIdle = (
+            process as NodeJS.Process & { _awaitRuntimeIdle?: () => Promise<void> }
+          )._awaitRuntimeIdle;
+          if (typeof awaitRuntimeIdle === 'function') {
+            return original.exit.call(process, code);
+          }
+          throw capturedExit;
+        }
         return undefined as never;
       }) as typeof process.exit;
 
@@ -127,7 +146,7 @@ export async function runCli(
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     } catch (error) {
-      if (error !== capturedExit) {
+      if (!isProcessExit(error)) {
         process.exitCode = Number(process.exitCode || 1);
         process.stderr.write(
           `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,

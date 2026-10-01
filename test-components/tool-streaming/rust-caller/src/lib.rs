@@ -260,7 +260,12 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
-    async fn builtin_cli_version(&self, tool: String) -> CliToolEvidence;
+    async fn builtin_cli(
+        &self,
+        tool: String,
+        cwd: String,
+        args: Vec<String>,
+    ) -> CliToolEvidence;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -501,19 +506,23 @@ fn raw_filesystem_input(
     golem_rust::encode_typed_schema_value(&value).expect("encode filesystem tool wire input")
 }
 
-fn raw_cli_input(tool: &str) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+fn raw_cli_input(
+    tool: &str,
+    cwd: String,
+    args: Vec<String>,
+) -> golem_rust::schema::wit::wire::TypedSchemaValue {
     let mut fields = vec![
         (
             "args",
             SchemaType::list(SchemaType::string()),
             SchemaValue::List {
-                elements: vec![SchemaValue::String("--version".to_string())],
+                elements: args.into_iter().map(SchemaValue::String).collect(),
             },
         ),
         (
             "cwd",
             SchemaType::string(),
-            SchemaValue::String("/workspace".to_string()),
+            SchemaValue::String(cwd),
         ),
     ];
     if matches!(tool, "npm" | "npx") {
@@ -1467,13 +1476,18 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         ]
     }
 
-    async fn builtin_cli_version(&self, tool: String) -> CliToolEvidence {
+    async fn builtin_cli(
+        &self,
+        tool: String,
+        cwd: String,
+        args: Vec<String>,
+    ) -> CliToolEvidence {
         let rpc = ToolRpc::create(&tool).expect("built-in CLI tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_output();
         let (stderr_target, stderr) = tool_host::create_output();
         let invoke = rpc.invoke_and_await(
             Vec::new(),
-            raw_cli_input(&tool),
+            raw_cli_input(&tool, cwd, args),
             None,
             Some(stdout_target),
             Some(stderr_target),
