@@ -5,9 +5,10 @@ time limit (600 s by default, at most 3600 s) with TERM, then KILL, and exit cod
 shell gains GNU's `timeout` command. The registry provisions 0.2.0 as its own component and
 supersedes the 0.1.0 release once 0.2.0 is published. The artifact rows below are for 0.2.0.
 
-Verified on 2026-09-30 on the `builtin-bash-tool` branch, based on Golem `0d5ef4a1d`, with the
-fork revisions and the artifact below. The conformance matrix, the registry tests and the real-server
-scenarios were run on that artifact; the other checks were run on the same fork source.
+Verified on 2026-10-01 on the `builtin-bash-tool` branch, based on Golem `0d5ef4a1d`, with the
+fork revisions and the artifact below. The registry tests and the real-server scenarios were run on
+that artifact. The conformance matrix runs the same shell library as the standalone `cooperative`
+example, built from the same source and pins; the other checks were run on that source too.
 Optional Rust argument encoding remains a separate requirement for the full 1.6 surface.
 
 ## Revisions and artifact
@@ -24,8 +25,8 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Rust compiler | `1.98.0 (88d9e12ae 2026-08-18)` |
 | Standalone WASM runner | Wasmtime `46.0.1` |
 | Guest artifact | `builtin-tools/bash.wasm`, release build, `golem:bash` / `bash@0.2.0` |
-| Artifact size | 23,284,849 bytes (22.21 MiB) |
-| Artifact SHA-256 | `ff68e214a32af3213e01b9d4ad73d0e63db78e6fbb3b11059544c6f6e1d617cb` |
+| Artifact size | 23,356,048 bytes (22.27 MiB) |
+| Artifact SHA-256 | `95410bc60350d71ebd63fe69796e6c675b34d79b541e6430dbb42fc4e30df425` |
 
 `cargo make build-builtin-tools` built the component in the pinned container the README describes
 (Build and verify), wrote it to the embedded artifact path and passed
@@ -39,23 +40,24 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Check | Result |
 |---|---|
 | Shared argv/help parser's moved tests | 15 passed; parser also checks on `wasm32-wasip2` without host features |
-| Standalone workspace library tests | 362 passed: shell 207, component 6, wget 37, curl 86, HTTP transport 26 |
-| Unit tests run as WASM | 133 passed under Wasmtime: shell 125, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
+| Standalone workspace library tests | 371 passed: shell 213, component 8, wget 37, curl 87, HTTP transport 26 |
+| Unit tests run as WASM | 141 passed under Wasmtime: shell 133, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
 | Shell integration tests | 20 passed |
-| Exact pinned Brush library tests | Core 130, builtins 28 and parser 268 passed (parser's YAML snapshot test is ignored upstream) |
-| Conformance matrix | 2,202 per-PR cases passed; exact shell exit code, stdout and stderr, against goldens recorded from Bash 5 and the GNU tools. Of the 17,964 cases including the sweep tier, the 238 that fail are exactly those listed in `conformance/sweep-known-failures.json` |
-| Oracle goldens | All 17,809 recorded goldens match a fresh run of the oracle image (`stale`) |
+| Exact pinned Brush library tests | Core 141, builtins 28 and parser 276 passed (parser's YAML snapshot test is ignored upstream) |
+| Conformance matrix | 2,253 per-PR cases passed on arm64 and on x86-64; exact shell exit code, stdout and stderr, against goldens recorded from Bash 5 and the GNU tools. Of the 18,015 cases including the sweep tier, the 238 that fail on each architecture are exactly those listed in `conformance/sweep-known-failures.json` |
+| Oracle goldens | The goldens `stale` checked on 2026-09-30 matched a fresh run of the oracle image; the 51 cases added since were each recorded from two fresh oracle containers that agreed |
 | Feature checklist | 316 of 316 features have at least one matrix case |
 | Brush compatibility suite | 2,541 cases run against the tool's shell; the 318 that fail match `conformance/compat/baseline.txt` exactly. One more, whose answer depends on timing in bash itself (`printf … | x=1` and SIGPIPE), may pass or fail |
 | Harness self-tests | 21 passed, including missing/unexpected stderr, mismatched shell status, stale goldens and splitting a script into calls |
-| Real Golem CLI integration | 2 scenarios passed: scripts, tools and crash recovery; background jobs with signals and sibling cancellation. Three are quarantined for executor behaviour: a crash while a sibling is pending, whose replay sometimes fails since #3992; crash recovery of interrupted HTTP requests, which no longer recovers since #3967; and a crash while a background job waits |
-| Built-in provisioning | Metadata, repeat provisioning, persisted-registry restart, immutable-release and upgrade-to-a-new-version checks passed |
+| Real Golem CLI integration | 3 scenarios passed: scripts, tools and crash recovery; background jobs with signals and sibling cancellation; a sibling's declared stderr through redirections and pipes. Three are quarantined for executor behaviour: a crash while a sibling is pending, whose replay sometimes fails since #3992; crash recovery of interrupted HTTP requests, which recovers in under a third of runs since #3967; and a crash while a background job waits |
+| Built-in provisioning | Metadata, repeat provisioning, persisted-registry restart, immutable-release and upgrade-to-a-new-version checks passed; an older filesystem-tools release stays published when a newer one is provisioned |
+| Waits and result size, on a real server (by hand) | A script polling a background job's file every 0.1 s, `sleep 15`, `timeout 2 sleep 60` and a call stopped at a 2 s time limit each complete with no suspension of the owner during the call, and a simulated crash after each leaves the owner healthy. A call returning 2 MiB on each stream, its `--lookup` and `golem agent oplog` after three such calls all succeed |
 | Lint and format | Standalone workspace native and WASM Clippy, all targets/features, `-D warnings`; format checks passed |
 | Dependency check | `cargo deny ... check advisories sources`: passed |
 
 The checked-in `cargo make test-builtin-bash-pipelines` task passed on the pinned build. It builds
-the same shell library as the tool, runs the harness self-tests, and compares all 2,202 per-PR matrix
-cases in 35 corpora (`conformance/cases/`) with goldens recorded from Bash and GNU coreutils, grep,
+the same shell library as the tool, runs the harness self-tests, and compares all 2,253 per-PR matrix
+cases in 45 corpora (`conformance/cases/`) with goldens recorded from Bash and GNU coreutils, grep,
 sed, jq, diffutils, patch, findutils and file. The goldens were recorded in an environment set up
 like a Golem agent's: no home directory, a uid with no passwd entry, and Golem's environment
 variables. The task needs no Docker. The corpora cover
@@ -116,7 +118,9 @@ It verifies:
 A second scenario crashes the owner while bash is waiting for a sibling. It is **quarantined**
 (`#[ignore]`): it passed every time before #3992, and since that change the owner's replay after the
 crash fails in about two full-suite runs of three (`Unexpected oplog entry during replay: … entity
-body returned before consuming its recorded descendant`). It passes run on its own. The fixture's
+body returned before consuming its recorded descendant`). It passes run on its own. The same replay
+failure follows a crash during a plain `sleep 0.3; curl …` with no sibling, in about half of runs,
+so it is not specific to siblings. The fixture's
 `checkpoint` operation appends `before`, parks on a GET to a test-controlled HTTP endpoint, then
 appends `after`. The test submits bash with `--trigger`, a fixed key and a non-root `--cwd`,
 waits until the endpoint receives the request, confirms through input-free `--lookup` that the
@@ -149,9 +153,8 @@ A third scenario covers the process model. It verifies:
 A fifth scenario, `bound_bash_recovers_a_crash_while_a_background_job_waits`, crashes the owner
 while a background job waits on a sibling. It is **quarantined** (`#[ignore]`): in 3 of 7 runs,
 locally and in CI, the owner was never reconstructed after `simulate-crash`, so the recovered
-call's request never arrived. Nothing in the bash tool runs in that window, and the foreground
-crash scenario above passes reliably; the executor's handling of a crash while the owner is parked
-is being investigated separately.
+call's request never arrived. Nothing in the bash tool runs in that window; the executor's handling
+of a crash while the owner is parked is being investigated separately.
 
 The 18 process-model matrix cases compare `&`, `wait`, `wait -n`, `$!`, `$$`, `BASHPID`, `kill`
 (TERM, HUP, KILL, INT, `-0`), trap handlers inside jobs, trap inheritance and exit statuses against
@@ -163,13 +166,19 @@ and completes once released. A POST is run again from the start of its request: 
 a second time with a new key, the documented at-least-once behavior for POST and PATCH. Five crash
 cycles, each on a fresh owner and followed by an ordinary call, check that recovery leaves the
 owner healthy. It is **quarantined** (`#[ignore]`): it passed every time on the executor before
-#3967, and fails every time after it. With an HTTP request in flight at the crash, the request is
-never re-sent and nothing is logged; the same artifact on the executor before that change passes.
+#3967. At this version fewer than a third of crashes with a request in flight recover (8 of 28,
+across GET, POST and `curl`/`wget` mid-body); in the rest the request is never re-sent, nothing is
+logged and the owner hangs, or its replay fails. The same artifact on the executor before that
+change passes.
+
+A sixth scenario, `bound_bash_routes_a_siblings_stderr`, binds a sibling command that declares a
+stderr channel and writes to stdout and stderr alternately. It verifies the exact bytes on each
+stream for a plain call, `2>/dev/null`, `2>&1`, `|&`, `| tr` (which sees only stdout) and `2>file`,
+and that a failing call writes the sibling's stderr, then `tool error: selected: …`, and exits 42.
 
 The sibling scenarios use a simulated crash and an idempotent GET checkpoint. They do not cover a
-crash while a sibling is inside a call Golem does not re-execute, such as a POST. A sibling's own
-stderr (declared by the tool, read alongside its stdout) is not yet covered by a real-server
-scenario.
+crash while a sibling is inside a call Golem does not re-execute, such as a POST, or a crash while
+a sibling that declares stderr is writing it.
 
 ## Timing and limits
 
@@ -183,8 +192,9 @@ again with release host binaries before making a caching decision.
 
 Known gaps:
 
-- A real-server scenario for a sibling that declares stderr: its bytes, `2>`/`2>&1`/`2>/dev/null`,
-  stderr before an error, and crash recovery.
+- Crash recovery while a sibling that declares stderr is writing it.
+- A sibling tool that itself waits 10 s or more can still have its owner suspended in the middle of
+  a bash call; bash's own waits are bounded below that (see README, Limits).
 - Optional Rust argument wire encoding; the tool uses supported non-optional shapes.
 - Broader waiter/fairness and arbitrary chunk-boundary cases beyond the preserved cooperative
   regression suite.
