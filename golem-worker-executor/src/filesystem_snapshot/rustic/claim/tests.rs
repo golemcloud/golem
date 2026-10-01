@@ -154,14 +154,17 @@ fn a_released_claim_never_starts_a_prune_and_a_drop_after_the_start_does_not_rel
         (first, second)
     };
 
+    // A refresh can also come before the start. Only the start lets the prune run.
     assert_eq!(
         (
             in_order(ClaimEvent::Start, ClaimEvent::Dropped),
             in_order(ClaimEvent::Dropped, ClaimEvent::Start),
+            in_order(ClaimEvent::Refreshed(path("refresh")), ClaimEvent::Start),
         ),
         (
             ((true, None), (false, Some(Cleanup::FinalMarker))),
             ((false, release(true)), (false, None)),
+            ((false, None), (true, None)),
         )
     );
 }
