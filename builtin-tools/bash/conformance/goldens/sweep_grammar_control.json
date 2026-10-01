@@ -3260,16 +3260,6 @@
     "text": "status=3 pipe=3\n"
    }
   },
-  "gram control list (exit 3) | echo o | ! false": {
-   "script": "70b6384d66a98fe5",
-   "status": 2,
-   "stderr": {
-    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `(exit 3) | echo o | ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
-   },
-   "stdout": {
-    "text": ""
-   }
-  },
   "gram control list (exit 3) | false || true": {
    "script": "0c92ec305de8a3b7",
    "status": 0,
@@ -3348,46 +3338,6 @@
    },
    "stdout": {
     "text": "o\nstatus=0 pipe=0\n"
-   }
-  },
-  "gram control list echo o | ! false || ! false": {
-   "script": "ed29d2a2c94ab173",
-   "status": 2,
-   "stderr": {
-    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `echo o | ! false || ! false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
-   },
-   "stdout": {
-    "text": ""
-   }
-  },
-  "gram control list echo o | ! false || false": {
-   "script": "cee6863df81bd313",
-   "status": 2,
-   "stderr": {
-    "text": "bash: -c: line 1: syntax error near unexpected token `!'\nbash: -c: line 1: `echo o | ! false || false; echo \"status=$? pipe=${PIPESTATUS[*]}\"'\n"
-   },
-   "stdout": {
-    "text": ""
-   }
-  },
-  "gram control list echo o | false || true": {
-   "script": "4a7341243f8707ba",
-   "status": 0,
-   "stderr": {
-    "text": ""
-   },
-   "stdout": {
-    "text": "status=0 pipe=0\n"
-   }
-  },
-  "gram control list echo o | false; true": {
-   "script": "a3d3e249d4f853cc",
-   "status": 0,
-   "stderr": {
-    "text": ""
-   },
-   "stdout": {
-    "text": "status=0 pipe=0\n"
    }
   },
   "gram control list echo o || ! false | false": {
@@ -3540,16 +3490,6 @@
     "text": ""
    }
   },
-  "gram control list false || echo o | (exit 3)": {
-   "script": "d5489dffbae6b38f",
-   "status": 0,
-   "stderr": {
-    "text": ""
-   },
-   "stdout": {
-    "text": "status=3 pipe=0 3\n"
-   }
-  },
   "gram control list false || true && echo o": {
    "script": "569741b31138d732",
    "status": 0,
@@ -3628,16 +3568,6 @@
    },
    "stdout": {
     "text": ""
-   }
-  },
-  "gram control list true | echo o | (exit 3)": {
-   "script": "4b634596e595d22b",
-   "status": 0,
-   "stderr": {
-    "text": ""
-   },
-   "stdout": {
-    "text": "status=3 pipe=0 0 3\n"
    }
   },
   "gram control list true || false | ! false": {

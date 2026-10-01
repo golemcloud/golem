@@ -171,7 +171,7 @@
    }
   },
   "runtime: TL an error that ends a pipeline stage ends only that stage": {
-   "script": "461d2466cde047db",
+   "script": "8227701cd7df9d35",
    "status": 0,
    "stderr": {
     "text": "bash: line 1: x: gone\n"

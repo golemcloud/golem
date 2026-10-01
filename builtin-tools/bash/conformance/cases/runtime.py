@@ -429,7 +429,7 @@ CASES = [
     # names, and read/mapfile on closed descriptors.
     (
         "runtime: TL an error that ends a pipeline stage ends only that stage",
-        "unset x; echo a | { echo \"${x:?gone}\"; echo stage-after; } | cat; echo \"after ${PIPESTATUS[*]}\"; echo end",
+        "unset x; true | { echo \"${x:?gone}\"; echo stage-after; } | cat; echo \"after ${PIPESTATUS[*]}\"; echo end",
     ),
     (
         "runtime: TL declarations with expanded names",

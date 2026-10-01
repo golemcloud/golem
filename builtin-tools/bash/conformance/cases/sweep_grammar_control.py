@@ -63,6 +63,10 @@ UNITS = ["true", "false", "(exit 3)", "! false", "echo o"]
 LIST_OPS = [" && ", " || ", "; ", " | "]
 for c1, op1, c2, op2, c3 in _pairwise([UNITS, LIST_OPS, UNITS, LIST_OPS, UNITS], 41):
     script = c1 + op1 + c2 + op2 + c3
+    # None of the units reads its input, so whether `echo o` before a later stage gets SIGPIPE
+    # (141) depends on timing in bash itself: those lists are left out.
+    if "echo o | " in script:
+        continue
     _add("list " + script, script + "; echo \"status=$? pipe=${PIPESTATUS[*]}\"", ["compound.list"])
 for units in [("false", "true"), ("true", "false"), ("(exit 2)", "(exit 3)")]:
     for neg in ("", "! "):

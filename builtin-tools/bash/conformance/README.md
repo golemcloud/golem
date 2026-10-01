@@ -135,10 +135,10 @@ not under `-c`; the tool always runs a script as `bash -c` would.
 | `cases/xargs.py` | 32 |
 | **Total, per PR** | **2253** |
 | `cases/sweep_options_*.py` (sweep tier: every option of every registered command; 7 modules) | 4103 |
-| `cases/sweep_grammar_*.py` (sweep tier: Bash grammar, generated from fixed seeds; 10 modules) | 4231 |
+| `cases/sweep_grammar_*.py` (sweep tier: Bash grammar, generated from fixed seeds; 10 modules) | 4224 |
 | `cases/sweep_realworld_*.py` (sweep tier: tldr-pages examples and coding-agent command shapes, see `cases/NOTICE`; 5 modules) | 3488 |
 | `cases/sweep_edge_*.py` (sweep tier: Unicode, invalid UTF-8, binary, empty and large input, `/dev` paths, separate calls, error paths; 7 modules) | 3940 |
-| **Total, sweep job** | **18015** |
+| **Total, sweep job** | **18008** |
 
 ## Two tiers
 

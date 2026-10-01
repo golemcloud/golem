@@ -44,8 +44,8 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Unit tests run as WASM | 141 passed under Wasmtime: shell 133, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
 | Shell integration tests | 20 passed |
 | Exact pinned Brush library tests | Core 141, builtins 28 and parser 276 passed (parser's YAML snapshot test is ignored upstream) |
-| Conformance matrix | 2,253 per-PR cases passed on arm64 and on x86-64; exact shell exit code, stdout and stderr, against goldens recorded from Bash 5 and the GNU tools. Of the 18,015 cases including the sweep tier, the 238 that fail on each architecture are exactly those listed in `conformance/sweep-known-failures.json` |
-| Oracle goldens | The goldens `stale` checked on 2026-09-30 matched a fresh run of the oracle image; the 51 cases added since were each recorded from two fresh oracle containers that agreed |
+| Conformance matrix | 2,253 per-PR cases passed on arm64 and on x86-64; exact shell exit code, stdout and stderr, against goldens recorded from Bash 5 and the GNU tools. Of the 18,008 cases including the sweep tier, the 238 that fail on each architecture are exactly those listed in `conformance/sweep-known-failures.json` |
+| Oracle goldens | The goldens `stale` checked on 2026-09-30 matched a fresh run of the oracle image; the 51 cases added since, and one whose script changed, were each recorded from two fresh oracle containers that agreed |
 | Feature checklist | 316 of 316 features have at least one matrix case |
 | Brush compatibility suite | 2,541 cases run against the tool's shell; the 318 that fail match `conformance/compat/baseline.txt` exactly. One more, whose answer depends on timing in bash itself (`printf … | x=1` and SIGPIPE), may pass or fail |
 | Harness self-tests | 21 passed, including missing/unexpected stderr, mismatched shell status, stale goldens and splitting a script into calls |
