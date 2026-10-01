@@ -156,9 +156,7 @@ fn deduplicate_bridge_targets(targets: &mut Vec<BridgeSdkTarget>) {
             target.target_language,
             target.bridge_mode,
             target.output_dir.clone(),
-            target
-                .rust_config
-                .marker_json()
+            serde_json::to_string(&target.rust_config)
                 .expect("validated Rust config is serializable"),
         ))
     });
@@ -429,21 +427,11 @@ async fn collect_manifest_targets_for_components_and_mode(
         if bridge_mode_filter.is_some_and(|bridge_mode_filter| bridge_mode_filter != bridge_mode) {
             continue;
         }
-        if target_language == GuestLanguage::Rust
-            && bridge_mode == BridgeMode::Guest
-            && sdk_targets.agents.is_empty()
-            && sdk_targets
-                .rust
-                .is_some_and(|config| config.is_configured())
-        {
-            bail!(
-                "Rust internal bridge additionalDerives/additionalDependencies require an agent selection"
-            );
-        }
-        let rust_config = RustBridgeGeneratorConfig::from_manifest(
-            sdk_targets.rust,
-            ctx.application().bridge_sdks_source(),
-        )?;
+        let rust_config = sdk_targets
+            .generator_config
+            .rust()
+            .cloned()
+            .unwrap_or_default();
 
         collect_agent_manifest_targets_for_entry(
             ctx,
@@ -468,6 +456,7 @@ async fn collect_manifest_targets_for_components_and_mode(
             target_language,
             sdk_targets
                 .tools
+                .as_ref()
                 .map(|tools| tools.clone().into_set())
                 .unwrap_or_default(),
             &application_component_names,
@@ -881,34 +870,13 @@ async fn collect_dependency_guest_bridge_targets(
 
         let metadata = extract_and_store_component_metadata(ctx, component_name).await?;
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
-        for agent_type in &metadata.agent_types {
-            if agent_type.kind != AgentTypeKind::Regular {
-                continue;
-            }
-            let dependency = ComponentDependency::Agent {
-                component_name: component_name.clone(),
-                agent_type_name: agent_type.type_name.clone(),
-            };
-            let target_languages = dependency_guest_bridge_target_languages(
-                ctx,
-                &dependency,
-                selection_scope_component_names,
-            );
-
-            for target_language in target_languages {
-                let output_dir = ctx
-                    .application()
-                    .dependency_bridge_sdk_dir(&agent_type.type_name, target_language);
-                targets.push(BridgeSdkTarget {
-                    source: BridgeSdkTargetSource::local(component_name.clone()),
-                    subject: BridgeSdkTargetSubject::Agent(agent_type.clone()),
-                    target_language,
-                    bridge_mode: BridgeMode::Guest,
-                    output_dir,
-                    rust_config: Default::default(),
-                });
-            }
-        }
+        collect_dependency_agent_bridge_targets(
+            ctx,
+            component_name,
+            &metadata.agent_types,
+            selection_scope_component_names,
+            &mut targets,
+        );
 
         for tool in &metadata.tools {
             let Some(tool_name) = tool.name() else {
@@ -1047,6 +1015,75 @@ async fn collect_dependency_guest_bridge_targets(
     }
 
     Ok(targets)
+}
+
+fn collect_dependency_agent_bridge_targets(
+    ctx: &BuildContext<'_>,
+    component_name: &ComponentName,
+    agent_types: &[golem_common::schema::AgentTypeSchema],
+    selection_scope_component_names: &[ComponentName],
+    targets: &mut Vec<BridgeSdkTarget>,
+) {
+    for agent_type in agent_types {
+        if agent_type.kind != AgentTypeKind::Regular {
+            continue;
+        }
+        let dependency = ComponentDependency::Agent {
+            component_name: component_name.clone(),
+            agent_type_name: agent_type.type_name.clone(),
+        };
+        let target_languages = dependency_guest_bridge_target_languages(
+            ctx,
+            &dependency,
+            selection_scope_component_names,
+        );
+
+        for target_language in target_languages {
+            let output_dir = ctx
+                .application()
+                .dependency_bridge_sdk_dir(&agent_type.type_name, target_language);
+            targets.push(BridgeSdkTarget {
+                source: BridgeSdkTargetSource::local(component_name.clone()),
+                subject: BridgeSdkTargetSubject::Agent(agent_type.clone()),
+                target_language,
+                bridge_mode: BridgeMode::Guest,
+                output_dir,
+                rust_config: dependency_agent_rust_config(
+                    ctx,
+                    target_language,
+                    component_name,
+                    agent_type.type_name.as_str(),
+                ),
+            });
+        }
+    }
+}
+
+fn dependency_agent_rust_config(
+    ctx: &BuildContext<'_>,
+    target_language: GuestLanguage,
+    component_name: &ComponentName,
+    agent_type_name: &str,
+) -> RustBridgeGeneratorConfig {
+    if target_language != GuestLanguage::Rust {
+        return Default::default();
+    }
+    let Some(targets) = ctx
+        .application()
+        .bridge_sdks()
+        .get(GuestLanguage::Rust, BridgeMode::Guest)
+    else {
+        return Default::default();
+    };
+    let matchers = targets.agents.clone().into_set();
+    if matchers.contains("*")
+        || matchers.contains(component_name.as_str())
+        || matchers.contains(agent_type_name)
+    {
+        targets.generator_config.rust().cloned().unwrap_or_default()
+    } else {
+        Default::default()
+    }
 }
 
 pub(crate) fn validate_no_ambient_tool_collisions(
@@ -1482,32 +1519,86 @@ mod tests {
     use test_r::test;
 
     #[test]
-    async fn configured_rust_internal_bridge_requires_agent_selection() {
-        let (application, _dir) = application_from_manifest(
-            r#"
+    fn configured_internal_target_is_applied_to_the_consumed_dependency_bridge() {
+        for custom_output in [false, true] {
+            let output_dir = custom_output
+                .then_some("      outputDir: generated/internal\n")
+                .unwrap_or_default();
+            let (application, _dir) = application_from_manifest(&format!(
+                r#"
 app: configured-internal
 environments:
   local:
     server: local
+componentTemplates:
+  rust-component:
+    guestLanguage: rust
+    componentWasm: consumer.wasm
 components:
-  app:component:
-    componentWasm: component.wasm
+  app:provider:
+    componentWasm: provider.wasm
+  app:consumer:
+    templates: rust-component
+    dependencies:
+      agents: [app:provider/ShoppingCart]
 bridge:
   rust:
     internal:
-      tools: "*"
-      additionalDerives: [".*=Clone"]
+      agents: [ShoppingCart]
+{output_dir}      additionalDerives: [".*=Eq"]
 "#,
-        );
-        let app_ctx = crate::app::context::ApplicationContext::for_test(application);
-        let build_config = crate::model::app::BuildConfig::default();
-        let ctx = BuildContext::new(&app_ctx, &build_config);
+            ));
+            let app_ctx = crate::app::context::ApplicationContext::for_test(application);
+            let build_config = crate::model::app::BuildConfig::default();
+            let ctx = BuildContext::new(&app_ctx, &build_config);
+            let provider = ComponentName("app:provider".into());
+            let consumer = ComponentName("app:consumer".into());
+            let shopping_cart = agent_type("ShoppingCart");
+            let mut targets = Vec::new();
 
-        let error = collect_manifest_targets(&ctx, None).await.unwrap_err();
-        assert!(
-            error.to_string().contains("require an agent selection"),
-            "{error:#}"
-        );
+            collect_dependency_agent_bridge_targets(
+                &ctx,
+                &provider,
+                std::slice::from_ref(&shopping_cart),
+                std::slice::from_ref(&consumer),
+                &mut targets,
+            );
+
+            assert_eq!(targets.len(), 1);
+            let dependency_target = &targets[0];
+            assert_eq!(dependency_target.target_language, GuestLanguage::Rust);
+            assert_eq!(
+                dependency_target.output_dir,
+                ctx.application()
+                    .dependency_bridge_sdk_dir(&shopping_cart.type_name, GuestLanguage::Rust,)
+            );
+            assert!(
+                serde_json::to_string(&dependency_target.rust_config)
+                    .unwrap()
+                    .contains("Eq")
+            );
+
+            let manifest_targets = ctx
+                .application()
+                .bridge_sdks()
+                .get(GuestLanguage::Rust, BridgeMode::Guest)
+                .unwrap();
+            let explicit_target = BridgeSdkTarget {
+                source: BridgeSdkTargetSource::local(provider.clone()),
+                subject: BridgeSdkTargetSubject::Agent(shopping_cart.clone()),
+                target_language: GuestLanguage::Rust,
+                bridge_mode: BridgeMode::Guest,
+                output_dir: ctx.application().bridge_sdk_dir(
+                    &shopping_cart.type_name,
+                    GuestLanguage::Rust,
+                    BridgeMode::Guest,
+                ),
+                rust_config: manifest_targets.generator_config.rust().unwrap().clone(),
+            };
+            let mut combined = vec![dependency_target.clone(), explicit_target];
+            deduplicate_bridge_targets(&mut combined);
+            assert_eq!(combined.len(), if custom_output { 2 } else { 1 });
+        }
     }
 
     #[test]

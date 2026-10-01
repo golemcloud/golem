@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bridge_gen::BridgeMode;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
@@ -38,6 +37,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+#[cfg(test)]
 use strum::IntoEnumIterator;
 use url::Url;
 
@@ -1843,137 +1843,6 @@ pub struct BridgeSdks {
     pub moonbit: Option<BridgeSdkLanguageTargets>,
 }
 
-impl BridgeSdks {
-    pub fn for_language(&self, language: GuestLanguage) -> Option<BridgeSdkLanguageTargetsRef<'_>> {
-        match language {
-            GuestLanguage::Rust => self.rust.as_ref().map(BridgeSdkLanguageTargetsRef::Rust),
-            GuestLanguage::TypeScript => self.ts.as_ref().map(BridgeSdkLanguageTargetsRef::Other),
-            GuestLanguage::Effect => self.effect.as_ref().map(BridgeSdkLanguageTargetsRef::Other),
-            GuestLanguage::Scala => self.scala.as_ref().map(BridgeSdkLanguageTargetsRef::Other),
-            GuestLanguage::MoonBit => self
-                .moonbit
-                .as_ref()
-                .map(BridgeSdkLanguageTargetsRef::Other),
-        }
-    }
-
-    pub fn for_all_languages(
-        &self,
-    ) -> impl Iterator<Item = (GuestLanguage, Option<BridgeSdkLanguageTargetsRef<'_>>)> {
-        GuestLanguage::iter().map(|lang| (lang, self.for_language(lang)))
-    }
-
-    pub fn for_all_used_languages(
-        &self,
-    ) -> impl Iterator<Item = (GuestLanguage, BridgeSdkLanguageTargetsRef<'_>)> {
-        self.for_all_languages().filter_map(|(lang, targets)| {
-            targets.and_then(|targets| {
-                (targets
-                    .external()
-                    .is_some_and(|external| !external.agents.is_empty())
-                    || targets
-                        .internal()
-                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty())
-                    || targets.has_rust_configuration())
-                .then_some((lang, targets))
-            })
-        })
-    }
-
-    pub fn for_all_used_modes(
-        &self,
-    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkInternalTargetsRef<'_>)> {
-        let mut result = Vec::new();
-        for (language, targets) in self.for_all_languages() {
-            if let Some(targets) = targets {
-                if let Some(external) = targets.external()
-                    && !external.agents.is_empty()
-                {
-                    result.push((
-                        language,
-                        BridgeMode::External,
-                        BridgeSdkInternalTargetsRef {
-                            agents: &external.agents,
-                            tools: None,
-                            output_dir: external.output_dir.as_ref(),
-                            rust: targets.rust_external().map(Into::into),
-                        },
-                    ));
-                }
-                if let Some(guest) = targets.internal()
-                    && (!guest.agents.is_empty()
-                        || !guest.tools.is_empty()
-                        || targets.rust_internal().is_some_and(|rust| {
-                            !rust.additional_derives.is_empty()
-                                || !rust.additional_dependencies.is_empty()
-                        }))
-                {
-                    result.push((
-                        language,
-                        BridgeMode::Guest,
-                        BridgeSdkInternalTargetsRef {
-                            agents: &guest.agents,
-                            tools: Some(&guest.tools),
-                            output_dir: guest.output_dir.as_ref(),
-                            rust: targets.rust_internal().map(Into::into),
-                        },
-                    ));
-                }
-            }
-        }
-        result
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum BridgeSdkLanguageTargetsRef<'a> {
-    Other(&'a BridgeSdkLanguageTargets),
-    Rust(&'a RustBridgeSdkLanguageTargets),
-}
-
-impl<'a> BridgeSdkLanguageTargetsRef<'a> {
-    pub fn external(&self) -> Option<&'a BridgeSdkExternalTargets> {
-        match self {
-            Self::Other(targets) => targets.external.as_ref(),
-            Self::Rust(targets) => targets.external.as_ref().map(|targets| &targets.common),
-        }
-    }
-
-    pub fn internal(&self) -> Option<&'a BridgeSdkInternalTargets> {
-        match self {
-            Self::Other(targets) => targets.internal.as_ref(),
-            Self::Rust(targets) => targets.internal.as_ref().map(|targets| &targets.common),
-        }
-    }
-
-    fn rust_external(&self) -> Option<&'a RustBridgeSdkExternalTargets> {
-        match self {
-            Self::Rust(targets) => targets.external.as_ref(),
-            Self::Other(_) => None,
-        }
-    }
-
-    fn rust_internal(&self) -> Option<&'a RustBridgeSdkInternalTargets> {
-        match self {
-            Self::Rust(targets) => targets.internal.as_ref(),
-            Self::Other(_) => None,
-        }
-    }
-
-    fn has_rust_configuration(&self) -> bool {
-        match self {
-            Self::Other(_) => false,
-            Self::Rust(targets) => {
-                targets.external.as_ref().is_some_and(|v| {
-                    !v.additional_derives.is_empty() || !v.additional_dependencies.is_empty()
-                }) || targets.internal.as_ref().is_some_and(|v| {
-                    !v.additional_derives.is_empty() || !v.additional_dependencies.is_empty()
-                })
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BridgeSdkLanguageTargets {
@@ -2066,51 +1935,6 @@ pub struct RustBridgeDependencyDetails {
     pub workspace: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optional: Option<bool>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct BridgeSdkInternalTargetsRef<'a> {
-    pub agents: &'a LenientTokenList,
-    pub tools: Option<&'a LenientTokenList>,
-    pub output_dir: Option<&'a String>,
-    pub rust: Option<RustBridgeTargetsRef<'a>>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum RustBridgeTargetsRef<'a> {
-    External(&'a RustBridgeSdkExternalTargets),
-    Internal(&'a RustBridgeSdkInternalTargets),
-}
-
-impl<'a> From<&'a RustBridgeSdkExternalTargets> for RustBridgeTargetsRef<'a> {
-    fn from(value: &'a RustBridgeSdkExternalTargets) -> Self {
-        Self::External(value)
-    }
-}
-
-impl<'a> From<&'a RustBridgeSdkInternalTargets> for RustBridgeTargetsRef<'a> {
-    fn from(value: &'a RustBridgeSdkInternalTargets) -> Self {
-        Self::Internal(value)
-    }
-}
-
-impl RustBridgeTargetsRef<'_> {
-    pub fn additional_derives(&self) -> &[String] {
-        match self {
-            Self::External(v) => &v.additional_derives,
-            Self::Internal(v) => &v.additional_derives,
-        }
-    }
-    pub fn additional_dependencies(&self) -> &BTreeMap<String, RustBridgeDependency> {
-        match self {
-            Self::External(v) => &v.additional_dependencies,
-            Self::Internal(v) => &v.additional_dependencies,
-        }
-    }
-
-    pub fn is_configured(&self) -> bool {
-        !self.additional_derives().is_empty() || !self.additional_dependencies().is_empty()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

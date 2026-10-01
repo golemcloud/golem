@@ -7,12 +7,10 @@
 //     http://license.golem.cloud/LICENSE
 
 use crate::fs;
-use crate::model::app_raw::{
-    RustBridgeDependency, RustBridgeDependencyDetails, RustBridgeTargetsRef,
-};
+use crate::model::app_raw::{RustBridgeDependency, RustBridgeDependencyDetails};
 use anyhow::{Context, bail};
 use regex::Regex;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::Path as SynPath;
@@ -36,28 +34,11 @@ pub struct RustBridgeGeneratorConfig {
     dependencies: BTreeMap<String, RustDependency>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct RustDeriveRule {
     pattern: String,
     regex: Regex,
-    derives: Vec<(String, SynPath)>,
-}
-
-impl std::fmt::Debug for RustDeriveRule {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("RustDeriveRule")
-            .field("pattern", &self.pattern)
-            .field(
-                "derives",
-                &self
-                    .derives
-                    .iter()
-                    .map(|(text, _)| text)
-                    .collect::<Vec<_>>(),
-            )
-            .finish()
-    }
+    derives: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -87,19 +68,33 @@ struct MarkerDeriveRule<'a> {
     derives: Vec<&'a str>,
 }
 
+impl Serialize for RustBridgeGeneratorConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        MarkerConfig {
+            derive_rules: self
+                .derive_rules
+                .iter()
+                .map(|rule| MarkerDeriveRule {
+                    pattern: &rule.pattern,
+                    derives: rule.derives.iter().map(String::as_str).collect(),
+                })
+                .collect(),
+            dependencies: &self.dependencies,
+        }
+        .serialize(serializer)
+    }
+}
+
 impl RustBridgeGeneratorConfig {
     pub fn from_manifest(
-        raw: Option<RustBridgeTargetsRef<'_>>,
+        derive_rules: &[String],
+        dependencies: BTreeMap<String, RustBridgeDependency>,
         source_dir: &Path,
     ) -> anyhow::Result<Self> {
-        let Some(raw) = raw else {
-            return Ok(Self::default());
-        };
-        Self::normalize(
-            raw.additional_derives(),
-            raw.additional_dependencies().clone(),
-            source_dir,
-        )
+        Self::normalize(derive_rules, dependencies, source_dir)
     }
 
     pub fn from_cli(
@@ -136,21 +131,6 @@ impl RustBridgeGeneratorConfig {
         })
     }
 
-    pub fn marker_json(&self) -> anyhow::Result<String> {
-        serde_json::to_string(&MarkerConfig {
-            derive_rules: self
-                .derive_rules
-                .iter()
-                .map(|rule| MarkerDeriveRule {
-                    pattern: &rule.pattern,
-                    derives: rule.derives.iter().map(|(text, _)| text.as_str()).collect(),
-                })
-                .collect(),
-            dependencies: &self.dependencies,
-        })
-        .map_err(Into::into)
-    }
-
     pub(crate) fn derives_for(
         &self,
         type_name: &str,
@@ -160,16 +140,24 @@ impl RustBridgeGeneratorConfig {
     ) -> Vec<SynPath> {
         let mut seen = builtins
             .iter()
-            .map(|value| value.to_string())
+            .map(|value| DeriveKey::Builtin((*value).to_string()))
             .collect::<BTreeSet<_>>();
         self.derive_rules
             .iter()
             .filter(|rule| rule.regex.is_match(type_name))
             .flat_map(|rule| &rule.derives)
-            .filter(|(text, _)| {
-                (allow_debug || text != "Debug") && (allow_clone || text != "Clone")
+            .filter(|path| {
+                let builtin = builtin_derive_name(path);
+                (allow_debug || builtin != Some("Debug"))
+                    && (allow_clone || builtin != Some("Clone"))
             })
-            .filter_map(|(text, path)| seen.insert(text.clone()).then_some(path.clone()))
+            .filter_map(|path| {
+                let key = builtin_derive_name(path)
+                    .map(|name| DeriveKey::Builtin(name.to_string()))
+                    .unwrap_or_else(|| DeriveKey::Path(path.clone()));
+                seen.insert(key)
+                    .then(|| syn::parse_str::<SynPath>(path).expect("validated Rust derive path"))
+            })
             .collect()
     }
 
@@ -179,6 +167,20 @@ impl RustBridgeGeneratorConfig {
 
     pub fn is_configured(&self) -> bool {
         !self.derive_rules.is_empty() || !self.dependencies.is_empty()
+    }
+}
+
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+enum DeriveKey {
+    Builtin(String),
+    Path(String),
+}
+
+fn builtin_derive_name(path: &str) -> Option<&'static str> {
+    match path.rsplit("::").next()? {
+        "Debug" => Some("Debug"),
+        "Clone" => Some("Clone"),
+        _ => None,
     }
 }
 
@@ -195,7 +197,7 @@ fn parse_derive_rule(rule: &str) -> anyhow::Result<RustDeriveRule> {
         .map(|value| {
             let path = syn::parse_str::<SynPath>(value)
                 .with_context(|| format!("invalid Rust derive path '{value}'"))?;
-            Ok((quote::quote!(#path).to_string().replace(' ', ""), path))
+            Ok(quote::quote!(#path).to_string().replace(' ', ""))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
     if derives.is_empty() {
@@ -409,7 +411,11 @@ mod tests {
 
         assert_eq!(config.derives_for("OrderResult", &[], true, true).len(), 3);
         assert_eq!(config.dependencies.len(), 2);
-        assert!(config.marker_json().unwrap().contains("serde_with"));
+        assert!(
+            serde_json::to_string(&config)
+                .unwrap()
+                .contains("serde_with")
+        );
     }
 
     #[test]
@@ -457,7 +463,8 @@ mod tests {
             )]),
         };
         let config = RustBridgeGeneratorConfig::from_manifest(
-            Some((&manifest_target).into()),
+            &manifest_target.additional_derives,
+            manifest_target.additional_dependencies,
             Path::new("/repo/manifests"),
         )
         .unwrap();
@@ -515,5 +522,29 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Eq"]
         );
+    }
+
+    #[test]
+    fn qualified_builtin_derives_are_deduplicated_and_restricted() {
+        let config = RustBridgeGeneratorConfig::from_cli(
+            &[".*=std::clone::Clone,std::fmt::Debug,serde::Serialize".into()],
+            &[],
+            Path::new("/work"),
+        )
+        .unwrap();
+
+        let with_builtins = config
+            .derives_for("Order", &["Debug", "Clone"], true, true)
+            .into_iter()
+            .map(|path| quote::quote!(#path).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(with_builtins, ["serde :: Serialize"]);
+
+        let restricted = config
+            .derives_for("StreamResult", &[], false, false)
+            .into_iter()
+            .map(|path| quote::quote!(#path).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(restricted, ["serde :: Serialize"]);
     }
 }

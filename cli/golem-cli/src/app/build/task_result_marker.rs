@@ -332,6 +332,18 @@ pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateBridgeSdkMarkerHashSource<'a> {
+    source: &'a BridgeSdkTargetSource,
+    target_name: &'a str,
+    kind: &'static str,
+    language: &'a GuestLanguage,
+    bridge_mode: BridgeMode,
+    rust_config: &'a crate::bridge_gen::rust::RustBridgeGeneratorConfig,
+    generator_version: u32,
+}
+
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
     fn kind() -> &'static str {
         "GenerateBridgeSdkMarkerHash"
@@ -346,15 +358,17 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(format!(
-            "source={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}\nrustConfig={}\ngeneratorVersion=2",
-            serde_json::to_string(self.source)?,
-            self.target_name,
-            self.kind,
-            self.language.id(),
-            self.bridge_mode.id(),
-            self.rust_config.marker_json()?,
-        )))
+        Ok(HashFromString(serde_json::to_string(
+            &GenerateBridgeSdkMarkerHashSource {
+                source: self.source,
+                target_name: self.target_name,
+                kind: self.kind,
+                language: self.language,
+                bridge_mode: self.bridge_mode,
+                rust_config: &self.rust_config,
+                generator_version: 2,
+            },
+        )?))
     }
 }
 
@@ -598,8 +612,11 @@ mod tests {
         };
 
         assert_ne!(external_source, guest_source);
-        assert!(external_source.contains("bridgeMode=external"));
-        assert!(guest_source.contains("bridgeMode=internal"));
+        let external: serde_json::Value = serde_json::from_str(&external_source).unwrap();
+        let guest: serde_json::Value = serde_json::from_str(&guest_source).unwrap();
+        assert_eq!(external["bridgeMode"], "external");
+        assert_eq!(guest["bridgeMode"], "guest");
+        assert_eq!(external["generatorVersion"], 2);
     }
 
     #[test]
@@ -635,6 +652,13 @@ mod tests {
             panic!("expected bridge marker to hash from string");
         };
         assert_ne!(default, configured);
+        let configured: serde_json::Value = serde_json::from_str(&configured).unwrap();
+        assert!(configured["rustConfig"].is_object());
+        assert_eq!(configured["rustConfig"]["deriveRules"][0]["pattern"], ".*");
+        assert_eq!(
+            configured["rustConfig"]["dependencies"]["anyhow"]["version"],
+            "1"
+        );
     }
 
     #[test]
