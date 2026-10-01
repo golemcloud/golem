@@ -250,7 +250,7 @@ pub(crate) struct InitialFileConflict {
 
 impl InitialFileConflict {
     /// The path of the conflict, below the root of the agent filesystem.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }

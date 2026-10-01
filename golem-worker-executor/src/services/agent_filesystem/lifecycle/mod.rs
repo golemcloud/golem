@@ -54,7 +54,6 @@ const WRITE_PRESSURE_RECOVERY_TIMEOUT: std::time::Duration = std::time::Duration
 mod baseline;
 mod initial_files;
 
-#[allow(unused_imports)]
 pub(crate) use baseline::{
     CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore,
     RestoreError, RestoreTree, WholeCapture, capture, capture_whole, materialize_baseline,
