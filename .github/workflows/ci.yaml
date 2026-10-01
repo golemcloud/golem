@@ -1061,6 +1061,11 @@ jobs:
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-make: 'false'
           install-cargo-binstall: 'true'
+      - name: Install cargo-make
+        if: matrix.chunk.name == 'rust-1'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
       - name: Restore CLI test binaries
         uses: actions/cache/restore@v5
         with:
