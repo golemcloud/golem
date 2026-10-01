@@ -18,10 +18,11 @@
 //! When the delete stops before its prune starts, or the second read of the ledger finds another
 //! time of the last prune than the first read, the claim is released: the first marker and each
 //! refresh marker whose write succeeded are deleted, and the claim when this delete knows that it
-//! wrote it. The marker of a refresh write that is in flight at a drop, or that lands and loses its
-//! answer, is not deleted. Such a marker only delays a prune. When the delete stops after the prune
-//! started and before the final marker is written, the final marker is written. A drop runs them in
-//! a task, so they also run when the caller drops the delete. After the start, only the delete
+//! wrote it. The marker of a refresh write that is in flight when the refresh stops, at the end of
+//! the prune or at a drop, or that lands and loses its answer, is not deleted. Such a marker only
+//! delays a prune. When the delete is dropped after the prune started and before the final marker
+//! is written, the final marker is written, and the claim is not released. A drop runs them in a
+//! task, so they also run when the caller drops the delete. After the start, only the delete
 //! releases the claim, when each attempt of the prune found a snapshot file gone, because such a
 //! prune changed nothing and counts as a prune that did not run.
 //!
@@ -249,8 +250,8 @@ impl Claim {
     /// Writes the first marker of the claim, then takes the claim, and gives the claim when this
     /// delete holds it. The lease starts with the marker write. [`marker_time`] reads an `Instant`
     /// and the time in the name of the marker. The lease ends one lease span after that `Instant`.
-    /// The claim exists before the marker write. So a drop or an error from that write on deletes
-    /// the first marker.
+    /// The claim exists before the marker write. So a drop or an error during the marker write or
+    /// the claim write deletes the first marker.
     pub(super) async fn take(
         files: &SnapshotFiles,
         name: ClaimName,
