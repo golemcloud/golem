@@ -5,7 +5,8 @@ use crate::custom_api::api_definition_lookup::{
 };
 use crate::custom_api::oidc::DefaultIdentityProvider;
 use crate::custom_api::oidc::model::{
-    McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin, SessionId,
+    AuthorizationCode, BearerToken, McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin,
+    PendingPkceLogin, PkceAuthorizationCode, PkceBearerCredential, PkceBinding, SessionId,
 };
 use crate::custom_api::oidc::session_store::{SessionStore, SessionStoreError};
 use crate::mcp::InvocationHarness;
@@ -32,6 +33,30 @@ use test_r::test;
 
 #[path = "live_files_tests.rs"]
 mod live_files;
+
+#[test]
+async fn unavailable_security_fails_before_route_dispatch() {
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::model::security_scheme::SecuritySchemeId;
+    use golem_service_base::custom_api::SecuritySchemeRouteSecurity;
+
+    let mut route = test_route(1, "/protected", Some("GET"), "typed");
+    route.security = RouteSecurity::SecurityScheme(SecuritySchemeRouteSecurity {
+        security_scheme_id: SecuritySchemeId::new(),
+    });
+    let resolver = test_resolver(vec![route]);
+    let request = poem::Request::builder()
+        .uri("/protected".parse().unwrap())
+        .header("host", "example.com")
+        .finish();
+    let selected = resolver.resolve_matching_route(&request).await.unwrap();
+    let result = require_available_security(&selected, async {
+        panic!("unavailable security must not dispatch the route")
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.status, StatusCode::SERVICE_UNAVAILABLE);
+}
 
 struct StaticApiDefinitionsLookup;
 
@@ -61,6 +86,52 @@ impl SessionStore for UnusedSessionStore {
         &self,
         _: &str,
     ) -> Result<Option<PendingOidcLogin>, SessionStoreError> {
+        unreachable!()
+    }
+
+    async fn store_pending_pkce_login(
+        &self,
+        _: &str,
+        _: PendingPkceLogin,
+    ) -> Result<(), SessionStoreError> {
+        unreachable!()
+    }
+
+    async fn take_pending_pkce_login(
+        &self,
+        _: &str,
+    ) -> Result<Option<PendingPkceLogin>, SessionStoreError> {
+        unreachable!()
+    }
+
+    async fn store_authorization_code(
+        &self,
+        _: &AuthorizationCode,
+        _: PkceAuthorizationCode,
+    ) -> Result<(), SessionStoreError> {
+        unreachable!()
+    }
+
+    async fn take_authorization_code(
+        &self,
+        _: &str,
+    ) -> Result<Option<PkceAuthorizationCode>, SessionStoreError> {
+        unreachable!()
+    }
+
+    async fn store_bearer_credential(
+        &self,
+        _: &BearerToken,
+        _: PkceBearerCredential,
+    ) -> Result<(), SessionStoreError> {
+        unreachable!()
+    }
+
+    async fn get_bearer_credential(
+        &self,
+        _: &str,
+        _: &PkceBinding,
+    ) -> Result<Option<PkceBearerCredential>, SessionStoreError> {
         unreachable!()
     }
 

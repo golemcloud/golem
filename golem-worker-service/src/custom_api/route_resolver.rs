@@ -18,7 +18,7 @@ use super::model::RichCompiledRoute;
 use super::openapi::{OpenApiInputs, OpenApiKey};
 use crate::config::RouteResolverConfig;
 use crate::custom_api::{
-    OidcCallbackBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
+    OidcCallbackBehaviour, OidcPkceBehaviour, RichRouteBehaviour, RichSecuritySchemeRouteSecurity,
 };
 use golem_common::SafeDisplay;
 use golem_common::cache::SimpleCache;
@@ -26,10 +26,11 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::agent::http_files::HttpRequestTarget;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::security_scheme::SecuritySchemeId;
+use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeLogin};
 use golem_service_base::custom_api::router::Router;
 use golem_service_base::custom_api::{
-    CompiledRoutes, CorsOptions, PathSegment, RouteMatch, RouteSecurity, SecuritySchemeDetails,
+    CompiledRoutes, CorsOptions, OriginPattern, PathSegment, RouteMatch, RouteSecurity,
+    SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
 };
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -270,7 +271,7 @@ impl RouteResolver {
             }
         };
 
-        let finalized_routes = match Self::finalize_routes(compiled_routes).await {
+        let finalized_routes = match Self::finalize_routes(compiled_routes, domain).await {
             Ok(value) => value,
             Err(err) => {
                 tracing::warn!("Failed to finalize routes for domain {domain}: {err:?}");
@@ -300,10 +301,13 @@ impl RouteResolver {
             matches!(
                 route.behavior,
                 RichRouteBehaviour::OidcCallback(_)
+                    | RichRouteBehaviour::OidcPkceAuthorize(_)
+                    | RichRouteBehaviour::OidcPkceToken(_)
                     | RichRouteBehaviour::WebhookCallback(_)
                     | RichRouteBehaviour::OpenApiSpec(_)
             )
         });
+        validate_reserved_bindings(&reserved, &typed)?;
         let mut mounts = mounts;
         mounts.sort_by(|a, b| mount_specificity(&b.path).cmp(mount_specificity(&a.path)));
 
@@ -319,7 +323,23 @@ impl RouteResolver {
 
     async fn finalize_routes(
         compiled_routes: CompiledRoutes,
+        domain: &Domain,
     ) -> Result<Vec<RichCompiledRoute>, String> {
+        let public_origin = compiled_routes
+            .routes
+            .iter()
+            .find_map(|route| match &route.behavior {
+                golem_service_base::custom_api::RouteBehaviour::OpenApiSpec(behavior) => {
+                    Some(behavior.scheme.origin(domain))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
+                    .origin(domain)
+            });
+        let public_origin_url = url::Url::parse(&public_origin)
+            .map_err(|error| format!("invalid deployment public origin: {error}"))?;
         let security_schemes: HashMap<_, _> = compiled_routes
             .security_schemes
             .into_iter()
@@ -348,15 +368,23 @@ impl RouteResolver {
             enriched_routes.push(enriched);
         }
 
-        let mut callbacks = security_schemes.values().collect::<Vec<_>>();
-        callbacks.sort_by_key(|scheme| scheme.id);
-        for scheme in callbacks {
+        let mut schemes = security_schemes.values().collect::<Vec<_>>();
+        schemes.sort_by_key(|scheme| scheme.id);
+        for scheme in schemes {
+            if scheme.redirect_url.url().origin() != public_origin_url.origin() {
+                return Err(format!(
+                    "OIDC callback origin for security scheme {} does not match {public_origin}",
+                    scheme.id
+                ));
+            }
             // Schemes are mutable independently of the selected deployment.
             let target = match HttpRequestTarget::parse(scheme.redirect_url.url().path()) {
                 Ok(target) => target,
                 Err(error) => {
-                    tracing::warn!(scheme_id = %scheme.id, error = %error, "Ignoring invalid OIDC callback path");
-                    continue;
+                    return Err(format!(
+                        "invalid OIDC callback path for security scheme {}: {error}",
+                        scheme.id
+                    ));
                 }
             };
             let redirect_url_path_segments: Vec<PathSegment> = target
@@ -390,6 +418,52 @@ impl RouteResolver {
             };
 
             enriched_routes.push(callback_route);
+
+            let SecuritySchemeLogin::AuthorizationCodePkce(config) = &scheme.login else {
+                continue;
+            };
+            let cors = CorsOptions {
+                allowed_patterns: config.origins.iter().cloned().map(OriginPattern).collect(),
+            };
+            for (method, path, behavior) in [
+                (
+                    golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {}),
+                    pkce_authorization_path(&scheme.id),
+                    RichRouteBehaviour::OidcPkceAuthorize(OidcPkceBehaviour {
+                        security_scheme: scheme.clone(),
+                    }),
+                ),
+                (
+                    golem_common::model::agent::HttpMethod::Post(golem_common::model::Empty {}),
+                    pkce_token_path(&scheme.id),
+                    RichRouteBehaviour::OidcPkceToken(OidcPkceBehaviour {
+                        security_scheme: scheme.clone(),
+                    }),
+                ),
+            ] {
+                let target = HttpRequestTarget::parse(&path)
+                    .expect("generated PKCE endpoint path must be valid");
+                enriched_routes.push(RichCompiledRoute {
+                    account_id: compiled_routes.account_id,
+                    account_email: compiled_routes.account_email.clone(),
+                    environment_id: compiled_routes.environment_id,
+                    deployment_revision: compiled_routes.deployment_revision,
+                    route_id: -1,
+                    route_match: RouteMatch::Method {
+                        method,
+                        trailing_slash: target.trailing_slash(),
+                    },
+                    path: target
+                        .segments()
+                        .iter()
+                        .cloned()
+                        .map(|value| PathSegment::Literal { value })
+                        .collect(),
+                    behavior,
+                    security: RichRouteSecurity::None,
+                    cors: cors.clone(),
+                });
+            }
         }
 
         Ok(enriched_routes)
@@ -434,17 +508,81 @@ fn build_router(
             .clone()
             .try_into()
             .expect("finalized route has a valid concrete method");
-        let callback = matches!(route.behavior, RichRouteBehaviour::OidcCallback(_));
         if !routers[usize::from(*trailing_slash)].add_route(method, route.path.clone(), route) {
-            if callback {
-                tracing::warn!("Ignoring conflicting OIDC callback binding");
-                continue;
-            }
             return Err(());
         }
     }
 
     Ok(routers)
+}
+
+fn validate_reserved_bindings(
+    reserved: &[Arc<RichCompiledRoute>],
+    typed: &[Arc<RichCompiledRoute>],
+) -> Result<(), ()> {
+    for (index, route) in reserved.iter().enumerate() {
+        if reserved[index + 1..]
+            .iter()
+            .any(|other| bindings_overlap(route, other, true))
+        {
+            return Err(());
+        }
+    }
+
+    for route in typed {
+        if matches!(route.behavior, RichRouteBehaviour::CallAgent(_))
+            && reserved
+                .iter()
+                .any(|reserved| bindings_overlap(reserved, route, false))
+        {
+            return Err(());
+        }
+    }
+
+    Ok(())
+}
+
+fn bindings_overlap(
+    reserved: &RichCompiledRoute,
+    other: &RichCompiledRoute,
+    symmetric: bool,
+) -> bool {
+    let (
+        RouteMatch::Method {
+            method: reserved_method,
+            trailing_slash: reserved_slash,
+        },
+        RouteMatch::Method {
+            method: other_method,
+            trailing_slash: other_slash,
+        },
+    ) = (&reserved.route_match, &other.route_match)
+    else {
+        return false;
+    };
+    let Ok(reserved_method): Result<http::Method, _> = reserved_method.clone().try_into() else {
+        return false;
+    };
+    let Ok(other_method): Result<http::Method, _> = other_method.clone().try_into() else {
+        return false;
+    };
+    reserved_method == other_method
+        && reserved_slash == other_slash
+        && reserved.path.len() == other.path.len()
+        && reserved
+            .path
+            .iter()
+            .zip(&other.path)
+            .all(|(reserved, other)| match (reserved, other) {
+                (
+                    PathSegment::Literal { value: reserved },
+                    PathSegment::Literal { value: other },
+                ) => reserved == other,
+                (PathSegment::Variable { .. }, PathSegment::Variable { .. })
+                | (PathSegment::Variable { .. }, PathSegment::Literal { .. }) => true,
+                (PathSegment::Literal { .. }, PathSegment::Variable { .. }) => symmetric,
+                _ => false,
+            })
 }
 
 fn mount_specificity(path: &[PathSegment]) -> impl Iterator<Item = bool> + '_ {
@@ -1039,6 +1177,7 @@ pub(super) mod tests {
         ] {
             let scheme = SecuritySchemeDetails {
                 id: SecuritySchemeId::new(),
+                revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
                 name: SecuritySchemeName("test".into()),
                 provider_type: Provider::Google(Empty {}),
                 client_id: openidconnect::ClientId::new("test".into()),
@@ -1046,27 +1185,18 @@ pub(super) mod tests {
                 redirect_url: openidconnect::RedirectUrl::new(format!("https://example.com{raw}"))
                     .unwrap(),
                 scopes: vec![],
+                login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
             };
-            let mut duplicate = scheme.clone();
-            duplicate.id = SecuritySchemeId::new();
-            let mut invalid = scheme.clone();
-            invalid.id = SecuritySchemeId::new();
-            invalid.redirect_url =
-                openidconnect::RedirectUrl::new("https://example.com/bad%2fpath".into()).unwrap();
             let compiled = CompiledRoutes {
                 account_id: AccountId(uuid::Uuid::nil()),
                 account_email: AccountEmail::new("test@example.com"),
                 environment_id: EnvironmentId(uuid::Uuid::nil()),
                 deployment_revision: DeploymentRevision::INITIAL,
-                security_schemes: HashMap::from([
-                    (scheme.id, scheme),
-                    (duplicate.id, duplicate),
-                    (invalid.id, invalid),
-                ]),
+                security_schemes: HashMap::from([(scheme.id, scheme)]),
                 routes: vec![test_route(5, "/health", Some("GET"), "typed")],
             };
             let routers = build_router(
-                RouteResolver::finalize_routes(compiled)
+                RouteResolver::finalize_routes(compiled, &Domain("example.com".into()))
                     .await
                     .unwrap()
                     .into_iter()
@@ -1096,6 +1226,289 @@ pub(super) mod tests {
         }
     }
 
+    fn pkce_scheme(id: SecuritySchemeId, callback: &str, origin: &str) -> SecuritySchemeDetails {
+        SecuritySchemeDetails {
+            id,
+            revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
+            name: golem_common::model::security_scheme::SecuritySchemeName(id.to_string()),
+            provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
+            client_id: openidconnect::ClientId::new("test".into()),
+            client_secret: openidconnect::ClientSecret::new("test".into()),
+            redirect_url: openidconnect::RedirectUrl::new(callback.into()).unwrap(),
+            scopes: vec![],
+            login: golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(
+                golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                    redirect_uris: vec![format!("{origin}/callback")],
+                    origins: vec![origin.into()],
+                },
+            ),
+        }
+    }
+
+    #[test]
+    async fn pkce_routes_select_scheme_method_and_cors_policy() {
+        let first = pkce_scheme(
+            SecuritySchemeId::new(),
+            "https://api.example/oidc/first",
+            "https://first.example",
+        );
+        let second = pkce_scheme(
+            SecuritySchemeId::new(),
+            "https://api.example/oidc/second",
+            "https://second.example",
+        );
+        let compiled = CompiledRoutes {
+            account_id: AccountId(uuid::Uuid::nil()),
+            account_email: AccountEmail::new("test@example.com"),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            security_schemes: HashMap::from([(first.id, first.clone()), (second.id, second)]),
+            routes: vec![test_route(1, "/openapi.json", Some("GET"), "reserved")],
+        };
+        let resolver = RouteResolver::new(
+            &RouteResolverConfig::default(),
+            Arc::new(RoutesLookup(std::sync::Mutex::new(Some(compiled)))),
+        );
+
+        for (path, method, authorize) in [
+            (pkce_authorization_path(&first.id), http::Method::GET, true),
+            (pkce_token_path(&first.id), http::Method::POST, false),
+        ] {
+            let request = poem::Request::builder()
+                .uri(path.parse().unwrap())
+                .method(method.clone())
+                .header("host", "api.example")
+                .finish();
+            let selected = resolver.resolve_matching_route(&request).await.unwrap();
+            let behavior = match &selected.route.behavior {
+                RichRouteBehaviour::OidcPkceAuthorize(behavior) if authorize => behavior,
+                RichRouteBehaviour::OidcPkceToken(behavior) if !authorize => behavior,
+                other => panic!("unexpected behavior: {other:?}"),
+            };
+            assert_eq!(behavior.security_scheme.id, first.id);
+            assert_eq!(
+                selected.route.cors.allowed_patterns,
+                vec![OriginPattern("https://first.example".into())]
+            );
+            assert!(
+                resolver
+                    .resolve_matching_route_for_method(&request, &method)
+                    .await
+                    .is_ok(),
+                "preflight method projection selects the same scheme route"
+            );
+            let wrong_method = if method == http::Method::GET {
+                http::Method::POST
+            } else {
+                http::Method::GET
+            };
+            assert!(matches!(
+                resolver
+                    .resolve_matching_route_for_method(&request, &wrong_method)
+                    .await,
+                Err(RouteResolverError::NoMatchingRoute)
+            ));
+
+            let mut preflight = poem::Request::builder()
+                .uri(path.parse().unwrap())
+                .method(http::Method::OPTIONS)
+                .header("host", "api.example")
+                .header(http::header::ORIGIN, "https://first.example")
+                .header(http::header::ACCESS_CONTROL_REQUEST_METHOD, method.as_str());
+            if !authorize {
+                preflight =
+                    preflight.header(http::header::ACCESS_CONTROL_REQUEST_HEADERS, "content-type");
+            }
+            let preflight = preflight.finish();
+            let response =
+                crate::custom_api::request_handler::handle_preflight(&resolver, preflight)
+                    .await
+                    .unwrap();
+            assert_eq!(response.status(), http::StatusCode::NO_CONTENT);
+            assert_eq!(
+                response.headers()[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "https://first.example"
+            );
+            assert_eq!(
+                response.headers()[http::header::VARY],
+                "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+            );
+
+            for (origin, requested_method) in [
+                ("https://denied.example", method.as_str()),
+                ("https://first.example", wrong_method.as_str()),
+            ] {
+                let denied = poem::Request::builder()
+                    .uri(path.parse().unwrap())
+                    .method(http::Method::OPTIONS)
+                    .header("host", "api.example")
+                    .header(http::header::ORIGIN, origin)
+                    .header(
+                        http::header::ACCESS_CONTROL_REQUEST_METHOD,
+                        requested_method,
+                    )
+                    .finish();
+                let response =
+                    crate::custom_api::request_handler::handle_preflight(&resolver, denied)
+                        .await
+                        .unwrap();
+                assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+                assert_eq!(
+                    response.headers()[http::header::VARY],
+                    "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+                );
+            }
+        }
+
+        let request = poem::Request::builder()
+            .uri(pkce_authorization_path(&first.id).parse().unwrap())
+            .method(http::Method::GET)
+            .header("host", "api.example")
+            .finish();
+        let selected = resolver.resolve_matching_route(&request).await.unwrap();
+        let deployed = selected
+            .openapi_inputs
+            .unwrap()
+            .generated_contribution()
+            .unwrap();
+        assert!(
+            deployed["paths"]
+                .get(pkce_authorization_path(&first.id))
+                .is_none()
+        );
+        assert!(deployed["paths"].get(pkce_token_path(&first.id)).is_none());
+    }
+
+    #[test]
+    async fn conflicting_or_invalid_security_routes_fail_closed() {
+        let first = pkce_scheme(
+            SecuritySchemeId::new(),
+            "https://api.example/callback",
+            "https://frontend.example",
+        );
+        let mut second = pkce_scheme(
+            SecuritySchemeId::new(),
+            "https://api.example/callback",
+            "https://other.example",
+        );
+        let base = CompiledRoutes {
+            account_id: AccountId(uuid::Uuid::nil()),
+            account_email: AccountEmail::new("test@example.com"),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            security_schemes: HashMap::from([
+                (first.id, first.clone()),
+                (second.id, second.clone()),
+            ]),
+            routes: vec![],
+        };
+        assert!(
+            RouteResolver::finalize_routes(base, &Domain("api.example".into()))
+                .await
+                .is_ok()
+        );
+
+        let callback_conflict = CompiledRoutes {
+            account_id: AccountId(uuid::Uuid::nil()),
+            account_email: AccountEmail::new("test@example.com"),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            security_schemes: HashMap::from([
+                (first.id, first.clone()),
+                (second.id, second.clone()),
+            ]),
+            routes: vec![],
+        };
+        assert!(
+            RouteResolver::fetch_and_build_domain_api(
+                Arc::new(RoutesLookup(std::sync::Mutex::new(Some(callback_conflict)))),
+                &Domain("api.example".into()),
+            )
+            .await
+            .is_err()
+        );
+
+        second.redirect_url =
+            openidconnect::RedirectUrl::new("https://api.example/bad%2fpath".into()).unwrap();
+        let invalid_callback = CompiledRoutes {
+            account_id: AccountId(uuid::Uuid::nil()),
+            account_email: AccountEmail::new("test@example.com"),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            security_schemes: HashMap::from([(second.id, second)]),
+            routes: vec![],
+        };
+        assert!(
+            RouteResolver::finalize_routes(invalid_callback, &Domain("api.example".into()))
+                .await
+                .is_err()
+        );
+
+        let origin_mismatch = CompiledRoutes {
+            account_id: AccountId(uuid::Uuid::nil()),
+            account_email: AccountEmail::new("test@example.com"),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            security_schemes: HashMap::from([(
+                first.id,
+                pkce_scheme(
+                    first.id,
+                    "https://other-api.example/callback",
+                    "https://frontend.example",
+                ),
+            )]),
+            routes: vec![],
+        };
+        assert!(
+            RouteResolver::finalize_routes(origin_mismatch, &Domain("api.example".into()))
+                .await
+                .is_err()
+        );
+
+        for (path, method) in [
+            (pkce_authorization_path(&first.id), "GET"),
+            (pkce_token_path(&first.id), "POST"),
+            (first.redirect_url.url().path().to_string(), "GET"),
+        ] {
+            let app_conflict = CompiledRoutes {
+                account_id: AccountId(uuid::Uuid::nil()),
+                account_email: AccountEmail::new("test@example.com"),
+                environment_id: EnvironmentId(uuid::Uuid::nil()),
+                deployment_revision: DeploymentRevision::INITIAL,
+                security_schemes: HashMap::from([(first.id, first.clone())]),
+                routes: vec![test_route(1, &path, Some(method), "typed")],
+            };
+            assert!(
+                RouteResolver::fetch_and_build_domain_api(
+                    Arc::new(RoutesLookup(std::sync::Mutex::new(Some(app_conflict)))),
+                    &Domain("api.example".into()),
+                )
+                .await
+                .is_err(),
+                "expected conflict for {method} {path}"
+            );
+        }
+
+        let variable_reserved_conflict = CompiledRoutes {
+            account_id: AccountId(uuid::Uuid::nil()),
+            account_email: AccountEmail::new("test@example.com"),
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            deployment_revision: DeploymentRevision::INITIAL,
+            security_schemes: HashMap::from([(first.id, first)]),
+            routes: vec![test_route(1, "/{reserved}", Some("GET"), "reserved")],
+        };
+        assert!(
+            RouteResolver::fetch_and_build_domain_api(
+                Arc::new(RoutesLookup(std::sync::Mutex::new(Some(
+                    variable_reserved_conflict,
+                )))),
+                &Domain("api.example".into()),
+            )
+            .await
+            .is_err()
+        );
+    }
+
     struct ChangingSecurityLookup(std::sync::atomic::AtomicBool);
 
     #[async_trait::async_trait]
@@ -1113,6 +1526,8 @@ pub(super) mod tests {
                     id,
                     SecuritySchemeDetails {
                         id,
+                        revision:
+                            golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
                         name: golem_common::model::security_scheme::SecuritySchemeName(
                             "current".into(),
                         ),
@@ -1126,6 +1541,9 @@ pub(super) mod tests {
                         )
                         .unwrap(),
                         scopes: vec![],
+                        login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                            Empty {},
+                        ),
                     },
                 );
             }

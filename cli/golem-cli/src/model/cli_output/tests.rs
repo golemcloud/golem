@@ -4546,6 +4546,7 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
         arb_small_string(),
         arb_url_string(),
         proptest::collection::vec(arb_small_string(), 0..5),
+        arb_security_scheme_login(),
     )
         .prop_map(
             |(
@@ -4557,6 +4558,7 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
                 client_id,
                 redirect_url,
                 scopes,
+                login,
             )| {
                 golem_client::model::SecuritySchemeDto {
                     id: golem_common::model::security_scheme::SecuritySchemeId(id),
@@ -4570,10 +4572,38 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
                     client_id,
                     redirect_url,
                     scopes,
+                    login,
                 }
             },
         )
         .boxed()
+}
+
+fn arb_security_scheme_login()
+-> BoxedStrategy<golem_common::model::security_scheme::SecuritySchemeLogin> {
+    prop_oneof![
+        Just(
+            golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {}
+            )
+        ),
+        (
+            proptest::collection::vec(arb_url_string(), 1..5),
+            proptest::collection::vec(
+                arb_small_string().prop_map(|subdomain| format!("https://{subdomain}.example.com")),
+                1..5,
+            ),
+        )
+            .prop_map(|(redirect_uris, origins)| {
+                golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(
+                    golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                        redirect_uris,
+                        origins,
+                    },
+                )
+            }),
+    ]
+    .boxed()
 }
 
 fn arb_security_scheme_provider() -> BoxedStrategy<golem_common::model::security_scheme::Provider> {

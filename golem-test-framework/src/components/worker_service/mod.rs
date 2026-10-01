@@ -111,7 +111,7 @@ async fn env_vars(
     // production default and collide with other local Golem processes.
     let mcp_port = custom_request_port + 2;
 
-    EnvVarBuilder::golem_service(verbosity)
+    let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
@@ -125,20 +125,53 @@ async fn env_vars(
             "GOLEM__REGISTRY_SERVICE__PORT",
             registry_service.grpc_port().to_string(),
         )
-        .with_str("GOLEM__ENVIRONMENT", "local")
-        .with_str("GOLEM__GATEWAY_SESSION_STORAGE__TYPE", "Redis")
-        .with(
-            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST",
-            redis.private_host(),
-        )
-        .with(
-            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT",
-            redis.private_port().to_string(),
-        )
-        .with(
-            "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__KEY_PREFIX",
-            redis.prefix().to_string(),
-        )
+        .with_str("GOLEM__ENVIRONMENT", "local");
+    let builder = match std::env::var("GOLEM_TEST_GATEWAY_SESSION_STORAGE")
+        .as_deref()
+        .unwrap_or("redis")
+    {
+        "redis" => builder
+            .with_str("GOLEM__GATEWAY_SESSION_STORAGE__TYPE", "Redis")
+            .with(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__HOST",
+                redis.private_host(),
+            )
+            .with(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PORT",
+                redis.private_port().to_string(),
+            )
+            .with(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__KEY_PREFIX",
+                redis.prefix().to_string(),
+            ),
+        "sqlite" => builder
+            .with_str("GOLEM__GATEWAY_SESSION_STORAGE__TYPE", "Sqlite")
+            .with_str(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__PENDING_LOGIN_EXPIRATION",
+                "1h",
+            )
+            .with_str(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__CLEANUP_INTERVAL",
+                "1m",
+            )
+            .with(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__DATABASE",
+                format!("/tmp/golem-gateway-session-{custom_request_port}.db"),
+            )
+            .with_str(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__MAX_CONNECTIONS",
+                "10",
+            )
+            .with_str(
+                "GOLEM__GATEWAY_SESSION_STORAGE__CONFIG__FOREIGN_KEYS",
+                "false",
+            ),
+        value => panic!(
+            "GOLEM_TEST_GATEWAY_SESSION_STORAGE must be either 'redis' or 'sqlite', got {value}"
+        ),
+    };
+
+    builder
         .with("GOLEM__SHARD_MANAGER__HOST", shard_manager.grpc_host())
         .with(
             "GOLEM__SHARD_MANAGER__PORT",

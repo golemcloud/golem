@@ -20,6 +20,7 @@ pub(super) fn emit(
     components: &mut Map<String, Value>,
     security_schemes: &mut Map<String, Value>,
     paths: &mut BTreeMap<String, Map<String, Value>>,
+    public_origin: &str,
 ) -> Result<(), String> {
     let RichRouteBehaviour::CallAgent(behaviour) = &route.behavior else {
         unreachable!()
@@ -100,7 +101,7 @@ pub(super) fn emit(
                 .trim()
             );
         }
-        op["security"] = build_security(&route.security, security_schemes)?;
+        op["security"] = build_security(&route.security, security_schemes, public_origin)?;
         if let Some(body) = body {
             op["requestBody"] = body;
         }
