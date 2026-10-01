@@ -518,6 +518,9 @@ fn delegated_to_namespace(test: &str) -> bool {
     }
 
     let binary = std::env::current_exe().expect("the running test binary");
+    // Spawning from this multithreaded process keeps every live socket alive in
+    // the child until exec closes its inherited descriptors. Host-process tests
+    // must not assume a dropped listener's port is immediately free.
     let child = std::process::Command::new("unshare")
         .args(["--user", "--map-root-user", "--net", "--"])
         .arg("sh")
@@ -1121,10 +1124,11 @@ async fn abandoned_connect_attempt_is_not_replayed_to_the_next_caller() {
 async fn client_recovers_when_a_cleanly_killed_peer_returns() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
-    drop(listener);
+    listener.set_nonblocking(true).unwrap();
 
     fn start(
         addr: std::net::SocketAddr,
+        prepared: Option<std::net::TcpListener>,
     ) -> (
         tokio::sync::oneshot::Sender<()>,
         std::thread::JoinHandle<()>,
@@ -1136,7 +1140,26 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
                 .build()
                 .unwrap();
             rt.block_on(async move {
-                let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+                let listener = match prepared {
+                    Some(listener) => tokio::net::TcpListener::from_std(listener).unwrap(),
+                    None => {
+                        let deadline = Instant::now() + Duration::from_secs(2);
+                        loop {
+                            match tokio::net::TcpListener::bind(addr).await {
+                                Ok(listener) => break listener,
+                                Err(err)
+                                    if err.kind() == std::io::ErrorKind::AddrInUse
+                                        && Instant::now() < deadline =>
+                                {
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
+                                }
+                                Err(err) => {
+                                    panic!("could not rebind restarted peer at {addr}: {err}")
+                                }
+                            }
+                        }
+                    }
+                };
                 let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
                 tokio::select! {
                     _ = tonic::transport::Server::builder()
@@ -1157,7 +1180,7 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
     // A live peer answers. The empty router replies Unimplemented, which proves
     // the transport works and is deliberately not Unavailable, so the channel is
     // cached exactly as it is in production.
-    let (kill, joined) = start(addr);
+    let (kill, joined) = start(addr, Some(listener));
     tokio::time::sleep(Duration::from_millis(300)).await;
     let first = ping(&client, uri.clone()).await;
     eprintln!(
@@ -1180,8 +1203,9 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
         during.as_ref().err().map(|e| e.message().to_string())
     );
 
-    // Same address, fresh peer. Only an evicted channel can reach it.
-    let (kill2, joined2) = start(addr);
+    // Same address, fresh peer. A sibling's spawning child may briefly retain
+    // the old listener, so restarting retries until that descriptor is closed.
+    let (kill2, joined2) = start(addr, None);
     tokio::time::sleep(Duration::from_millis(300)).await;
     let after = ping(&client, uri.clone()).await;
     let after_code = after.as_ref().err().map(|e| e.code());
@@ -1196,7 +1220,7 @@ async fn client_recovers_when_a_cleanly_killed_peer_returns() {
         after_code,
         Some(tonic::Code::Unimplemented),
         "client did not recover after the peer returned on the same address — \
-         the dead channel was never evicted"
+         the dead channel never reconnected"
     );
 }
 
