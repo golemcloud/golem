@@ -5,6 +5,14 @@ import { join } from 'node:path';
 
 import { runCli, validatedCwd } from '../shared/cli-runtime.ts';
 
+const runtimeProcess = process as NodeJS.Process & {
+  _awaitRuntimeIdle?: () => Promise<void>;
+};
+Object.defineProperty(runtimeProcess, '_awaitRuntimeIdle', {
+  value: async () => undefined,
+  configurable: true,
+});
+
 function capture() {
   const chunks: Uint8Array[] = [];
   return {
@@ -99,9 +107,6 @@ async function capturesErrors() {
 async function waitsForRuntimeIdleBeforeRestoringOutput() {
   const stdout = capture();
   const stderr = capture();
-  const runtimeProcess = process as NodeJS.Process & {
-    _awaitRuntimeIdle?: () => Promise<void>;
-  };
   const original = runtimeProcess._awaitRuntimeIdle;
   Object.defineProperty(runtimeProcess, '_awaitRuntimeIdle', {
     value: () => new Promise<void>((resolve) => setTimeout(resolve, 30)),
@@ -110,7 +115,7 @@ async function waitsForRuntimeIdleBeforeRestoringOutput() {
 
   try {
     const exitCode = await runCli(
-      { argv: ['node', '--eval'], cwd: '/', waitForRuntimeIdle: true },
+      { argv: ['node', '--eval'], cwd: '/' },
       { stdout: stdout.stream, stderr: stderr.stream },
       (processFacade) => {
         setTimeout(() => processFacade.stdout.write('late output'), 20);

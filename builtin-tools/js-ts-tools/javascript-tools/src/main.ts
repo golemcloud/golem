@@ -177,7 +177,6 @@ async function runNode(
       },
       directories: [home],
       stopOnExit: true,
-      waitForRuntimeIdle: true,
     },
     streams,
     async () => {
