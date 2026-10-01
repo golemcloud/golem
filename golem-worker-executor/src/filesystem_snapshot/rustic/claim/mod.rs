@@ -67,8 +67,8 @@ enum ClaimState {
 enum ClaimEvent {
     /// The write of the claim succeeded.
     Won,
-    /// Another delete holds the claim, and this delete tried to delete its marker. A marker that
-    /// stays only delays a prune.
+    /// The claim write found a claim at its path, so this delete does not hold the claim, and it
+    /// tried to delete its marker. A marker that stays only delays a prune.
     Lost,
     /// The blocking task of the prune asks to start the rustic prune.
     Start,

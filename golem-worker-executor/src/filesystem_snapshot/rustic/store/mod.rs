@@ -274,8 +274,9 @@ impl RusticSnapshotStore {
         Ok(BlobBackend::new(files, runtime()?, KEPT_PACKS_LIMIT).tracked_by(self.tracker.token()))
     }
 
-    /// Gives the spawner of the work that runs after the caller of an operation stops waiting: the
-    /// runtime of the operation, and the tracker of the store.
+    /// Gives the spawner of the work that the store runs as a task, so that the work also ends when
+    /// the caller of an operation stops waiting: the runtime of the operation, and the tracker of
+    /// the store.
     fn spawner(&self) -> Result<Spawner, SnapshotStoreError> {
         Ok(Spawner {
             tracker: self.tracker.clone(),
@@ -331,13 +332,13 @@ impl RusticSnapshotStore {
     /// succeeds, so a later prune counts them again. It lists the packs only when their size can
     /// make a prune due.
     /// A due prune runs only after the delete takes a claim of its ledger, and only when a second
-    /// read of the ledger after the claim finds the time of the last prune of the first read.
-    /// Another time of the last prune shows that another prune ended after the first read. Then the
-    /// claim is deleted and the delete gives no error. After an error before the prune ran, the
-    /// claim is deleted, so a retry of the delete prunes again, and a claim write that the storage
-    /// completes after that delete can delay that prune by up to the hold of a claim. A prune that
-    /// found a snapshot file gone at each attempt changed nothing, so it counts as an error before
-    /// the prune ran.
+    /// read of the ledger after the claim finds the time of the last prune of the first read. When
+    /// it finds another time, the claim is released and the delete gives no error. So a delete
+    /// prunes only with a claim in the claim directory of the ledger that the second read gives.
+    /// After an error before the prune ran, the claim is released, so a retry of the delete prunes
+    /// again, and a claim write that the storage completes after that release can delay that prune
+    /// by up to the hold of a claim. A prune that found a snapshot file gone at each attempt
+    /// changed nothing, so it counts as an error before the prune ran.
     /// After a prune that started, the claim stays on each outcome, also when the prune or its
     /// ledger write fails, or when the lease skips its ledger write. So the next prune waits a full
     /// hold from the newest claim marker that was written, which is the end of the prune unless the
@@ -379,8 +380,8 @@ impl RusticSnapshotStore {
         };
         // Before the prune starts, an error releases the claim, so a retry of the delete prunes
         // again. When the second read of the ledger finds another time of the last prune than the
-        // first read, the claim is released too, because another prune ended after the first read.
-        // A prune that started can have marked packs, so its claim stays.
+        // first read, the claim is released too, and the delete gives no error. A prune that
+        // started can have marked packs, so its claim stays.
         let backend = match self.prepare_prune(&files, &claim).await {
             Ok(Some(backend)) => backend,
             other => {
@@ -444,8 +445,8 @@ impl RusticSnapshotStore {
     }
 
     /// Checks the ledger again and builds the backend of the prune. It gives `None` when the second
-    /// read finds another time of the last prune than the first read, because another prune ended
-    /// after the first read.
+    /// read finds another time of the last prune than the first read. So a prune runs only with a
+    /// claim in the claim directory of the ledger that the second read gives.
     async fn prepare_prune(
         &self,
         files: &SnapshotFiles,

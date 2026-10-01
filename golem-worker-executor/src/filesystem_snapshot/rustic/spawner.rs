@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The runtime and the tracker of the work that the store runs after its caller stops waiting.
+//! The runtime and the tracker of the work that the store runs as a task, so that the work also
+//! ends when its caller stops waiting.
 
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
