@@ -15,15 +15,15 @@
 //! The claim of a prune that a delete holds, from just before the write of its first marker until
 //! the final marker of its prune.
 //!
-//! When the delete stops before its prune starts, or the second read of the ledger finds a newer
-//! ledger, the claim is released: the first marker and each refresh marker whose write succeeded
-//! are deleted, and the claim when this delete knows that it wrote it. The marker of a refresh
-//! write that is in flight at a drop, or that lands and loses its answer, is not deleted. Such a
-//! marker only delays a prune. When the delete stops after the prune started and before the final
-//! marker is written, the final marker is written. A drop runs them in a task, so they also run
-//! when the caller drops the delete. After the start, only the delete releases the claim, when each
-//! attempt of the prune found a snapshot file gone, because such a prune changed nothing and counts
-//! as a prune that did not run.
+//! When the delete stops before its prune starts, or the second read of the ledger finds another
+//! time of the last prune than the first read, the claim is released: the first marker and each
+//! refresh marker whose write succeeded are deleted, and the claim when this delete knows that it
+//! wrote it. The marker of a refresh write that is in flight at a drop, or that lands and loses its
+//! answer, is not deleted. Such a marker only delays a prune. When the delete stops after the prune
+//! started and before the final marker is written, the final marker is written. A drop runs them in
+//! a task, so they also run when the caller drops the delete. After the start, only the delete
+//! releases the claim, when each attempt of the prune found a snapshot file gone, because such a
+//! prune changed nothing and counts as a prune that did not run.
 //!
 //! [`transition`] holds these rules. The claim and the blocking task of its prune share the state,
 //! and each event replaces the state with the result of [`transition`] in one step under a lock. So
@@ -74,8 +74,9 @@ enum ClaimEvent {
     Start,
     /// A refresh wrote the marker.
     Refreshed(Box<Path>),
-    /// No prune ran: an error came before the prune, the second read of the ledger found a newer
-    /// ledger, or each attempt of the prune found a snapshot file gone.
+    /// No prune ran: an error came before the prune, the second read of the ledger found another
+    /// time of the last prune than the first read, or each attempt of the prune found a snapshot
+    /// file gone.
     Release,
     /// The blocking task of the prune ended, and the delete writes the final marker when the prune
     /// started. It also comes before the start, when the blocking task failed before it started the
