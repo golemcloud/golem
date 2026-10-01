@@ -331,7 +331,8 @@ impl RusticSnapshotStore {
     /// succeeds, so a later prune counts them again. It lists the packs only when their size can
     /// make a prune due.
     /// A due prune runs only after the delete takes a claim of its ledger, and only when the ledger
-    /// did not change after the claim. After an error before the prune ran, the claim is deleted,
+    /// did not change after the claim. When the ledger changed, the claim is deleted and the delete
+    /// gives no error. After an error before the prune ran, the claim is deleted,
     /// so a retry of the delete prunes again, and a claim write that the storage completes after
     /// that delete can delay that prune by up to the hold of a claim. A prune that found a snapshot
     /// file gone at each attempt changed nothing, so it counts as an error before the prune ran.
@@ -374,8 +375,9 @@ impl RusticSnapshotStore {
         else {
             return Ok(());
         };
-        // Only an error before the prune starts releases the claim, so a retry of the delete
-        // prunes again. A prune that started can have marked packs, so its claim stays.
+        // Before the prune starts, an error releases the claim, so a retry of the delete prunes
+        // again. A newer ledger at the second read also releases the claim, because another prune
+        // ended after the claim. A prune that started can have marked packs, so its claim stays.
         let backend = match self.prepare_prune(&files, &claim).await {
             Ok(Some(backend)) => backend,
             other => {
