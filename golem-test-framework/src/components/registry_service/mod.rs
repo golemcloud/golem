@@ -474,14 +474,9 @@ async fn env_vars(
             "GOLEM__BUILTIN_ARTIFACTS__CACHE_DIR",
             builtin_artifact_cache_dir.to_string_lossy().to_string(),
         )
+        .with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
         .with_optional_otlp("registry_service", otlp);
-
-    let builder = if otlp {
-        builder.with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
-    } else {
-        builder
-    };
 
     builder.build()
 }
