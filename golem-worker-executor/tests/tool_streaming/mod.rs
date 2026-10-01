@@ -10509,6 +10509,7 @@ async fn exercise_filesystem_tools(
         .tools
         .iter()
         .map(|definition| {
+            assert!(definition.requires_filesystem);
             let name = definition
                 .name()
                 .expect("filesystem tool has a root command");
@@ -11400,6 +11401,17 @@ async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
         .find(|definition| definition.name() == Some("web-fetch"))
         .cloned()
         .expect("web-fetch metadata is present");
+    assert!(!definition.requires_filesystem);
+    for command in &definition.commands.nodes {
+        if let Some(body) = &command.body {
+            assert!(
+                body.annotations
+                    .as_ref()
+                    .expect("web-fetch command body has annotations")
+                    .open_world
+            );
+        }
+    }
     let command_index = definition
         .command_index_by_path(&[])
         .expect("web-fetch root command is present");

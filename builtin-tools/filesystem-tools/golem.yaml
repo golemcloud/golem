@@ -7,6 +7,9 @@ components:
   golem:filesystem-tools:
     dir: "."
     templates: rust
+    customCommands:
+      copy:
+        - command: cp golem-temp/agents/golem_filesystem_tools_release.wasm ../filesystem-tools.wasm
 
 environments:
   local:

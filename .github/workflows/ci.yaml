@@ -193,6 +193,7 @@ jobs:
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
+      BUILTIN_USE_LOCAL_WEB_FETCH: '1'
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
       - build-and-store
@@ -333,6 +334,7 @@ jobs:
   it:
     env:
       CARGO_BUILD_JOBS: 10
+      BUILTIN_USE_LOCAL_WEB_FETCH: '1'
     runs-on: ${{ matrix.group.runner || 'blacksmith-8vcpu-ubuntu-2204' }}
     needs:
       - build-and-store
@@ -562,8 +564,7 @@ jobs:
           cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
           chmod +x target/dev-release-ci/*
 
-      - name: Restore streaming test components
-        if: matrix.group.shard == 'agents_streaming'
+      - name: Restore test components and built-in artifacts
         uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
@@ -680,6 +681,11 @@ jobs:
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
           cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
+
+      - name: Restore built-in artifacts
+        uses: ./.github/actions/restore-test-components
+        with:
+          run-id: ${{ github.run_id }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8

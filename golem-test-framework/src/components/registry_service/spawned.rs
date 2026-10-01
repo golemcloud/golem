@@ -88,7 +88,8 @@ impl SpawnedRegistryService {
             .expect("registry service working directory is inside the repository");
         let builtin_artifact_cache_dir =
             repository_root.join("target/integration-builtin-artifacts");
-        prepopulate_builtin_artifact_cache(repository_root, &builtin_artifact_cache_dir);
+        let web_fetch_sha256 =
+            prepopulate_builtin_artifact_cache(repository_root, &builtin_artifact_cache_dir);
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)
@@ -114,6 +115,14 @@ impl SpawnedRegistryService {
                     &builtin_artifact_cache_dir,
                 )
                 .await,
+            )
+            .env(
+                "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__WEB_FETCH__URL",
+                "https://github.com/golemcloud/golem-builtins/releases/download/web-fetch-v0.0.1/web-fetch.wasm",
+            )
+            .env(
+                "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__WEB_FETCH__SHA256",
+                web_fetch_sha256,
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -156,7 +165,7 @@ impl SpawnedRegistryService {
     }
 }
 
-fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) {
+fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) -> String {
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(repository_root.join("builtin-artifacts.lock.json"))
             .expect("failed to read builtin-artifacts.lock.json"),
@@ -170,31 +179,38 @@ fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) 
         ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
         ("otlp_exporter", "plugins/otlp-exporter.wasm"),
         ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+        ("web_fetch", "builtin-tools/web-fetch.wasm"),
     ];
 
     std::fs::create_dir_all(cache_dir).expect("failed to create built-in artifact test cache");
+    let mut web_fetch_sha256 = None;
     for (artifact_id, relative_path) in local_artifacts {
         let source = repository_root.join(relative_path);
         if !source.is_file() {
             continue;
         }
-        let expected = artifacts[artifact_id]["sha256"]
-            .as_str()
-            .expect("default built-in artifacts must have a SHA-256");
+        let bytes = std::fs::read(&source)
+            .unwrap_or_else(|error| panic!("failed to read '{}': {error}", source.display()));
+        let actual = hex::encode(Sha256::digest(&bytes));
+        let expected = if artifact_id == "web_fetch" {
+            web_fetch_sha256 = Some(actual.clone());
+            actual.as_str()
+        } else {
+            let expected = artifacts[artifact_id]["sha256"]
+                .as_str()
+                .expect("default built-in artifacts must have a SHA-256");
+            assert_eq!(
+                actual,
+                expected,
+                "locally built artifact '{}' does not match builtin-artifacts.lock.json",
+                source.display()
+            );
+            expected
+        };
         let destination = cache_dir.join(format!("{expected}.wasm"));
         if destination.is_file() {
             continue;
         }
-
-        let bytes = std::fs::read(&source)
-            .unwrap_or_else(|error| panic!("failed to read '{}': {error}", source.display()));
-        let actual = hex::encode(Sha256::digest(&bytes));
-        assert_eq!(
-            actual,
-            expected,
-            "locally built artifact '{}' does not match builtin-artifacts.lock.json",
-            source.display()
-        );
         let mut temporary = tempfile::NamedTempFile::new_in(cache_dir)
             .expect("failed to create temporary built-in artifact cache file");
         temporary
@@ -210,6 +226,7 @@ fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) 
             ),
         }
     }
+    web_fetch_sha256.expect("web-fetch artifact is required by integration tests")
 }
 
 #[async_trait]

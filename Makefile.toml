@@ -1645,15 +1645,29 @@ description = "Builds all built-in plugins"
 ## BUILT-IN TOOLS
 [tasks.build-filesystem-tools]
 dependencies = ["wit"]
-description = "Builds the built-in tool components"
+description = "Builds the built-in filesystem tool component"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/filesystem-tools
 exec --fail-on-error ${golem} build -P release --force-build --yes
-cp golem-temp/agents/golem_filesystem_tools_release.wasm ../filesystem-tools.wasm
-cd ../web-fetch
+exec --fail-on-error ${golem} exec -P release copy
+cd ../..
+'''
+
+[tasks.build-web-fetch]
+dependencies = ["wit"]
+description = "Builds the built-in web fetch tool component"
+script_runner = "@duckscript"
+script = '''
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem --bin golem
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+end
+set_env GOLEM_RUST_PATH "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/sdks/rust/golem-rust"
+cd builtin-tools/web-fetch
 exec --fail-on-error ${golem} build -P release --force-build --yes
 cp golem-temp/agents/golem_web_fetch_release.wasm ../web-fetch.wasm
 cd ../..
@@ -1687,7 +1701,7 @@ dependencies = ["build-javascript-typescript-tools"]
 description = "Builds the built-in TypeScript tool component"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools"]
+dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools", "build-web-fetch"]
 description = "Builds all built-in tool components"
 
 [tasks.fetch-builtin-artifacts]
@@ -1706,7 +1720,7 @@ if not is_path_exists ${cache_dir}
     mkdir ${cache_dir}
 end
 
-artifact_ids = array filesystem_tools javascript_tools otlp_exporter typescript_tools
+artifact_ids = array filesystem_tools javascript_tools otlp_exporter typescript_tools web_fetch
 for artifact_id in ${artifact_ids}
     entry = map_get ${artifacts} ${artifact_id}
     component = map_get ${entry} component
@@ -1722,44 +1736,59 @@ for artifact_id in ${artifact_ids}
         destination = set builtin-tools/javascript-tools.wasm
     elif equals ${artifact_id} otlp_exporter
         destination = set plugins/otlp-exporter.wasm
-    else
+    elif equals ${artifact_id} typescript_tools
         destination = set builtin-tools/typescript-tools.wasm
+    else
+        destination = set builtin-tools/web-fetch.wasm
     end
 
-    if not is_path_exists ${cached}
-        if is_path_exists ${destination}
-            local_sha256 = sha256sum ${destination}
-            if equals ${local_sha256} ${sha256}
-                cp ${destination} ${cached}
+    use_local_web_fetch = get_env BUILTIN_USE_LOCAL_WEB_FETCH
+    use_locked_artifact = set true
+    if equals ${artifact_id} web_fetch
+        if equals ${use_local_web_fetch} 1
+            if not is_path_exists ${destination}
+                trigger_error "BUILTIN_USE_LOCAL_WEB_FETCH requires ${destination}"
+            end
+            use_locked_artifact = set false
+        end
+    end
+
+    if ${use_locked_artifact}
+        if not is_path_exists ${cached}
+            if is_path_exists ${destination}
+                local_sha256 = sha256sum ${destination}
+                if equals ${local_sha256} ${sha256}
+                    cp ${destination} ${cached}
+                end
             end
         end
-    end
 
-    if is_path_exists ${cached}
-        actual = sha256sum ${cached}
-        if not equals ${actual} ${sha256}
-            rm ${cached}
+        if is_path_exists ${cached}
+            actual = sha256sum ${cached}
+            if not equals ${actual} ${sha256}
+                rm ${cached}
+            end
         end
-    end
-    if not is_path_exists ${cached}
-        temporary = set "${cached}.tmp"
-        if is_path_exists ${temporary}
-            rm ${temporary}
+        if not is_path_exists ${cached}
+            temporary = set "${cached}.tmp"
+            if is_path_exists ${temporary}
+                rm ${temporary}
+            end
+            download = exec curl --fail --location --silent --show-error --output ${temporary} ${url}
+            if not equals ${download.code} 0
+                echo ${download.stderr}
+                trigger_error "failed to download built-in artifact '${artifact_id}' from ${url}"
+            end
+            actual = sha256sum ${temporary}
+            if not equals ${actual} ${sha256}
+                rm ${temporary}
+                trigger_error "downloaded built-in artifact '${artifact_id}' has SHA-256 ${actual}, expected ${sha256}"
+            end
+            mv ${temporary} ${cached}
         end
-        download = exec curl --fail --location --silent --show-error --output ${temporary} ${url}
-        if not equals ${download.code} 0
-            echo ${download.stderr}
-            trigger_error "failed to download built-in artifact '${artifact_id}' from ${url}"
-        end
-        actual = sha256sum ${temporary}
-        if not equals ${actual} ${sha256}
-            rm ${temporary}
-            trigger_error "downloaded built-in artifact '${artifact_id}' has SHA-256 ${actual}, expected ${sha256}"
-        end
-        mv ${temporary} ${cached}
-    end
 
-    cp ${cached} ${destination}
+        cp ${cached} ${destination}
+    end
 end
 release --recursive ${lock}
 echo "downloaded checksum-pinned built-in artifacts into ${cache_dir}"
@@ -1816,8 +1845,15 @@ elif equals ${component} typescript-tools
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
+elif equals ${component} web-fetch
+    build_task = set build-web-fetch
+    wasm = set builtin-tools/web-fetch.wasm
+    artifact_id = set web_fetch
+    exports_json = set "{\"tools\":[\"web-fetch@0.1.0\"]}"
+    licenses = set LICENSE
+    sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools, web-fetch"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD
@@ -2032,6 +2068,7 @@ if ${golem_cli_empty}
     golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
     set_env GOLEM_CLI ${golem_cli}
 end
+exec --fail-on-error cargo make build-web-fetch
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
 cd ..

@@ -22,6 +22,8 @@ use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
+use golem_common::config::{ConfigLoader, env_config_provider};
+use golem_registry_service::config::{BuiltinArtifactsConfig, RegistryServiceConfig};
 use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
 use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
@@ -124,6 +126,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             data_dir: data_dir.clone(),
             agent_filesystem_root: args.agent_filesystem_root.clone(),
             resource_usage_metering: resource_usage_metering_from_env()?,
+            builtin_artifacts: builtin_artifacts_from_env()?,
         })
         .await
         .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
@@ -187,6 +190,15 @@ fn resource_usage_metering_from_env() -> anyhow::Result<ResourceUsageMeteringCon
         memory: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__MEMORY")?,
         filesystem: metering_dimension_from_env("GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM")?,
     })
+}
+
+fn builtin_artifacts_from_env() -> anyhow::Result<BuiltinArtifactsConfig> {
+    ConfigLoader::<RegistryServiceConfig>::new(Path::new("registry-service.toml"))
+        .default_figment()
+        .merge(env_config_provider())
+        .extract::<RegistryServiceConfig>()
+        .map(|config| config.builtin_artifacts)
+        .context("Failed to parse built-in artifact configuration")
 }
 
 fn metering_dimension_from_env(name: &str) -> anyhow::Result<bool> {
@@ -253,6 +265,7 @@ fn launch_args_from_run_args_and_local_server(
             .clone()
             .or_else(|| local_server.and_then(|manifest| manifest.agent_filesystem_root.clone())),
         resource_usage_metering,
+        builtin_artifacts: builtin_artifacts_from_env()?,
     })
 }
 

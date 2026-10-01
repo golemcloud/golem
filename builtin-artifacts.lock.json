@@ -21,6 +21,11 @@
       "component": "typescript-tools",
       "version": "0.0.6",
       "sha256": "b079061e2ced69489b27f422c48a40a115714f4f8100de73f8b858f7f43b850f"
+    },
+    "web_fetch": {
+      "component": "web-fetch",
+      "version": "0.0.1",
+      "sha256": "46e3014646d200755572d60c62e975886df96311cff939d9b621f9ef73fdc33b"
     }
   }
 }
