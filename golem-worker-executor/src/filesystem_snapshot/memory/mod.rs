@@ -109,11 +109,11 @@ fn with_saved(snapshots: &[Stored], snapshot: Stored) -> Result<Arc<[Stored]>, S
     }
 }
 
-/// Gives the snapshots without the snapshot with the name.
-fn without(snapshots: &[Stored], name: &SnapshotName) -> Arc<[Stored]> {
+/// Gives the snapshots without the snapshots with the names `names`.
+fn without(snapshots: &[Stored], names: &[SnapshotName]) -> Arc<[Stored]> {
     snapshots
         .iter()
-        .filter(|stored| stored.name != *name)
+        .filter(|stored| !names.contains(&stored.name))
         .cloned()
         .collect()
 }
@@ -208,11 +208,11 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
     async fn delete(
         &self,
         agent: &AgentSnapshots,
-        name: &SnapshotName,
+        names: &[SnapshotName],
     ) -> Result<(), SnapshotStoreError> {
         let mut agents = self.agents();
         if let Some(snapshots) = agents.get(agent) {
-            let kept = without(snapshots, name);
+            let kept = without(snapshots, names);
             agents.insert(agent.clone(), kept);
         }
         Ok(())

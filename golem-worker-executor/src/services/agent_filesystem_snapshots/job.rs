@@ -345,21 +345,20 @@ pub(super) async fn delete_older_snapshots(
             SnapshotKind::Update => core.settings.retained_update_snapshots(),
         };
         let victims = retention::victims(&listing, &own, info, keep.get(), kept);
-        futures::stream::iter(victims.iter())
-            .for_each(|victim| async move {
-                if let Err(error) = retrying(core.settings.upload_retry(), || {
-                    core.store.delete(agent, victim)
-                })
-                .await
-                {
-                    tracing::warn!(
-                        error = %error,
-                        name = %victim,
-                        "Failed to delete an old filesystem snapshot; the next retention tries again"
-                    );
-                }
-            })
-            .await;
+        if victims.is_empty() {
+            return;
+        }
+        if let Err(error) = retrying(core.settings.upload_retry(), || {
+            core.store.delete(agent, &victims)
+        })
+        .await
+        {
+            tracing::warn!(
+                error = %error,
+                names = ?victims,
+                "Failed to delete old filesystem snapshots; the next retention tries again"
+            );
+        }
     };
     tokio::select! {
         biased;
@@ -380,14 +379,15 @@ async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSna
         let Ok(name) = store_name(name) else {
             return;
         };
+        let names = [name];
         if let Err(error) = retrying(core.settings.upload_retry(), || {
-            core.store.delete(agent, &name)
+            core.store.delete(agent, &names)
         })
         .await
         {
             tracing::warn!(
                 error = %error,
-                name = %name,
+                name = %names[0],
                 "Failed to delete a filesystem snapshot that no confirmation record names"
             );
             crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete");

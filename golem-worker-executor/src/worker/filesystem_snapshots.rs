@@ -2232,11 +2232,12 @@ mod tests {
         async fn delete(
             &self,
             agent: &AgentSnapshots,
-            name: &crate::filesystem_snapshot::SnapshotName,
+            names: &[crate::filesystem_snapshot::SnapshotName],
         ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete(agent, name).await?;
-            self.deleted
-                .send_modify(|deleted| deleted.push(Box::from(name.as_str())));
+            self.memory.delete(agent, names).await?;
+            self.deleted.send_modify(|deleted| {
+                deleted.extend(names.iter().map(|name| Box::from(name.as_str())))
+            });
             Ok(())
         }
 

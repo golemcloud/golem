@@ -902,21 +902,25 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
     async fn delete(
         &self,
         scope: &AgentSnapshots,
-        name: &SnapshotName,
+        names: &[SnapshotName],
     ) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
-        let name = name.clone();
+        let names = names
+            .iter()
+            .map(|name| Box::<str>::from(name.as_str()))
+            .collect::<std::collections::HashSet<_>>();
         let found = self
             .blocking(Operation::Repository, move || {
                 let Some(repository) = open_existing(backend, &key)? else {
                     return Ok(None);
                 };
+                // One listing finds every snapshot of the batch.
                 let named = scope_snapshots(&repository)?
                     .readable
                     .into_iter()
-                    .filter(|snapshot| snapshot.label == name.as_str())
+                    .filter(|snapshot| names.contains(snapshot.label.as_str()))
                     .collect::<Box<[_]>>();
                 let ids = named
                     .iter()

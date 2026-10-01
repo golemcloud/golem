@@ -282,17 +282,18 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
         agent: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError>;
 
-    /// Deletes one snapshot.
+    /// Deletes the snapshots with the names `names`, as one batch.
     ///
-    /// The name stops resolving immediately, so no later restore of it can succeed. The call is
-    /// idempotent: an unknown name, or a name that is already deleted, gives success. Every other
-    /// snapshot of the agent continues to work, also when it shares data with the deleted one.
-    /// Storage comes back after a grace period, and a restore that is already in progress is not
-    /// disturbed.
+    /// Each name stops resolving immediately, so no later restore of it can succeed. The call is
+    /// idempotent for each name: an unknown name, or a name that is already deleted, gives
+    /// success. Every other snapshot of the agent continues to work, also when it shares data
+    /// with a deleted one. Storage comes back after a grace period, and a restore that is already
+    /// in progress is not disturbed. A store reads the snapshots of the agent once for the whole
+    /// batch.
     async fn delete(
         &self,
         agent: &AgentSnapshots,
-        name: &SnapshotName,
+        names: &[SnapshotName],
     ) -> Result<(), SnapshotStoreError>;
 
     /// Removes every snapshot of the agent, with all their data and metadata.

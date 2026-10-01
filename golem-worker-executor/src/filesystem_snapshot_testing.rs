@@ -231,7 +231,7 @@ impl TestFilesystemSnapshotStore {
         if let Ok(name) = SnapshotName::new(name) {
             let _ = self
                 .inner
-                .delete(&AgentSnapshots::agent(agent), &name)
+                .delete(&AgentSnapshots::agent(agent), &[name])
                 .await;
         }
     }
@@ -367,9 +367,9 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
     async fn delete(
         &self,
         agent: &AgentSnapshots,
-        name: &SnapshotName,
+        names: &[SnapshotName],
     ) -> Result<(), SnapshotStoreError> {
-        self.inner.delete(agent, name).await
+        self.inner.delete(agent, names).await
     }
 
     async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {

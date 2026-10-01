@@ -107,11 +107,7 @@ impl CleanupQueue {
 impl Cleaner {
     async fn run(&self, cleanup: Cleanup) {
         match cleanup {
-            Cleanup::Delete { agent, names } => {
-                futures::stream::iter(names.iter())
-                    .for_each(|name| self.delete(&agent, name))
-                    .await
-            }
+            Cleanup::Delete { agent, names } => self.delete(&agent, &names).await,
             Cleanup::DeleteAll { agent, ticket } => {
                 ticket.until_agent_free().await;
                 let deleted = self
@@ -128,18 +124,23 @@ impl Cleaner {
         }
     }
 
-    async fn delete(&self, agent: &AgentSnapshots, name: &FilesystemSnapshotName) {
-        let Ok(store_name) = store_name(name) else {
+    /// Deletes the snapshots `names` of `agent` as one batch, under one slot and its retries.
+    async fn delete(&self, agent: &AgentSnapshots, names: &[FilesystemSnapshotName]) {
+        let store_names = names
+            .iter()
+            .filter_map(|name| store_name(name).ok())
+            .collect::<Box<[_]>>();
+        if store_names.is_empty() {
             return;
-        };
+        }
         let deleted = self
-            .with_slot(|| retrying(&self.retry, || self.store.delete(agent, &store_name)))
+            .with_slot(|| retrying(&self.retry, || self.store.delete(agent, &store_names)))
             .await;
         if let Err(error) = deleted {
             tracing::warn!(
                 error = %error,
-                name = %name,
-                "Failed to delete a filesystem snapshot after the retries"
+                names = ?store_names,
+                "Failed to delete filesystem snapshots after the retries"
             );
             crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete");
         }

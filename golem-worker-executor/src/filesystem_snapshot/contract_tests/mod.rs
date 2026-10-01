@@ -116,6 +116,10 @@ const CASES: &[(&str, Case)] = &[
     ("delete_is_idempotent", |open| {
         delete_is_idempotent(open).boxed()
     }),
+    (
+        "a_batch_delete_removes_its_names_and_keeps_every_other_snapshot",
+        |open| a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open).boxed(),
+    ),
     ("a_delete_keeps_every_other_snapshot", |open| {
         a_delete_keeps_every_other_snapshot(open).boxed()
     }),
@@ -645,7 +649,7 @@ async fn a_deleted_name_stops_resolving_at_once(open: OpenStore) {
         .await
         .unwrap();
 
-    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
     let stat = store.stat(&scope, &name("p-deleted")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-deleted")).await;
     let names = listed_names(&*store, &scope).await;
@@ -667,15 +671,70 @@ async fn delete_is_idempotent(open: OpenStore) {
         .unwrap();
 
     let results = [
-        store.delete(&unused, &name("p-twice")).await.is_ok(),
-        store.delete(&scope, &name("p-never")).await.is_ok(),
-        store.delete(&scope, &name("p-twice")).await.is_ok(),
-        store.delete(&scope, &name("p-twice")).await.is_ok(),
+        store.delete(&unused, &[name("p-twice")]).await.is_ok(),
+        store.delete(&scope, &[name("p-never")]).await.is_ok(),
+        store.delete(&scope, &[name("p-twice")]).await.is_ok(),
+        store.delete(&scope, &[name("p-twice")]).await.is_ok(),
     ];
 
     assert_eq!(
         (results, listed_names(&*store, &scope).await),
         ([true; 4], Vec::<String>::new())
+    );
+}
+
+async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: OpenStore) {
+    // Two names of the batch hold snapshots, one is unknown, and two snapshots stay outside it.
+    let store = open();
+    let scope = new_scope();
+    let shared = new_tree(&fixture());
+    let other = new_tree(&one_file("other"));
+    store
+        .save(&scope, &name("p-batch-1"), shared.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-batch-2"), other.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept-1"), shared.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept-2"), other.path(), None)
+        .await
+        .unwrap();
+
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-batch-1"), name("p-unknown"), name("p-batch-2")],
+        )
+        .await;
+    let again = store
+        .delete(&scope, &[name("p-batch-1"), name("p-batch-2")])
+        .await;
+    let mut names = listed_names(&*store, &scope).await;
+    names.sort();
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert!(again.is_ok(), "{again:?}");
+    assert_eq!(
+        (
+            names,
+            store.stat(&scope, &name("p-batch-1")).await.unwrap(),
+            store.stat(&scope, &name("p-batch-2")).await.unwrap(),
+            restored_listing(&*store, &scope, &name("p-kept-1")).await,
+            restored_listing(&*store, &scope, &name("p-kept-2")).await,
+        ),
+        (
+            vec!["p-kept-1".to_string(), "p-kept-2".to_string()],
+            None,
+            None,
+            listing(shared.path()),
+            listing(other.path()),
+        )
     );
 }
 
@@ -698,7 +757,7 @@ async fn a_delete_keeps_every_other_snapshot(open: OpenStore) {
         .await
         .unwrap();
 
-    store.delete(&scope, &name("p-twin-1")).await.unwrap();
+    store.delete(&scope, &[name("p-twin-1")]).await.unwrap();
 
     assert_eq!(
         (
@@ -726,7 +785,7 @@ async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing
     let raced = name("p-raced");
     let (restore, deleted) = futures::join!(
         restored(&*store, &scope, &raced),
-        store.delete(&scope, &raced)
+        store.delete(&scope, std::slice::from_ref(&raced))
     );
 
     deleted.unwrap();
@@ -754,7 +813,7 @@ async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: Op
     let (restored_name, deleted_name) = (name("p-restored"), name("p-deleted"));
     let (restore, deleted) = futures::join!(
         restored(&*store, &scope, &restored_name),
-        store.delete(&scope, &deleted_name)
+        store.delete(&scope, std::slice::from_ref(&deleted_name))
     );
 
     deleted.unwrap();
@@ -782,7 +841,7 @@ async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: O
     let (saved, restore, deleted) = futures::join!(
         store.save(&scope, &third_name, third.path(), None),
         restored(&*store, &scope, &first_name),
-        store.delete(&scope, &second_name)
+        store.delete(&scope, std::slice::from_ref(&second_name))
     );
 
     saved.unwrap();
@@ -925,7 +984,7 @@ async fn copied_scopes_are_independent(open: OpenStore) {
         .unwrap();
     store.copy_all(&from, &to).await.unwrap();
 
-    store.delete(&from, &name("p-1")).await.unwrap();
+    store.delete(&from, &[name("p-1")]).await.unwrap();
     store
         .save(&to, &name("p-3"), later.path(), None)
         .await
@@ -983,7 +1042,7 @@ async fn one_name_in_two_scopes_gives_two_snapshots(open: OpenStore) {
     let first_restored = restored_listing(&*store, &first_scope, &name("p-same")).await;
     let second_restored = restored_listing(&*store, &second_scope, &name("p-same")).await;
 
-    store.delete(&first_scope, &name("p-same")).await.unwrap();
+    store.delete(&first_scope, &[name("p-same")]).await.unwrap();
 
     assert_eq!(
         (

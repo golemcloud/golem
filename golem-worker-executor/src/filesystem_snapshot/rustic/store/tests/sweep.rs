@@ -385,7 +385,7 @@ pub(super) async fn run_case(
         let scope = scope.clone();
         let task = tokio::spawn({
             let deleting = deleting.clone();
-            async move { deleting.delete(&scope, &name(["p-1", "p-2"][who])).await }
+            async move { deleting.delete(&scope, &[name(["p-1", "p-2"][who])]).await }
         });
         Delete {
             store: deleting,

@@ -267,7 +267,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
     async fn delete(
         &self,
         agent: &AgentSnapshots,
-        name: &SnapshotName,
+        names: &[SnapshotName],
     ) -> Result<(), SnapshotStoreError> {
         let gate = self.delete_gate.lock().unwrap().clone();
         if let Some(gate) = gate {
@@ -285,8 +285,11 @@ impl FilesystemSnapshotStore for ScriptedStore {
             self.failed_deletes.fetch_add(1, Ordering::SeqCst);
             return Err(retryable("the delete failed"));
         }
-        self.deletes.lock().unwrap().push(Box::from(name.as_str()));
-        self.memory.delete(agent, name).await
+        self.deletes
+            .lock()
+            .unwrap()
+            .extend(names.iter().map(|name| Box::from(name.as_str())));
+        self.memory.delete(agent, names).await
     }
 
     async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {

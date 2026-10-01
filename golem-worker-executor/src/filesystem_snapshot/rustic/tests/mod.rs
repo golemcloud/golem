@@ -905,7 +905,7 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
 
     // The first prune marks the packs that only the deleted name used, and the second prune
     // deletes them, because they stay marked for no time.
-    store.delete(&scope, &name("p-first")).await.unwrap();
+    store.delete(&scope, &[name("p-first")]).await.unwrap();
     let settings = PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
@@ -1180,7 +1180,7 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
             .save(&scope, &name("p-second"), tree.path(), None)
             .await
             .unwrap();
-        store.delete(&scope, &name("p-first")).await.unwrap();
+        store.delete(&scope, &[name("p-first")]).await.unwrap();
         let settings = PruneSettings {
             fast_repack,
             keep_delete: Duration::ZERO,
