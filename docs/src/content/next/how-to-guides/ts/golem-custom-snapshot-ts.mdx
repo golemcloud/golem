@@ -61,6 +61,36 @@ export const CounterAgentImpl = CounterAgent.implement({
 
 A bare enabled policy without a `state` schema (e.g. `snapshotting: 'default'` or `snapshotting: { everyNInvocations: 5 }`) requires a custom `snapshot: { save, load }` implementation. Automatic loading is generated only when a `state` schema provides a JSON-deserializable state contract.
 
+### SQLite Databases
+
+Typed state snapshotting handles each top-level `DatabaseSync` field of the agent (from `node:sqlite`). Do not declare these fields in the `state` schema.
+
+- **In-memory database** (`new DatabaseSync(':memory:')`) or **temporary database** (`new DatabaseSync('')`): the snapshot holds the contents of the database. The snapshot then uses the `multipart/mixed` format.
+- **File-backed database** (`new DatabaseSync('/app.db')`): the snapshot holds only the location of the file. The executor's filesystem snapshot restores the file before the snapshot is loaded, and the load opens the database again at that location. A load reads each file-backed database once in full, so it costs time and memory in proportion to the size of the database.
+- A database with an open transaction makes the save fail, also when the database is file-backed. Commit or roll back before the invocation ends.
+
+```typescript
+import { DatabaseSync } from 'node:sqlite';
+
+export const NotesAgentImpl = NotesAgent.implement({
+    init: () => {
+        const cache = new DatabaseSync(':memory:'); // contents go into the snapshot
+        const notes = new DatabaseSync('/notes.db'); // restored by the filesystem snapshot
+        notes.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT)');
+        return { count: 0, cache, notes };
+    },
+    methods: { /* ... */ },
+});
+```
+
+> **Data loss without filesystem snapshots.** Typed snapshotting with a file-backed database loses data on an executor without filesystem snapshots. Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. There, a start from a snapshot does not restore the database file, so the database loses every write made before that snapshot. On such an executor, use an in-memory database or custom `save` and `load` functions.
+
+Limits:
+
+- Only the main database of a connection is in the snapshot. Databases added with `ATTACH` and tables in the `temp` schema are not.
+- The load opens a database again with the default options of `node:sqlite` (for example `readOnly: false`, `timeout: 0`). To use other options, open the database in a custom `load`. The SDK keeps a `DatabaseSync` that `load` returns in a field and does not open that field again.
+- A `DatabaseSync` inside a nested object, and `StatementSync`, `Session` and `SQLTagStore` fields, make the save fail. Keep them out of the state, or use custom `save` and `load` functions.
+
 ## Custom Snapshotting
 
 For state the default JSON path can't represent (a compact binary format, cross-version migration logic), supply a `snapshot: { save, load }` block on `.implement(...)`. `save()` runs on the live agent state and returns raw snapshot bytes. `load(bytes, context)` is a separate restoration factory: it has no `this`, does not call `init`, and must return a complete fresh state object.

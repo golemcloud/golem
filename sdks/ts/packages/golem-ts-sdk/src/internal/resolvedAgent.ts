@@ -31,5 +31,16 @@ export interface ResolvedAgent {
     methodArgs: SchemaValueTree,
     principal: Principal,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>>;
-  saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }>;
+  saveSnapshot(): Promise<SavedAgentSnapshot>;
 }
+
+/**
+ * The snapshot of an agent before the guest adds its envelope. `fileDatabases` holds the
+ * location of each file-backed SQLite database of a typed snapshot, keyed by its field; a custom
+ * save has none.
+ */
+export type SavedAgentSnapshot = {
+  data: Uint8Array;
+  mimeType: string;
+  fileDatabases: Record<string, string>;
+};
