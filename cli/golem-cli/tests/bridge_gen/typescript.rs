@@ -1563,7 +1563,7 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     std::fs::write(
         package_dir.join(format!("{package_name}.ts")),
         format!(
-            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> | undefined = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<{{ result: string[]; stdout?: Uint8Array; stderr?: Uint8Array }}> = started.collect();\nvoid stdout; void result; void collected;\n"
+            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> | undefined = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<base.CollectedToolInvocation<string[]>> = started.collect();\nvoid stdout; void result; void collected;\n"
         ),
     )
     .unwrap();
