@@ -106,6 +106,7 @@ not under `-c`; the tool always runs a script as `bash -c` would.
 | `cases/job_listings.py` (`jobs` in substitutions and pipeline stages) | 5 |
 | `cases/jobs.py` (jobs, traps and signals in the process model) | 143 |
 | `cases/jq.py` | 95 |
+| `cases/memory.py` (the shell's memory budget) | 8 |
 | `cases/options.py` (`set` and `shopt` options) | 18 |
 | `cases/params.py` (parameters and arrays) | 33 |
 | `cases/parsing.py` (parser, tokenizer, expansion syntax; jq's parsing) | 231 |

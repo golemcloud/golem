@@ -33,3 +33,13 @@ const WRAPPED_PATH_SYMBOLS: &[&str] = &[
     "symlink",
     "opendir",
 ];
+
+// The allocator's entry points, so `shell/src/heap.rs` can count what the shell holds.
+const WRAPPED_HEAP_SYMBOLS: &[&str] = &[
+    "malloc",
+    "calloc",
+    "realloc",
+    "aligned_alloc",
+    "posix_memalign",
+    "free",
+];

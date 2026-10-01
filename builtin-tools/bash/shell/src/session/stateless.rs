@@ -668,7 +668,12 @@ fn script_at_depth(script: &str, depth: usize, code: Code<'_>) -> Result<(), Ref
     let options = brush_parser::ParserOptions::default();
     let mut reader = std::io::BufReader::new(script.as_bytes());
     let parsed = brush_parser::Parser::new(&mut reader, &options).parse_program();
-    if parsed.is_err() && PARSED_WHEN_RUN.with(std::cell::Cell::get) {
+    // Text too large to parse in the shell's memory is the shell's to refuse when it parses it to
+    // run it.
+    if let Err(error) = &parsed
+        && (PARSED_WHEN_RUN.with(std::cell::Cell::get)
+            || brush_core::memory::refused_parse(error).is_some())
+    {
         return Ok(());
     }
     let program = match (parsed, code) {

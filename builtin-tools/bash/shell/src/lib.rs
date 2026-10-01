@@ -3,6 +3,8 @@
 pub use brush_core::execution::ExecutionServices;
 pub mod commands;
 mod error;
+#[cfg(target_arch = "wasm32")]
+mod heap;
 mod helpshim;
 mod manifest;
 mod registry;

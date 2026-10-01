@@ -398,6 +398,26 @@ number, 64 MiB, bounds everything bash-tool holds in memory at once for a single
 substitution, a finite command's piped input and output, and a synchronous builtin's output into a
 pipe. What a call returns is bounded lower, by what Golem can carry (see Output).
 
+- **Memory.** A call holds at most 384 MiB at once: variables and array elements, the text of
+  expansions in flight (brace expansion, word expansion, a substitution's output, `mapfile`, `read`,
+  here-documents and here-strings), the parse of the script and of `eval`'d and sourced text,
+  background jobs, and the buffers above, all counted as the allocator hands them out. An agent's
+  memory is capped (1 GiB on the default plan) and running out of it traps the agent, so the rest is
+  left for the allocator's free space, the stack, and the copies a command makes between checks;
+  scripts that reach the budget peak under 450 MiB of the agent's memory. A script that asks for
+  more fails as bash does when `malloc` fails,
+  `bash: xmalloc: cannot allocate N bytes: shell memory over 384 MiB is unsupported in bash-tool`
+  (status 2), which ends the script, or the subshell, pipeline stage or job it happens in; the call
+  returns normally. So `x=a; for i in {1..40}; do x=$x$x; done` ends when `x` reaches 128 MiB,
+  appending a 60 MB value to an array ends after a few, and `mapfile` of a 400 MB file ends partway.
+  Text whose syntax tree would not fit (a few megabytes of dense commands, in the script itself or
+  given to `eval`, `source` or `sh -c`) is refused the same way before any of it runs. A brace
+  expansion is sized before any of its words are made: one that would not fit (`{1..100000000}`, or
+  more than about 2.3 million numbers) fails as an expansion error does (status 1), with bash's
+  own `brace expansion: failed to allocate memory for N elements` and the same suffix; bash leaves
+  such a sequence unexpanded instead. A finished job that is never waited for keeps about 28 KB
+  until the call ends, so some 13,000 of them fit. A 50 MB variable and its copies, an array of a
+  million elements and a brace expansion of a million words fit comfortably.
 - **Time.** A call runs for at most its `timeout` argument (600 s by default, at most 3600 s;
   see [Contract](#contract)). The limit reaches a loop of commands that never wait
   (`while :; do x=1; done`): the shell lets the call's timers run every 64 commands. It cannot

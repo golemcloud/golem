@@ -1,5 +1,6 @@
 //! Wraps libc's path and descriptor entry points so `tools::devices` can answer `/dev` paths and
-//! serve in-process commands' standard streams on WASI. Link
+//! serve in-process commands' standard streams on WASI, and its allocator so `heap` can count
+//! what the shell holds. Link
 //! arguments reach only this package's own artifacts, so every package that links the shell into
 //! a WASM binary carries the same script.
 include!("../wrap_symbols.rs");
@@ -7,7 +8,7 @@ include!("../wrap_symbols.rs");
 fn main() {
     println!("cargo:rerun-if-changed=../wrap_symbols.rs");
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
-        for symbol in WRAPPED_PATH_SYMBOLS {
+        for symbol in WRAPPED_PATH_SYMBOLS.iter().chain(WRAPPED_HEAP_SYMBOLS) {
             println!("cargo:rustc-link-arg=--wrap={symbol}");
         }
         // 4 MiB of shadow stack (Rust's default is 1 MiB), so recursion reaches ~90 levels before
