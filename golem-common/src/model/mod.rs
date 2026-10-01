@@ -1488,11 +1488,11 @@ pub struct AgentStatusRecord {
     pub last_automatic_snapshot: Option<AutomaticSnapshot>,
     /// The newest automatic snapshot entry before the last one that was usable when the entry
     /// after it came: an entry with a confirmed filesystem snapshot, or an entry without a
-    /// filesystem snapshot name. A new entry that reuses the filesystem snapshot name of the last
-    /// entry holds the same tree, so it does not move the last entry here, and the older fallback
-    /// stays. A start uses this entry when the last automatic snapshot entry is not usable, or
-    /// when the filesystem snapshot of the last entry does not restore. A successful update clears
-    /// it together with the last automatic snapshot entry.
+    /// filesystem snapshot name. A new entry moves a usable last entry here, also when it reuses
+    /// the filesystem snapshot name of that entry, because each entry has its own application
+    /// snapshot. A start uses this entry when the last automatic snapshot entry is not usable, or
+    /// when the last entry does not load or restore. A successful update clears it together with
+    /// the last automatic snapshot entry.
     pub previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
     /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part

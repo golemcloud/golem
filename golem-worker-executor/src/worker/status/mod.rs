@@ -1604,14 +1604,11 @@ fn calculate_update_fields(
                 filesystem_snapshot,
                 ..
             } => {
-                // A record that reuses the name of the candidate holds the same tree, so the
-                // older usable record stays the fallback.
+                // A usable candidate becomes the fallback, also when the new record reuses its
+                // filesystem snapshot name: each record has its own application snapshot, which
+                // can fail to load on its own.
                 if let Some(usable) = last_automatic_snapshot
                     .take()
-                    .filter(|last| {
-                        filesystem_snapshot.is_none()
-                            || last.files.name() != filesystem_snapshot.as_ref()
-                    })
                     .and_then(AutomaticSnapshot::into_usable)
                 {
                     previous_usable_automatic_snapshot = Some(usable);

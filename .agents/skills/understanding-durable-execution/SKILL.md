@@ -762,8 +762,8 @@ the guest snapshot hook (`snapshot_guest`), captures the tree (`agent_filesystem
 tree holds only the initial files of the agent; the worker slot (`SnapshotSlot`) then keeps the
 mark of that tree with no name. When the tree did not change since the last confirmed snapshot
 that a start would select now, the record reuses its name and the confirmation comes with it
-(`Snapshot` then `SnapshotConfirmed`); the status then keeps the older usable record as the
-fallback. When the tree did not change since a record without a name that a start would select
+(`Snapshot` then `SnapshotConfirmed`); the record before it, which has its own application
+snapshot, becomes the fallback. When the tree did not change since a record without a name that a start would select
 now, the record has no name again: no store call, no confirmation, and no check of the
 declarations and directories. A manual update uploads its filesystem snapshot before it writes `PendingUpdate`
 (`worker/filesystem_snapshots.rs::update_snapshot`). When a

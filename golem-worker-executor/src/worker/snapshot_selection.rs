@@ -659,6 +659,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_rejected_record_that_reuses_a_name_falls_back_to_the_record_before_it() {
+        let name = FilesystemSnapshotName::periodic();
+        let shared = status(Some(name.clone()), true, None);
+        let reused = AgentStatusRecord {
+            last_automatic_snapshot: Some(AutomaticSnapshot {
+                index: OplogIndex::from_u64(20),
+                timestamp: Timestamp::from(2_000),
+                component_revision: revision(2),
+                files: SnapshotFiles::Confirmed(name.clone()),
+            }),
+            previous_usable_automatic_snapshot: Some(UsableAutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                component_revision: revision(2),
+                filesystem_snapshot: Some(name.clone()),
+            }),
+            ..shared
+        };
+        let rejected = SnapshotExclusions::default().rejecting(OplogIndex::from_u64(20), &reused);
+
+        let selected = StartSelection::of(&reused, &rejected, true).automatic;
+
+        assert_eq!(
+            selected,
+            Some(UsableAutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                component_revision: revision(2),
+                filesystem_snapshot: Some(name),
+            })
+        );
+    }
+
     fn selection_index(selection: &StartSelection) -> Option<u64> {
         selection
             .automatic

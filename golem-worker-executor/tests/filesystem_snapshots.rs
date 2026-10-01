@@ -1587,6 +1587,67 @@ async fn a_newer_and_an_older_record_that_both_fail_to_load_end_in_a_full_replay
 
 #[test]
 #[timeout("4m")]
+async fn a_record_that_reuses_a_name_and_fails_to_load_falls_back_to_the_record_before_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let operations = [Operation::Write {
+        path: "a.txt",
+        content: "a",
+    }];
+    let expected =
+        tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "reused-fails",
+        &[],
+    )
+    .await?;
+    let (first, name) = agent.apply_and_confirm(&executor, operations[0]).await?;
+    // The next invocation changes no file, so its record reuses the name of the first one.
+    agent.applied(&executor).await?;
+    let reused = eventually(Duration::from_secs(30), || async {
+        Ok(executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Snapshot(snapshot)
+                    if snapshot.filesystem_snapshot.as_deref() == Some(name.as_str())
+                        && entry.oplog_index != first =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            }))
+    })
+    .await?;
+    executor
+        .return_empty_snapshot_payload(&agent.worker_id, reused)
+        .await?;
+    let restores = store.restored_names().len();
+
+    let (_, tree) = agent.restart_and_describe(&executor, &context).await?;
+    let applied = agent.applied(&executor).await?;
+
+    // The start restores the name for the reused record, fails to load its payload, and restores
+    // the same name again for the record before it.
+    assert_eq!(store.restored_names()[restores..], [name.clone(), name]);
+    assert_eq!((tree, applied), expected);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
 async fn a_start_attempt_from_a_record_that_fails_to_load_writes_nothing_to_the_oplog(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

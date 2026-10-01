@@ -2477,13 +2477,14 @@ async fn a_new_snapshot_after_an_unconfirmed_candidate_keeps_the_older_usable_sn
 }
 
 #[test]
-async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_keeps_the_older_record() {
+async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_moves_the_record_before_it_to_the_fallback()
+ {
     let older = FilesystemSnapshotName::periodic();
     let name = FilesystemSnapshotName::periodic();
 
     let test_case = TestCase::builder(1)
         .snapshot_with_filesystem(Some(older.clone()))
-        .snapshot_confirmed(older.clone(), true)
+        .snapshot_confirmed(older, true)
         .snapshot_with_filesystem(Some(name.clone()))
         .snapshot_confirmed(name.clone(), true)
         .snapshot_with_filesystem(Some(name.clone()))
@@ -2509,7 +2510,29 @@ async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_keeps_the_older_
             .previous_usable_automatic_snapshot
             .as_ref()
             .map(|snapshot| (snapshot.index, snapshot.filesystem_snapshot.clone())),
-        Some((OplogIndex::from_u64(2), Some(older)))
+        Some((OplogIndex::from_u64(4), Some(name)))
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn a_record_that_reuses_the_name_of_the_candidate_keeps_that_candidate_as_the_fallback() {
+    let name = FilesystemSnapshotName::periodic();
+
+    let test_case = TestCase::builder(1)
+        .snapshot_with_filesystem(Some(name.clone()))
+        .snapshot_confirmed(name.clone(), true)
+        .snapshot_with_filesystem(Some(name.clone()))
+        .build();
+    let final_status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        final_status.previous_usable_automatic_snapshot,
+        Some(UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(2),
+            component_revision: ComponentRevision::new(1).unwrap(),
+            filesystem_snapshot: Some(name),
+        })
     );
     run_test_case(test_case).await;
 }
@@ -3036,8 +3059,6 @@ impl TestCaseBuilder {
             },
             move |mut status| {
                 if let Some(last) = &status.last_automatic_snapshot
-                    && (filesystem_snapshot.is_none()
-                        || filesystem_snapshot.as_ref() != last.files.name())
                     && (last.files.is_confirmed() || last.files.name().is_none())
                 {
                     status.previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
