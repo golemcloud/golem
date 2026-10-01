@@ -46,14 +46,16 @@ export type DatabasePlan = {
 };
 
 /**
- * The open options of a database that a load creates. These are the options that the
- * `node:sqlite` builtin reads, each with the value that the builtin uses when it is not given.
+ * The open options of a database that a load creates: every option of the `DatabaseSync`
+ * constructor of the wasm-rquickjs `node:sqlite` builtin, each set to the value that the builtin
+ * uses when the option is not given.
  */
 export const REOPENED_DATABASE_OPTIONS = {
   open: true,
   readOnly: false,
   enableForeignKeyConstraints: true,
   enableDoubleQuotedStringLiterals: false,
+  allowExtension: false,
   timeout: 0,
   defensive: true,
   readBigInts: false,
