@@ -40,7 +40,7 @@ pub struct BuiltinArtifactSource {
     pub sha256: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BuiltinArtifactsConfig {
     pub cache_dir: Option<PathBuf>,
@@ -151,15 +151,6 @@ fn valid_component_name(value: &str) -> bool {
     let mut bytes = value.bytes();
     matches!(bytes.next(), Some(b'a'..=b'z'))
         && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-impl Default for BuiltinArtifactsConfig {
-    fn default() -> Self {
-        Self {
-            cache_dir: None,
-            source_overrides: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
