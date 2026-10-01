@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -272,11 +273,28 @@ func (u *ToolUnderlyingStdout[A, O]) Forward(a A) (O, error) {
 	if err != nil {
 		return zero, err
 	}
-	if _, err := io.Copy(u.inv.stdout, inv.Stdout()); err != nil {
+	return relayAndWait(u.inv.stdout, inv)
+}
+
+// relayAndWait copies the output of a call beneath into the middleware's own
+// and awaits its result. A failure of the call's own output stream yields to
+// the call's error, which says why it failed; a failure writing the
+// middleware's output cancels the call.
+func relayAndWait[O any](dst *ToolStdout, inv *ToolInvocation[O]) (O, error) {
+	var zero O
+	srcErr, dstErr := relayStdout(dst, inv.call.stdout)
+	if dstErr != nil {
 		inv.Cancel()
+		return zero, dstErr
+	}
+	out, err := inv.Wait()
+	if err != nil {
 		return zero, err
 	}
-	return inv.Wait()
+	if srcErr != nil {
+		return zero, srcErr
+	}
+	return out, nil
 }
 
 func forwardArgs[A any](a A) func(reflect.Value) {
@@ -413,21 +431,31 @@ func (c *UniversalToolMiddlewareContext[P]) Next(input TypedValue) (Option[Typed
 	if err != nil {
 		return None[TypedValue](), err
 	}
-	if err := relayStdout(c.inv.stdout, inv.call.stdout); err != nil {
-		inv.Cancel()
-		return None[TypedValue](), err
-	}
-	return inv.Wait()
+	return relayAndWait(c.inv.stdout, inv)
 }
 
 // relayStdout copies the output of the layer beneath into the middleware's
-// own, when both exist.
-func relayStdout(dst *ToolStdout, src *byteReader) error {
+// own, when both exist, reporting a failure to read it apart from a failure to
+// write it.
+func relayStdout(dst *ToolStdout, src *byteReader) (srcErr, dstErr error) {
 	if src == nil || dst == nil || dst.absent != "" {
-		return nil
+		return nil, nil
 	}
-	_, err := io.Copy(dst, src)
-	return err
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				return nil, werr
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		if err != nil {
+			return err, nil
+		}
+	}
 }
 
 // middlewareInvocation is the state of one middleware invocation.
@@ -601,13 +629,17 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 		if err != nil {
 			return reflect.Value{}, err
 		}
-		if err := relayStdout(inv.stdout, call.stdout); err != nil {
+		srcErr, dstErr := relayStdout(inv.stdout, call.stdout)
+		if dstErr != nil {
 			call.cancel()
-			return reflect.Value{}, err
+			return reflect.Value{}, dstErr
 		}
 		res, rpcErr := call.wait()
 		if rpcErr != nil {
 			return reflect.Value{}, toolCallErrorFromWit(inv.toolName, inv.commandPath, *rpcErr)
+		}
+		if srcErr != nil {
+			return reflect.Value{}, srcErr
 		}
 		result = optionFromWit(res)
 		return reflect.Value{}, nil
