@@ -534,21 +534,16 @@ impl Session {
         let result = match time_limit {
             None => script.await,
             Some(limit) => {
-                let mut watchdog =
-                    std::pin::pin!(stop_at_time_limit(&table, services, limit, &timed_out));
-                // Arm the timer before the script runs: its durable clock calls then come before
-                // anything the script does in the oplog. Golem's recovery of a POST interrupted
-                // by a crash discards the oplog after the request's start by position, and a
-                // timer call still being delivered in that range makes the replay fail.
-                for _ in 0..ARM_TURNS {
-                    if futures::poll!(watchdog.as_mut()).is_ready() {
-                        break;
-                    }
-                    (services.yield_now)().await;
-                }
-                // The watchdog is polled first: once its timer is due, the script is stopped
-                // before it runs further, live and on replay alike.
-                match futures::future::select(watchdog, std::pin::pin!(script)).await {
+                let watchdog = stop_at_time_limit(&table, services, limit, &timed_out);
+                // The watchdog is polled first. On Golem its wait starts by reading the clock, a
+                // synchronous durable call recorded whole before anything the script does, so the
+                // call's deadline stays out of the oplog range that Golem's recovery of a request
+                // interrupted by a crash discards by position. The steps of the wait start and
+                // end while the script runs. Once the timer is due, the script is stopped before
+                // it runs further, live and on replay alike.
+                match futures::future::select(std::pin::pin!(watchdog), std::pin::pin!(script))
+                    .await
+                {
                     futures::future::Either::Left(((), _)) => {
                         Ok(brush_core::ExecutionResult::new(TIMED_OUT))
                     }
@@ -711,10 +706,6 @@ impl Session {
         }
     }
 }
-
-/// Turns the call's timer gets to be armed before its script starts (see `execute_program`).
-#[cfg(target_arch = "wasm32")]
-const ARM_TURNS: usize = 4;
 
 /// A call stopped at its time limit ends with this status, as a command `timeout(1)` stopped
 /// does.

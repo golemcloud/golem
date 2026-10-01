@@ -268,9 +268,10 @@ keeps on the resent request. `curl -m` and `wget -T` do not race a durable timer
 request: Golem's recovery of an interrupted POST discards the oplog range after the request's
 start by position, including the entries of a timer racing it, and the replay then failed and
 left the agent unusable. They use WASI-HTTP's own timeouts instead (see the README's HTTP
-limits). The call's own time limit (`run`'s `timeout`) keeps its single timer, armed before the
-script runs so that its clock calls precede anything the script does in the oplog; left to be
-armed at the script's first wait, it too could fall inside that range.
+limits). The call's own time limit (`run`'s `timeout`) cannot stay out of that range: it waits in
+steps of at most 5 s, as every wait does (see the README), and its steps run alongside the
+script. Its deadline comes from a clock reading taken before the script starts, which precedes
+anything the script does in the oplog, so such a recovery keeps it.
 
 ## Error Handling
 
