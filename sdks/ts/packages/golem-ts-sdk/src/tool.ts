@@ -27,6 +27,7 @@ import type {
 } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
 import {
+  deferredStartedToolInvocation,
   mapSettledToolResult,
   resultFromSettledToolResult,
   startedToolInvocation,
@@ -1884,35 +1885,89 @@ function createToolClientMethod(
 
   return (args: Record<string, unknown>): unknown => {
     if (!commandBody.stdout && !commandBody.stderr) {
-      return Promise.resolve().then(() => startToolClientCall());
+      return Promise.resolve()
+        .then(() => prepareInput(true))
+        .then(({ input, stdin }) => startToolClientCall(input, stdin))
+        .catch((error) => {
+          throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+        });
     }
-    return startToolClientCall();
+    const prepared = prepareStartedInput();
+    if (prepared instanceof Promise) {
+      return deferredStartedToolInvocation(
+        prepared.then(({ input, stdin }) => startToolClientCall(input, stdin)) as Promise<
+          StartedToolInvocation<unknown>
+        >,
+        commandBody.stdout !== undefined,
+        commandBody.stderr !== undefined,
+      );
+    }
+    return startToolClientCall(prepared.input, prepared.stdin);
 
-    function startToolClientCall(): unknown {
-      let input: WireTypedSchemaValue;
-      let stdin: ToolInputStream | undefined;
+    function prepareStartedInput():
+      | { input: WireTypedSchemaValue; stdin?: ToolInputStream }
+      | Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }> {
       try {
-        if (!isImplementationObject(args)) {
-          throw new Error('tool client arguments must be an object');
-        }
-        const canonicalInput = Object.fromEntries(
-          inputModel.fields.map((field) => {
-            const projectedName = camelCase(field.name);
-            return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
-          }),
-        );
-        input = inputModel.encodeWire(canonicalInput);
-        stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
-        if (stdin !== undefined && !isReadableStream(stdin)) {
-          throw new Error('stdin must be a readable stream');
-        }
-        if (commandBody.stdin?.required && stdin === undefined) {
-          throw new Error('required stdin stream is missing');
-        }
+        const { canonicalInput, stdin } = canonicalizeInput();
+        const input = inputModel.encodeWireForStartedInvocation(canonicalInput);
+        return input instanceof Promise
+          ? input
+              .then((value) => ({ input: value, stdin }))
+              .catch((error) => {
+                throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+              })
+          : { input, stdin };
       } catch (error) {
         throw mapFailure(error, { phase: 'input', body: commandBody, callName });
       }
+    }
 
+    function prepareInput(
+      asynchronous: true,
+    ): Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }>;
+    function prepareInput(asynchronous: false): {
+      input: WireTypedSchemaValue;
+      stdin?: ToolInputStream;
+    };
+    function prepareInput(
+      asynchronous: boolean,
+    ):
+      | { input: WireTypedSchemaValue; stdin?: ToolInputStream }
+      | Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }> {
+      try {
+        const { canonicalInput, stdin } = canonicalizeInput();
+        return asynchronous
+          ? inputModel.encodeWireAsync(canonicalInput).then((input) => ({ input, stdin }))
+          : { input: inputModel.encodeWire(canonicalInput), stdin };
+      } catch (error) {
+        throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+      }
+    }
+
+    function canonicalizeInput() {
+      if (!isImplementationObject(args)) {
+        throw new Error('tool client arguments must be an object');
+      }
+      const canonicalInput = Object.fromEntries(
+        inputModel.fields.map((field) => {
+          const projectedName = camelCase(field.name);
+          return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
+        }),
+      );
+      const stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
+      if (stdin !== undefined && !isReadableStream(stdin)) {
+        throw new Error('stdin must be a readable stream');
+      }
+      if (commandBody.stdin?.required && stdin === undefined) {
+        throw new Error('required stdin stream is missing');
+      }
+      return { canonicalInput, stdin };
+    }
+
+    function startToolClientCall(
+      input: WireTypedSchemaValue,
+      stdin: ToolInputStream | undefined,
+    ): unknown {
       let invocation: ToolClientInvocationResult;
       try {
         invocation = transport.start(

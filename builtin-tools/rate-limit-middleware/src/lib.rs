@@ -9,6 +9,9 @@ use golem_rust::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
+mod k3_persistent_rate_limit_contract_tests;
+
 #[derive(Clone, Debug, PartialEq, Eq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct Admission {
     pub admitted: bool,

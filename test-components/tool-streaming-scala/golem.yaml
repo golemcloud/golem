@@ -36,6 +36,7 @@ tools:
   scala-streaming: {}
   matrix-core: {}
   matrix-resource: {}
+  matrix-permission-issuer: {}
 
 agents:
   ScalaToolStreamingCaller:
@@ -45,6 +46,7 @@ agents:
   ScalaResourceToolStreamingCaller:
     tools:
       matrix-resource: {}
+      matrix-permission-issuer: {}
 
 environments:
   local:

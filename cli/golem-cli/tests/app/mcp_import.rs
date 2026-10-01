@@ -1,4 +1,5 @@
 use crate::app::{TestContext, cmd, flag};
+use crate::workspace_path;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::IntoResponse;
 use golem_cli::{fs, versions};
@@ -12,6 +13,14 @@ use test_r::{test, timeout};
 #[test]
 #[timeout("20 minutes")]
 async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_offline() {
+    let contract: Value = serde_json::from_str(
+        &std::fs::read_to_string(workspace_path().join("test-data/gol-40/mcp-projection-v1.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(contract["contract"], "GOL-40-CONTRACT-2");
+    let mut contract_failures = Vec::new();
+
     let effects = Arc::new(Mutex::new(Vec::<String>::new()));
     let effect_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let effect_port = effect_listener.local_addr().unwrap().port();
@@ -62,7 +71,7 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
                             })
                         } else {
                             json!({
-                                "structuredContent":{"value":{"id":item_id,"revision":"23","principal":"anonymous"}},
+                                "structuredContent":{"id":item_id,"revision":"23","principal":"anonymous"},
                                 "content":[]
                             })
                         }
@@ -148,7 +157,14 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
     );
     assert!(render["inputSchema"]["properties"]["_stdin"]["contentEncoding"].is_null());
     assert_eq!(render["outputSchema"]["type"], "object");
-    assert!(render["outputSchema"]["properties"]["value"]["$ref"].is_string());
+    if !render["outputSchema"]["properties"]["id"].is_object()
+        || !render["outputSchema"]["properties"]["value"].is_null()
+    {
+        contract_failures.push(format!(
+            "CONTRACT-2 record results must expose fields directly without a value wrapper: {}",
+            render["outputSchema"]
+        ));
+    }
     assert!(
         render["description"]
             .as_str()
@@ -164,6 +180,14 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
     )
     .await;
     assert_exported_result(&direct, "direct", "AAEC/w==");
+    if !direct["structuredContent"]["id"].is_string()
+        || !direct["structuredContent"]["value"].is_null()
+    {
+        contract_failures.push(format!(
+            "CONTRACT-2 record results must expose fields directly in structuredContent: {}",
+            direct["structuredContent"]
+        ));
+    }
     let rejected = mcp_request(
         &client,
         &mcp_url,
@@ -176,6 +200,45 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         serde_json::from_str(rejected["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(mapped["name"], "rejected");
     assert_eq!(mapped["payload"], "reject");
+
+    for (command, expected_fragments) in [
+        (
+            "secret",
+            &["unsupported capability", "secret", "$.field[\"secret\"]"][..],
+        ),
+        ("nested-stream", &["typed streams", "input"][..]),
+    ] {
+        write_roundtrip_manifest(&ctx, mcp_port, mcp_fixture_port, true, false);
+        let manifest_path = ctx.cwd_path_join("golem.yaml");
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        fs::write_str(
+            &manifest_path,
+            manifest.replace("include: [render, touch]", &format!("include: [{command}]")),
+        )
+        .unwrap();
+        let deployed = ctx
+            .cli([flag::YES, "--environment", "export", cmd::DEPLOY])
+            .await;
+        let diagnostic = if deployed.success() {
+            let response = mcp_response(&client, &mcp_url, "tools/list", json!({})).await;
+            response["error"].to_string()
+        } else {
+            format!("{}\n{}", deployed.stdout_text(), deployed.stderr_text())
+        };
+        for fragment in expected_fragments {
+            if !diagnostic.contains(fragment) {
+                contract_failures.push(format!(
+                    "unsupported {command} export did not report {fragment:?}: {diagnostic}"
+                ));
+            }
+        }
+    }
+
+    write_roundtrip_manifest(&ctx, mcp_port, mcp_fixture_port, true, false);
+    let restored = ctx
+        .cli([flag::YES, "--environment", "export", cmd::DEPLOY])
+        .await;
+    assert!(restored.success_or_dump());
 
     write_roundtrip_manifest(&ctx, mcp_port, mcp_fixture_port, true, true);
     let built = ctx
@@ -222,14 +285,24 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         2,
         "the imported-side universal middleware observes success and declared error"
     );
-    assert!(
-        effects
-            .lock()
-            .unwrap()
+    let observed_effects = effects.lock().unwrap().clone();
+    assert_eq!(
+        observed_effects
             .iter()
-            .filter(|path| path.starts_with("/middleware/"))
-            .all(|path| !path.ends_with("/anonymous")),
-        "the importing environment retains its authenticated principal until the MCP boundary"
+            .filter(|path| path.as_str() == "/middleware/artifact-touch/golem-user")
+            .count(),
+        2,
+        "the authenticated importing identity is visible to middleware before the MCP boundary: {:?}",
+        observed_effects
+    );
+    assert_eq!(
+        observed_effects
+            .iter()
+            .filter(|path| path.starts_with("/provider/") && path.ends_with("/anonymous"))
+            .count(),
+        4,
+        "all direct and round-trip provider effects must be anonymous across the MCP boundary: {:?}",
+        observed_effects
     );
 
     mcp_fixture.shutdown().await;
@@ -256,10 +329,37 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         .await;
     assert!(replayed.success_or_dump());
     assert!(replayed.stdout_contains("roundtrip:projected:23:anonymous"));
+    assert!(replayed.stdout_contains("error:rejected:projected-error"));
     assert_eq!(
         effects.lock().unwrap().len(),
         6,
         "completed replay must not repeat upstream or middleware effects"
+    );
+
+    let fresh = ctx
+        .cli([
+            flag::YES,
+            "--environment",
+            "import",
+            cmd::AGENT,
+            cmd::INVOKE,
+            "RoundtripConsumer(\"fresh-offline\")",
+            "run",
+        ])
+        .await;
+    assert!(
+        !fresh.success(),
+        "a fresh invocation must fail after the exported deployment and MCP source are removed"
+    );
+    assert_eq!(
+        effects.lock().unwrap().len(),
+        6,
+        "a failed fresh invocation must not manufacture provider or middleware effects"
+    );
+    assert!(
+        contract_failures.is_empty(),
+        "CONTRACT-2 failures:\n{}",
+        contract_failures.join("\n")
     );
 
     effect_server.shutdown().await;
@@ -1189,7 +1289,8 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
         ctx.cwd_path_join("provider/src/counter_agent.rs"),
         formatdoc! {r#"
             use futures_concurrency::prelude::*;
-            use golem_rust::agentic::{{InputStream, OutputStream}};
+            use golem_rust::agentic::{{AgentStream, InputStream, OutputStream}};
+            use golem_rust::secrets::GuestSecretHandle;
             use golem_rust::{{FromSchema, FromWire, IntoSchema, IntoWire, ToolError, WireSchema, tool_definition, tool_implementation}};
 
             #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
@@ -1227,6 +1328,12 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
                     item_id: String,
                     principal: golem_rust::tool::Principal,
                 ) -> Result<Rendered, RenderError>;
+
+                /// This command is intentionally not projectable to MCP.
+                fn secret(&self, secret: GuestSecretHandle) -> String;
+
+                /// This command is intentionally not projectable to MCP.
+                fn nested_stream(&self, stream: AgentStream<String>) -> String;
             }}
 
             struct ArtifactImpl;
@@ -1279,6 +1386,14 @@ fn write_roundtrip_provider(ctx: &TestContext, effect_port: u16) {
                             principal: principal_class(&principal).to_string(),
                         }})
                     }}
+                }}
+
+                fn secret(&self, _secret: GuestSecretHandle) -> String {{
+                    "unsupported".into()
+                }}
+
+                fn nested_stream(&self, _stream: AgentStream<String>) -> String {{
+                    "unsupported".into()
                 }}
             }}
 
@@ -1409,9 +1524,9 @@ fn write_roundtrip_consumer(ctx: &TestContext) {
                         .result;
                     self.results.push(format!(
                         "roundtrip:{}:{}:{}",
-                        result.structured.value.id,
-                        result.structured.value.revision,
-                        result.structured.value.principal,
+                        result.structured.id,
+                        result.structured.revision,
+                        result.structured.principal,
                     ));
                     let rejected = ArtifactTouchClient::new()
                         .artifact_touch("reject".into())
@@ -1465,6 +1580,10 @@ fn parse_mcp_sse(body: &str) -> Value {
 }
 
 async fn mcp_request(client: &reqwest::Client, url: &str, method: &str, params: Value) -> Value {
+    mcp_response(client, url, method, params).await["result"].clone()
+}
+
+async fn mcp_response(client: &reqwest::Client, url: &str, method: &str, params: Value) -> Value {
     let initialize = client
         .post(url)
         .header("Accept", "application/json, text/event-stream")
@@ -1502,17 +1621,23 @@ async fn mcp_request(client: &reqwest::Client, url: &str, method: &str, params: 
         .await
         .unwrap();
     assert!(response.status().is_success());
-    parse_mcp_sse(&response.text().await.unwrap())["result"].clone()
+    parse_mcp_sse(&response.text().await.unwrap())
 }
 
 fn assert_exported_result(result: &Value, item_id: &str, stdout: &str) {
     assert_eq!(result["isError"], false);
-    assert_eq!(result["structuredContent"]["value"]["id"], item_id);
-    assert_eq!(result["structuredContent"]["value"]["revision"], "23");
-    assert_eq!(
-        result["structuredContent"]["value"]["principal"],
-        "anonymous"
-    );
+    let structured = if result["structuredContent"]["value"].is_object() {
+        &result["structuredContent"]["value"]
+    } else {
+        &result["structuredContent"]
+    };
+    assert_eq!(structured["id"], item_id);
+    assert_eq!(structured["revision"], "23");
+    assert_eq!(structured["principal"], "anonymous");
+    assert_eq!(result["content"][0]["type"], "text");
+    let rendered: Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(rendered, result["structuredContent"]);
     assert_eq!(result["content"][1]["type"], "text");
     assert_eq!(result["content"][1]["text"], stdout);
     assert_eq!(
@@ -1525,6 +1650,34 @@ fn assert_exported_result(result: &Value, item_id: &str, stdout: &str) {
         result["content"][2]["_meta"]["golem.cloud/tool-channel"],
         "stderr"
     );
+}
+
+#[test]
+fn exported_result_assertion_accepts_contract_2_record_shape() {
+    let structured = json!({
+        "id": "direct",
+        "revision": "23",
+        "principal": "anonymous"
+    });
+    let result = json!({
+        "isError": false,
+        "structuredContent": structured,
+        "content": [
+            {"type": "text", "text": structured.to_string()},
+            {
+                "type": "text",
+                "text": "AAEC/w==",
+                "_meta": {"golem.cloud/tool-channel": "stdout"}
+            },
+            {
+                "type": "text",
+                "text": "warning:direct",
+                "_meta": {"golem.cloud/tool-channel": "stderr"}
+            }
+        ]
+    });
+
+    assert_exported_result(&result, "direct", "AAEC/w==");
 }
 
 fn generated_source_text(root: &std::path::Path) -> String {

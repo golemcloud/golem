@@ -324,6 +324,8 @@ impl EntityInvocationDurability {
             principal,
             plan,
             assume_idempotence: key_context.assume_idempotence,
+            authority_wallet: store
+                .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
         };
         let encoded_metadata = desert_rust::serialize_to_byte_vec(&metadata).map_err(|error| {
             WorkerExecutorError::runtime(format!(
@@ -570,7 +572,6 @@ impl EntityInvocationDurability {
             &key_context.caller_key,
             key_context.logical_position.unwrap_or(handle.start_index()),
         );
-        let logical_key_positions = key_context.logical_position.is_some();
         let operation = metadata.operation;
         let resolved_position = resolve_recorded_plan(
             store,
@@ -639,10 +640,11 @@ impl EntityInvocationDurability {
             execution_mode,
             idempotency_key,
             metadata.assume_idempotence,
-            logical_key_positions,
+            true,
             stream_session_idempotency_key,
         )
         .map_err(WorkerExecutorError::runtime)?
+        .with_authority_wallet(metadata.authority_wallet)
         .with_span_started(span_started);
         Ok(Self {
             handle,
@@ -753,6 +755,7 @@ impl EntityInvocationDurability {
             scope.stream_session_idempotency_key().clone(),
         )
         .map_err(WorkerExecutorError::runtime)?
+        .with_authority_wallet(scope.authority_wallet().to_vec())
         .with_span_started(
             scope
                 .span_started()
@@ -1202,6 +1205,7 @@ impl EntityInvocationDurability {
                 None => Some(body.as_mut().await),
             };
             let Some(body_result) = body_result else {
+                on_completed_cancelled();
                 let _ = body.as_mut().await;
                 let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Executed)
                     .await
@@ -2173,6 +2177,7 @@ mod tests {
             }),
             plan,
             assume_idempotence: true,
+            authority_wallet: Vec::new(),
         })
         .unwrap()
     }

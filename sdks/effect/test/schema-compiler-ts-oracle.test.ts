@@ -5,6 +5,7 @@ import type {
   QuotaToken as RawQuotaToken,
   Secret as RawSecret,
 } from "golem:core/types@2.0.0"
+import * as Bridge from "../src/Bridge.js"
 import * as GolemSchema from "../src/Schema.js"
 import { toWitCodec } from "../src/WitCodec.js"
 import { field, t, v, type SchemaGraph } from "../src/internal/schema-model/model.js"
@@ -147,7 +148,8 @@ describe("Effect authoring to TypeScript canonical schema oracle", () => {
         v.record([v.string("root"), v.option()]),
       )
 
-      const quota = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as RawQuotaToken)
+      const quotaHandle = createGuestQuotaTokenHandle(QUOTA_INTERNAL, {} as RawQuotaToken)
+      const quota = Bridge.quotaTokenFromSchemaValue({ tag: "quota-token", handle: quotaHandle })
       const card = createGuestPermissionCardHandle(
         PERMISSION_CARD_INTERNAL,
         {} as RawPermissionCard,
@@ -168,7 +170,7 @@ describe("Effect authoring to TypeScript canonical schema oracle", () => {
         ]),
       })
       expect(yield* Schema.encodeEffect(capabilities.codec)({ quota, card, secret })).toEqual(
-        v.record([v.quotaToken(quota), v.permissionCard(card), v.secret(secret)]),
+        v.record([v.quotaToken(quotaHandle), v.permissionCard(card), v.secret(secret)]),
       )
     }),
   )

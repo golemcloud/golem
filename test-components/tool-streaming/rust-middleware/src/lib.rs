@@ -419,6 +419,26 @@ async fn universal_pass_through(
         .await
 }
 
+#[universal_tool_middleware(name = "k3-rate-limit-pre-leaf-checkpoint")]
+async fn k3_rate_limit_pre_leaf_checkpoint(
+    tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    if tool_name == "middleware-probe" {
+        wait_at_middleware_promise_checkpoint("k3-rate-limit-post-admission-pre-leaf").await;
+    }
+    underlying
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+        .await
+}
+
 fn invoke_streaming_pass_through(
     _tool_name: String,
     _tool_metadata: Tool,

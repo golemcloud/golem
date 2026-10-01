@@ -33,6 +33,8 @@ private[wire] object ConcreteCodecMacro {
       val tpe = TypeRepr.of[T].dealias
       val key = id(tpe)
       if (active(key)) return '{ $registry.ref[T](${ Expr(key) }) }
+      val custom = Expr.summon[ConcreteCodec[T]]
+      if (custom.nonEmpty) return custom.get
       val next = active + key
 
       def child(tpe: TypeRepr): Expr[ConcreteCodec[Any]] = tpe.asType match {

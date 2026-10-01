@@ -49,6 +49,7 @@ import {
 import {
   assertGuestSecretHandleCanLiftFromWire,
   GuestSecretHandle,
+  isGuestSecretHandle,
   liftGuestSecretHandleFromWire,
   peekGuestSecretHandle,
   takeGuestSecretHandleToWire,
@@ -57,7 +58,7 @@ import { SECRET_INTERNAL } from "./secretInternal.js"
 import {
   abandonGuestQuotaTokenWireHandle,
   assertGuestQuotaTokenHandleCanLiftFromWire,
-  GuestQuotaTokenHandle,
+  isGuestQuotaTokenHandle,
   liftGuestQuotaTokenHandleFromWire,
   peekGuestQuotaTokenHandle,
   takeGuestQuotaTokenHandleToWire,
@@ -68,7 +69,7 @@ import { STREAM_INTERNAL } from "./streamInternal.js"
 import {
   abandonGuestPermissionCardWireHandle,
   assertGuestPermissionCardHandleCanLiftFromWire,
-  GuestPermissionCardHandle,
+  isGuestPermissionCardHandle,
   liftGuestPermissionCardHandleFromWire,
   peekGuestPermissionCardHandle,
   takeGuestPermissionCardHandleToWire,
@@ -629,7 +630,7 @@ export function assertSchemaValueRepresentable(
         }
         return
       case "secret": {
-        if (!(v.handle instanceof GuestSecretHandle)) {
+        if (!isGuestSecretHandle(v.handle)) {
           throw new SchemaEncodeError("secret value contains an invalid secret handle")
         }
         assertCapabilityReady(v.handle)
@@ -648,7 +649,7 @@ export function assertSchemaValueRepresentable(
         return
       }
       case "quota-token": {
-        if (!(v.handle instanceof GuestQuotaTokenHandle)) {
+        if (!isGuestQuotaTokenHandle(v.handle)) {
           throw new SchemaEncodeError("quota-token value contains an invalid quota-token handle")
         }
         assertCapabilityReady(v.handle)
@@ -688,7 +689,7 @@ export function assertSchemaValueRepresentable(
         return
       }
       case "permission-card": {
-        if (!(v.handle instanceof GuestPermissionCardHandle)) {
+        if (!isGuestPermissionCardHandle(v.handle)) {
           throw new SchemaEncodeError(
             "permission-card value contains an invalid permission-card handle",
           )

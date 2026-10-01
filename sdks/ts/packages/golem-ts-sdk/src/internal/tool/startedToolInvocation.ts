@@ -133,6 +133,59 @@ export function startedToolInvocation<Result>(
   };
 }
 
+export function deferredStartedToolInvocation<Result>(
+  invocation: Promise<StartedToolInvocation<Result>>,
+  hasStdout: boolean,
+  hasStderr: boolean,
+): StartedToolInvocation<Result> {
+  let cancelled = false;
+  let started: StartedToolInvocation<Result> | undefined;
+  void invocation.then(
+    (value) => {
+      started = value;
+      if (cancelled) value.cancel();
+    },
+    () => {},
+  );
+  return {
+    stdout: hasStdout ? deferredReadableStream(invocation, 'stdout') : undefined,
+    stderr: hasStderr ? deferredReadableStream(invocation, 'stderr') : undefined,
+    get result() {
+      return invocation.then((started) => started.result);
+    },
+    cancel() {
+      if (started) started.cancel();
+      else cancelled = true;
+    },
+    collect() {
+      return invocation.then((started) => started.collect());
+    },
+  };
+}
+
+function deferredReadableStream<Result>(
+  invocation: Promise<StartedToolInvocation<Result>>,
+  channel: 'stdout' | 'stderr',
+): ReadableStream<Uint8Array> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const getReader = async () => {
+    if (reader) return reader;
+    const stream = (await invocation)[channel];
+    if (!stream) throw new TypeError(`required ${channel} stream is missing`);
+    return (reader = stream.getReader());
+  };
+  return new ReadableStream({
+    async pull(controller) {
+      const next = await (await getReader()).read();
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    async cancel(reason) {
+      await (await getReader()).cancel(reason);
+    },
+  });
+}
+
 function readableToolOutput(
   source: AsyncIterable<ByteStreamItem>,
   channel: 'stdout' | 'stderr',

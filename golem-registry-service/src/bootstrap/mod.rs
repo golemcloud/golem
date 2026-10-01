@@ -358,6 +358,8 @@ impl Services {
         let tool_middleware_release_service = Arc::new(ToolMiddlewareReleaseService::new(
             repos.tool_middleware_release_repo.clone(),
             account_service.clone(),
+            component_service.clone(),
+            builtin_tool_owner_account_id,
         ));
         let environment_tool_middleware_grant_service =
             Arc::new(EnvironmentToolMiddlewareGrantService::new(
@@ -529,6 +531,7 @@ impl Services {
             &deployment_service,
             &deployment_write_service,
             &tool_release_service,
+            &tool_middleware_release_service,
         )
         .await
         .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;

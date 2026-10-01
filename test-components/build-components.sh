@@ -6,7 +6,7 @@ rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-sy
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts")
 effect_test_apps=("tool-streaming-effect")
 scala_test_apps=("tool-streaming-scala")
-moonbit_test_apps=("tool-streaming-moonbit")
+moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
@@ -319,6 +319,9 @@ build_sdk_apps() {
           ;;
         tool-streaming-moonbit)
           test -s ../golem_it_tool_streaming_moonbit.wasm
+          ;;
+        tool-streaming-moonbit-lifecycle-gol40)
+          test -s ../golem_it_tool_streaming_moonbit_lifecycle_gol40.wasm
           ;;
       esac
     fi

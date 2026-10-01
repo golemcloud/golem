@@ -31,6 +31,11 @@ import { CanonicalInputModel } from '../src/internal/tool';
 import { t, typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
 import { tool } from '../src';
 import { encodeToolValue } from '../src/internal/tool/invocationResult';
+import {
+  GuestPermissionCardHandle,
+  peekGuestPermissionCardHandle,
+} from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 import type { ByteStreamFailure } from 'golem:tool/host@0.1.0';
 
 const streamFailures = [
@@ -1111,7 +1116,11 @@ describe('tool guest exports', () => {
 
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
-    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toBe(raw);
+    const card = commandNode.body?.result?.codec.fromValue(decoded.value);
+    expect(card).toBeInstanceOf(GuestPermissionCardHandle);
+    expect(
+      peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card as GuestPermissionCardHandle),
+    ).toBe(raw);
   });
 
   it('releases a permission card after a non-canonical result so it can be retried', async () => {
@@ -1147,7 +1156,10 @@ describe('tool guest exports', () => {
     const result = await invoke();
     expect(result.result).toBeDefined();
     const decoded = typedSchemaValueFromWit(result.result!);
-    expect(commandNode.body?.result?.codec.fromValue(decoded.value)).toEqual({ card: raw });
+    const output = commandNode.body?.result?.codec.fromValue(decoded.value) as {
+      card: GuestPermissionCardHandle;
+    };
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, output.card)).toBe(raw);
   });
 
   it.each([
@@ -1186,8 +1198,8 @@ describe('tool guest exports', () => {
 
   it('delivers an owned permission-card input to a tool handler', async () => {
     const raw = { id: 'opaque-permission-card-input' } as never;
-    const handler = vi.fn(async ({ card }: { card: typeof raw }) => {
-      expect(card).toBe(raw);
+    const handler = vi.fn(async ({ card }: { card: GuestPermissionCardHandle }) => {
+      expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBe(raw);
       return ok(undefined);
     });
     toolDefinition('permission-card-input')

@@ -76,7 +76,8 @@ export async function invokeRegistered(
         return Promise.reject(cause)
       }
     }
-    await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
+    const results = await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
+    return results.find((result): result is PromiseRejectedResult => result.status === "rejected")
   }
   try {
     const registered = registeredTools().find((x) => x.definition.name === toolName)
@@ -183,7 +184,8 @@ export async function invokeRegistered(
         never
       >,
     )
-    await settleOutputs("finish")
+    const finishFailure = await settleOutputs("finish")
+    if (finishFailure) throw finishFailure.reason
     return result
   } catch (error) {
     if (error instanceof ToolInvokeError || isToolError(error)) await settleOutputs("finish")

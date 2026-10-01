@@ -155,6 +155,9 @@ macro_rules! setup_rate_limit_chain {
     };
 }
 
+#[path = "k3_persistent_rate_limit_acceptance.rs"]
+mod k3_persistent_rate_limit_acceptance;
+
 macro_rules! setup_probe_chain {
     ($last:expr, $deps:expr, $provider:expr, $caller:expr, $names:expr,
      $context:ident, $environment:ident, $executor:ident, $provider_component:ident,
@@ -1035,6 +1038,10 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
         5,
         "restricted input, universal configured/input, and allowed configured/input reveals"
     );
+    let reveal_start_indices = reveal_starts
+        .iter()
+        .map(|entry| entry.oplog_index)
+        .collect::<BTreeSet<_>>();
     for start in config_starts.into_iter().chain(reveal_starts) {
         let terminals = replayed_oplog
             .iter()
@@ -1088,6 +1095,46 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     );
 
     let public_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let reveal_audits = public_oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if reveal_start_indices.contains(&end.start_index) => {
+                let response = end
+                    .response
+                    .clone()
+                    .expect("secret reveal response payload");
+                let response_json = serde_json::to_string(&response)
+                    .expect("serialize public secret reveal response");
+                let response =
+                    golem_common::model::oplog::host_functions::host_response_from_typed_schema_value(
+                        "golem::secrets::reveal::reveal",
+                        response,
+                    )
+                    .expect("decode public secret reveal response");
+                let golem_common::model::oplog::payload::HostResponse::SecretRevealed(response) =
+                    response
+                else {
+                    panic!("expected secret reveal response")
+                };
+                Some((response.audit, response_json))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reveal_audits.len(), reveal_start_indices.len());
+    assert!(
+        reveal_audits
+            .iter()
+            .all(|(audit, _)| audit.calling_agent == worker_id),
+        "every duplicate middleware reveal outcome must retain the calling owner: {reveal_audits:?}"
+    );
+    let serialized_agent_id = serde_json::to_string(&agent_id.to_string())?;
+    assert!(
+        reveal_audits
+            .iter()
+            .all(|(_, response)| response.contains(&serialized_agent_id)),
+        "every CLI-shaped reveal response must retain the calling owner"
+    );
     assert!(
         !format!("{public_oplog:?}").contains(plaintext),
         "public oplog rendering must not contain secret plaintext"
@@ -1107,10 +1154,6 @@ async fn duplicate_secret_policy_occurrences_are_isolated_from_leaf(
     assert!(
         !cli_shaped.contains(plaintext),
         "CLI-shaped oplog JSON must not contain secret plaintext"
-    );
-    assert!(
-        cli_shaped.contains(&agent_id.to_string()),
-        "reveal audit payloads must retain the calling owner"
     );
     assert!(
         cli_shaped.contains("toolSecret"),

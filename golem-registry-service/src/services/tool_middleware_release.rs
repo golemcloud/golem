@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
+use super::component::ComponentService;
 use super::release_grant_lifecycle::{
     PublicationDecision, ReleaseLifecycle, ReleaseManagementDecision, publication_decision,
     release_management_decision,
@@ -38,10 +39,10 @@ use golem_common::model::tool_middleware::{
     ToolMiddlewareSource,
 };
 use golem_common::model::tool_middleware_release::{
-    ToolMiddlewarePublication, ToolMiddlewarePublicationPlanAction,
-    ToolMiddlewarePublicationPlanEntry, ToolMiddlewareRelease, ToolMiddlewareReleaseId,
-    ToolMiddlewareReleaseLifecycle, ToolMiddlewareReleaseOrigin, ToolMiddlewareReleaseReference,
-    tool_middleware_metadata_digest,
+    SystemToolMiddlewareReleaseProvision, ToolMiddlewarePublication,
+    ToolMiddlewarePublicationPlanAction, ToolMiddlewarePublicationPlanEntry, ToolMiddlewareRelease,
+    ToolMiddlewareReleaseId, ToolMiddlewareReleaseLifecycle, ToolMiddlewareReleaseOrigin,
+    ToolMiddlewareReleaseReference, tool_middleware_metadata_digest,
 };
 use golem_common::schema::tool::ToolMiddleware;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -102,6 +103,8 @@ error_forwarding!(
 pub struct ToolMiddlewareReleaseService {
     tool_middleware_release_repo: Arc<dyn ToolMiddlewareReleaseRepo>,
     account_service: Arc<AccountService>,
+    component_service: Arc<ComponentService>,
+    builtin_tool_owner_account_id: AccountId,
 }
 
 type ToolMiddlewarePublicationAssessment = PublicationDecision<ToolMiddlewareReleaseId>;
@@ -110,10 +113,14 @@ impl ToolMiddlewareReleaseService {
     pub fn new(
         tool_middleware_release_repo: Arc<dyn ToolMiddlewareReleaseRepo>,
         account_service: Arc<AccountService>,
+        component_service: Arc<ComponentService>,
+        builtin_tool_owner_account_id: AccountId,
     ) -> Self {
         Self {
             tool_middleware_release_repo,
             account_service,
+            component_service,
+            builtin_tool_owner_account_id,
         }
     }
 
@@ -499,12 +506,7 @@ impl ToolMiddlewareReleaseService {
         &self,
         reference: &ToolMiddlewareReleaseReference,
     ) -> Result<ToolMiddlewareReleaseWithOwnerRecord, ToolMiddlewareReleaseError> {
-        let record = self.resolve_published_reference(reference).await?;
-        let release: ToolMiddlewareRelease = record.release.clone().try_into()?;
-        if release.origin != ToolMiddlewareReleaseOrigin::Ordinary {
-            return Err(ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound);
-        }
-        Ok(record)
+        self.resolve_published_reference(reference).await
     }
 
     pub(crate) async fn resolve_auto_grantable_system_release(
@@ -519,6 +521,131 @@ impl ToolMiddlewareReleaseService {
             return Err(ToolMiddlewareReleaseError::ReferencedToolMiddlewareReleaseNotFound);
         }
         Ok(record)
+    }
+
+    pub async fn provision_system_release(
+        &self,
+        provision: SystemToolMiddlewareReleaseProvision,
+    ) -> Result<ToolMiddlewareRelease, ToolMiddlewareReleaseError> {
+        let ToolMiddlewareSource::Component {
+            component_id,
+            component_revision,
+            component_name,
+        } = &provision.source;
+        let component = self
+            .component_service
+            .get_component_revision(
+                *component_id,
+                *component_revision,
+                false,
+                &AuthCtx::system(),
+            )
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("invalid system tool middleware component source: {error}")
+            })?;
+        let deployed = self
+            .component_service
+            .get_all_deployed_component_versions(*component_id, &AuthCtx::system())
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("invalid system tool middleware component source: {error}")
+            })?;
+        let exported = component.metadata.tool_middlewares().get(&provision.name);
+        if component.account_id != self.builtin_tool_owner_account_id
+            || component.component_name != *component_name
+            || !deployed
+                .iter()
+                .any(|value| value.revision == *component_revision)
+            || exported.map(|value| &value.definition) != Some(&provision.definition)
+        {
+            return Err(ToolMiddlewareReleaseError::InternalError(anyhow::anyhow!(
+                "system tool middleware component source does not match its owner, deployed revision, name, or exported metadata"
+            )));
+        }
+        let candidate = ToolMiddlewareReleaseRecord::from_system_provision(
+            self.builtin_tool_owner_account_id,
+            provision,
+            AccountId::SYSTEM,
+        )?;
+        match self
+            .tool_middleware_release_repo
+            .create(candidate.clone())
+            .await
+        {
+            Ok(record) => record.release.try_into().map_err(Into::into),
+            Err(ToolMiddlewareReleaseRepoError::CoordinateAlreadyExists) => {
+                let existing = self
+                    .tool_middleware_release_repo
+                    .get_by_coordinates(
+                        candidate.owner_account_id,
+                        &candidate.tool_middleware_name,
+                        &candidate.middleware_version,
+                    )
+                    .await?
+                    .ok_or(ToolMiddlewareReleaseError::ImmutableReleaseConflict)?;
+                if !existing.release.immutable_fields_match(&candidate) {
+                    return Err(ToolMiddlewareReleaseError::ImmutableReleaseConflict);
+                }
+                existing.release.try_into().map_err(Into::into)
+            }
+            Err(other) => Err(other.into()),
+        }
+    }
+
+    pub(crate) async fn preflight_system_component_release(
+        &self,
+        name: &ToolMiddlewareName,
+        version: &str,
+        definition: &ToolMiddleware,
+        component_name: &golem_common::model::component::ComponentName,
+        wasm_hash: diff::Hash,
+    ) -> Result<bool, ToolMiddlewareReleaseError> {
+        let Some(existing) = self
+            .tool_middleware_release_repo
+            .get_by_coordinates(self.builtin_tool_owner_account_id.0, name.as_str(), version)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let release: ToolMiddlewareRelease = existing.release.try_into()?;
+        let ToolMiddlewareSource::Component {
+            component_id,
+            component_revision,
+            component_name: recorded_name,
+        } = release.source;
+        let component = self
+            .component_service
+            .get_component_revision(component_id, component_revision, false, &AuthCtx::system())
+            .await
+            .map_err(|_| ToolMiddlewareReleaseError::ImmutableReleaseConflict)?;
+        let deployed = self
+            .component_service
+            .get_all_deployed_component_versions(component_id, &AuthCtx::system())
+            .await
+            .map_err(|_| ToolMiddlewareReleaseError::ImmutableReleaseConflict)?;
+        if release.definition != *definition
+            || release.metadata_version != TOOL_MIDDLEWARE_METADATA_WIT_VERSION
+            || !release.immutable
+            || release.lifecycle != ToolMiddlewareReleaseLifecycle::Published
+            || release.origin != ToolMiddlewareReleaseOrigin::ProtectedSystem
+            || recorded_name != *component_name
+            || component.component_name != *component_name
+            || component.account_id != self.builtin_tool_owner_account_id
+            || component.wasm_hash != wasm_hash
+            || !deployed
+                .iter()
+                .any(|value| value.revision == component_revision)
+            || component
+                .metadata
+                .tool_middlewares()
+                .get(name)
+                .map(|middleware| &middleware.definition)
+                != Some(definition)
+        {
+            return Err(ToolMiddlewareReleaseError::ImmutableReleaseConflict);
+        }
+        Ok(true)
     }
 
     async fn authorize_management(

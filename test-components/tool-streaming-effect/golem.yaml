@@ -13,6 +13,9 @@ componentTemplates:
         - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
 
 components:
+  golem-it:tool-streaming-rust-provider:
+    dir: ../tool-streaming/rust-provider
+    templates: rust, rust-test-component
   golem-it:tool-streaming-effect-provider:
     dir: provider
     templates: effect, effect-test-component
@@ -23,16 +26,24 @@ components:
       tools:
         - golem-it:tool-streaming-effect-provider/matrix-core
         - golem-it:tool-streaming-effect-provider/matrix-resource
+        - golem-it:tool-streaming-effect-provider/chunk-m-effect-streaming
+        - golem-it:tool-streaming-rust-provider/matrix-permission-issuer
 
 tools:
   matrix-core: {}
   matrix-resource: {}
+  chunk-m-effect-streaming: {}
+  matrix-permission-issuer:
+    component: golem-it:tool-streaming-rust-provider
 
 agents:
   EffectToolStreamingCaller:
+    config: {}
     tools:
       matrix-core: {}
       matrix-resource: {}
+      chunk-m-effect-streaming: {}
+      matrix-permission-issuer: {}
 
 resourceDefaults:
   local:
@@ -47,3 +58,7 @@ resourceDefaults:
 environments:
   local:
     server: local
+
+secretDefaults:
+  local:
+    secret: matrix-secret-value

@@ -16,11 +16,18 @@ import type { ToolRpcError } from 'golem:core/types@2.0.0';
 import type { TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { createToolClientTransport, isRpcError } from './bridge/tool';
 import {
+  deferredStartedToolInvocation,
   mapSettledToolResult,
   resultFromSettledToolResult,
   startedToolInvocation,
+  type StartedToolInvocation,
 } from './internal/tool/startedToolInvocation';
-import { readConcrete, writeConcrete, type CompiledCommand } from './internal/tool/compiled';
+import {
+  readConcrete,
+  writeConcrete,
+  writeConcreteAsync,
+  type CompiledCommand,
+} from './internal/tool/compiled';
 import {
   createToolClient,
   decodeDeclaredToolError,
@@ -114,14 +121,8 @@ export function compiledToolClient(
     const name = members.at(-1)!;
     const callName = [toolName, ...command.path].join(' ');
     const method = (args: Record<string, unknown>): unknown => {
-      const start = () => {
+      const start = (input: TypedSchemaValue) => {
         try {
-          if (args === null || typeof args !== 'object' || Array.isArray(args))
-            throw new TypeError('tool client arguments must be an object');
-          const input = {
-            graph: command.input.graph,
-            value: writeConcrete(command.input.codec, args),
-          };
           const stdin = command.stdin ? args.stdin : undefined;
           if (stdin !== undefined && !(stdin instanceof ReadableStream))
             throw new TypeError('stdin must be a readable stream');
@@ -169,11 +170,47 @@ export function compiledToolClient(
           throw mapCompiledFailure(error, command, callName);
         }
       };
-      return command.stdout || command.stderr ? start() : Promise.resolve().then(start);
+      try {
+        if (args === null || typeof args !== 'object' || Array.isArray(args))
+          throw new TypeError('tool client arguments must be an object');
+        if (command.stdout || command.stderr) {
+          try {
+            return start({
+              graph: command.input.graph,
+              value: writeConcrete(command.input.codec, args),
+            });
+          } catch (error) {
+            if (!requiresAsyncSchemaStreamEncoding(error)) throw error;
+            return deferredStartedToolInvocation(
+              writeConcreteAsync(command.input.codec, args)
+                .then((value) => start({ graph: command.input.graph, value }))
+                .catch((asyncError) => {
+                  throw mapCompiledFailure(asyncError, command, callName);
+                }) as Promise<StartedToolInvocation<unknown>>,
+              command.stdout !== undefined,
+              command.stderr !== undefined,
+            );
+          }
+        }
+        return writeConcreteAsync(command.input.codec, args)
+          .then((value) => start({ graph: command.input.graph, value }))
+          .catch((error) => {
+            throw mapCompiledFailure(error, command, callName);
+          });
+      } catch (error) {
+        throw mapCompiledFailure(error, command, callName);
+      }
     };
     Object.defineProperty(target, name, { value: method, enumerable: true });
   }
   return root;
+}
+
+function requiresAsyncSchemaStreamEncoding(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes('native schema streams require asynchronous encoding')
+  );
 }
 
 function mapCompiledFailure(error: unknown, command: CompiledCommand, callName: string): unknown {

@@ -2,7 +2,9 @@ use golem_rust::agentic::{
     AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
     spawn_local,
 };
-use golem_rust::bindings::golem::permissions::types as permission_types;
+use golem_rust::bindings::golem::permissions::{
+    derive as permission_derive, types as permission_types,
+};
 use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
 use golem_rust::quota::QuotaToken;
@@ -217,6 +219,40 @@ pub struct PermissionExchange {
     pub principal: String,
     pub owner_agent_id: String,
     pub card: GuestPermissionCardHandle,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct PermissionIssue {
+    pub card: GuestPermissionCardHandle,
+    pub issuer: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait MatrixPermissionIssuer {
+    async fn issue(&self, principal: golem_rust::agentic::Principal) -> PermissionIssue;
+}
+
+struct MatrixPermissionIssuerImpl;
+
+#[tool_implementation]
+impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
+    async fn issue(&self, principal: Principal) -> PermissionIssue {
+        let card = permission_derive::derive_from_wallet(&[], &[], &[], &[], None)
+            .expect("matrix permission issuer derives a card from the owner wallet");
+        let owner_agent_id = golem_rust::get_self_metadata()
+            .expect("matrix permission issuer owner metadata")
+            .agent_id
+            .agent_id;
+        PermissionIssue {
+            card: GuestPermissionCardHandle::new(card),
+            issuer: "rust".to_string(),
+            principal: matrix_principal(&principal),
+            owner_agent_id,
+        }
+    }
 }
 
 pub struct MatrixSecretSubtree;
@@ -1404,6 +1440,8 @@ impl Streaming for StreamingImpl {
                 | "declared-error"
                 | "explicit-stdout-failure"
                 | "finish-failure"
+                | "writer-abandonment"
+                | "finish-after-reader-drop"
                 | "stream-failure-success"
         ) {
             if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
@@ -1470,6 +1508,12 @@ impl Streaming for StreamingImpl {
                     ))
                     .await
                     .expect("fail stdout explicitly");
+                return Ok(summary);
+            }
+            "writer-abandonment" => return Ok(summary),
+            "finish-after-reader-drop" => {
+                while stdin.next().await.is_some() {}
+                summary.output_closed = stdout.finish().await.is_err();
                 return Ok(summary);
             }
             "hold-after-eof" => {

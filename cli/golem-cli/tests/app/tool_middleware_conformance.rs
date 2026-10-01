@@ -235,7 +235,7 @@ async fn manifest_middleware_merge_matrix_executes_in_live_order() {
             agent: Some(&["A1", "A2"]),
             mode: MergeMode::Omitted,
             expected_order: "U1;U2;A1;A2;E1;E2;leaf:E2(E1(A2(A1(input))));",
-            expected_value: "ok:A1[A2[E1[E2[leaf(E2(E1(A2(A1(input))))]]]]]",
+            expected_value: "ok:A1[A2[E1[E2[leaf(E2(E1(A2(A1(input)))))]]]]",
         },
         Case {
             name: "append",
@@ -327,10 +327,30 @@ async fn structural_projection_strict_rejection_and_nominal_runtime_validation()
         &ctx,
         "compat-leaf",
         "structural-projection",
-        "structural-subtype",
+        "strict-equality",
     );
     build(&mut ctx).await;
     ctx.start_server().await;
+
+    let strict = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(!strict.success_or_dump());
+    let strict_error = format!(
+        "{}\n{}",
+        strict.stdout_text(),
+        strict.stderr().collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        strict_error.contains("structural-projection"),
+        "{strict_error}"
+    );
+    assert!(strict_error.contains("compat-leaf"), "{strict_error}");
+
+    set_compatibility_case(
+        &ctx,
+        "compat-leaf",
+        "structural-projection",
+        "structural-subtype",
+    );
     deploy(&mut ctx).await;
 
     let structural = ctx
@@ -354,21 +374,6 @@ async fn structural_projection_strict_rejection_and_nominal_runtime_validation()
         "{structural_text}"
     );
     assert!(!structural_text.contains("leafOnly"), "{structural_text}");
-
-    set_compatibility_case(
-        &ctx,
-        "compat-leaf",
-        "structural-projection",
-        "strict-equality",
-    );
-    let strict = ctx.cli([flag::YES, cmd::DEPLOY]).await;
-    assert!(!strict.success_or_dump());
-    let strict_error = strict.stderr().collect::<Vec<_>>().join("\n");
-    assert!(
-        strict_error.contains("structural-projection"),
-        "{strict_error}"
-    );
-    assert!(strict_error.contains("compat-leaf"), "{strict_error}");
 
     set_compatibility_case(&ctx, "compat-leaf", "structural-adapter", "nominal");
     set_compatibility_case(&ctx, "nominal-leaf", "nominal-adapter", "nominal");
@@ -408,10 +413,24 @@ async fn adapter_uses_lookup_identity_with_presented_metadata_and_generated_clie
         "golem-temp/bridge-sdk/rust/internal/compat-leaf-tool-guest-client/src/lib.rs",
     ))
     .unwrap();
-    assert!(generated.contains("compat-leaf"), "{generated}");
+    assert!(
+        generated.contains("pub struct PresentedAdapterClient"),
+        "{generated}"
+    );
+    assert!(generated.contains("ToolRpc::new("), "{generated}");
+    assert!(generated.contains("\"compat-leaf\""), "{generated}");
 
     let agent = format!("adapter-{}", Uuid::new_v4());
     let constructor = format!("AdapterConformanceAgent(\"{agent}\")");
+    let result = invoke_agent(
+        &mut ctx,
+        "AdapterConformanceAgent",
+        &agent,
+        "invoke",
+        &["\"through-adapter\""],
+    )
+    .await;
+    assert!(result.contains("ok:leaf: through-adapter"), "{result}");
     let help = ctx
         .cli([
             cmd::TOOL,
@@ -425,15 +444,6 @@ async fn adapter_uses_lookup_identity_with_presented_metadata_and_generated_clie
         .await;
     assert!(help.success_or_dump());
     assert!(help.stdout_text().contains("presented-adapter"));
-    let result = invoke_agent(
-        &mut ctx,
-        "AdapterConformanceAgent",
-        &agent,
-        "invoke",
-        &["\"through-adapter\""],
-    )
-    .await;
-    assert!(result.contains("ok:leaf: through-adapter"), "{result}");
 }
 
 #[test]

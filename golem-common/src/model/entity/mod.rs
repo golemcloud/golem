@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
+use crate::model::card::StoredCard;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
@@ -953,6 +954,7 @@ pub struct EntityInvocationRequest {
     pub principal: Principal,
     pub plan: EntityInvocationPlanReference,
     pub assume_idempotence: bool,
+    pub authority_wallet: Vec<StoredCard>,
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -980,6 +982,9 @@ pub struct EntityInvocationScope {
     assume_idempotence: bool,
     logical_key_positions: bool,
     stream_session_idempotency_key: IdempotencyKey,
+    /// Wallet snapshot pinned in the immutable entity invocation `Start`.
+    #[serde(skip)]
+    authority_wallet: Vec<StoredCard>,
     /// Resident tracing context restored from the immutable entity invocation `Start`.
     #[serde(skip)]
     span_started: Option<ResidentEntitySpan>,
@@ -1037,8 +1042,18 @@ impl EntityInvocationScope {
             assume_idempotence,
             logical_key_positions,
             stream_session_idempotency_key,
+            authority_wallet: Vec::new(),
             span_started: None,
         })
+    }
+
+    pub fn with_authority_wallet(mut self, authority_wallet: Vec<StoredCard>) -> Self {
+        self.authority_wallet = authority_wallet;
+        self
+    }
+
+    pub fn authority_wallet(&self) -> &[StoredCard] {
+        &self.authority_wallet
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {

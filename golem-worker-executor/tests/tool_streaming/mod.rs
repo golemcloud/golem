@@ -82,9 +82,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 
+mod chunk_f_policy_acceptance;
+mod chunk_m_stream_deltas;
+mod gol40_k1_audit_acceptance;
+mod matrix_client_resource_acceptance;
 mod matrix_conformance;
 mod middleware_acceptance;
 mod moonbit_exports;
+mod moonbit_sdk_rows_acceptance;
+mod path_policy_acceptance;
+mod rust_sdk_gol40_conformance;
 mod trapped_leaf_observers;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -124,6 +131,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_moonbit")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_moonbit_lifecycle_gol40")]
     PrecompiledComponent
 );
 inherit_test_dep!(

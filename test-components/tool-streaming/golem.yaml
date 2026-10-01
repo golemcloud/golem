@@ -26,6 +26,7 @@ components:
       - golem-it:tool-streaming-rust-provider/environment-probe
       - golem-it:tool-streaming-rust-provider/matrix-core
       - golem-it:tool-streaming-rust-provider/matrix-resource
+      - golem-it:tool-streaming-rust-provider/matrix-permission-issuer
   golem-it:tool-streaming-rust-middleware:
     dir: rust-middleware
     templates: rust, rust-test-component
@@ -43,6 +44,8 @@ tools:
     component: golem-it:tool-streaming-rust-provider
   matrix-resource:
     component: golem-it:tool-streaming-rust-provider
+  matrix-permission-issuer:
+    component: golem-it:tool-streaming-rust-provider
 
 agents:
   ToolStreamingCaller:
@@ -54,6 +57,7 @@ agents:
   RustResourceToolStreamingCaller:
     tools:
       matrix-resource: {}
+      matrix-permission-issuer: {}
   ToolSecretCaller:
     tools:
       secret-policy-probe: {}
@@ -72,6 +76,7 @@ bridge:
       - environment-probe
       - matrix-core
       - matrix-resource
+      - matrix-permission-issuer
 
 environments:
   local:

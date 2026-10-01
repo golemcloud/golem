@@ -17,6 +17,7 @@ use crate::services::auth::AuthService;
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
+use crate::services::tool_middleware_release::ToolMiddlewareReleaseService;
 use crate::services::tool_release::ToolReleaseService;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::extraction::extract_component_metadata_from_bytes;
@@ -33,8 +34,12 @@ use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
 use golem_common::model::tool::{TOOL_METADATA_WIT_VERSION, ToolName, ToolSource};
+use golem_common::model::tool_middleware::{
+    TOOL_MIDDLEWARE_METADATA_WIT_VERSION, ToolMiddlewareName, ToolMiddlewareSource,
+};
+use golem_common::model::tool_middleware_release::SystemToolMiddlewareReleaseProvision;
 use golem_common::model::tool_release::{SystemToolAvailability, SystemToolReleaseProvision};
-use golem_common::schema::tool::Tool;
+use golem_common::schema::tool::{Tool, ToolMiddleware};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use std::collections::BTreeMap;
@@ -44,30 +49,58 @@ use uuid::Uuid;
 const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-tools";
 
-pub struct BuiltinToolDescriptor {
+pub struct BuiltinExportDescriptor {
     pub component_name: &'static str,
-    pub tool_name: &'static str,
+    pub export_name: &'static str,
     pub release_version: &'static str,
+    pub kind: BuiltinExportKind,
     pub wasm_bytes: &'static [u8],
 }
 
-static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
-    BuiltinToolDescriptor {
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BuiltinExportKind {
+    Tool,
+    Middleware,
+}
+
+enum ExtractedBuiltinExport {
+    Tool(Tool),
+    Middleware(ToolMiddleware),
+}
+
+#[derive(Default)]
+struct ComponentExports {
+    tools: Vec<Tool>,
+    middlewares: Vec<ToolMiddleware>,
+}
+
+static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
+    BuiltinExportDescriptor {
         component_name: "filesystem-tools",
-        tool_name: "read-file",
+        export_name: "read-file",
         release_version: "0.3.0",
+        kind: BuiltinExportKind::Tool,
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
-    BuiltinToolDescriptor {
+    BuiltinExportDescriptor {
         component_name: "filesystem-tools",
-        tool_name: "write-file",
+        export_name: "write-file",
         release_version: "0.3.0",
+        kind: BuiltinExportKind::Tool,
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
-    BuiltinToolDescriptor {
+    BuiltinExportDescriptor {
         component_name: "filesystem-tools",
-        tool_name: "edit-file",
+        export_name: "edit-file",
         release_version: "0.3.0",
+        kind: BuiltinExportKind::Tool,
+        wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
+    },
+    BuiltinExportDescriptor {
+        component_name: "filesystem-tools",
+        export_name: "path-policy",
+        release_version: "0.1.0",
+        kind: BuiltinExportKind::Middleware,
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
 ];
@@ -83,9 +116,10 @@ pub async fn provision_builtin_tools(
     deployment_service: &Arc<DeploymentService>,
     deployment_write_service: &Arc<DeploymentWriteService>,
     tool_release_service: &Arc<ToolReleaseService>,
+    tool_middleware_release_service: &Arc<ToolMiddlewareReleaseService>,
 ) -> anyhow::Result<()> {
     provision_descriptors(
-        BUILTIN_TOOLS,
+        BUILTIN_EXPORTS,
         builtin_tool_owner_account_id,
         auth_service,
         application_service,
@@ -95,13 +129,14 @@ pub async fn provision_builtin_tools(
         deployment_service,
         deployment_write_service,
         tool_release_service,
+        tool_middleware_release_service,
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_descriptors(
-    descriptors: &[BuiltinToolDescriptor],
+    descriptors: &[BuiltinExportDescriptor],
     owner: AccountId,
     auth_service: &Arc<AuthService>,
     applications: &Arc<ApplicationService>,
@@ -111,6 +146,7 @@ pub async fn provision_descriptors(
     deployments: &Arc<DeploymentService>,
     deployment_writes: &Arc<DeploymentWriteService>,
     releases: &Arc<ToolReleaseService>,
+    middleware_releases: &Arc<ToolMiddlewareReleaseService>,
 ) -> anyhow::Result<()> {
     if descriptors.is_empty() {
         return Ok(());
@@ -119,10 +155,14 @@ pub async fn provision_descriptors(
     let mut coordinates = std::collections::BTreeSet::new();
     let mut component_hashes = BTreeMap::new();
     for descriptor in descriptors {
-        if !coordinates.insert((descriptor.tool_name, descriptor.release_version)) {
+        if !coordinates.insert((
+            descriptor.kind,
+            descriptor.export_name,
+            descriptor.release_version,
+        )) {
             anyhow::bail!(
-                "duplicate built-in tool release coordinate '{}@{}'",
-                descriptor.tool_name,
+                "duplicate built-in export release coordinate '{}@{}'",
+                descriptor.export_name,
                 descriptor.release_version
             );
         }
@@ -139,40 +179,80 @@ pub async fn provision_descriptors(
             .await
             .map_err(|error| {
                 anyhow::anyhow!(
-                    "failed to extract built-in tool '{}@{}': {error}",
-                    descriptor.tool_name,
+                    "failed to extract built-in export '{}@{}': {error}",
+                    descriptor.export_name,
                     descriptor.release_version
                 )
             })?;
-        let name = ToolName::try_from(descriptor.tool_name).map_err(anyhow::Error::msg)?;
-        let tool = metadata
-            .tools
-            .into_iter()
-            .find(|tool| tool.name() == Some(name.as_str()))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "built-in component '{}' does not export tool '{}'",
-                    descriptor.component_name,
-                    name
-                )
-            })?;
-        if tool.version != descriptor.release_version {
-            anyhow::bail!(
-                "built-in tool '{}' metadata does not match release coordinate {}",
-                name,
-                descriptor.release_version
-            );
-        }
-        let already_published = releases
-            .preflight_system_component_release(
-                &name,
-                descriptor.release_version,
-                &tool,
-                &ComponentName(descriptor.component_name.to_string()),
-                golem_common::model::diff::Hash::new(blake3::hash(descriptor.wasm_bytes)),
-            )
-            .await?;
-        extracted.push((tool, already_published));
+        let component_name = ComponentName(descriptor.component_name.to_string());
+        let wasm_hash = golem_common::model::diff::Hash::new(wasm_hash);
+        let (export, already_published) = match descriptor.kind {
+            BuiltinExportKind::Tool => {
+                let name =
+                    ToolName::try_from(descriptor.export_name).map_err(anyhow::Error::msg)?;
+                let tool = metadata
+                    .tools
+                    .into_iter()
+                    .find(|tool| tool.name() == Some(name.as_str()))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "built-in component '{}' does not export tool '{}'",
+                            descriptor.component_name,
+                            name
+                        )
+                    })?;
+                if tool.version != descriptor.release_version {
+                    anyhow::bail!(
+                        "built-in tool '{}' metadata does not match release coordinate {}",
+                        name,
+                        descriptor.release_version
+                    );
+                }
+                let published = releases
+                    .preflight_system_component_release(
+                        &name,
+                        descriptor.release_version,
+                        &tool,
+                        &component_name,
+                        wasm_hash,
+                    )
+                    .await?;
+                (ExtractedBuiltinExport::Tool(tool), published)
+            }
+            BuiltinExportKind::Middleware => {
+                let name = ToolMiddlewareName::try_from(descriptor.export_name)
+                    .map_err(anyhow::Error::msg)?;
+                let middleware = metadata
+                    .tool_middlewares
+                    .into_iter()
+                    .find(|middleware| middleware.name == name.as_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "built-in component '{}' does not export tool middleware '{}'",
+                            descriptor.component_name,
+                            name
+                        )
+                    })?;
+                if middleware.version != descriptor.release_version {
+                    anyhow::bail!(
+                        "built-in tool middleware '{}' metadata does not match release coordinate {}",
+                        name,
+                        descriptor.release_version
+                    );
+                }
+                let published = middleware_releases
+                    .preflight_system_component_release(
+                        &name,
+                        descriptor.release_version,
+                        &middleware,
+                        &component_name,
+                        wasm_hash,
+                    )
+                    .await?;
+                (ExtractedBuiltinExport::Middleware(middleware), published)
+            }
+        };
+        extracted.push((export, already_published));
     }
     if extracted
         .iter()
@@ -191,18 +271,23 @@ pub async fn provision_descriptors(
             (!already_published).then_some(descriptor.component_name)
         })
         .collect::<std::collections::BTreeSet<_>>();
-    let mut component_tools = BTreeMap::<_, Vec<_>>::new();
-    for (descriptor, (tool, _)) in descriptors.iter().zip(&extracted) {
+    let mut component_exports = BTreeMap::<_, ComponentExports>::new();
+    for (descriptor, (export, _)) in descriptors.iter().zip(&extracted) {
         if !components_needing_work.contains(descriptor.component_name) {
             continue;
         }
-        component_tools
+        let component = component_exports
             .entry(descriptor.component_name)
-            .or_default()
-            .push(tool.clone());
+            .or_default();
+        match export {
+            ExtractedBuiltinExport::Tool(tool) => component.tools.push(tool.clone()),
+            ExtractedBuiltinExport::Middleware(middleware) => {
+                component.middlewares.push(middleware.clone())
+            }
+        }
     }
     let mut staged = BTreeMap::new();
-    for (component_name, tools) in component_tools {
+    for (component_name, exports) in component_exports {
         let descriptor = descriptors
             .iter()
             .find(|descriptor| descriptor.component_name == component_name)
@@ -212,7 +297,8 @@ pub async fn provision_descriptors(
             components,
             environment.id,
             descriptor,
-            tools,
+            exports.tools,
+            exports.middlewares,
             &auth,
         )
         .await?;
@@ -231,7 +317,7 @@ pub async fn provision_descriptors(
         }
         staged.insert(component_name, component);
     }
-    for (descriptor, (_, already_published)) in descriptors.iter().zip(extracted) {
+    for (descriptor, (export, already_published)) in descriptors.iter().zip(extracted) {
         if already_published {
             continue;
         }
@@ -245,39 +331,69 @@ pub async fn provision_descriptors(
                 descriptor.component_name
             );
         }
-        let name = ToolName::try_from(descriptor.tool_name).map_err(anyhow::Error::msg)?;
-        let metadata = component.metadata.tools().get(&name).ok_or_else(|| {
-            anyhow::anyhow!(
-                "built-in component '{}' does not export tool '{}'",
-                descriptor.component_name,
-                name
-            )
-        })?;
-        if metadata.definition.name() != Some(name.as_str())
-            || metadata.definition.version != descriptor.release_version
-        {
-            anyhow::bail!(
-                "built-in tool '{}' metadata does not match release coordinate {}",
-                name,
-                descriptor.release_version
-            );
+        match export {
+            ExtractedBuiltinExport::Tool(tool) => {
+                let name =
+                    ToolName::try_from(descriptor.export_name).map_err(anyhow::Error::msg)?;
+                let metadata = component.metadata.tools().get(&name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "built-in component '{}' does not export tool '{}'",
+                        descriptor.component_name,
+                        name
+                    )
+                })?;
+                if metadata.definition != tool {
+                    anyhow::bail!("deployed built-in tool '{}' metadata changed", name);
+                }
+                releases
+                    .provision_system_release(SystemToolReleaseProvision {
+                        name,
+                        version: descriptor.release_version.to_string(),
+                        source: ToolSource::Component {
+                            component_id: component.id,
+                            component_revision: component.revision,
+                            component_name: component.component_name.clone(),
+                        },
+                        definition: metadata.definition.clone(),
+                        metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
+                        availability: SystemToolAvailability::Grantable,
+                    })
+                    .await?;
+            }
+            ExtractedBuiltinExport::Middleware(middleware) => {
+                let name = ToolMiddlewareName::try_from(descriptor.export_name)
+                    .map_err(anyhow::Error::msg)?;
+                let metadata = component
+                    .metadata
+                    .tool_middlewares()
+                    .get(&name)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "built-in component '{}' does not export tool middleware '{}'",
+                            descriptor.component_name,
+                            name
+                        )
+                    })?;
+                if metadata.definition != middleware {
+                    anyhow::bail!("deployed built-in middleware '{}' metadata changed", name);
+                }
+                middleware_releases
+                    .provision_system_release(SystemToolMiddlewareReleaseProvision {
+                        name,
+                        version: descriptor.release_version.to_string(),
+                        source: ToolMiddlewareSource::Component {
+                            component_id: component.id,
+                            component_revision: component.revision,
+                            component_name: component.component_name.clone(),
+                        },
+                        definition: metadata.definition.clone(),
+                        metadata_version: TOOL_MIDDLEWARE_METADATA_WIT_VERSION.to_string(),
+                    })
+                    .await?;
+            }
         }
-        releases
-            .provision_system_release(SystemToolReleaseProvision {
-                name,
-                version: descriptor.release_version.to_string(),
-                source: ToolSource::Component {
-                    component_id: component.id,
-                    component_revision: component.revision,
-                    component_name: component.component_name.clone(),
-                },
-                definition: metadata.definition.clone(),
-                metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
-                availability: SystemToolAvailability::Grantable,
-            })
-            .await?;
     }
-    tracing::info!("Built-in tools provisioned successfully");
+    tracing::info!("Built-in tool components provisioned successfully");
     Ok(())
 }
 
@@ -339,8 +455,9 @@ async fn upload_component(
     writes: &Arc<ComponentWriteService>,
     reads: &Arc<ComponentService>,
     env: EnvironmentId,
-    descriptor: &BuiltinToolDescriptor,
+    descriptor: &BuiltinExportDescriptor,
     tools: Vec<Tool>,
+    middlewares: Vec<ToolMiddleware>,
     auth: &AuthCtx,
 ) -> anyhow::Result<Component> {
     let name = ComponentName(descriptor.component_name.into());
@@ -368,6 +485,22 @@ async fn upload_component(
             )
         })
         .collect();
+    let tool_middleware_provision_configs = middlewares
+        .iter()
+        .map(|middleware| {
+            let name = ToolMiddlewareName::try_from(middleware.name.clone())
+                .expect("built-in middleware metadata name was already validated");
+            (
+                name,
+                ToolProvisionConfigCreation {
+                    config: serde_json::json!({}).into(),
+                    env: BTreeMap::new(),
+                    plugin_installations: Vec::new(),
+                    files: BTreeMap::new(),
+                },
+            )
+        })
+        .collect();
     match writes
         .create(
             env,
@@ -379,8 +512,8 @@ async fn upload_component(
                 agent_type_provision_configs: BTreeMap::new(),
                 tools: tools.clone(),
                 tool_deployment_configs,
-                tool_middlewares: vec![],
-                tool_middleware_provision_configs: BTreeMap::new(),
+                tool_middlewares: middlewares.clone(),
+                tool_middleware_provision_configs,
             },
             descriptor.wasm_bytes.to_vec(),
             None,
@@ -393,7 +526,9 @@ async fn upload_component(
             let existing = reads.get_staged_component_by_name(env, &name, auth).await?;
             let expected =
                 golem_common::model::diff::Hash::new(blake3::hash(descriptor.wasm_bytes));
-            if existing.wasm_hash == expected && component_has_intended_tools(&existing, &tools) {
+            if existing.wasm_hash == expected
+                && component_has_intended_exports(&existing, &tools, &middlewares)
+            {
                 break Ok(existing);
             }
             let tool_deployment_config_updates = tools
@@ -422,6 +557,24 @@ async fn upload_component(
                     )
                 })
                 .collect();
+            let tool_middleware_provision_config_updates = middlewares
+                .iter()
+                .map(|middleware| {
+                    let name = ToolMiddlewareName::try_from(middleware.name.clone())
+                        .expect("built-in middleware metadata name was already validated");
+                    (
+                        name,
+                        ToolProvisionConfigUpdate {
+                            config: Some(serde_json::json!({}).into()),
+                            env: Some(BTreeMap::new()),
+                            plugin_updates: Vec::new(),
+                            files_to_add_or_update: BTreeMap::new(),
+                            files_to_remove: Vec::new(),
+                            file_permission_updates: BTreeMap::new(),
+                        },
+                    )
+                })
+                .collect();
             match writes
                 .update(
                     existing.id,
@@ -433,8 +586,10 @@ async fn upload_component(
                         agent_type_provision_config_updates: None,
                         tools: Some(tools.clone()),
                         tool_deployment_config_updates: Some(tool_deployment_config_updates),
-                        tool_middlewares: None,
-                        tool_middleware_provision_config_updates: None,
+                        tool_middlewares: Some(middlewares.clone()),
+                        tool_middleware_provision_config_updates: Some(
+                            tool_middleware_provision_config_updates,
+                        ),
                         allow_incompatible_config: false,
                     },
                     Some(descriptor.wasm_bytes.to_vec()),
@@ -452,14 +607,26 @@ async fn upload_component(
     }
 }
 
-fn component_has_intended_tools(component: &Component, tools: &[Tool]) -> bool {
+fn component_has_intended_exports(
+    component: &Component,
+    tools: &[Tool],
+    middlewares: &[ToolMiddleware],
+) -> bool {
     let stored = component.metadata.tools();
+    let stored_middlewares = component.metadata.tool_middlewares();
     stored.len() == tools.len()
+        && stored_middlewares.len() == middlewares.len()
         && tools.iter().all(|tool| {
             tool.name()
                 .and_then(|name| ToolName::try_from(name).ok())
                 .and_then(|name| stored.get(&name))
                 .is_some_and(|metadata| metadata.definition == *tool)
+        })
+        && middlewares.iter().all(|middleware| {
+            ToolMiddlewareName::try_from(middleware.name.clone())
+                .ok()
+                .and_then(|name| stored_middlewares.get(&name))
+                .is_some_and(|metadata| metadata.definition == *middleware)
         })
 }
 
@@ -502,30 +669,47 @@ mod tests {
     use test_r::test;
 
     #[test]
-    async fn embedded_filesystem_tools_are_closed_world_and_require_filesystem() {
-        for descriptor in BUILTIN_TOOLS {
+    async fn embedded_filesystem_component_exports_expected_tools_and_middleware() {
+        for descriptor in BUILTIN_EXPORTS {
             let metadata = extract_component_metadata_from_bytes(descriptor.wasm_bytes, true, true)
                 .await
                 .unwrap();
-            let tool = metadata
-                .tools
-                .iter()
-                .find(|tool| tool.name() == Some(descriptor.tool_name))
-                .unwrap();
+            match descriptor.kind {
+                BuiltinExportKind::Tool => {
+                    let tool = metadata
+                        .tools
+                        .iter()
+                        .find(|tool| tool.name() == Some(descriptor.export_name))
+                        .unwrap();
 
-            assert!(tool.requires_filesystem, "{}", descriptor.tool_name);
-            assert!(
-                tool.commands
-                    .nodes
-                    .iter()
-                    .filter_map(|node| node.body.as_ref())
-                    .all(|body| body
-                        .annotations
-                        .as_ref()
-                        .is_some_and(|annotations| !annotations.open_world)),
-                "{}",
-                descriptor.tool_name
-            );
+                    assert!(tool.requires_filesystem, "{}", descriptor.export_name);
+                    assert_eq!(tool.version, descriptor.release_version);
+                    assert!(
+                        tool.commands
+                            .nodes
+                            .iter()
+                            .filter_map(|node| node.body.as_ref())
+                            .all(|body| body
+                                .annotations
+                                .as_ref()
+                                .is_some_and(|annotations| !annotations.open_world)),
+                        "{}",
+                        descriptor.export_name
+                    );
+                }
+                BuiltinExportKind::Middleware => {
+                    let middleware = metadata
+                        .tool_middlewares
+                        .iter()
+                        .find(|middleware| middleware.name == descriptor.export_name)
+                        .unwrap();
+                    assert_eq!(middleware.version, descriptor.release_version);
+                    assert!(matches!(
+                        middleware.scope,
+                        golem_common::schema::tool::ToolMiddlewareScope::Universal
+                    ));
+                }
+            }
         }
     }
 }

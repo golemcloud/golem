@@ -16,6 +16,7 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path as FilePath, PathBuf};
 use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -35,6 +36,29 @@ pub struct ApprovalRequest {
     pub tool_name: String,
     pub command_path: Vec<String>,
     pub principal: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthenticatedPrincipalKind {
+    Anonymous,
+    Oidc,
+    Agent,
+    GolemUser,
+}
+
+impl TryFrom<&str> for AuthenticatedPrincipalKind {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "anonymous" => Ok(Self::Anonymous),
+            "oidc" => Ok(Self::Oidc),
+            "agent" => Ok(Self::Agent),
+            "golem-user" => Ok(Self::GolemUser),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -66,6 +90,7 @@ pub struct ApprovalDecision {
 pub enum CallbackState {
     NotRequired,
     Pending,
+    Delivering,
     Delivered,
     OwnerGone,
 }
@@ -112,7 +137,9 @@ impl ApprovalStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Snapshot::default(),
             Err(error) => return Err(error.into()),
         };
-        Ok(Self { path, snapshot })
+        let mut store = Self { path, snapshot };
+        store.recover_callback_claims()?;
+        Ok(store)
     }
 
     pub fn register(&mut self, request: ApprovalRequest) -> Result<ApprovalRecord, StoreError> {
@@ -225,7 +252,7 @@ impl ApprovalStore {
         Ok(result)
     }
 
-    pub fn set_callback_state(
+    fn set_callback_state(
         &mut self,
         request_id: Uuid,
         callback: CallbackState,
@@ -248,6 +275,73 @@ impl ApprovalStore {
             return Err(error);
         }
         Ok(result)
+    }
+
+    fn recover_callback_claim(&mut self, request_id: Uuid) -> Result<(), StoreError> {
+        if self
+            .snapshot
+            .records
+            .get(&request_id)
+            .is_some_and(|record| record.callback == CallbackState::Delivering)
+        {
+            self.set_callback_state(request_id, CallbackState::Pending)?;
+        }
+        Ok(())
+    }
+
+    fn recover_callback_claims(&mut self) -> Result<(), StoreError> {
+        let claimed = self
+            .snapshot
+            .records
+            .iter()
+            .filter_map(|(request_id, record)| {
+                (record.callback == CallbackState::Delivering).then_some(*request_id)
+            })
+            .collect::<Vec<_>>();
+        for request_id in claimed {
+            self.recover_callback_claim(request_id)?;
+        }
+        Ok(())
+    }
+
+    fn claim_callback(&mut self, request_id: Uuid) -> Result<ApprovalRecord, StoreError> {
+        let record = self
+            .snapshot
+            .records
+            .get(&request_id)
+            .ok_or(StoreError::NotFound)?;
+        if record.callback != CallbackState::Pending {
+            return Err(StoreError::InvalidTransition(
+                "only a pending callback can be claimed".to_string(),
+            ));
+        }
+        self.set_callback_state(request_id, CallbackState::Delivering)
+    }
+
+    fn finish_callback(
+        &mut self,
+        request_id: Uuid,
+        callback: CallbackState,
+    ) -> Result<ApprovalRecord, StoreError> {
+        if !matches!(
+            callback,
+            CallbackState::Delivered | CallbackState::OwnerGone
+        ) {
+            return Err(StoreError::InvalidTransition(
+                "callback delivery must finish as delivered or owner-gone".to_string(),
+            ));
+        }
+        let record = self
+            .snapshot
+            .records
+            .get(&request_id)
+            .ok_or(StoreError::NotFound)?;
+        if record.callback != CallbackState::Delivering {
+            return Err(StoreError::InvalidTransition(
+                "only a claimed callback can finish delivery".to_string(),
+            ));
+        }
+        self.set_callback_state(request_id, callback)
     }
 
     fn persist(&self) -> Result<(), StoreError> {
@@ -279,13 +373,26 @@ pub struct ApprovalServiceConfig {
 #[derive(Clone)]
 struct ApprovalServiceState {
     store: Arc<Mutex<ApprovalStore>>,
+    callback_deliveries: Arc<Mutex<BTreeMap<Uuid, Arc<AsyncMutex<()>>>>>,
     config: ApprovalServiceConfig,
     client: reqwest::Client,
+}
+
+impl ApprovalServiceState {
+    fn callback_delivery(&self, request_id: Uuid) -> Arc<AsyncMutex<()>> {
+        self.callback_deliveries
+            .lock()
+            .unwrap()
+            .entry(request_id)
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
 }
 
 pub fn router(store: ApprovalStore, config: ApprovalServiceConfig) -> Router {
     let state = ApprovalServiceState {
         store: Arc::new(Mutex::new(store)),
+        callback_deliveries: Arc::new(Mutex::new(BTreeMap::new())),
         config,
         client: reqwest::Client::new(),
     };
@@ -315,6 +422,12 @@ async fn register_request(
             "invalid request token".to_string(),
         ));
     }
+    AuthenticatedPrincipalKind::try_from(request.principal.as_str()).map_err(|_| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "principal must be one of anonymous, oidc, agent, or golem-user".to_string(),
+        )
+    })?;
     let mut store = state.store.lock().unwrap();
     let existed = store.get(request.request_id).is_some();
     store.register(request).map_err(store_error_response)?;
@@ -370,19 +483,44 @@ async fn decide_request(
             "invalid decision token".to_string(),
         ));
     }
+    let delivery = state.callback_delivery(request_id);
+    let _delivery_guard = delivery.lock().await;
     let record = {
         let mut store = state.store.lock().unwrap();
+        store
+            .recover_callback_claim(request_id)
+            .map_err(store_error_response)?;
         store
             .decide(request_id, decision)
             .map_err(store_error_response)?
     };
     if record.callback == CallbackState::Pending {
-        let callback = deliver_callback(&state, &record).await?;
-        let mut store = state.store.lock().unwrap();
-        return store
-            .set_callback_state(request_id, callback)
-            .map(Json)
-            .map_err(store_error_response);
+        let claimed = state
+            .store
+            .lock()
+            .unwrap()
+            .claim_callback(request_id)
+            .map_err(store_error_response)?;
+        match deliver_callback(&state, &claimed).await {
+            Ok(callback) => {
+                return state
+                    .store
+                    .lock()
+                    .unwrap()
+                    .finish_callback(request_id, callback)
+                    .map(Json)
+                    .map_err(store_error_response);
+            }
+            Err(delivery_error) => {
+                state
+                    .store
+                    .lock()
+                    .unwrap()
+                    .set_callback_state(request_id, CallbackState::Pending)
+                    .map_err(store_error_response)?;
+                return Err(delivery_error);
+            }
+        }
     }
     Ok(Json(record))
 }
@@ -577,5 +715,42 @@ mod tests {
             ),
             Err(StoreError::Conflict(_))
         ));
+    }
+
+    #[test]
+    fn callback_claim_is_durable_and_recovered_after_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("approvals.json");
+        let request = request();
+        let mut store = ApprovalStore::open(&path).unwrap();
+        store.register(request.clone()).unwrap();
+        store
+            .decide(
+                request.request_id,
+                ApprovalDecision {
+                    owner: request.owner,
+                    state: ApprovalState::Approved,
+                    decided_by: "operator".to_string(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            store.claim_callback(request.request_id).unwrap().callback,
+            CallbackState::Delivering
+        );
+        drop(store);
+
+        let mut recovered = ApprovalStore::open(&path).unwrap();
+        assert_eq!(
+            recovered.get(request.request_id).unwrap().callback,
+            CallbackState::Pending
+        );
+        assert_eq!(
+            recovered
+                .claim_callback(request.request_id)
+                .unwrap()
+                .callback,
+            CallbackState::Delivering
+        );
     }
 }

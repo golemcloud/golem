@@ -31,6 +31,7 @@ components:
 tools:
   moonbit-streaming: {}
   matrix-core: {}
+  matrix-permission-issuer: {}
   matrix-resource: {}
 
 agents:
@@ -40,6 +41,7 @@ agents:
       matrix-core: {}
   MoonBitResourceToolStreamingCaller:
     tools:
+      matrix-permission-issuer: {}
       matrix-resource: {}
 
 environments:

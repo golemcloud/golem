@@ -40,7 +40,7 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareName, ToolMiddlewareSource,
 };
-use golem_common::model::{AgentInvocationResult, IdempotencyKey};
+use golem_common::model::{AgentInvocationResult, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::tool::{ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_service_base::model::agent_secret::AgentSecret;
@@ -142,10 +142,13 @@ struct Fixture {
     owner_component: golem_common::model::component::ComponentDto,
     owner_id: golem_common::model::AgentId,
     other_owner_id: golem_common::model::AgentId,
+    cross_environment_owner_id: golem_common::model::AgentId,
     account_id: AccountId,
     environment_id: EnvironmentId,
+    other_environment_id: EnvironmentId,
     fingerprint: golem_common::model::AgentFingerprint,
     other_fingerprint: golem_common::model::AgentFingerprint,
+    cross_environment_fingerprint: golem_common::model::AgentFingerprint,
     definitions: BTreeMap<ToolName, golem_common::schema::tool::Tool>,
     effects: Arc<Mutex<Vec<String>>>,
     quota: Arc<RecordingQuotaService>,
@@ -159,19 +162,27 @@ async fn fixture(
     provider: &PrecompiledComponent,
 ) -> anyhow::Result<Fixture> {
     let context = TestContext::new(last_unique_id);
+    let publisher_environment_id = EnvironmentId::new();
+    let other_environment_id = EnvironmentId::new();
     let environment = Arc::new(TestEnvironmentStateService::default());
     let quota = Arc::new(RecordingQuotaService::default());
     let (effect_port, effect_server, effects) = start_effect_server().await?;
-    environment.set_agent_secret(AgentSecret {
-        id: AgentSecretId::new(),
-        environment_id: context.default_environment_id,
-        path: CanonicalAgentSecretPath(vec!["contextSecret".to_string()]),
-        revision: AgentSecretRevision::INITIAL,
-        secret_type: golem_common::schema::SchemaGraph::anonymous(
-            golem_common::schema::SchemaType::string(),
-        ),
-        secret_value: Some(SchemaValue::String("caller-secret".to_string())),
-    });
+    for (environment_id, value) in [
+        (publisher_environment_id, "publisher-secret"),
+        (context.default_environment_id, "caller-one-secret"),
+        (other_environment_id, "caller-two-secret"),
+    ] {
+        environment.set_agent_secret(AgentSecret {
+            id: AgentSecretId::new(),
+            environment_id,
+            path: CanonicalAgentSecretPath(vec!["contextSecret".to_string()]),
+            revision: AgentSecretRevision::INITIAL,
+            secret_type: golem_common::schema::SchemaGraph::anonymous(
+                golem_common::schema::SchemaType::string(),
+            ),
+            secret_value: Some(SchemaValue::String(value.to_string())),
+        });
+    }
     let executor = start_with_overrides(
         deps,
         &context,
@@ -183,16 +194,20 @@ async fn fixture(
     )
     .await?;
     let provider_component = executor
-        .component_dep(&context.default_environment_id, provider)
+        .component_dep(&publisher_environment_id, provider)
         .store()
         .await?;
     let owner_component = executor
         .component_dep(&context.default_environment_id, owner)
         .store()
         .await?;
+    let other_owner_component = executor
+        .component_dep(&other_environment_id, owner)
+        .store()
+        .await?;
     let middleware_component = executor
         .component(
-            &context.default_environment_id,
+            &publisher_environment_id,
             "golem_it_tool_runtime_bypass_middleware_release",
         )
         .name("golem-it:tool-runtime-bypass-middleware")
@@ -223,48 +238,53 @@ async fn fixture(
         })
         .collect::<BTreeMap<_, _>>();
     let agent_type = AgentTypeName("ToolRuntimeBypassOwner".to_string());
-    let mut deployment = deployment_state(
-        context.account_id,
-        provider_component.id,
-        provider_component.revision,
-        provider_metadata.tools,
-    );
-    install_chain(
-        &mut deployment,
-        &agent_type,
-        &ToolName::try_from("chain-probe").unwrap(),
-        middleware_component.id,
-        middleware_component.revision,
-        &middleware_metadata.tool_middlewares,
-        &[
-            "runtime-bypass-u1",
-            "runtime-bypass-u2",
-            "runtime-bypass-p1",
-            "runtime-bypass-p2",
-        ],
-    );
-    install_chain(
-        &mut deployment,
-        &agent_type,
-        &ToolName::try_from("validation-probe").unwrap(),
-        middleware_component.id,
-        middleware_component.revision,
-        &middleware_metadata.tool_middlewares,
-        &["runtime-bypass-u2"],
-    );
-    environment.set_tool_deployment(
-        context.default_environment_id,
-        owner_component.id,
-        owner_component.revision,
-        Some(deployment),
-    );
+    for (environment_id, component) in [
+        (context.default_environment_id, &owner_component),
+        (other_environment_id, &other_owner_component),
+    ] {
+        let mut deployment = deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            provider_metadata.tools.clone(),
+        );
+        install_chain(
+            &mut deployment,
+            &agent_type,
+            &ToolName::try_from("chain-probe").unwrap(),
+            middleware_component.id,
+            middleware_component.revision,
+            &middleware_metadata.tool_middlewares,
+            &[
+                "runtime-bypass-u1",
+                "runtime-bypass-u2",
+                "runtime-bypass-p1",
+                "runtime-bypass-p2",
+            ],
+        );
+        install_chain(
+            &mut deployment,
+            &agent_type,
+            &ToolName::try_from("validation-probe").unwrap(),
+            middleware_component.id,
+            middleware_component.revision,
+            &middleware_metadata.tool_middlewares,
+            &["runtime-bypass-u2"],
+        );
+        environment.set_tool_deployment(
+            environment_id,
+            component.id,
+            component.revision,
+            Some(deployment),
+        );
+    }
     let agent_id = agent_id!("ToolRuntimeBypassOwner", "e2-owner");
     let owner_id = executor
         .start_agent_with(
             &owner_component.id,
             agent_id,
             HashMap::from([
-                ("OWNER_MARKER".to_string(), "caller-config".to_string()),
+                ("OWNER_MARKER".to_string(), "caller-one-config".to_string()),
                 ("EFFECT_PORT".to_string(), effect_port.to_string()),
             ]),
             Vec::new(),
@@ -276,7 +296,7 @@ async fn fixture(
             &owner_component.id,
             agent_id!("ToolRuntimeBypassOwner", "e2-other"),
             HashMap::from([
-                ("OWNER_MARKER".to_string(), "caller-config".to_string()),
+                ("OWNER_MARKER".to_string(), "caller-one-config".to_string()),
                 ("EFFECT_PORT".to_string(), effect_port.to_string()),
             ]),
             Vec::new(),
@@ -286,15 +306,33 @@ async fn fixture(
         .get_worker_metadata(&other_owner_id)
         .await?
         .fingerprint;
+    let cross_environment_owner_id = executor
+        .start_agent_with(
+            &other_owner_component.id,
+            agent_id!("ToolRuntimeBypassOwner", "e2-cross-environment"),
+            HashMap::from([
+                ("OWNER_MARKER".to_string(), "caller-two-config".to_string()),
+                ("EFFECT_PORT".to_string(), effect_port.to_string()),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let cross_environment_fingerprint = executor
+        .get_worker_metadata(&cross_environment_owner_id)
+        .await?
+        .fingerprint;
     Ok(Fixture {
         executor,
         owner_component,
         owner_id,
         other_owner_id,
+        cross_environment_owner_id,
         account_id: context.account_id,
         environment_id: context.default_environment_id,
+        other_environment_id,
         fingerprint,
         other_fingerprint,
+        cross_environment_fingerprint,
         definitions,
         effects,
         quota,
@@ -314,8 +352,8 @@ async fn immediate_successor_overlap_and_calling_owner_context(
     let fixture = fixture(last_unique_id, deps, owner, provider).await?;
     let normal = invoke_chain(&fixture, "forged-principal", "normal").await?;
     assert_eq!(normal.claimed_principal, "P2>P1>U2>U1>forged-principal");
-    assert_eq!(normal.owner_config, "caller-config");
-    assert_eq!(normal.owner_secret, "caller-secret");
+    assert_eq!(normal.owner_config, "caller-one-config");
+    assert_eq!(normal.owner_secret, "caller-one-secret");
     let account_bits = fixture.account_id.0.as_u128();
     assert!(normal.actual_principal.contains("Principal::GolemUser"));
     assert!(
@@ -379,6 +417,68 @@ async fn immediate_successor_overlap_and_calling_owner_context(
             "runtime-bypass-p2",
             "chain-probe",
         ]));
+    Ok(())
+}
+
+#[test]
+#[timeout("3m")]
+async fn calling_owner_context_isolated_across_environments(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_runtime_bypass_owner")] owner: &PrecompiledComponent,
+    #[tagged_as("tool_runtime_bypass_provider")] provider: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let fixture = fixture(last_unique_id, deps, owner, provider).await?;
+
+    let first = invoke_chain(&fixture, "first-forged-principal", "first").await?;
+    let second = invoke_chain_for(
+        &fixture,
+        &fixture.cross_environment_owner_id,
+        fixture.cross_environment_fingerprint,
+        "second-forged-principal",
+        "second",
+    )
+    .await?;
+    let first_again = invoke_chain(&fixture, "first-again-forged-principal", "first-again").await?;
+
+    for (evidence, config, secret, forged) in [
+        (
+            &first,
+            "caller-one-config",
+            "caller-one-secret",
+            "first-forged-principal",
+        ),
+        (
+            &second,
+            "caller-two-config",
+            "caller-two-secret",
+            "second-forged-principal",
+        ),
+        (
+            &first_again,
+            "caller-one-config",
+            "caller-one-secret",
+            "first-again-forged-principal",
+        ),
+    ] {
+        assert_eq!(evidence.owner_config, config);
+        assert_eq!(evidence.owner_secret, secret);
+        assert!(evidence.actual_principal.contains("Principal::GolemUser"));
+        assert!(!evidence.actual_principal.contains(forged));
+    }
+
+    let acquisitions = fixture.quota.acquisitions();
+    assert_eq!(acquisitions.len(), 3);
+    assert_eq!(acquisitions[0].0, fixture.environment_id);
+    assert_eq!(acquisitions[1].0, fixture.other_environment_id);
+    assert_eq!(acquisitions[2].0, fixture.environment_id);
+    assert!(
+        acquisitions
+            .iter()
+            .all(|(_, resource, expected)| resource.0 == "context-quota" && *expected == 7)
+    );
+    assert_eq!(leaf_effect_count(&fixture), 3);
     Ok(())
 }
 
@@ -461,6 +561,7 @@ async fn universal_results_are_validated_and_valid_stream_transformation_survive
 ) -> anyhow::Result<()> {
     let fixture = fixture(last_unique_id, deps, owner, provider).await?;
     for mode in ["wrong-root", "wrong-nested", "wrong-error"] {
+        let effects_before = fixture.effects.lock().unwrap().len();
         let result = invoke_tool(
             &fixture,
             "validation-probe",
@@ -478,6 +579,12 @@ async fn universal_results_are_validated_and_valid_stream_transformation_survive
             ),
             "{mode} did not produce invalid-result: {error:?}"
         );
+        assert_eq!(
+            fixture.effects.lock().unwrap().len(),
+            effects_before + 1,
+            "{mode} repeated or skipped its independently observed leaf effect"
+        );
+        assert_entity_cleanup(&fixture).await;
     }
 
     let agent_id = agent_id!("ToolRuntimeBypassOwner", "e2-owner");
@@ -500,6 +607,7 @@ async fn universal_results_are_validated_and_valid_stream_transformation_survive
         }
     );
     assert_eq!(fixture.effects.lock().unwrap().len(), 4);
+    assert_entity_cleanup(&fixture).await;
 
     let oplog = fixture
         .executor
@@ -575,6 +683,24 @@ fn leaf_effect_count(fixture: &Fixture) -> usize {
         .count()
 }
 
+async fn assert_entity_cleanup(fixture: &Fixture) {
+    let owner = OwnedAgentId::new(fixture.environment_id, &fixture.owner_id);
+    if let Some(active) = fixture.executor.active_entity_metadata(&owner).await {
+        assert!(
+            active.tool_operations.operations.is_empty(),
+            "tool operations leaked after result settlement: {active:#?}"
+        );
+        assert!(
+            active.slots.iter().all(|slot| slot.invocations.is_empty()),
+            "entity invocations leaked after result settlement: {active:#?}"
+        );
+        assert!(
+            active.lane.holder.is_none() && active.lane.active_invocation_count == 0,
+            "owner lane remained occupied after result settlement: {active:#?}"
+        );
+    }
+}
+
 async fn invoke_tool(
     fixture: &Fixture,
     name: &str,
@@ -608,9 +734,15 @@ async fn invoke_tool_for(
         .command_index_by_path(&command_path)
         .ok_or_else(|| anyhow::anyhow!("tool `{name}` has no inspect command"))?;
     let schema = definition.canonical_input_record_schema(command)?;
+    let environment_id = if owner_id == &fixture.cross_environment_owner_id {
+        fixture.other_environment_id
+    } else {
+        fixture.environment_id
+    };
     let output = fixture
         .executor
-        .invoke_external_tool(
+        .invoke_external_tool_in_environment(
+            environment_id,
             owner_id,
             fingerprint,
             IdempotencyKey::fresh(),

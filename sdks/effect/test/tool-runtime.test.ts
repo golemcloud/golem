@@ -234,7 +234,7 @@ describe("registered tool guest runtime", () => {
       expect(settled).toBe(false)
       releaseStderr()
       if (declaredError) await expect(invocation).rejects.toMatchObject({ tag: "custom-error" })
-      else await expect(invocation).resolves.toEqual({ result: undefined })
+      else await expect(invocation).rejects.toThrow("stdout finish failed")
       expect(settled).toBe(true)
     },
   )

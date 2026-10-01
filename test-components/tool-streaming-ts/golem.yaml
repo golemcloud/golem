@@ -27,6 +27,7 @@ tools:
   ts-streaming: {}
   matrix-core: {}
   matrix-resource: {}
+  matrix-permission-issuer: {}
 
 agents:
   TsToolStreamingCaller:
@@ -36,6 +37,7 @@ agents:
   TsResourceToolStreamingCaller:
     tools:
       matrix-resource: {}
+      matrix-permission-issuer: {}
 
 resourceDefaults:
   local:

@@ -35,6 +35,11 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { Bytes, s } from '../src/schema/markers';
+import {
+  GuestPermissionCardHandle,
+  peekGuestPermissionCardHandle,
+} from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 
 interface RecordedInvocation {
   readonly commandPath: readonly string[];
@@ -837,24 +842,55 @@ describe('tool runtime client', () => {
     ).resolves.toBe(raw);
   });
 
-  it('decodes an owned permission-card result exactly once', async () => {
+  it('keeps a returned imported permission-card resource live until its next transfer', async () => {
     const schema = s.permissionCard({ polymorphic: false });
     const codec = compileSchema(schema);
     const definition = toolDefinition('permission-card-result').body((body) =>
       body.returns(schema),
     );
-    const raw = { [Symbol.dispose]: vi.fn() } as never;
+    class ImportedPermissionCard {
+      private live = true;
+      borrow() {
+        if (!this.live) throw new Error('unknown handle index 4294967295');
+        return 'card-id';
+      }
+      consume() {
+        this.live = false;
+      }
+    }
+    const raw = new ImportedPermissionCard() as never;
 
-    await expect(
-      client(definition, {
-        transport: new FakeTransport(() => ({
-          result: typedSchemaValueToWit({
-            graph: codec.graph,
-            value: codec.toValue(raw),
-          }),
-        })),
-      })['permission-card-result']({}),
-    ).resolves.toBe(raw);
+    const card = await client(definition, {
+      transport: new FakeTransport(() => ({
+        result: typedSchemaValueToWit({
+          graph: codec.graph,
+          value: codec.toValue(raw),
+        }),
+      })),
+    })['permission-card-result']({});
+
+    expect(card).toBeInstanceOf(GuestPermissionCardHandle);
+    const imported = peekGuestPermissionCardHandle(
+      PERMISSION_CARD_INTERNAL,
+      card as GuestPermissionCardHandle,
+    ) as unknown as ImportedPermissionCard;
+    expect(imported).toBe(raw);
+    expect(imported.borrow()).toBe('card-id');
+
+    const exchange = toolDefinition('permission-card-exchange').body((body) =>
+      body.positional('card', schema).returns(z.void()),
+    );
+    await client(exchange, {
+      transport: new FakeTransport((invocation) => {
+        const node = invocation.input.value.valueNodes.find(
+          (node) => node.tag === 'permission-card-handle',
+        ) as { val: ImportedPermissionCard };
+        expect(node.val).toBe(raw);
+        node.val.consume();
+        return {};
+      }),
+    })['permission-card-exchange']({ card });
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
   });
 
   it('accepts allowed MIME metadata when projecting a binary result to Uint8Array', async () => {

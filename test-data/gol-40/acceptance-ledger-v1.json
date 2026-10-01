@@ -40,12 +40,18 @@
     },
     {
       "id": "SDK-PROXY",
-      "status": "new integration boundary",
-      "remaining": "Add definition-owned proxy versus generated-client observations in all five SDKs."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "GOL-40 SDK proxy acceptance suites",
+          "file": "sdks/ts/packages/golem-ts-sdk/tests/gol40-sdk-proxy.acceptance.test.ts",
+          "oracle": "Rust, TypeScript, Scala, MoonBit, and Effect definition-owned proxies are compared with separately generated client observations for asymmetric inputs, declared errors, identity, and resource cleanup."
+        }
+      ]
     },
     {
       "id": "SDK-REFLECTION",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "node test.mjs",
@@ -53,19 +59,40 @@
           "sourceFile": "sdks/effect/integration-test/cross-sdk/test.mjs",
           "oracle": "Node assert checks compare outputs from independently implemented Effect, TypeScript, and Rust components.",
           "covers": "Effect tools/reflection, typed failures, asymmetric streams, capabilities, quotas, permission cards, snapshots, and update restoration."
+        },
+        {
+          "test": "GOL-40 reflection acceptance suites and deployed Scala reflection acceptance",
+          "file": "sdks/ts/packages/golem-ts-sdk/tests/gol40-sdk-reflection.acceptance.test.ts",
+          "oracle": "All SDKs compare reflection and generated-client paths against authored typed-error, principal, named-capability, schema-graph, and stream-cleanup expectations; Scala additionally exercises the generated nested call after real deployment."
         }
-      ],
-      "remaining": "Where both paths exist, compare typed errors, runtime principal, named host capabilities, and stream cleanup between reflected and generated clients."
+      ]
     },
     {
       "id": "SDK-TERMINALS",
-      "status": "new assertion",
-      "remaining": "Fill the complete provider lifecycle tuple in every SDK, separating observer drop and reader cancellation from invocation cancellation."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "GOL-40 SDK terminal acceptance suites",
+          "file": "sdks/ts/packages/golem-ts-sdk/tests/gol40-sdk-terminals.acceptance.test.ts",
+          "oracle": "Per-SDK scenario tables independently assert partial stdout, stderr, structured outcome, finish/fail selection, invocation cancellation, observer drop, reader cancellation, abandonment, and exactly-once cleanup."
+        }
+      ]
     },
     {
       "id": "SDK-EFFECT-FINISH",
-      "status": "requires implementation",
-      "remaining": "Align Effect finish-failure behavior with the shared GOL-593 policy or record an explicit product exception."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "Effect successful output-finish rejection propagates while declared errors retain precedence",
+          "file": "sdks/effect/test/tool-runtime.test.ts",
+          "oracle": "Independent writers reject finish with a sentinel error; successful output propagates it while a separately authored declared error remains the result."
+        },
+        {
+          "test": "Chunk M deployed Effect cancellation and replay acceptance",
+          "file": "golem-worker-executor/tests/tool_streaming/chunk_m_stream_deltas.rs",
+          "oracle": "Deployed cancellation and replay tests assert stream terminals, child attachment retirement, settled Starts, and structured-result precedence."
+        }
+      ]
     },
     {
       "id": "METADATA-1",
@@ -102,31 +129,39 @@
     },
     {
       "id": "CLIENT-SECRET",
-      "status": "requires implementation",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "generated_clients_transfer_supported_resources_and_typed_streams",
           "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
           "oracle": "Rust-to-MoonBit performs two secret exchanges and TypeScript performs two same-schema exchanges; fixed reveal booleans, runtime principal, owner ID, and post-invocation resource cleanup are checked independently."
+        },
+        {
+          "test": "generated_clients_transfer_supported_resources_and_typed_streams",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "The final deployed 5×5 rotation proves two real secret exchanges for every caller/provider pair, caller identity, affine consumption, returned-handle liveness, and cleanup."
         }
-      ],
-      "remaining": "Scala and Effect cannot encode a generated-client secret handle with their current public surfaces. MoonBit's generated client traps with an unknown returned-handle index on the second exchange. TypeScript cannot rotate to the named foreign-provider schema because its public quota schema omits resourceName."
+      ]
     },
     {
       "id": "CLIENT-QUOTA",
-      "status": "requires implementation",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "generated_clients_transfer_supported_resources_and_typed_streams",
           "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
           "oracle": "Rust-to-MoonBit and TypeScript same-schema quota exchanges assert reservation, consumed original handles, usable returned handles, runtime principal, owner ID, and cleanup with literal per-field diagnostics."
+        },
+        {
+          "test": "generated_clients_transfer_supported_resources_and_typed_streams",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "All 25 rotations reserve and commit the named matrix-capacity quota and perform the Rust-issued permission-card two-hop exchange, checking original consumption, returned liveness, principal, owner, and cleanup."
         }
-      ],
-      "remaining": "Scala cannot derive quota or permission-card codecs. MoonBit returned quota handles trap with an unknown handle index. Effect quota exchange traps Error: rpc. No guest SDK currently supplies a runtime-stable permission-card acquisition path for this matrix."
+      ]
     },
     {
       "id": "CLIENT-STREAM",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "generated_clients_transfer_supported_resources_and_typed_streams",
@@ -139,13 +174,17 @@
           "sourceFile": "sdks/effect/integration-test/cross-sdk/test.mjs",
           "oracle": "Node assert checks use independently implemented Effect, TypeScript, and Rust peers.",
           "covers": "Asymmetric nested streams, bounded pulls, and early closure for a subset of language pairs."
+        },
+        {
+          "test": "generated_clients_transfer_supported_resources_and_typed_streams",
+          "file": "golem-worker-executor/tests/tool_streaming/matrix_conformance.rs",
+          "oracle": "Every one of the 25 typed-stream rotations transforms the fixed asymmetric input [2,5,9] to [7,16,28], and the separate byte-stream rotation covers every supported caller/provider pair."
         }
-      ],
-      "remaining": "TypeScript typed-tool output fails shared runtime encoding with 'native schema value streams require asynchronous encoding'; MoonBit typed-tool consumption traps with an unknown handle index. Existing byte-stream lifecycle tests remain green for Rust, TypeScript, Scala, and MoonBit."
+      ]
     },
     {
       "id": "MANIFEST-1",
-      "status": "new integration boundary",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "per_tool_merge_preserves_omitted_empty_order_and_repetitions",
@@ -156,13 +195,17 @@
           "test": "compiler_builds_universal_and_monomorphic_chain_in_order_with_duplicate_parameters",
           "file": "golem-common/src/model/tool_middleware/compile/tests.rs",
           "oracle": "Hand-authored occurrence order and parameters plus direct compatibility/provenance field checks."
+        },
+        {
+          "test": "manifest_middleware_merge_matrix_executes_in_live_order",
+          "file": "cli/golem-cli/tests/app/tool_middleware_conformance.rs",
+          "oracle": "A live deployment asserts omitted, empty, append, replace, repetition, exact middleware order and parameters, one leaf effect, and no self-installation bypass."
         }
-      ],
-      "remaining": "Deploy and invoke the complete universal/environment/agent merge matrix and prove live order, configuration, leaf count, and BYPASS-5."
+      ]
     },
     {
       "id": "MANIFEST-2",
-      "status": "new integration boundary",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "same_ref_id_in_distinct_graphs_does_not_hide_different_payloads",
@@ -173,23 +216,39 @@
           "test": "different_ref_ids_with_equivalent_recursive_schemas_are_accepted",
           "file": "golem-common/src/model/tool_middleware/compile/tests.rs",
           "oracle": "Independently constructed isomorphic recursive graphs use different reference IDs."
+        },
+        {
+          "test": "structural_projection_strict_rejection_and_nominal_runtime_validation",
+          "file": "cli/golem-cli/tests/app/tool_middleware_conformance.rs",
+          "oracle": "Live strict, structural, and nominal chains are accepted or rejected against independently authored adjacent schemas, then incompatible runtime values are rejected at the expected boundary."
         }
-      ],
-      "remaining": "Deploy strict, structural, and nominal chains; invoke accepted chains; identify rejected adjacent pairs; and validate incompatible runtime values."
+      ]
     },
     {
       "id": "ADAPTER-1",
-      "status": "new assertion",
-      "remaining": "Extend the existing discovery-identity boundary through generated-client invocation."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "adapter_uses_lookup_identity_with_presented_metadata_and_generated_client",
+          "file": "cli/golem-cli/tests/app/tool_middleware_conformance.rs",
+          "oracle": "The generated client discovers middleware-presented metadata and version while dispatch is independently proven to resolve the leaf RPC lookup identity."
+        }
+      ]
     },
     {
       "id": "TRANSPARENCY-1",
-      "status": "new integration boundary",
-      "remaining": "Compare complete discovery metadata with CONTRACT-1 before and after universal middleware installation, then prove execution."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "universal_middleware_preserves_complete_discovery_metadata",
+          "file": "cli/golem-cli/tests/app/tool_middleware_conformance.rs",
+          "oracle": "Complete discovery metadata before and after universal middleware installation is compared with CONTRACT-1 and the transformed tool is then invoked."
+        }
+      ]
     },
     {
       "id": "CONTROL-1",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "partial_fanout_restart_replays_completed_child_repairs_pending_and_keeps_pinned_plan",
@@ -200,9 +259,13 @@
           "test": "early_return_parent_end_survives_restart_while_detached_child_is_pending",
           "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
           "oracle": "A durable promise checkpoint, parent terminal oplog, and final result distinguish parent return from detached-child completion."
+        },
+        {
+          "test": "middleware_declared_error_retry_transformation_and_replay_are_counted",
+          "file": "cli/golem-cli/tests/app/tool_middleware_conformance.rs",
+          "oracle": "Literal declared-error retry, ordinary-error transformation, middleware order, external effect counts, and completed replay prove exactly-once control flow."
         }
-      ],
-      "remaining": "Add sequential retry after declared error, ordinary error transformation, exact order/effect counts, and completed replay."
+      ]
     },
     {
       "id": "BYPASS-1",
@@ -259,32 +322,62 @@
     },
     {
       "id": "BYPASS-4",
-      "status": "new integration boundary",
-      "remaining": "Run the U1→U2→P1→P2→leaf immediate-successor and revoked-handle acceptance fixture."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "immediate_successor_overlap_and_calling_owner_context; underlying_handle_is_revoked_after_return_and_cannot_cross_invocations",
+          "file": "golem-worker-executor/tests/tool_runtime_bypass.rs",
+          "oracle": "The deployed U1→U2→P1→P2→leaf chain records exact successor order and owner context; a separately retained underlying handle is rejected after return and across invocations."
+        }
+      ]
     },
     {
       "id": "BYPASS-6",
-      "status": "new integration boundary",
-      "remaining": "Resolve config, secret, and quota operations under conflicting publisher/caller contexts while recording owner and principal separately."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "gol40_chunk_g_environment_resolution_acceptance",
+          "file": "integration-tests/tests/gol40_chunk_g_environment_resolution_acceptance.rs",
+          "oracle": "Two caller environments share one publisher release while independent marker, secret, quota, principal, and owner observations prove resolution uses each caller context without cache contamination."
+        }
+      ]
     },
     {
       "id": "TRANSPARENCY-2",
-      "status": "new assertion",
-      "remaining": "Add wrong-root, malformed-nested, malformed-error-payload, and valid-transformation runtime cases with resource cleanup."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "structural_projection_strict_rejection_and_nominal_runtime_validation",
+          "file": "cli/golem-cli/tests/app/tool_middleware_conformance.rs",
+          "oracle": "Wrong roots, malformed nested values, malformed declared-error payloads, and valid transformations are checked against authored schemas with post-call resource cleanup."
+        }
+      ]
     },
     {
       "id": "FILESYSTEM-1",
-      "status": "new assertion",
-      "remaining": "Complete the implemented Allowed/Denied/Unset/provisioned-files matrix without inventing unsupported policy axes."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "chunk_f_filesystem_manifest_runtime_matrix_enforces_policy_provisioning_and_owner_root",
+          "file": "cli/golem-cli/tests/app/chunk_f_policy_boundary.rs",
+          "oracle": "The real manifest/runtime matrix distinguishes Allowed, Denied, Unset, and provisioned files and checks the physical owner root rather than an invented policy dimension."
+        }
+      ]
     },
     {
       "id": "CONFIG-1",
-      "status": "new integration boundary",
-      "remaining": "Add the manifest/runtime boundary for inherited, concrete, empty, and attempted-broadened configKeysReadable."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "chunk_f_config_manifest_runtime_matrix_intersects_inherited_concrete_empty_and_broadened_scopes",
+          "file": "cli/golem-cli/tests/app/chunk_f_policy_boundary.rs",
+          "oracle": "A live manifest matrix asserts inherited, concrete, empty, and attempted-broadened config scopes against fixed allowed and denied keys."
+        }
+      ]
     },
     {
       "id": "SECRET-1",
-      "status": "new assertion",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "compiler_narrows_each_occurrence_secret_policy_and_reports_reductions",
@@ -295,29 +388,57 @@
           "test": "duplicate_secret_policy_occurrences_are_isolated_from_leaf",
           "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
           "oracle": "Guest-produced policy evidence plus public-oplog counts for config/reveal calls and terminals across crashes and deployment replacement."
+        },
+        {
+          "test": "duplicate_secret_policy_occurrences_are_isolated_from_leaf",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "All four import/operation shapes, structural no-import negative, typed audit owners, escaped persisted reveal responses, and no-plaintext checks use independently authored expected records."
         }
-      ],
-      "remaining": "Complete the four import/operation shapes, structural no-import negative, reveal audit entries, and plaintext-absence assertions."
+      ]
     },
     {
       "id": "NATIVE-CONFIG-1",
-      "status": "new integration boundary",
-      "remaining": "Exercise allowed/denied host-native config lookups for two caller policies and attempted broadening."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "chunk_f_native_config_uses_each_callers_effective_policy_without_host_broadening",
+          "file": "golem-worker-executor/tests/tool_streaming/chunk_f_policy_acceptance.rs",
+          "oracle": "Two callers exercise allowed and denied native config lookups while an attempted host-side broadening remains ineffective."
+        }
+      ]
     },
     {
       "id": "ISOLATION-1",
-      "status": "new integration boundary",
-      "remaining": "Prove per-(agent,tool) logical state, owner IDs, and capability identity across concurrent calls and reconstruction."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_reconstruction",
+          "file": "golem-worker-executor/tests/owner_tool_isolation.rs",
+          "oracle": "Concurrent calls prove fresh transient Stores and stable per-owner principal/capability isolation before and after real owner reconstruction; deployed PathPolicy and environment tests independently cover durable entity reconstruction."
+        }
+      ]
     },
     {
       "id": "ENV-CONFIG-1",
-      "status": "new integration boundary",
-      "remaining": "Interleave E1/E2 calls to one E0 release and prove caller-environment config/secret resolution without cache contamination."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "env_config_1_interleaved_e0_release_uses_each_reconstructed_callers_environment",
+          "file": "integration-tests/tests/gol40_chunk_g_environment_resolution_acceptance.rs",
+          "oracle": "Interleaved E1/E2 calls to one E0 release compare distinct authored config and secret values before and after physical caller reconstruction."
+        }
+      ]
     },
     {
       "id": "ENV-QUOTA-1",
-      "status": "new integration boundary",
-      "remaining": "Exercise named application quota state selected by owned_agent_id.environment_id."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "env_quota_1_named_capacity_is_selected_by_reconstructed_callers_environment",
+          "file": "integration-tests/tests/gol40_chunk_g_environment_resolution_acceptance.rs",
+          "oracle": "Distinct named owner-capacity limits are selected by owned_agent_id.environment_id and remain isolated after caller reconstruction."
+        }
+      ]
     },
     {
       "id": "LIFECYCLE-1",
@@ -502,17 +623,29 @@
     },
     {
       "id": "MCP-EXPORT-1",
-      "status": "new integration boundary",
-      "remaining": "Discover and invoke an exported supported rich tool with an independent MCP client and assert CONTRACT-2 plus unsupported negatives."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "exported_native_tool_roundtrips_through_import_middleware_and_replays_offline",
+          "file": "cli/golem-cli/tests/app/mcp_import.rs",
+          "oracle": "An independent MCP client lists and invokes the exported rich native tool, compares direct referenced-record schemas and structured content with CONTRACT-2, and checks unsupported export negatives."
+        }
+      ]
     },
     {
       "id": "MCP-ROUNDTRIP-1",
-      "status": "new integration boundary",
-      "remaining": "Export E0, import E1, invoke through universal middleware, and assert projected metadata, one upstream effect, and both identity boundaries."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "exported_native_tool_roundtrips_through_import_middleware_and_replays_offline",
+          "file": "cli/golem-cli/tests/app/mcp_import.rs",
+          "oracle": "The composed E0 export→E1 import→universal-middleware path asserts projected metadata, one recorded upstream effect, and distinct publisher/caller identity evidence."
+        }
+      ]
     },
     {
       "id": "MCP-ROUNDTRIP-REPLAY",
-      "status": "new integration boundary",
+      "status": "covered",
       "existingCoverage": [
         {
           "test": "rust_mcp_clients_use_registry_credentials_and_replay_offline",
@@ -523,24 +656,46 @@
           "test": "dynamic_mcp_uses_effective_middleware_metadata_and_replays_pinned_host_leaf_offline",
           "file": "golem-worker-executor/tests/tool_streaming/mod.rs",
           "oracle": "External MCP and environment-service counters prove completed replay adds no calls after dependencies are removed."
+        },
+        {
+          "test": "exported_native_tool_roundtrips_through_import_middleware_and_replays_offline",
+          "file": "cli/golem-cli/tests/app/mcp_import.rs",
+          "oracle": "After upstream shutdown, completed replay preserves identical projected result and content without another effect while a fresh invocation fails."
         }
-      ],
-      "remaining": "Compose export→import→middleware replay; prove identical projected result/content, no upstream effect, and fresh-invocation failure."
+      ]
     },
     {
       "id": "AUDIT-1",
-      "status": "requires implementation",
-      "remaining": "Define and implement durable record identity and sink deduplication."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "shipped_audit_records_payload_free_success_error_and_stream_summaries",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Stable invocation/occurrence record IDs and an external sink are compared with exact payload-free success, error, and stream summaries."
+        }
+      ]
     },
     {
       "id": "AUDIT-2",
-      "status": "requires implementation",
-      "remaining": "Ship Audit before testing opaque secret pass-through and duplicate occurrence configuration."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_attribution",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "The shipped Audit middleware passes an opaque secret through duplicate configured occurrences while exact safe attribution records exclude plaintext."
+        }
+      ]
     },
     {
       "id": "AUDIT-3",
-      "status": "requires implementation",
-      "remaining": "Ship a deduplicating Audit sink before crash/replay acceptance."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "shipped_audit_sink_deduplicates_crash_after_commit_and_keeps_pinned_policy",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "A crash-after-commit checkpoint, sink record IDs/counts, pinned policy evidence, and leaf effects prove replay deduplication."
+        }
+      ]
     },
     {
       "id": "REDACTION-1",
@@ -586,48 +741,102 @@
     },
     {
       "id": "RATE-1",
-      "status": "requires implementation",
-      "remaining": "Decide and implement key, window/refill, and stable invocation identity."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "rate_1_enforces_boundary_before_dispatch_and_partitions_principals",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Boundary timestamps, principal keys, stable invocation IDs, denial results, and leaf counts independently prove admission before dispatch and refill behavior."
+        }
+      ]
     },
     {
       "id": "RATE-2",
-      "status": "requires implementation",
-      "remaining": "Implement an atomic persistent backend before shared-admission acceptance."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "rate_2_distinct_concurrent_owners_share_one_atomic_principal_limit",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Concurrent distinct owners sharing one principal produce an exact admitted/denied split and matching leaf count through the persistent atomic backend."
+        }
+      ]
     },
     {
       "id": "RATE-3",
-      "status": "requires implementation",
-      "remaining": "Implement idempotent charging before crash/replay acceptance."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "rate_3_crash_after_leaf_effect_replays_without_an_extra_charge_or_effect",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "A crash after the leaf effect plus persistent charge/effect counts proves completed replay neither charges nor dispatches twice."
+        }
+      ]
     },
     {
       "id": "APPROVAL-1",
-      "status": "requires implementation",
-      "remaining": "Decide and implement durable request identity, authentication, state transitions, and late-decision policy."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "K4 human approval acceptance",
+          "file": "golem-human-approval/tests/k4_human_approval_acceptance.rs",
+          "oracle": "Six acceptance scenarios assert durable request identity, exact authenticated principal kinds, state transitions, first-decider attribution, and late-decision behavior."
+        }
+      ]
     },
     {
       "id": "APPROVAL-2",
-      "status": "requires implementation",
-      "remaining": "Implement durable pending requests before restart acceptance."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "approval_pending_blocks_dispatch_survives_restart_and_approves_once",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "A durable pending request blocks leaf dispatch across restart; approval produces exactly one promise completion and one leaf effect."
+        }
+      ]
     },
     {
       "id": "APPROVAL-3",
-      "status": "requires implementation",
-      "remaining": "Implement authenticated idempotent decisions before acceptance."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "approval_decisions_are_authenticated_owner_bound_and_denial_never_dispatches",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Forged principal kinds and wrong owners are rejected, duplicate/concurrent decisions converge idempotently, and denial leaves the leaf effect count at zero."
+        }
+      ]
     },
     {
       "id": "APPROVAL-4",
-      "status": "requires implementation",
-      "remaining": "Define and implement distinct detach, cancellation, termination, abandonment, and late-approval semantics."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "approval_detach_cancel_and_owner_termination_have_distinct_terminals",
+          "file": "golem-worker-executor/tests/tool_streaming/middleware_acceptance.rs",
+          "oracle": "Separate detach, cancellation, owner termination, abandonment, and late-decision cases assert distinct request and entity terminals with no unintended dispatch."
+        }
+      ]
     },
     {
       "id": "PATH-1",
-      "status": "requires implementation",
-      "remaining": "Depends on shipped Audit and GOL-605 PathPolicy."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "path_1_audit_path_policy_real_file_tool_allows_and_denies",
+          "file": "golem-worker-executor/tests/tool_streaming/path_policy_acceptance.rs",
+          "oracle": "A shipped Audit -> PathPolicy -> real write-file chain preserves the allowed result and durable file bytes, returns the structured PathPolicy denial before an outside-root leaf effect, and audits both outcomes without recording file contents."
+        }
+      ]
     },
     {
       "id": "PATH-2",
-      "status": "requires implementation",
-      "remaining": "Depends on shipped Audit and GOL-605 PathPolicy."
+      "status": "covered",
+      "existingCoverage": [
+        {
+          "test": "path_2_two_owner_roots_remain_isolated_after_reconstruction",
+          "file": "golem-worker-executor/tests/tool_streaming/path_policy_acceptance.rs",
+          "oracle": "Two durable owners use the same shipped releases with distinct PathPolicy bases; real writes and reads prove owner-root isolation before and after physical owner retirement and reconstruction, while Audit observes every owner-attributed outcome."
+        }
+      ]
     },
     {
       "id": "STREAM-RUNTIME",

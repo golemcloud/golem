@@ -1,6 +1,6 @@
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { Effect, Schema, Stream } from "effect"
-import { Agents, Bridge, Quota, Tool, WitTypes } from "@golemcloud/effect-golem"
+import { Agents, Quota, Secrets, Tool, WitTypes } from "@golemcloud/effect-golem"
 
 const MatrixRequest = Schema.Struct({
   source: Schema.String,
@@ -33,7 +33,16 @@ const ProviderEvidence = {
   ownerAgentId: Schema.String,
 }
 
-const MatrixQuotaToken = WitTypes.QuotaToken({ resourceName: "matrix-capacity" })
+const MatrixQuotaToken = WitTypes.QuotaToken({
+  resourceName: "matrix-capacity",
+})
+
+const MatrixSecret = WitTypes.Secret(Schema.String)
+const SecretExchange = Schema.Struct({
+  ...ProviderEvidence,
+  revealed: Schema.Boolean,
+  secret: MatrixSecret,
+})
 
 const QuotaExchange = Schema.Struct({
   ...ProviderEvidence,
@@ -46,6 +55,13 @@ const PermissionExchange = Schema.Struct({
   ...ProviderEvidence,
   card: PermissionCard,
 })
+
+const ChunkMStreamEvidence = Schema.Struct({
+  bytesRead: WitTypes.Uint64,
+  outcome: Schema.String,
+})
+
+const ChunkMRejected = Schema.Struct({ reason: Schema.String })
 
 const getSelfMetadata = Agents.getSelfMetadata as Effect.Effect<
   Agents.AgentMetadata,
@@ -115,6 +131,11 @@ Tool.toolDefinition("matrix-core", { version: "1.0.0" })
   })
 
 Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
+  .command("secret", (secret) =>
+    secret.command("exchange", (exchange) =>
+      exchange.body((body) => body.positional("secret", MatrixSecret).returns(SecretExchange)),
+    ),
+  )
   .command("quota", (quota) =>
     quota.command("exchange", (exchange) =>
       exchange.body((body) => body.positional("token", MatrixQuotaToken).returns(QuotaExchange)),
@@ -135,25 +156,31 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
     ),
   )
   .implement({
+    secret: {
+      exchange: ({ secret }, context) =>
+        Effect.gen(function* () {
+          const owner = yield* getSelfMetadata.pipe(Effect.orDie)
+          const revealed = yield* (
+            Secrets.reveal(secret, Schema.String) as Effect.Effect<string, unknown>
+          ).pipe(Effect.orDie)
+          return {
+            ...evidence(context.principal, owner.agentId.agentId),
+            revealed: revealed === "matrix-secret-value",
+            secret,
+          }
+        }),
+    },
     quota: {
       exchange: ({ token }, context) =>
         Effect.gen(function* () {
           const owner = yield* getSelfMetadata.pipe(Effect.orDie)
-          const effectToken = Bridge.quotaTokenFromSchemaValue({
-            tag: "quota-token",
-            handle: token,
-          })
-          const returnedToken = Bridge.quotaTokenToSchemaValue(effectToken)
-          if (returnedToken.tag !== "quota-token") {
-            return yield* Effect.die("quota token bridge returned a non-quota value")
-          }
-          return yield* Quota.withReservation(effectToken, 1n, () =>
+          return yield* Quota.withReservation(token, 1n, () =>
             Effect.succeed({
               used: 1n,
               value: {
                 ...evidence(context.principal, owner.agentId.agentId),
                 reserved: true,
-                token: returnedToken.handle,
+                token,
               },
             }),
           ).pipe(Effect.orDie) as Effect.Effect<typeof QuotaExchange.Type, never>
@@ -172,4 +199,42 @@ Tool.toolDefinition("matrix-resource", { version: "1.0.0" })
     typed: {
       transform: ({ input }) => Effect.succeed(input.pipe(Stream.map((value) => value * 3 + 1))),
     },
+  })
+
+Tool.toolDefinition("chunk-m-effect-streaming", { version: "1.0.0" })
+  .body((body) =>
+    body
+      .positional("mode", Schema.String)
+      .input({ required: true })
+      .output({ required: true })
+      .returns(ChunkMStreamEvidence)
+      .error("rejected", ChunkMRejected, {
+        kind: "runtime-error",
+        exitCode: 7,
+      }),
+  )
+  .implement({
+    chunkMEffectStreaming: ({ mode }, context) =>
+      Effect.gen(function* () {
+        if (!context.stdin || !context.stdout) return yield* Effect.die("required streams missing")
+
+        if (mode === "cancel") {
+          const pressure = new Uint8Array(1024 * 1024)
+          yield* context.stdout(
+            Stream.fromIterable([
+              new Uint8Array([99, 97, 110, 99, 101, 108, 58]),
+              ...Array.from({ length: 32 }, () => pressure),
+            ]),
+          )
+          return { bytesRead: 0n, outcome: "unexpected-cancel-completion" }
+        }
+
+        const chunks = Array.from(yield* Stream.runCollect(context.stdin))
+        const bytesRead = chunks.reduce((total, chunk) => total + BigInt(chunk.length), 0n)
+        yield* context.stdout(Stream.fromIterable([new Uint8Array([0, 127, 128, 255]), ...chunks]))
+        if (mode === "declared-error") {
+          return yield* Effect.fail(Tool.err("rejected", { reason: "expected" }))
+        }
+        return { bytesRead, outcome: "success" }
+      }),
   })

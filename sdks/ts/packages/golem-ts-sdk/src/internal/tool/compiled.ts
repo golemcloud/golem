@@ -220,6 +220,18 @@ export function encodeToolValue(
   }
 }
 
+export async function encodeToolValueAsync(
+  codec: TypedCodec,
+  value: unknown,
+  position: string,
+): Promise<TypedSchemaValue> {
+  try {
+    return { graph: codec.graph, value: await writeConcreteAsync(codec.codec, value) };
+  } catch (error) {
+    throw invalidToolResult(`${position}: ${errorMessage(error)}`);
+  }
+}
+
 export function writeConcrete(codec: ConcreteCodec, value: unknown): SchemaValueTree {
   const writer = new WireWriter();
   try {
@@ -276,6 +288,17 @@ export function readConcrete(codec: ConcreteCodec, tree: SchemaValueTree): unkno
 }
 
 export const invalidToolResult = (val: string) => ({ tag: 'invalid-result' as const, val });
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (
+    error !== null &&
+    typeof error === 'object' &&
+    typeof (error as { val?: unknown }).val === 'string'
+  )
+    return (error as { val: string }).val;
+  return String(error);
+}
 
 interface DeclaredError {
   tag: 'err';

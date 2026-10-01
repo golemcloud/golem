@@ -1,6 +1,6 @@
 use golem_rust::{agent_definition, agent_implementation};
 use manifest_probe_tool_guest_client::ManifestProbeClient;
-use compat_leaf_tool_guest_client::{CompatInput, CompatLeafClient};
+use compat_leaf_tool_guest_client::{CompatInput, PresentedAdapterClient};
 
 #[agent_definition]
 pub trait MiddlewareConformanceAgent {
@@ -49,7 +49,10 @@ impl AdapterConformanceAgent for AdapterConformanceAgentImpl {
     }
 
     async fn invoke(&self, kept: String) -> String {
-        match CompatLeafClient::new().execute(CompatInput { kept }).await {
+        match PresentedAdapterClient::new()
+            .execute(CompatInput { kept })
+            .await
+        {
             Ok(output) => format!("ok:{}", output.kept),
             Err(error) => format!("err:{error:?}"),
         }

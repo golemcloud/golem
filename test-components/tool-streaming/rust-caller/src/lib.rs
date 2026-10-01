@@ -7,19 +7,23 @@ use golem_rust::agentic::{
     AgentStream, Config, InputStream, Principal, RpcError, Secret, ToolError, ToolInvocation,
     ToolInvocationOutput, pump_tool_stdin, spawn_local, tool_protocol_error,
 };
+use golem_rust::bindings::golem::permissions::types as permission_types;
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
 use golem_rust::quota::QuotaToken;
+use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::schema::wit::wire::ToolError as WireToolError;
 use golem_rust::{
-    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph,
-    SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
-    decode_typed_schema_value_owned, encode_schema_value, read_only,
+    CardId, ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire,
+    SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition,
+    agent_implementation, decode_typed_schema_value_owned, encode_schema_value, read_only,
 };
 use matrix_core_tool_guest_client::{
     MatrixCoreArtifactInspectError, MatrixCoreClient, MatrixDimensions, MatrixRequest,
 };
+use matrix_permission_issuer_tool_guest_client::MatrixPermissionIssuerClient;
 use matrix_resource_tool_guest_client::MatrixResourceClient;
 use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
 use std::io::{Read, Write};
@@ -55,6 +59,68 @@ mod definition_owned_proxy {
         ) -> Result<StreamSummary, StreamingError>;
 
         async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
+    }
+}
+
+#[allow(dead_code)]
+mod definition_owned_matrix_proxy {
+    use golem_rust::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, tool_definition};
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    pub struct MatrixDimensions {
+        pub width: u32,
+        pub height: u32,
+    }
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    pub struct MatrixRequest {
+        pub source: String,
+        pub dimensions: MatrixDimensions,
+        pub labels: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    #[schema(rename_all = "camelCase")]
+    pub struct MatrixResult {
+        pub provider: String,
+        pub command: String,
+        pub normalized_source: String,
+        pub weighted_size: i64,
+        pub label_summary: String,
+        pub principal: String,
+        pub owner_agent_id: String,
+    }
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    #[schema(rename_all = "camelCase")]
+    pub struct MatrixRejection {
+        pub field: String,
+        pub reason: String,
+        pub retryable: bool,
+    }
+
+    #[derive(Debug, Clone, golem_rust::ToolError)]
+    pub enum MatrixError {
+        #[tool_error(kind = "usage-error", exit_code = 2)]
+        Rejected(MatrixRejection),
+    }
+
+    pub struct MatrixArtifactSubtree;
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait MatrixCore {
+        #[command(subtree = Artifact)]
+        fn artifact(&self) -> MatrixArtifactSubtree;
+    }
+
+    #[tool_definition]
+    pub trait Artifact {
+        async fn inspect(
+            &self,
+            request: MatrixRequest,
+            multiplier: i64,
+            principal: golem_rust::agentic::Principal,
+        ) -> Result<MatrixResult, MatrixError>;
     }
 }
 
@@ -137,6 +203,27 @@ pub struct MatrixResourceObservation {
     pub typed_values: Vec<u32>,
 }
 
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct RustSdkTerminalObservation {
+    pub success_bytes: Vec<u8>,
+    pub success_result: bool,
+    pub declared_bytes: Vec<u8>,
+    pub declared_error: bool,
+    pub failed_bytes: Vec<u8>,
+    pub failed_terminal: String,
+    pub failed_result: bool,
+    pub cancellation_result: String,
+    pub cancellation_closed_stdin: bool,
+    pub abandoned_writer_bytes: Vec<u8>,
+    pub abandoned_writer_result: bool,
+    pub finish_failure_bytes: Vec<u8>,
+    pub finish_failure_observed: bool,
+    pub cancelled_reader_resumed_bytes: Vec<u8>,
+    pub cancelled_reader_result: bool,
+    pub dropped_observer_bytes: Vec<u8>,
+}
+
 #[derive(IntoSchema)]
 struct RawRunInput {
     mode: String,
@@ -187,6 +274,24 @@ struct RawReadFileResult {
     start_line: Option<u64>,
     end_line: Option<u64>,
     next_cursor: Option<RawReadFileCursor>,
+}
+
+#[derive(FromSchema)]
+#[schema(rename_all = "snake_case")]
+enum RawPathPolicyOperation {
+    Read,
+    Write,
+    Delete,
+}
+
+#[derive(FromSchema)]
+struct RawPathPolicyDenied {
+    operation: RawPathPolicyOperation,
+    argument: String,
+    supplied_path: String,
+    resolved_path: Option<String>,
+    allowed_roots: Vec<String>,
+    reason: String,
 }
 
 #[derive(FromSchema)]
@@ -390,6 +495,8 @@ pub trait ToolStreamingCaller {
     async fn rust_proxy_generated_parity(&self) -> Vec<String>;
     async fn rust_reflected_generated_parity(&self, capable_path: String) -> Vec<String>;
     async fn rust_provider_terminal_rows(&self) -> Vec<String>;
+    async fn gol40_rust_sdk_terminal_observation(&self) -> RustSdkTerminalObservation;
+    async fn gol40_rust_sdk_exception(&self);
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence;
     async fn redaction_stream_case(&self, mode: String) -> RedactionEvidence;
     async fn redaction_dual_case(&self) -> RedactionEvidence;
@@ -414,6 +521,12 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
+    async fn filesystem_policy_write_read(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<Vec<String>, String>;
+    async fn filesystem_policy_read(&self, path: String) -> Result<String, String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -473,6 +586,10 @@ pub trait RustResourceToolStreamingCaller {
         #[agent_config] config: Config<RustResourceToolStreamingCallerConfig>,
     ) -> Self;
 
+    async fn matrix_secret_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_quota_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_permission_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation;
     async fn matrix_resource_observation(&self) -> MatrixResourceObservation;
 }
 
@@ -489,6 +606,30 @@ fn matrix_typed_input(values: [u32; 3]) -> AgentStream<u32> {
             .expect("write matrix typed input values");
     });
     input
+}
+
+fn empty_matrix_resource_observation() -> MatrixResourceObservation {
+    MatrixResourceObservation {
+        secret_first_provider: String::new(),
+        secret_second_provider: String::new(),
+        secret_first_revealed: false,
+        secret_second_revealed: false,
+        secret_principal: String::new(),
+        secret_owner_agent_id: String::new(),
+        quota_provider: String::new(),
+        quota_reserved: false,
+        quota_returned_usable: false,
+        quota_original_consumed: false,
+        quota_principal: String::new(),
+        quota_owner_agent_id: String::new(),
+        permission_supported: false,
+        permission_provider: String::new(),
+        permission_same_identity: false,
+        permission_original_consumed: false,
+        permission_principal: String::new(),
+        permission_owner_agent_id: String::new(),
+        typed_values: Vec::new(),
+    }
 }
 
 fn input_stream(chunks: Vec<Vec<u8>>) -> InputStream {
@@ -675,19 +816,63 @@ async fn invoke_filesystem_tool<T: FromSchema>(
     name: String,
     input: golem_rust::schema::wit::wire::TypedSchemaValue,
 ) -> T {
+    try_invoke_filesystem_tool(name.clone(), input)
+        .await
+        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error}"))
+}
+
+async fn try_invoke_filesystem_tool<T: FromSchema>(
+    name: String,
+    input: golem_rust::schema::wit::wire::TypedSchemaValue,
+) -> Result<T, String> {
     let result = ToolRpc::create(&name)
-        .expect("tool RPC creation failed")
+        .map_err(|error| format!("{error:?}"))?
         .invoke_and_await(Vec::new(), input, None, None, None)
         .await
-        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error:?}"));
+        .map_err(describe_filesystem_error)?;
     let value = decode_typed_schema_value_owned(
         result
             .result
-            .unwrap_or_else(|| panic!("filesystem tool '{name}' returned no result")),
+            .ok_or_else(|| format!("filesystem tool '{name}' returned no result"))?,
     )
-    .unwrap_or_else(|error| panic!("decode filesystem tool '{name}' result: {error}"));
+    .map_err(|error| format!("decode filesystem tool '{name}' result: {error}"))?;
     T::from_value(value.value())
-        .unwrap_or_else(|error| panic!("convert filesystem tool '{name}' result: {error}"))
+        .map_err(|error| format!("convert filesystem tool '{name}' result: {error}"))
+}
+
+fn describe_filesystem_error(error: ToolRpcError) -> String {
+    match error {
+        ToolRpcError::RemoteToolError(WireToolError::CustomError(error))
+            if error.name == "path-policy-denied" =>
+        {
+            let value =
+                decode_typed_schema_value_owned(error.payload).unwrap_or_else(|decode_error| {
+                    panic!("decode path-policy payload: {decode_error}")
+                });
+            let payload =
+                RawPathPolicyDenied::from_value(value.value()).unwrap_or_else(|decode_error| {
+                    panic!("convert path-policy payload: {decode_error}")
+                });
+            let operation = match payload.operation {
+                RawPathPolicyOperation::Read => "read",
+                RawPathPolicyOperation::Write => "write",
+                RawPathPolicyOperation::Delete => "delete",
+            };
+            format!(
+                "{}|{operation}|{}|{}|{}|{}|{}",
+                error.name,
+                payload.argument,
+                payload.supplied_path,
+                payload.resolved_path.as_deref().unwrap_or("none"),
+                payload.allowed_roots.join(","),
+                payload.reason,
+            )
+        }
+        ToolRpcError::RemoteToolError(WireToolError::CustomError(error)) => {
+            format!("custom-tool-error:{}", error.name)
+        }
+        other => format!("unexpected-tool-rpc-error:{other:?}"),
+    }
 }
 
 fn gated_typed_input<T: IntoWire + FromWire + 'static>(items: [T; 3]) -> AgentStream<T> {
@@ -1007,55 +1192,106 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn rust_proxy_generated_parity(&self) -> Vec<String> {
-        let generated_success = StreamingClient::default()
-            .no_stream("proxy-parity".to_string())
+        let generated_success = MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                MatrixRequest {
+                    source: "matrix.sample".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 3,
+                        height: 5,
+                    },
+                    labels: vec!["north".to_string(), "east".to_string(), "south".to_string()],
+                },
+                7,
+            )
             .await
             .expect("invoke generated client success");
-        let proxy_success = definition_owned_proxy::StreamingClient::default()
-            .no_stream("proxy-parity".to_string())
+        let proxy_success = definition_owned_matrix_proxy::MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                definition_owned_matrix_proxy::MatrixRequest {
+                    source: "matrix.sample".to_string(),
+                    dimensions: definition_owned_matrix_proxy::MatrixDimensions {
+                        width: 3,
+                        height: 5,
+                    },
+                    labels: vec!["north".to_string(), "east".to_string(), "south".to_string()],
+                },
+                7,
+            )
             .await
             .expect("invoke definition-owned proxy success");
 
-        let generated_error = StreamingClient::default()
-            .no_stream("native-error".to_string())
+        let generated_error = MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                MatrixRequest {
+                    source: "reject.me".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 1,
+                        height: 1,
+                    },
+                    labels: vec!["generated-secret".to_string()],
+                },
+                99,
+            )
             .await
             .expect_err("generated client observes declared error");
-        let proxy_error = definition_owned_proxy::StreamingClient::default()
-            .no_stream("native-error".to_string())
+        let proxy_error = definition_owned_matrix_proxy::MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                definition_owned_matrix_proxy::MatrixRequest {
+                    source: "reject.me".to_string(),
+                    dimensions: definition_owned_matrix_proxy::MatrixDimensions {
+                        width: 1,
+                        height: 1,
+                    },
+                    labels: vec!["proxy-secret".to_string()],
+                },
+                101,
+            )
             .await
             .expect_err("definition-owned proxy observes declared error");
 
-        let generated_stream = StreamingClient::default()
-            .run("principal".to_string(), input_stream(Vec::new()))
-            .await
-            .expect("start generated streaming call")
-            .collect()
-            .await
-            .expect("collect generated streaming call");
-        let proxy_stream = definition_owned_proxy::StreamingClient::default()
-            .run("principal".to_string(), input_stream(Vec::new()))
-            .await
-            .expect("start definition-owned streaming call")
-            .collect()
-            .await
-            .expect("collect definition-owned streaming call");
+        let ToolError::Tool(MatrixCoreArtifactInspectError::Rejected(generated_rejection)) =
+            generated_error
+        else {
+            panic!("generated client returned the wrong error: {generated_error:?}")
+        };
+        let ToolError::Tool(definition_owned_matrix_proxy::MatrixError::Rejected(proxy_rejection)) =
+            proxy_error
+        else {
+            panic!("definition-owned proxy returned the wrong error: {proxy_error:?}")
+        };
 
-        assert_eq!(proxy_success, generated_success);
-        assert_eq!(format!("{proxy_error:?}"), format!("{generated_error:?}"));
-        assert_eq!(proxy_stream.stdout, generated_stream.stdout);
+        assert_eq!(proxy_success.provider, generated_success.provider);
+        assert_eq!(proxy_success.command, generated_success.command);
         assert_eq!(
-            proxy_stream.result.bytes_read,
-            generated_stream.result.bytes_read
+            proxy_success.normalized_source,
+            generated_success.normalized_source
         );
+        assert_eq!(proxy_success.weighted_size, generated_success.weighted_size);
+        assert_eq!(proxy_success.label_summary, generated_success.label_summary);
+        assert_eq!(proxy_success.principal, generated_success.principal);
         assert_eq!(
-            proxy_stream.result.output_closed,
-            generated_stream.result.output_closed
+            proxy_success.owner_agent_id,
+            generated_success.owner_agent_id
         );
+        assert_eq!(proxy_rejection.field, generated_rejection.field);
+        assert_eq!(proxy_rejection.reason, generated_rejection.reason);
+        assert_eq!(proxy_rejection.retryable, generated_rejection.retryable);
 
         vec![
-            generated_success,
-            format!("{generated_error:?}"),
-            format!("{:?}", generated_stream.stdout),
+            generated_success.provider,
+            generated_success.command,
+            generated_success.normalized_source,
+            generated_success.weighted_size.to_string(),
+            generated_success.label_summary,
+            generated_success.principal,
+            generated_rejection.field,
+            generated_rejection.reason,
+            generated_rejection.retryable.to_string(),
         ]
     }
 
@@ -1080,17 +1316,6 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             panic!("no-stream returns text")
         };
 
-        let reflected_error = command
-            .invoke_value(SchemaValue::Record {
-                fields: vec![SchemaValue::String("native-error".to_string())],
-            })
-            .await
-            .expect_err("reflected client observes declared error");
-        let generated_error = StreamingClient::default()
-            .no_stream("native-error".to_string())
-            .await
-            .expect_err("generated client observes declared error");
-
         let generated_stream = StreamingClient::default()
             .run("principal".to_string(), input_stream(Vec::new()))
             .await
@@ -1103,6 +1328,43 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .client()
             .command(&["run"])
             .expect("resolve reflected run command");
+        let mut generated_error_invocation = StreamingClient::default()
+            .run("declared-error".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start generated declared-error stream");
+        let generated_error_output = read_tool_stdout(
+            generated_error_invocation
+                .stdout
+                .take()
+                .expect("generated declared-error stream has stdout"),
+        )
+        .await;
+        let generated_error = generated_error_invocation
+            .result()
+            .await
+            .expect_err("generated client observes declared error");
+        let mut reflected_error_invocation = stream_command
+            .start_value(
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String("declared-error".to_string())],
+                },
+                Some(input_stream(Vec::new())),
+            )
+            .await
+            .expect("start reflected declared-error stream");
+        let reflected_error_output = read_tool_stdout(
+            reflected_error_invocation
+                .stdout
+                .take()
+                .expect("reflected declared-error stream has stdout"),
+        )
+        .await;
+        let reflected_error = reflected_error_invocation
+            .result()
+            .await
+            .expect_err("reflected client observes declared error");
+        assert_eq!(reflected_error_output, generated_error_output);
+        assert_eq!(generated_error_output, b"marker:");
         let mut reflected_stream = stream_command
             .start_value(
                 SchemaValue::Record {
@@ -1125,10 +1387,21 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("reflected principal stream succeeds")
             .expect("reflected run returns a structured result");
 
+        let generated_principal = String::from_utf8(
+            generated_stream
+                .stdout
+                .as_ref()
+                .expect("generated principal stream has stdout")
+                .clone(),
+        )
+        .expect("generated principal is UTF-8");
+        let reflected_principal =
+            String::from_utf8(reflected_output.clone()).expect("reflected principal is UTF-8");
+
         assert_eq!(reflected, generated);
         assert!(format!("{reflected_error:?}").contains("declared"));
         assert!(format!("{generated_error:?}").contains("Declared"));
-        assert_eq!(reflected_output, generated_stream.stdout.unwrap());
+        assert_eq!(reflected_principal, generated_principal);
         assert!(matches!(reflected_result, SchemaValue::Record { .. }));
 
         let generated_capable = CapableStreamingClient::default()
@@ -1164,16 +1437,23 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("reflected capable stream succeeds")
             .expect("reflected capable call returns a structured result");
-        assert_eq!(reflected_capable_output, generated_capable.stdout.unwrap());
+        let generated_capable_output = generated_capable
+            .stdout
+            .expect("generated capable stream has stdout");
+        assert_eq!(reflected_capable_output, generated_capable_output);
         assert!(matches!(
             reflected_capable_result,
             SchemaValue::Record { .. }
         ));
         vec![
             generated,
-            "declared".to_string(),
-            "stream-ended".to_string(),
-            "capability-stream-ended".to_string(),
+            reflected,
+            format!("{generated_error:?}"),
+            format!("{reflected_error:?}"),
+            generated_principal,
+            reflected_principal,
+            generated_capable_output.len().to_string(),
+            reflected_capable_output.len().to_string(),
         ]
     }
 
@@ -1236,6 +1516,185 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             String::from_utf8(abandoned_prefix).expect("marker is UTF-8"),
             abandoned_result.output_closed.to_string(),
         ]
+    }
+
+    async fn gol40_rust_sdk_terminal_observation(&self) -> RustSdkTerminalObservation {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let success = StreamingClient::default()
+            .run("marker-echo".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start partial-success case")
+            .collect()
+            .await
+            .expect("partial-success case retains structured success");
+
+        let mut declared = StreamingClient::default()
+            .run("declared-error".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start declared-error case");
+        let declared_bytes = read_tool_stdout(
+            declared
+                .stdout
+                .take()
+                .expect("declared-error case has stdout"),
+        )
+        .await;
+        let declared_error = matches!(
+            declared.result().await,
+            Err(ToolError::Tool(StreamingRunError::Declared { .. }))
+        );
+
+        let mut failed = StreamingClient::default()
+            .run(
+                "explicit-stdout-failure".to_string(),
+                input_stream(Vec::new()),
+            )
+            .await
+            .expect("start explicit stdout failure case");
+        let failed_bytes = first_chunk(&mut failed).await;
+        let failed_terminal = match failed
+            .stdout
+            .as_mut()
+            .expect("explicit failure case has stdout")
+            .next()
+            .await
+        {
+            Some(Err(ByteStreamFailure::Failed(reason))) => reason,
+            other => panic!("expected explicit stdout failure, got {other:?}"),
+        };
+        let failed_result = failed.result().await.is_ok();
+
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let command = ["run".to_string()];
+        let (mut cancel_source, cancel_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (cancel_target, mut cancel_stdout) = tool_host::create_output();
+        let cancelled = rpc.async_invoke_and_await(
+            &command,
+            raw_input("marker-echo"),
+            Some(pump_tool_stdin(cancel_stdin)),
+            Some(cancel_target),
+            None,
+        );
+        assert_eq!(raw_chunk(&mut cancel_stdout).await, b"marker:");
+        cancelled.cancel();
+        let cancellation_result = format!("{:?}", raw_result(&cancelled).await);
+        let cancellation_closed_stdin = !cancel_source
+            .write_all(vec![Ok(b"after-cancel".to_vec())])
+            .await
+            .is_empty();
+
+        let abandoned_writer = StreamingClient::default()
+            .run("writer-abandonment".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start writer-abandonment case")
+            .collect()
+            .await
+            .expect("writer abandonment preserves structured success");
+
+        let (mut finish_source, finish_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let mut finish_failure = StreamingClient::default()
+            .run("finish-after-reader-drop".to_string(), finish_stdin)
+            .await
+            .expect("start finish-failure case");
+        let finish_failure_bytes = first_chunk(&mut finish_failure).await;
+        drop(
+            finish_failure
+                .stdout
+                .take()
+                .expect("finish-failure case has stdout"),
+        );
+        assert!(finish_source.write_all(vec![Ok(vec![1])]).await.is_empty());
+        drop(finish_source);
+        let finish_failure_observed = finish_failure
+            .result()
+            .await
+            .expect("finish failure preserves structured success")
+            .output_closed;
+
+        let (mut resumed_source, resumed_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (resumed_target, mut resumed_stdout) = tool_host::create_output();
+        let resumed_result = rpc.async_invoke_and_await(
+            &command,
+            raw_input("marker-echo"),
+            Some(pump_tool_stdin(resumed_stdin)),
+            Some(resumed_target),
+            None,
+        );
+        assert_eq!(raw_chunk(&mut resumed_stdout).await, b"marker:");
+        let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
+        poll_fn(|cx| match pending_read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("stdout read completed before cancellation: {result:?}"),
+        })
+        .await;
+        let (reader_cancelled, buffer) = pending_read.as_mut().cancel();
+        assert_eq!(format!("{reader_cancelled:?}"), "Cancelled");
+        assert!(buffer.is_empty());
+        drop(pending_read);
+        assert!(
+            resumed_source
+                .write_all(vec![Ok(b"resumed".to_vec())])
+                .await
+                .is_empty()
+        );
+        drop(resumed_source);
+        let cancelled_reader_resumed_bytes = read_all(resumed_stdout).await;
+        let cancelled_reader_result = raw_result(&resumed_result).await.is_ok();
+
+        let (detached_target, detached_stdout) = tool_host::create_output();
+        let detached = rpc.async_invoke_and_await(
+            &command,
+            raw_input("marker-echo"),
+            Some(raw_stdin(vec![b"detached".to_vec()])),
+            Some(detached_target),
+            None,
+        );
+        drop(detached);
+        let dropped_observer_bytes = read_all(detached_stdout).await;
+
+        RustSdkTerminalObservation {
+            success_bytes: success.stdout.expect("partial-success case has stdout"),
+            success_result: !success.result.output_closed,
+            declared_bytes,
+            declared_error,
+            failed_bytes,
+            failed_terminal,
+            failed_result,
+            cancellation_result,
+            cancellation_closed_stdin,
+            abandoned_writer_bytes: abandoned_writer
+                .stdout
+                .expect("writer-abandonment case has stdout"),
+            abandoned_writer_result: !abandoned_writer.result.output_closed,
+            finish_failure_bytes,
+            finish_failure_observed,
+            cancelled_reader_resumed_bytes,
+            cancelled_reader_result,
+            dropped_observer_bytes,
+        }
+    }
+
+    async fn gol40_rust_sdk_exception(&self) {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("trap-after-clean-eof"),
+            Some(closed_raw_stdin()),
+            Some(stdout_target),
+            None,
+        );
+        let bytes = read_all(stdout).await;
+        assert_eq!(bytes, b"marker:");
+        wait_at_crash_checkpoint("gol40-rust-sdk-exception-bytes-observed").await;
+        raw_result(&result)
+            .await
+            .expect("provider exception must fail the caller invocation");
     }
 
     async fn benchmark_producer(
@@ -1889,6 +2348,86 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             edit.bytes_before.to_string(),
             edit.bytes_after.to_string(),
         ]
+    }
+
+    async fn filesystem_policy_write_read(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<Vec<String>, String> {
+        let write: RawWriteFileResult = try_invoke_filesystem_tool(
+            "write-file".to_string(),
+            raw_filesystem_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
+                (
+                    "content",
+                    SchemaType::string(),
+                    SchemaValue::String(content.clone()),
+                ),
+                (
+                    "create-parent-directories",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(true),
+                ),
+            ]),
+        )
+        .await?;
+        let read: RawReadFileResult = try_invoke_filesystem_tool(
+            "read-file".to_string(),
+            golem_rust::encode_typed_schema_value(
+                &RawReadFileInput {
+                    path,
+                    start_line: None,
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .map_err(|error| format!("{error:?}"))?,
+            )
+            .map_err(|error| format!("{error:?}"))?,
+        )
+        .await?;
+
+        Ok(vec![
+            match write.disposition {
+                RawWriteDisposition::Created => "created",
+                RawWriteDisposition::Replaced => "replaced",
+            }
+            .to_string(),
+            write.bytes_written.to_string(),
+            read.content,
+            read.start_line
+                .map_or_else(|| "none".to_string(), |line| line.to_string()),
+            read.end_line
+                .map_or_else(|| "none".to_string(), |line| line.to_string()),
+            read.next_cursor.map_or_else(
+                || "none".to_string(),
+                |cursor| format!("{}:{}", cursor.byte_offset, cursor.line),
+            ),
+        ])
+    }
+
+    async fn filesystem_policy_read(&self, path: String) -> Result<String, String> {
+        let read: RawReadFileResult = try_invoke_filesystem_tool(
+            "read-file".to_string(),
+            golem_rust::encode_typed_schema_value(
+                &RawReadFileInput {
+                    path,
+                    start_line: None,
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .map_err(|error| format!("{error:?}"))?,
+            )
+            .map_err(|error| format!("{error:?}"))?,
+        )
+        .await?;
+        Ok(read.content)
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {
@@ -3337,7 +3876,7 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
         Self { config }
     }
 
-    async fn matrix_resource_observation(&self) -> MatrixResourceObservation {
+    async fn matrix_secret_observation(&self) -> MatrixResourceObservation {
         let secret = self
             .config
             .get()
@@ -3356,6 +3895,18 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
             .await
             .expect("second matrix secret exchange succeeds");
 
+        MatrixResourceObservation {
+            secret_first_provider: first_secret.provider,
+            secret_second_provider: second_secret.provider,
+            secret_first_revealed: first_secret.revealed,
+            secret_second_revealed: second_secret.revealed,
+            secret_principal: second_secret.principal,
+            secret_owner_agent_id: second_secret.owner_agent_id,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_quota_observation(&self) -> MatrixResourceObservation {
         let quota = QuotaToken::new("matrix-capacity", 2);
         let quota_original =
             QuotaToken::from_value(&quota.to_value()).expect("clone matrix quota handle cell");
@@ -3371,6 +3922,54 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
             .map(|reservation| reservation.commit(0))
             .is_ok();
 
+        MatrixResourceObservation {
+            quota_provider: quota_exchange.provider,
+            quota_reserved: quota_exchange.reserved,
+            quota_returned_usable,
+            quota_original_consumed,
+            quota_principal: quota_exchange.principal,
+            quota_owner_agent_id: quota_exchange.owner_agent_id,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_permission_observation(&self) -> MatrixResourceObservation {
+        let issue = MatrixPermissionIssuerClient::default()
+            .issue()
+            .await
+            .expect("matrix permission issue succeeds");
+        assert_eq!(issue.issuer, "rust");
+        let original = issue.card;
+        let original_view = GuestPermissionCardHandle::from_value(&original.to_value())
+            .expect("clone matrix permission handle cell");
+        let id = original
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("derived matrix permission card is usable");
+        let exchange = MatrixResourceClient::default()
+            .permissions()
+            .exchange(original)
+            .await
+            .expect("matrix permission exchange succeeds");
+        let same_identity = exchange
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .is_some_and(|returned_id| returned_id == id);
+        let original_consumed = !original_view.is_present();
+        assert_eq!(issue.principal, exchange.principal);
+        assert_eq!(issue.owner_agent_id, exchange.owner_agent_id);
+
+        MatrixResourceObservation {
+            permission_supported: true,
+            permission_provider: exchange.provider,
+            permission_same_identity: same_identity,
+            permission_original_consumed: original_consumed,
+            permission_principal: exchange.principal,
+            permission_owner_agent_id: exchange.owner_agent_id,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation {
         let typed_values = MatrixResourceClient::default()
             .typed()
             .transform(matrix_typed_input([2, 5, 9]))
@@ -3381,25 +3980,30 @@ impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
             .expect("matrix typed transform completes");
 
         MatrixResourceObservation {
-            secret_first_provider: first_secret.provider,
-            secret_second_provider: second_secret.provider,
-            secret_first_revealed: first_secret.revealed,
-            secret_second_revealed: second_secret.revealed,
-            secret_principal: second_secret.principal,
-            secret_owner_agent_id: second_secret.owner_agent_id,
-            quota_provider: quota_exchange.provider,
-            quota_reserved: quota_exchange.reserved,
-            quota_returned_usable,
-            quota_original_consumed,
-            quota_principal: quota_exchange.principal,
-            quota_owner_agent_id: quota_exchange.owner_agent_id,
-            permission_supported: false,
-            permission_provider: String::new(),
-            permission_same_identity: false,
-            permission_original_consumed: false,
-            permission_principal: String::new(),
-            permission_owner_agent_id: String::new(),
             typed_values,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_resource_observation(&self) -> MatrixResourceObservation {
+        let secret = self.matrix_secret_observation().await;
+        let quota = self.matrix_quota_observation().await;
+        let typed = self.matrix_typed_stream_observation().await;
+        MatrixResourceObservation {
+            secret_first_provider: secret.secret_first_provider,
+            secret_second_provider: secret.secret_second_provider,
+            secret_first_revealed: secret.secret_first_revealed,
+            secret_second_revealed: secret.secret_second_revealed,
+            secret_principal: secret.secret_principal,
+            secret_owner_agent_id: secret.secret_owner_agent_id,
+            quota_provider: quota.quota_provider,
+            quota_reserved: quota.quota_reserved,
+            quota_returned_usable: quota.quota_returned_usable,
+            quota_original_consumed: quota.quota_original_consumed,
+            quota_principal: quota.quota_principal,
+            quota_owner_agent_id: quota.quota_owner_agent_id,
+            typed_values: typed.typed_values,
+            ..empty_matrix_resource_observation()
         }
     }
 }

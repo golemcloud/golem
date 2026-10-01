@@ -386,28 +386,28 @@ pub struct BridgeSdkTarget {
 #[allow(clippy::large_enum_variant)]
 pub enum BridgeSdkTargetSubject {
     Agent(AgentTypeSchema),
-    Tool(Tool),
+    Tool { definition: Tool, rpc_name: String },
 }
 
 impl BridgeSdkTargetSubject {
     pub fn kind(&self) -> BridgeSdkTargetKind {
         match self {
             BridgeSdkTargetSubject::Agent(_) => BridgeSdkTargetKind::Agent,
-            BridgeSdkTargetSubject::Tool(_) => BridgeSdkTargetKind::Tool,
+            BridgeSdkTargetSubject::Tool { .. } => BridgeSdkTargetKind::Tool,
         }
     }
 
     pub fn display_name(&self) -> &str {
         match self {
             BridgeSdkTargetSubject::Agent(agent_type) => agent_type.type_name.as_str(),
-            BridgeSdkTargetSubject::Tool(tool) => tool.name().unwrap_or_default(),
+            BridgeSdkTargetSubject::Tool { rpc_name, .. } => rpc_name,
         }
     }
 
     pub fn as_agent(&self) -> Option<&AgentTypeSchema> {
         match self {
             BridgeSdkTargetSubject::Agent(agent_type) => Some(agent_type),
-            BridgeSdkTargetSubject::Tool(_) => None,
+            BridgeSdkTargetSubject::Tool { .. } => None,
         }
     }
 }
@@ -1083,13 +1083,9 @@ impl Application {
         &self,
         component_name: &ComponentName,
         agent_type_name: &AgentTypeName,
-        mut component_base: app_raw::AgentLayerProperties,
+        component_base: app_raw::AgentLayerProperties,
         component_tool_bindings: ToolBindingsProperty<AgentLayer>,
     ) -> anyhow::Result<(AgentProperties, AgentLayerProperties)> {
-        if let Some(environment_tools) = self.selected_environment().tools.as_ref() {
-            component_base.tools = Some(environment_tools.bindings.clone());
-            component_base.tools_merge_mode = Some(MapMergeMode::Upsert);
-        }
         let base_component_id = AgentLayerId::Component(component_name.clone());
         let mut agent_layer_store = Store::new();
 

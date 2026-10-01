@@ -17,6 +17,7 @@ use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -81,6 +82,7 @@ pub struct AgentConfig {
     pub last_snapshot_index: Option<OplogIndex>,
     pub last_snapshot_source: Option<SnapshotSource>,
     pub agent_effective_surface: EffectiveSurface,
+    pub authority_wallet: Option<Vec<StoredCard>>,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
 
@@ -95,6 +97,7 @@ impl AgentConfig {
         last_snapshot_index: Option<OplogIndex>,
         last_snapshot_source: Option<SnapshotSource>,
         agent_effective_surface: EffectiveSurface,
+        authority_wallet: Option<Vec<StoredCard>>,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
@@ -107,6 +110,7 @@ impl AgentConfig {
             last_snapshot_index,
             last_snapshot_source,
             agent_effective_surface,
+            authority_wallet,
             owner_component_metadata,
         }
     }

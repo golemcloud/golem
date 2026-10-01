@@ -835,6 +835,9 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 self.owner_component_metadata
                     .clone()
                     .expect("Entity instance host must pin its owner component metadata"),
+                scope
+                    .map(|scope| scope.authority_wallet().to_vec())
+                    .unwrap_or_default(),
             )
             .await?;
         if let Some(scope) = scope {

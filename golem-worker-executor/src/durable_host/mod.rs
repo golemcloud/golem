@@ -1243,13 +1243,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             tail_work,
             component_metadata,
             worker_config.owner_component_metadata,
-            worker_config.agent_effective_surface,
             worker_fork,
             file_loader,
             worker_config.created_by,
             worker_config.created_by_email,
             worker_config.initial_agent_config,
             agent_config,
+            worker_config.authority_wallet,
             shard_service,
             pending_update,
             original_phantom_id,
@@ -10815,13 +10815,13 @@ impl PrivateDurableWorkerState {
         tail_work: tail_work::TailWorkTracker,
         component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
-        configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
+        initial_authority_wallet: Option<Vec<StoredCard>>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
         original_phantom_id: Option<Uuid>,
@@ -10882,7 +10882,15 @@ impl PrivateDurableWorkerState {
                     (initial_agent_wallet_cards()?, 0)
                 }
             }
-            OwnerRuntime::Entity(_) => (BTreeMap::new(), 0),
+            OwnerRuntime::Entity(_) => (
+                initial_authority_wallet
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|card| (card.card_id(), card))
+                    .collect(),
+                0,
+            ),
         };
         let wallet_id_hash = CardHolder::Agent(golem_common::model::card::AgentCardHolder {
             agent_id: owned_agent_id.agent_id.clone(),
@@ -10905,7 +10913,30 @@ impl PrivateDurableWorkerState {
                 &owned_agent_id,
                 agent_wallet_cards.values(),
             ),
-            (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
+            (OwnerRuntime::Entity(_), ResolvedOwnerContext::Agent(agent_id)) => {
+                let owner_component_metadata = owner_component_metadata
+                    .as_deref()
+                    .expect("entity Store has owner component metadata");
+                let context = agent_monomorphization_context(
+                    owner_component_metadata,
+                    &owned_agent_id,
+                    agent_id,
+                );
+                golem_common::model::card::agent_effective_surface_from_wallet(
+                    &context,
+                    agent_wallet_cards.values(),
+                )
+            }
+            (
+                OwnerRuntime::Entity(_),
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+            ) => component_baseline_effective_surface_from_wallet(
+                owner_component_metadata
+                    .as_deref()
+                    .expect("entity Store has owner component metadata"),
+                &owned_agent_id,
+                agent_wallet_cards.values(),
+            ),
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
         Ok(Self {

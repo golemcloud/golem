@@ -6,6 +6,11 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Component, Path};
 
+mod path_policy;
+
+#[cfg(test)]
+use path_policy::*;
+
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_READ_LINES: usize = 200;
 
@@ -434,7 +439,481 @@ fn replace_exactly_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_rust::SchemaValue;
+    use golem_rust::agentic::ToolBuildCtx;
+    use golem_rust::tool::{Tool, ToolInvokeError};
+    use golem_rust::{IntoTypedSchemaValue, schema::FromSchema};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn path_policy_contract_classifies_supported_operations() {
+        for (tool, operation) in [
+            ("read-file", PathPolicyOperation::Read),
+            ("ls", PathPolicyOperation::Read),
+            ("write-file", PathPolicyOperation::Write),
+            ("edit-file", PathPolicyOperation::Write),
+            ("delete-file", PathPolicyOperation::Delete),
+        ] {
+            assert_eq!(
+                protected_path_argument(tool, &[]),
+                Ok(Some(ProtectedPathArgument {
+                    operation,
+                    argument: "path"
+                }))
+            );
+        }
+        assert_eq!(protected_path_argument("search", &[]), Ok(None));
+        assert_eq!(
+            protected_path_argument("read-file", &["nested".to_string()]),
+            Err(vec!["nested".to_string()])
+        );
+    }
+
+    #[test]
+    fn path_policy_contract_rejects_ambiguous_configuration() {
+        let valid = PathPolicyParameters {
+            base: "/workspace".to_string(),
+            allowed_roots: vec![PathPolicyRoot {
+                path: "project".to_string(),
+                operations: vec![PathPolicyOperation::Read],
+            }],
+        };
+        assert_eq!(validate_path_policy_parameters(&valid), Ok(()));
+
+        let mut invalid = valid.clone();
+        invalid.base.clear();
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.base = "workspace".to_string();
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.base.push('\0');
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.base.push('\\');
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.allowed_roots.clear();
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.allowed_roots[0].path.clear();
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.allowed_roots[0].path.push('\0');
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid.clone();
+        invalid.allowed_roots[0].path.push('\\');
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+        invalid = valid;
+        invalid.allowed_roots[0].operations.clear();
+        assert!(validate_path_policy_parameters(&invalid).is_err());
+    }
+
+    #[test]
+    fn path_policy_contract_accepts_absolute_and_relative_roots_and_round_trips() {
+        let parameters = PathPolicyParameters {
+            base: "/workspace".to_string(),
+            allowed_roots: vec![
+                PathPolicyRoot {
+                    path: "readable".to_string(),
+                    operations: vec![PathPolicyOperation::Read],
+                },
+                PathPolicyRoot {
+                    path: "/workspace/writable".to_string(),
+                    operations: vec![PathPolicyOperation::Write, PathPolicyOperation::Delete],
+                },
+            ],
+        };
+        assert_eq!(validate_path_policy_parameters(&parameters), Ok(()));
+        let typed = parameters.clone().into_typed_schema_value().unwrap();
+        assert_eq!(
+            PathPolicyParameters::from_value(typed.value()).unwrap(),
+            parameters
+        );
+    }
+
+    fn policy(
+        base: &Path,
+        root: &str,
+        operations: Vec<PathPolicyOperation>,
+    ) -> PathPolicyParameters {
+        PathPolicyParameters {
+            base: base.to_string_lossy().into_owned(),
+            allowed_roots: vec![PathPolicyRoot {
+                path: root.to_string(),
+                operations,
+            }],
+        }
+    }
+
+    fn with_temp_directory<T>(test: impl FnOnce(&Path) -> T) -> T {
+        let path = std::env::temp_dir().join(format!(
+            "golem-path-policy-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        let result = test(&path.canonicalize().unwrap());
+        fs::remove_dir_all(path).unwrap();
+        result
+    }
+
+    #[test]
+    fn path_policy_uses_component_containment_after_normalization() {
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("workspace")).unwrap();
+            fs::create_dir(base.join("workspace-other")).unwrap();
+            let parameters = policy(
+                base,
+                "workspace",
+                vec![PathPolicyOperation::Read, PathPolicyOperation::Write],
+            );
+
+            assert_eq!(
+                authorize_path(&parameters, PathPolicyOperation::Read, "workspace/file").unwrap(),
+                base.join("workspace/file")
+            );
+            assert_eq!(
+                authorize_path(
+                    &parameters,
+                    PathPolicyOperation::Write,
+                    base.join("workspace/new/child").to_str().unwrap()
+                )
+                .unwrap(),
+                base.join("workspace/new/child")
+            );
+            assert!(
+                authorize_path(
+                    &parameters,
+                    PathPolicyOperation::Read,
+                    "workspace-other/file"
+                )
+                .is_err()
+            );
+            assert!(
+                authorize_path(
+                    &parameters,
+                    PathPolicyOperation::Read,
+                    "workspace/../workspace-other/file"
+                )
+                .is_err()
+            );
+            assert!(
+                authorize_path(
+                    &parameters,
+                    PathPolicyOperation::Read,
+                    r"workspace\..\workspace-other/file"
+                )
+                .is_err()
+            );
+        });
+    }
+
+    #[test]
+    fn path_policy_applies_independent_operation_grants() {
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("root-a")).unwrap();
+            fs::create_dir(base.join("root-b")).unwrap();
+            for granted in [
+                PathPolicyOperation::Read,
+                PathPolicyOperation::Write,
+                PathPolicyOperation::Delete,
+            ] {
+                let parameters = policy(base, "root-a", vec![granted]);
+                for requested in [
+                    PathPolicyOperation::Read,
+                    PathPolicyOperation::Write,
+                    PathPolicyOperation::Delete,
+                ] {
+                    assert_eq!(
+                        authorize_path(&parameters, requested, "root-a/file").is_ok(),
+                        requested == granted,
+                        "granted {granted:?}, requested {requested:?}"
+                    );
+                }
+            }
+
+            let parameters = PathPolicyParameters {
+                base: base.to_string_lossy().into_owned(),
+                allowed_roots: vec![
+                    PathPolicyRoot {
+                        path: "root-a".to_string(),
+                        operations: vec![PathPolicyOperation::Read],
+                    },
+                    PathPolicyRoot {
+                        path: "root-b".to_string(),
+                        operations: vec![PathPolicyOperation::Write],
+                    },
+                ],
+            };
+            assert!(
+                authorize_path(&parameters, PathPolicyOperation::Write, "root-a/file").is_err()
+            );
+            assert!(authorize_path(&parameters, PathPolicyOperation::Read, "root-b/file").is_err());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_policy_rejects_existing_symlink_components_and_targets() {
+        use std::os::unix::fs::symlink;
+
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("allowed")).unwrap();
+            fs::create_dir(base.join("outside")).unwrap();
+            fs::write(base.join("outside/secret"), "secret").unwrap();
+            symlink(base.join("outside"), base.join("allowed/escape")).unwrap();
+            symlink(base.join("outside/secret"), base.join("allowed/final-link")).unwrap();
+            symlink(base.join("outside/missing"), base.join("allowed/dangling")).unwrap();
+            let parameters = policy(
+                base,
+                "allowed",
+                vec![PathPolicyOperation::Read, PathPolicyOperation::Write],
+            );
+
+            for path in ["allowed/escape/secret", "allowed/final-link"] {
+                let violation =
+                    authorize_path(&parameters, PathPolicyOperation::Read, path).unwrap_err();
+                assert!(violation.reason.contains("symbolic link"), "{violation:?}");
+            }
+            for path in ["allowed/escape/missing/target", "allowed/dangling"] {
+                let violation =
+                    authorize_path(&parameters, PathPolicyOperation::Write, path).unwrap_err();
+                assert!(violation.reason.contains("symbolic link"), "{violation:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn path_policy_allows_nonexistent_write_suffix_below_real_ancestor() {
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("allowed")).unwrap();
+            let parameters = policy(base, "allowed", vec![PathPolicyOperation::Write]);
+            assert_eq!(
+                authorize_path(
+                    &parameters,
+                    PathPolicyOperation::Write,
+                    "allowed/missing/target"
+                )
+                .unwrap(),
+                base.join("allowed/missing/target")
+            );
+        });
+    }
+
+    #[derive(IntoSchema)]
+    struct ReadFileInput {
+        path: String,
+        start_line: Option<u64>,
+        end_line: Option<u64>,
+        cursor: Option<ReadFileCursor>,
+    }
+
+    #[derive(IntoSchema)]
+    struct WriteFileInput {
+        path: String,
+        content: String,
+        create_parent_directories: bool,
+    }
+
+    fn read_file_tool() -> Tool {
+        __golem_tool_descriptor_for_ReadFile(&mut ToolBuildCtx::new())
+            .unwrap()
+            .try_to_native_tool()
+            .unwrap()
+    }
+
+    fn write_file_tool() -> Tool {
+        __golem_tool_descriptor_for_WriteFile(&mut ToolBuildCtx::new())
+            .unwrap()
+            .try_to_native_tool()
+            .unwrap()
+    }
+
+    #[test]
+    fn path_policy_rewrites_only_the_authorized_path_field() {
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("allowed")).unwrap();
+            let parameters = policy(base, "allowed", vec![PathPolicyOperation::Read]);
+            let input = ReadFileInput {
+                path: "allowed/file".to_string(),
+                start_line: Some(7),
+                end_line: Some(11),
+                cursor: Some(ReadFileCursor {
+                    byte_offset: 13,
+                    line: 3,
+                }),
+            }
+            .into_typed_schema_value()
+            .unwrap();
+            let rewritten =
+                apply_path_policy(&parameters, "read-file", &read_file_tool(), &[], input).unwrap();
+            assert_eq!(
+                rewritten,
+                ReadFileInput {
+                    path: base.join("allowed/file").to_string_lossy().into_owned(),
+                    start_line: Some(7),
+                    end_line: Some(11),
+                    cursor: Some(ReadFileCursor {
+                        byte_offset: 13,
+                        line: 3,
+                    }),
+                }
+                .into_typed_schema_value()
+                .unwrap()
+            );
+
+            let write_input = WriteFileInput {
+                path: "allowed/output".to_string(),
+                content: "leave path-looking text allowed/unchanged".to_string(),
+                create_parent_directories: true,
+            }
+            .into_typed_schema_value()
+            .unwrap();
+            assert_eq!(
+                apply_path_policy(
+                    &policy(base, "allowed", vec![PathPolicyOperation::Write]),
+                    "write-file",
+                    &write_file_tool(),
+                    &[],
+                    write_input,
+                )
+                .unwrap(),
+                WriteFileInput {
+                    path: base.join("allowed/output").to_string_lossy().into_owned(),
+                    content: "leave path-looking text allowed/unchanged".to_string(),
+                    create_parent_directories: true,
+                }
+                .into_typed_schema_value()
+                .unwrap()
+            );
+        });
+    }
+
+    #[test]
+    fn path_policy_applies_every_protected_operation_and_passes_unknown_tools_through() {
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("allowed")).unwrap();
+            let parameters = policy(
+                base,
+                "allowed",
+                vec![
+                    PathPolicyOperation::Read,
+                    PathPolicyOperation::Write,
+                    PathPolicyOperation::Delete,
+                ],
+            );
+            let tool = read_file_tool();
+            for tool_name in ["read-file", "ls", "write-file", "edit-file", "delete-file"] {
+                let input = ReadFileInput {
+                    path: "allowed/file".to_string(),
+                    start_line: None,
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .unwrap();
+                let rewritten =
+                    apply_path_policy(&parameters, tool_name, &tool, &[], input).unwrap();
+                let fields = tool
+                    .decode_canonical_input_record(0, rewritten.into_parts().1)
+                    .unwrap();
+                assert_eq!(
+                    fields
+                        .iter()
+                        .find(|field| field.name == "path")
+                        .unwrap()
+                        .value,
+                    SchemaValue::String(base.join("allowed/file").to_string_lossy().into_owned()),
+                    "{tool_name}"
+                );
+            }
+
+            let input = ReadFileInput {
+                path: "outside/file".to_string(),
+                start_line: Some(3),
+                end_line: None,
+                cursor: None,
+            }
+            .into_typed_schema_value()
+            .unwrap();
+            assert_eq!(
+                apply_path_policy(&parameters, "search", &tool, &[], input.clone()).unwrap(),
+                input
+            );
+        });
+    }
+
+    #[test]
+    fn path_policy_fails_closed_for_recognized_non_root_commands() {
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("allowed")).unwrap();
+            let parameters = policy(base, "allowed", vec![PathPolicyOperation::Read]);
+            let input = ReadFileInput {
+                path: "allowed/file".to_string(),
+                start_line: None,
+                end_line: None,
+                cursor: None,
+            }
+            .into_typed_schema_value()
+            .unwrap();
+
+            assert!(matches!(
+                apply_path_policy(
+                    &parameters,
+                    "read-file",
+                    &read_file_tool(),
+                    &["nested".to_string()],
+                    input
+                ),
+                Err(ToolInvokeError::InvalidCommandPath(path)) if path == ["nested"]
+            ));
+        });
+    }
+
+    #[test]
+    fn path_policy_returns_structured_denial_before_dispatch() {
+        with_temp_directory(|base| {
+            fs::create_dir(base.join("allowed")).unwrap();
+            fs::create_dir(base.join("write-only")).unwrap();
+            let parameters = PathPolicyParameters {
+                base: base.to_string_lossy().into_owned(),
+                allowed_roots: vec![
+                    PathPolicyRoot {
+                        path: "allowed".to_string(),
+                        operations: vec![PathPolicyOperation::Read],
+                    },
+                    PathPolicyRoot {
+                        path: "write-only".to_string(),
+                        operations: vec![PathPolicyOperation::Write],
+                    },
+                ],
+            };
+            let input = ReadFileInput {
+                path: "outside/file".to_string(),
+                start_line: None,
+                end_line: None,
+                cursor: None,
+            }
+            .into_typed_schema_value()
+            .unwrap();
+            let error = apply_path_policy(&parameters, "read-file", &read_file_tool(), &[], input)
+                .unwrap_err();
+            let ToolInvokeError::UnknownCustomError(error) = error else {
+                panic!("expected structured custom denial")
+            };
+            assert_eq!(error.name, "path-policy-denied");
+            let denial = PathPolicyDenied::from_value(error.payload().unwrap().value()).unwrap();
+            assert_eq!(denial.operation, PathPolicyOperation::Read);
+            assert_eq!(denial.argument, "path");
+            assert_eq!(denial.supplied_path, "outside/file");
+            assert_eq!(denial.allowed_roots, ["allowed"]);
+            assert!(denial.resolved_path.unwrap().ends_with("/outside/file"));
+        });
+    }
 
     fn with_file<T>(content: &[u8], test: impl FnOnce(&str) -> T) -> T {
         let path = std::env::temp_dir().join(format!(

@@ -210,6 +210,19 @@ struct MatrixCoreObservation {
 }
 
 ///|
+#derive.golem_schema
+struct MatrixReflectionObservation {
+  generatedProvider : String
+  generatedPrincipal : String
+  generatedOwnerAgentId : String
+  reflectedJson : String
+  reflectedErrorName : String
+  reflectedErrorField : String
+  reflectedErrorReason : String
+  reflectedErrorRetryable : Bool
+}
+
+///|
 #derive.agent
 struct MoonBitToolStreamingCaller {
   name : String
@@ -226,6 +239,13 @@ pub async fn MoonBitToolStreamingCaller::matrix_core_observation(
 ) -> MatrixCoreObservation {
   ignore(self)
   let client = MatrixCoreClient::new()
+  matrix_core_observe_with_client(client)
+}
+
+///|
+async fn matrix_core_observe_with_client(
+  client : MatrixCoreClient,
+) -> MatrixCoreObservation {
   let artifact = client.artifact()
   defer artifact.drop()
   let dimensions : MatrixDimensions = { width: 3U, height: 5U, }
@@ -259,6 +279,100 @@ pub async fn MoonBitToolStreamingCaller::matrix_core_observation(
     errorField: rejected.field,
     errorReason: rejected.reason,
     errorRetryable: rejected.retryable,
+  }
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::matrix_core_definition_observation(
+  self : Self,
+) -> MatrixCoreObservation {
+  ignore(self)
+  let definition = @reflection.ToolClientDefinition::named("matrix-core", fn(
+    name,
+  ) {
+    MatrixCoreClient::new_for(name)
+  })
+  let client = definition.client() catch {
+    _ => abort("matrix-core definition-owned client construction failed")
+  }
+  matrix_core_observe_with_client(client)
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::matrix_core_reflection_observation(
+  self : Self,
+) -> MatrixReflectionObservation {
+  ignore(self)
+  let generated = matrix_core_observe_with_client(MatrixCoreClient::new())
+  let tool = @reflection.get_tool_type("matrix-core") catch {
+    _ => abort("matrix-core reflection discovery failed")
+  }
+  let command = tool.command(["artifact", "inspect"]) catch {
+    _ => abort("matrix-core reflected command lookup failed")
+  }
+  let success_input = Json::object({
+    "request": Json::object({
+      "source": Json::string("matrix.sample"),
+      "dimensions": Json::object({
+        "width": Json::number(3.0),
+        "height": Json::number(5.0),
+      }),
+      "labels": Json::array([
+        Json::string("north"),
+        Json::string("east"),
+        Json::string("south"),
+      ]),
+    }),
+    "multiplier": Json::string("7"),
+  })
+  let reflectedJson = match command.invoke_json(success_input) {
+    Ok(Some(value)) => value.stringify()
+    _ => abort("matrix-core reflected success failed")
+  }
+  let rejected_input = Json::object({
+    "request": Json::object({
+      "source": Json::string("reject.me"),
+      "dimensions": Json::object({
+        "width": Json::number(2.0),
+        "height": Json::number(5.0),
+      }),
+      "labels": Json::array([Json::string("not"), Json::string("used")]),
+    }),
+    "multiplier": Json::string("9"),
+  })
+  let (
+    reflectedErrorName,
+    reflectedErrorField,
+    reflectedErrorReason,
+    reflectedErrorRetryable,
+  ) = match command.invoke_json(rejected_input) {
+    Err(@tool.ToolError::Tool(error)) => {
+      let (field, reason, retryable) = match error.payload.value {
+        @model.SchemaValue::Record(
+          [
+            @model.SchemaValue::String(field),
+            @model.SchemaValue::String(reason),
+            @model.SchemaValue::Bool(retryable),
+          ]
+        ) => (field, reason, retryable)
+        value => {
+          @model.drop_owned_capabilities(value)
+          abort("matrix-core reflected error payload shape changed")
+        }
+      }
+      (error.name, field, reason, retryable)
+    }
+    _ => abort("matrix-core reflected rejection failed")
+  }
+  {
+    generatedProvider: generated.provider,
+    generatedPrincipal: generated.principal,
+    generatedOwnerAgentId: generated.ownerAgentId,
+    reflectedJson,
+    reflectedErrorName,
+    reflectedErrorField,
+    reflectedErrorReason,
+    reflectedErrorRetryable,
   }
 }
 

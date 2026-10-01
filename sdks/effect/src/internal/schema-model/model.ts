@@ -41,10 +41,13 @@ import type {
   DiscriminatorRule,
   Datetime,
 } from "golem:core/types@2.0.0"
-import { GuestSecretHandle } from "./secretHandle.js"
+import { GuestSecretHandle, isGuestSecretHandle } from "./secretHandle.js"
 import { GuestQuotaTokenHandle } from "./quotaTokenHandle.js"
 import { GuestSchemaValueStreamHandle } from "./schemaValueStreamHandle.js"
-import { GuestPermissionCardHandle } from "./permissionCardHandle.js"
+import {
+  type GuestPermissionCardHandle,
+  isGuestPermissionCardHandle,
+} from "./permissionCardHandle.js"
 
 export type {
   TypeId,
@@ -820,11 +823,11 @@ export function deepEqual(
   // Capability handles are affine, not structural data: equality is identity
   // only. Without this, distinct handles would compare equal because they
   // expose no enumerable state.
-  if (a instanceof GuestSecretHandle || b instanceof GuestSecretHandle) return false
+  if (isGuestSecretHandle(a) || isGuestSecretHandle(b)) return false
   if (a instanceof GuestQuotaTokenHandle || b instanceof GuestQuotaTokenHandle) return false
   if (a instanceof GuestSchemaValueStreamHandle || b instanceof GuestSchemaValueStreamHandle)
     return false
-  if (a instanceof GuestPermissionCardHandle || b instanceof GuestPermissionCardHandle) {
+  if (isGuestPermissionCardHandle(a) || isGuestPermissionCardHandle(b)) {
     return false
   }
 

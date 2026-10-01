@@ -304,6 +304,30 @@ object SchemaWire {
     visit(value)
   }
 
+  private[golem] def releaseOwned(value: SchemaValue): Unit = {
+    def visit(value: SchemaValue): Unit =
+      value match {
+        case SchemaValue.SecretValue(handle)          => handle.take()
+        case SchemaValue.QuotaTokenHandle(handle)     => handle.take()
+        case SchemaValue.PermissionCardHandle(handle) => handle.take()
+        case SchemaValue.StreamValue(handle)          =>
+          handle.take().foreach(stream => AgentStreamOwnership.cleanup(stream.dispose()))
+        case SchemaValue.RecordValue(fields)              => fields.foreach(visit)
+        case SchemaValue.VariantValue(_, payload)         => payload.foreach(visit)
+        case SchemaValue.TupleValue(elements)             => elements.foreach(visit)
+        case SchemaValue.ListValue(elements)              => elements.foreach(visit)
+        case SchemaValue.FixedListValue(elements)         => elements.foreach(visit)
+        case SchemaValue.MapValue(entries)                => entries.foreach { entry => visit(entry.key); visit(entry.value) }
+        case SchemaValue.OptionValue(value)               => value.foreach(visit)
+        case SchemaValue.ResultValue(SchemaResult.Ok(v))  => v.foreach(visit)
+        case SchemaValue.ResultValue(SchemaResult.Err(v)) => v.foreach(visit)
+        case SchemaValue.UnionValue(_, body)              => visit(body)
+        case _                                            => ()
+      }
+
+    visit(value)
+  }
+
   def schemaValueToWit(value: SchemaValue): WitSchemaValueTree = {
     preflightCapabilityHandles(value)
     val valueNodes = mutable.ArrayBuffer.empty[WitSchemaValueNode]

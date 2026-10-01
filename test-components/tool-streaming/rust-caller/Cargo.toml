@@ -17,6 +17,7 @@ environment-probe-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/in
 futures-concurrency = "7.6.3"
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 matrix-core-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/matrix-core-tool-guest-client" }
+matrix-permission-issuer-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/matrix-permission-issuer-tool-guest-client" }
 matrix-resource-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/matrix-resource-tool-guest-client" }
 secret-policy-probe-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/secret-policy-probe-tool-guest-client" }
 streaming-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/streaming-tool-guest-client" }

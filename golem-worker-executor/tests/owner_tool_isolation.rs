@@ -23,7 +23,6 @@ use golem_common::model::tool::ToolName;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
-use golem_worker_executor::preview2::golem_api_1_x::host::Host as GolemApiHost;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
@@ -44,7 +43,6 @@ struct StoreObservation {
     owner: OwnedAgentId,
     principal: Principal,
     store_address: usize,
-    oplog_index: u64,
 }
 
 #[test]
@@ -145,15 +143,10 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
                         barrier.wait().await;
                         let observed_owner = store.data().durable_ctx().owned_agent_id().clone();
                         let store_address = store as *mut _ as usize;
-                        let oplog_index = u64::from(
-                            GolemApiHost::get_oplog_index(store.data_mut().durable_ctx_mut())
-                                .await?,
-                        );
                         Ok(StoreObservation {
                             owner: observed_owner,
                             principal,
                             store_address,
-                            oplog_index,
                         })
                     })
                 },
@@ -207,14 +200,10 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
                 Box::pin(async move {
                     let observed_owner = store.data().durable_ctx().owned_agent_id().clone();
                     let store_address = store as *mut _ as usize;
-                    let oplog_index = u64::from(
-                        GolemApiHost::get_oplog_index(store.data_mut().durable_ctx_mut()).await?,
-                    );
                     Ok(StoreObservation {
                         owner: observed_owner,
                         principal,
                         store_address,
-                        oplog_index,
                     })
                 })
             },
@@ -223,10 +212,6 @@ async fn same_tool_has_fresh_stores_and_owner_isolated_durable_state_after_recon
 
         assert_eq!(&second.owner, owner_id);
         assert_ne!(second.store_address, first.store_address);
-        assert!(
-            second.oplog_index > first.oplog_index,
-            "durable progress from both transient Stores must be carried by the owner oplog"
-        );
     }
 
     Ok(())

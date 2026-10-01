@@ -26,6 +26,7 @@ use crate::model::app::{
     BridgeSdkTarget, BridgeSdkTargetKind, BridgeSdkTargetSource, BridgeSdkTargetSubject,
     ComponentDependency, CustomBridgeSdkTarget,
 };
+use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::language::GuestLanguage;
 use crate::model::repl::{ReplAgentMetadata, ReplMetadata};
@@ -35,9 +36,13 @@ use crate::model::tool_deployment::{
 };
 use anyhow::{Context, bail};
 use camino::Utf8PathBuf;
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::component::ComponentName;
 use golem_common::model::tool::ToolName;
+use golem_common::model::tool_middleware::compile::synthesize_effective_definition;
+use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareMergeMode};
 use golem_common::schema::agent::AgentTypeKind;
+use golem_common::schema::tool::{Tool, ToolMiddleware, ToolMiddlewareScope};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -592,7 +597,10 @@ fn collect_remote_tool_manifest_targets_for_entry(
                 source_digest: grant.release.source_digest,
                 manifest_source: ctx.application().tool_declarations()[name].source.clone(),
             },
-            subject: BridgeSdkTargetSubject::Tool(grant.release.definition.clone()),
+            subject: BridgeSdkTargetSubject::Tool {
+                definition: grant.release.definition.clone(),
+                rpc_name: name.to_string(),
+            },
             target_language,
             bridge_mode,
             output_dir: ctx
@@ -827,7 +835,10 @@ fn collect_local_tool_manifest_targets_for_component(
         let output_dir = application.tool_bridge_sdk_dir(name, target_language);
         targets.push(BridgeSdkTarget {
             source: BridgeSdkTargetSource::local(component_name.clone()),
-            subject: BridgeSdkTargetSubject::Tool(tool),
+            subject: BridgeSdkTargetSubject::Tool {
+                rpc_name: name.to_string(),
+                definition: tool,
+            },
             target_language,
             bridge_mode,
             output_dir,
@@ -843,18 +854,70 @@ async fn collect_dependency_guest_bridge_targets(
     selection_scope_component_names: &[ComponentName],
 ) -> anyhow::Result<Vec<BridgeSdkTarget>> {
     let mut targets = Vec::new();
+    let mut extracted = BTreeMap::new();
 
     for component_name in source_component_names {
-        if !ctx
+        if ctx
             .application()
             .component(component_name)
             .agent_type_extraction_source_wasm()
             .exists()
         {
-            continue;
+            extracted.insert(
+                component_name.clone(),
+                extract_and_store_component_metadata(ctx, component_name).await?,
+            );
         }
+    }
+    let mut agent_components = extracted
+        .iter()
+        .flat_map(|(component_name, metadata)| {
+            metadata
+                .agent_types
+                .iter()
+                .map(move |agent| (agent.type_name.clone(), component_name.clone()))
+        })
+        .collect::<BTreeMap<AgentTypeName, ComponentName>>();
+    let dependency_consumers = selection_scope_component_names
+        .iter()
+        .filter(|component_name| {
+            ctx.application()
+                .component(component_name)
+                .properties()
+                .dependencies
+                .iter()
+                .any(|dependency| matches!(dependency, ComponentDependency::Tool { .. }))
+        })
+        .collect::<Vec<_>>();
+    if let [consumer] = dependency_consumers.as_slice() {
+        for agent_name in ctx.application().agent_ids() {
+            agent_components
+                .entry(agent_name.clone())
+                .or_insert_with(|| (*consumer).clone());
+        }
+    }
+    let resolved_agents = ctx.application().resolve_agents(&agent_components)?;
+    let middleware_definitions = extracted
+        .values()
+        .flat_map(|metadata| metadata.tool_middlewares.iter().cloned())
+        .collect::<Vec<_>>();
+    let environment_bindings = ctx
+        .application()
+        .environment_tool_bindings()
+        .map(|bindings| {
+            bindings
+                .iter()
+                .map(|(name, binding)| {
+                    (
+                        name.as_str(),
+                        ToolBindingState::from_binding(binding.clone()),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
 
-        let metadata = extract_and_store_component_metadata(ctx, component_name).await?;
+    for (component_name, metadata) in &extracted {
         validate_no_ambient_tool_collisions(ctx, component_name, &metadata.tools)?;
         for agent_type in &metadata.agent_types {
             if agent_type.kind != AgentTypeKind::Regular {
@@ -904,12 +967,28 @@ async fn collect_dependency_guest_bridge_targets(
             );
 
             for target_language in target_languages {
+                let definition = if target_language == GuestLanguage::Rust {
+                    effective_dependency_tool_definition(
+                        tool,
+                        tool_name,
+                        selection_scope_component_names,
+                        &agent_components,
+                        &resolved_agents,
+                        environment_bindings.get(tool_name),
+                        &middleware_definitions,
+                    )?
+                } else {
+                    tool.clone()
+                };
                 let output_dir = ctx
                     .application()
                     .dependency_tool_bridge_sdk_dir(tool_name, target_language);
                 targets.push(BridgeSdkTarget {
                     source: BridgeSdkTargetSource::local(component_name.clone()),
-                    subject: BridgeSdkTargetSubject::Tool(tool.clone()),
+                    subject: BridgeSdkTargetSubject::Tool {
+                        definition,
+                        rpc_name: tool_name.to_string(),
+                    },
                     target_language,
                     bridge_mode: BridgeMode::Guest,
                     output_dir,
@@ -969,7 +1048,10 @@ async fn collect_dependency_guest_bridge_targets(
                         .source
                         .clone(),
                 },
-                subject: BridgeSdkTargetSubject::Tool(grant.release.definition.clone()),
+                subject: BridgeSdkTargetSubject::Tool {
+                    definition: grant.release.definition.clone(),
+                    rpc_name: tool_name.to_string(),
+                },
                 target_language,
                 bridge_mode: BridgeMode::Guest,
                 output_dir: ctx
@@ -1019,6 +1101,114 @@ async fn collect_dependency_guest_bridge_targets(
     }
 
     Ok(targets)
+}
+
+fn effective_dependency_tool_definition(
+    tool: &Tool,
+    tool_name: &str,
+    consumer_components: &[ComponentName],
+    agent_components: &BTreeMap<AgentTypeName, ComponentName>,
+    resolved_agents: &crate::model::app::Agents,
+    environment: Option<&ToolBindingState>,
+    middleware_definitions: &[ToolMiddleware],
+) -> anyhow::Result<Tool> {
+    let mut effective = None;
+    for (agent_name, component_name) in agent_components {
+        if !consumer_components.contains(component_name) {
+            continue;
+        }
+        let Some(agent) = resolved_agents.agent(agent_name) else {
+            continue;
+        };
+        let Some(binding) = agent.tool_bindings().get(tool_name) else {
+            continue;
+        };
+        let candidate = apply_presented_tool_definitions(
+            tool,
+            environment,
+            Some(binding),
+            middleware_definitions,
+        )?;
+        if effective
+            .as_ref()
+            .is_some_and(|current| current != &candidate)
+        {
+            bail!(
+                "Tool '{tool_name}' has different middleware-presented definitions across generated-client consumers"
+            );
+        }
+        effective = Some(candidate);
+    }
+    Ok(effective.unwrap_or_else(|| tool.clone()))
+}
+
+fn apply_presented_tool_definitions(
+    tool: &Tool,
+    environment: Option<&ToolBindingState>,
+    owner: Option<&ToolBindingState>,
+    middleware_definitions: &[ToolMiddleware],
+) -> anyhow::Result<Tool> {
+    let environment = environment
+        .map(|binding| binding.middleware_installations())
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .flatten()
+        .unwrap_or_default();
+    let owner_installations = owner
+        .map(|binding| binding.middleware_installations())
+        .transpose()
+        .map_err(anyhow::Error::msg)?
+        .flatten();
+    let installations = match (owner, owner_installations) {
+        (_, None) => environment,
+        (Some(binding), Some(owner)) => match binding.middleware_merge_mode.unwrap_or_default() {
+            ToolMiddlewareMergeMode::Prepend => owner.into_iter().chain(environment).collect(),
+            ToolMiddlewareMergeMode::Append => environment.into_iter().chain(owner).collect(),
+            ToolMiddlewareMergeMode::Replace => owner,
+        },
+        (None, Some(_)) => unreachable!(),
+    };
+    let mut effective = tool.clone();
+    for installation in installations.iter().rev() {
+        let definition = find_middleware_definition(installation, middleware_definitions)?;
+        if let ToolMiddlewareScope::Monomorphic(scope) = &definition.scope {
+            effective = synthesize_effective_definition(
+                &scope.presented,
+                scope.expected.as_ref(),
+                &effective,
+            )
+            .map_err(anyhow::Error::msg)?;
+        }
+    }
+    Ok(effective)
+}
+
+fn find_middleware_definition<'a>(
+    installation: &ToolMiddlewareInstallation,
+    definitions: &'a [ToolMiddleware],
+) -> anyhow::Result<&'a ToolMiddleware> {
+    let definition = definitions
+        .iter()
+        .find(|definition| {
+            definition.name == installation.name.as_str()
+                || definition
+                    .aliases
+                    .iter()
+                    .any(|alias| alias == installation.name.as_str())
+        })
+        .with_context(|| format!("Tool middleware '{}' was not discovered", installation.name))?;
+    if installation
+        .version
+        .as_ref()
+        .is_some_and(|version| version != &definition.version)
+    {
+        bail!(
+            "Tool middleware '{}' requested version does not match definition version {}",
+            installation.name,
+            definition.version
+        );
+    }
+    Ok(definition)
 }
 
 pub(crate) fn validate_no_ambient_tool_collisions(
@@ -1084,7 +1274,10 @@ fn environment_tool_bridge_target(
     };
     Ok(BridgeSdkTarget {
         source,
-        subject: BridgeSdkTargetSubject::Tool(definition),
+        subject: BridgeSdkTargetSubject::Tool {
+            definition,
+            rpc_name: tool_name.to_string(),
+        },
         target_language,
         bridge_mode,
         output_dir,
@@ -1318,10 +1511,18 @@ async fn gen_bridge_sdk_target(
                         fs::remove(&output_dir)?;
                         generator.generate()
                     }
-                    BridgeSdkTargetSubject::Tool(tool) => match (target.target_language, target.bridge_mode) {
+                    BridgeSdkTargetSubject::Tool {
+                        definition: tool,
+                        rpc_name,
+                    } => match (target.target_language, target.bridge_mode) {
                         (GuestLanguage::Rust, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
-                            RustToolBridgeGenerator::new(tool, &output_dir, false)?.generate()
+                            RustToolBridgeGenerator::new_with_rpc_tool_name(
+                                tool,
+                                rpc_name,
+                                &output_dir,
+                                false,
+                            )?.generate()
                         }
                         (GuestLanguage::Scala, BridgeMode::Guest) => {
                             fs::remove(&output_dir)?;
@@ -1435,7 +1636,9 @@ mod tests {
     use golem_common::model::agent::{AgentConfigSource, AgentMode, AgentTypeName, Snapshotting};
     use golem_common::model::component::ComponentName;
     use golem_common::schema::agent::AgentConfigDeclarationSchema;
-    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use golem_common::schema::tool::{
+        CommandNode, CommandTree, Doc, Globals, MonomorphicToolMiddlewareScope, Tool,
+    };
     use golem_common::schema::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, AutoInjectedKind, InputSchema,
         NamedField, OutputSchema, SchemaGraph, SchemaType,
@@ -1483,7 +1686,10 @@ tools:
             BuildContext::new(&app_ctx, &build_config).with_environment_tools(&environment_tools);
         let mut targets = vec![BridgeSdkTarget {
             source: BridgeSdkTargetSource::local(ComponentName("app:second".into())),
-            subject: BridgeSdkTargetSubject::Tool(tool("echo")),
+            subject: BridgeSdkTargetSubject::Tool {
+                definition: tool("echo"),
+                rpc_name: "echo".to_string(),
+            },
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::Guest,
             output_dir: ctx
@@ -1778,8 +1984,14 @@ environments:
 
         assert_eq!(original_target.source, configured_target.source);
         let (
-            BridgeSdkTargetSubject::Tool(original_definition),
-            BridgeSdkTargetSubject::Tool(configured_definition),
+            BridgeSdkTargetSubject::Tool {
+                definition: original_definition,
+                ..
+            },
+            BridgeSdkTargetSubject::Tool {
+                definition: configured_definition,
+                ..
+            },
         ) = (original_target.subject, configured_target.subject)
         else {
             panic!("ambient tool targets must contain tool definitions")
@@ -2088,7 +2300,10 @@ components:
             );
             let tool_target = BridgeSdkTarget {
                 source: BridgeSdkTargetSource::local(ComponentName("component".to_string())),
-                subject: BridgeSdkTargetSubject::Tool(tool("MyTool")),
+                subject: BridgeSdkTargetSubject::Tool {
+                    definition: tool("MyTool"),
+                    rpc_name: "MyTool".to_string(),
+                },
                 target_language: language,
                 bridge_mode: BridgeMode::Guest,
                 output_dir: tempdir()
@@ -2125,7 +2340,10 @@ components:
     fn validate_supported_bridge_targets_reports_external_tool_mode_separately() {
         let target = BridgeSdkTarget {
             source: BridgeSdkTargetSource::local(ComponentName("component".to_string())),
-            subject: BridgeSdkTargetSubject::Tool(tool("MyTool")),
+            subject: BridgeSdkTargetSubject::Tool {
+                definition: tool("MyTool"),
+                rpc_name: "MyTool".to_string(),
+            },
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::External,
             output_dir: tempdir().unwrap().path().join("bridge/my-tool-client"),
@@ -2155,7 +2373,7 @@ components:
         );
         let agent = match &mut target.subject {
             BridgeSdkTargetSubject::Agent(agent) => agent,
-            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+            BridgeSdkTargetSubject::Tool { .. } => unreachable!(),
         };
         agent.methods.push(AgentMethodSchema {
             name: "forward".to_string(),
@@ -2188,7 +2406,7 @@ components:
         );
         let agent = match &mut target.subject {
             BridgeSdkTargetSubject::Agent(agent) => agent,
-            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+            BridgeSdkTargetSubject::Tool { .. } => unreachable!(),
         };
         agent.methods.push(AgentMethodSchema {
             name: "forward".to_string(),
@@ -2218,7 +2436,7 @@ components:
         );
         let constructor_agent = match &mut constructor_target.subject {
             BridgeSdkTargetSubject::Agent(agent) => agent,
-            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+            BridgeSdkTargetSubject::Tool { .. } => unreachable!(),
         };
         constructor_agent.constructor.input_schema = InputSchema::parameters([
             NamedField::user_supplied(
@@ -2246,7 +2464,7 @@ components:
         );
         let config_agent = match &mut config_target.subject {
             BridgeSdkTargetSubject::Agent(agent) => agent,
-            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+            BridgeSdkTargetSubject::Tool { .. } => unreachable!(),
         };
         config_agent.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
@@ -2271,7 +2489,7 @@ components:
         );
         let agent = match &mut target.subject {
             BridgeSdkTargetSubject::Agent(agent) => agent,
-            BridgeSdkTargetSubject::Tool(_) => unreachable!(),
+            BridgeSdkTargetSubject::Tool { .. } => unreachable!(),
         };
         agent.config.push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
@@ -2485,6 +2703,34 @@ components:
             },
             schema: SchemaGraph::empty(),
         }
+    }
+
+    #[test]
+    fn generated_client_middleware_resolution_honors_requested_version() {
+        let installation = ToolMiddlewareInstallation {
+            name: "adapter".try_into().unwrap(),
+            version: Some("2.0.0".to_string()),
+            parameters: golem_common::base_model::json::NormalizedJsonValue::new(
+                serde_json::json!({}),
+            ),
+            account: None,
+            secret_keys_readable: None,
+            secret_keys_revealable: None,
+            filesystem_access: Default::default(),
+        };
+        let definition = ToolMiddleware {
+            name: "adapter".to_string(),
+            version: "1.0.0".to_string(),
+            aliases: vec![],
+            doc: Doc::default(),
+            scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                presented: tool("presented"),
+                expected: None,
+            })),
+            parameter_schema: SchemaGraph::empty(),
+        };
+
+        assert!(find_middleware_definition(&installation, &[definition]).is_err());
     }
 
     fn ambient_tool(name: &str) -> golem_common::model::deployment::DeploymentPlanAmbientToolEntry {

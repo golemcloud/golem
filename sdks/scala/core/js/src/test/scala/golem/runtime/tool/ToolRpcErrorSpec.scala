@@ -28,7 +28,8 @@ import golem.tool.{
   StreamWriteError,
   ToolInputStream,
   ToolInvokeError,
-  ToolRpcFailure
+  ToolRpcFailure,
+  WireToolRpcFailure
 }
 import golem.tool.wire.{WitCustomToolError, WitToolError}
 import zio.test._
@@ -82,7 +83,9 @@ object ToolRpcErrorSpec extends ZIOSpecDefault {
       val jsError = ToolWireInterop.toolErrorToJs(WitToolError.InvalidInput("bad wire input"))
       assertTrue(
         ToolHostApi.decodeRpcFailure(variant("remote-tool-error", jsError)) ==
-          ToolRpcFailure.RemoteToolError(ToolInvokeError.InvalidInput("bad wire input"))
+          ToolRpcFailure.RemoteToolError(ToolInvokeError.InvalidInput("bad wire input")),
+        ToolHostApi.decodeWireRpcFailure(variant("remote-tool-error", jsError)) ==
+          WireToolRpcFailure.InvalidInput("bad wire input")
       )
     },
     test("falls back to a protocol error for an unrecognized thrown value") {

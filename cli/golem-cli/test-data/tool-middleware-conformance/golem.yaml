@@ -20,6 +20,11 @@ components:
   conformance:caller:
     dir: caller
     templates: rust
+    tools:
+      compat-leaf:
+        filesystemAccess: allowed
+      nominal-leaf:
+        filesystemAccess: allowed
     dependencies:
       tools:
         - conformance:middleware/manifest-probe
@@ -48,6 +53,12 @@ agents:
     tools:
       manifest-probe:
         filesystemAccess: allowed
+      compat-leaf:
+        middleware:
+          - name: structural-adapter
+            filesystemAccess: allowed
+        middlewareMergeMode: replace
+        filesystemAccess: allowed
   AdapterConformanceAgent:
     tools:
       compat-leaf:
@@ -56,10 +67,3 @@ agents:
             filesystemAccess: allowed
         middlewareMergeMode: replace
         filesystemAccess: allowed
-
-bridge:
-  rust:
-    internal:
-      tools:
-        - manifest-probe
-        - compat-leaf

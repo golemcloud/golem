@@ -293,6 +293,12 @@ test_component!(
     "golem:moonbit-examples"
 );
 test_component!(
+    tool_streaming_moonbit_lifecycle_gol40,
+    "tool_streaming_moonbit_lifecycle_gol40",
+    "golem_it_tool_streaming_moonbit_lifecycle_gol40",
+    "golem:moonbit-lifecycle-gol40"
+);
+test_component!(
     tool_streaming_effect_provider,
     "tool_streaming_effect_provider",
     "golem_it_tool_streaming_effect_provider",

@@ -131,7 +131,7 @@ use golem_common::schema::tool::DiscoveredTool;
 use golem_common::schema::tool::canonical::CanonicalSurfaceRef;
 use golem_common::schema::tool::wit::wire::{Host as HostToolCommon, Tool as WitTool, ToolError};
 use golem_common::schema::tool::{FlagShape, OptionShape, OptionSpec, Repetition, Tool};
-use golem_common::schema::validation::{is_equivalent_cross_graph, validate_value};
+use golem_common::schema::validation::{is_equivalent_cross_graph, validate_graph, validate_value};
 use golem_common::schema::wit::{
     decode_graph, decode_value_with, encode_graph, encode_value_with_streams,
 };
@@ -2051,6 +2051,7 @@ fn decode_guest_tool_error<Ctx: WorkerCtx>(
 fn validate_declared_tool_error(
     error: SerializableToolRpcError,
     contract: &ToolOutputContract,
+    allow_undeclared_custom_error: bool,
 ) -> SerializableToolRpcError {
     let SerializableToolRpcError::RemoteToolError(tool_error) = error else {
         return error;
@@ -2059,6 +2060,17 @@ fn validate_declared_tool_error(
         return SerializableToolRpcError::RemoteToolError(tool_error);
     };
     let Some(declared) = contract.errors.iter().find(|case| case.name == custom.name) else {
+        if allow_undeclared_custom_error
+            && validate_graph(custom.payload.graph()).is_ok()
+            && validate_value(
+                custom.payload.graph(),
+                &custom.payload.graph().root,
+                custom.payload.value(),
+            )
+            .is_ok()
+        {
+            return SerializableToolRpcError::RemoteToolError(tool_error);
+        }
         return SerializableToolRpcError::RemoteToolError(Box::new(
             SerializableToolError::InvalidResult(format!(
                 "tool returned undeclared custom error '{}'",
@@ -2133,7 +2145,7 @@ fn validate_native_tool_output(
             validate_declared_tool_result(typed, contract)?;
             Ok(result)
         }
-        Err(error) => Err(validate_declared_tool_error(error, contract)),
+        Err(error) => Err(validate_declared_tool_error(error, contract, false)),
     }
 }
 
@@ -2261,6 +2273,7 @@ async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
         golem_common::schema::tool::wit::wire::ToolError,
     >,
     output_contract: &ToolOutputContract,
+    allow_undeclared_custom_error: bool,
     result_streams: &crate::durable_host::durable_session::StreamSession,
 ) -> wasmtime::Result<HostResponseEntityInvocation> {
     let response = accessor
@@ -2292,6 +2305,7 @@ async fn materialize_guest_tool_response<Ctx: WorkerCtx>(
                     Err(error) => Err(validate_declared_tool_error(
                         decode_guest_tool_error(error, ctx),
                         output_contract,
+                        allow_undeclared_custom_error,
                     )),
                 })
             },
@@ -2430,14 +2444,21 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                         principal,
                     )
                     .await?;
-                materialize_guest_tool_response(accessor, result, &output_contract, &result_streams)
-                    .await
+                materialize_guest_tool_response(
+                    accessor,
+                    result,
+                    &output_contract,
+                    false,
+                    &result_streams,
+                )
+                .await
             })
             .await
         }
         golem_common::model::entity::EntityInvocationPlanLayer::Middleware {
             activation,
             parameters,
+            presented_definition,
             next_effective_definition,
             ..
         } => {
@@ -2493,6 +2514,7 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
                     accessor,
                     result?,
                     &output_contract,
+                    presented_definition.is_none(),
                     &result_streams,
                 )
                 .await
@@ -2638,6 +2660,7 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             executable,
             scope.activation().clone(),
             owner_component_metadata,
+            scope.authority_wallet().to_vec(),
         ),
     )
     .await
@@ -7749,9 +7772,69 @@ mod tests {
         ));
 
         assert_eq!(
-            validate_declared_tool_error(error.clone(), &contract),
+            validate_declared_tool_error(error.clone(), &contract, false),
             error
         );
+    }
+
+    #[test]
+    fn universal_middleware_may_return_well_formed_undeclared_custom_error() {
+        let payload_schema = SchemaGraph::anonymous(SchemaType::string());
+        let contract = ToolOutputContract {
+            result: None,
+            errors: Vec::new(),
+        };
+        let error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "path-policy-denied".to_string(),
+                payload: TypedSchemaValue::new(
+                    payload_schema,
+                    SchemaValue::String("outside allowed roots".to_string()),
+                ),
+            })),
+        ));
+
+        assert_eq!(
+            validate_declared_tool_error(error.clone(), &contract, true),
+            error
+        );
+        assert!(matches!(
+            validate_declared_tool_error(error, &contract, false),
+            SerializableToolRpcError::RemoteToolError(error)
+                if matches!(*error, SerializableToolError::InvalidResult(_))
+        ));
+    }
+
+    #[test]
+    fn universal_middleware_rejects_undeclared_custom_error_with_malformed_schema() {
+        let payload_schema = SchemaGraph::anonymous(SchemaType::record_from_fields([
+            ("reason", SchemaType::string()),
+            ("reason", SchemaType::string()),
+        ]));
+        let contract = ToolOutputContract {
+            result: None,
+            errors: Vec::new(),
+        };
+        let error = SerializableToolRpcError::RemoteToolError(Box::new(
+            SerializableToolError::CustomError(Box::new(SerializableCustomToolError {
+                name: "path-policy-denied".to_string(),
+                payload: TypedSchemaValue::new(
+                    payload_schema,
+                    SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String("first".to_string()),
+                            SchemaValue::String("second".to_string()),
+                        ],
+                    },
+                ),
+            })),
+        ));
+
+        assert!(matches!(
+            validate_declared_tool_error(error, &contract, true),
+            SerializableToolRpcError::RemoteToolError(error)
+                if matches!(*error, SerializableToolError::InvalidResult(_))
+        ));
     }
 
     #[test]
@@ -7777,7 +7860,7 @@ mod tests {
         ));
 
         assert_eq!(
-            validate_declared_tool_error(error.clone(), &contract),
+            validate_declared_tool_error(error.clone(), &contract, false),
             error
         );
     }

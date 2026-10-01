@@ -660,7 +660,7 @@ fn resolve_registration<'a>(
     Ok(registration)
 }
 
-fn synthesize_effective_definition(
+pub fn synthesize_effective_definition(
     presented: &Tool,
     expected: Option<&Tool>,
     next: &Tool,
