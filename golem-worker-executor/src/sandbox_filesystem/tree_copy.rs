@@ -1366,6 +1366,51 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn seed_replaces_a_file_with_a_directory_that_has_the_source_attributes() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir(source.path().join("data")).unwrap();
+        std::fs::write(source.path().join("data/file"), b"new").unwrap();
+        std::fs::set_permissions(
+            source.path().join("data"),
+            std::fs::Permissions::from_mode(0o750),
+        )
+        .unwrap();
+        let modified = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        File::open(source.path().join("data"))
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        std::fs::write(destination.path().join("data"), b"old file").unwrap();
+
+        seed_entry(
+            buffered_seed(SeedPlacement::Replace),
+            &open(destination.path()),
+            source.path(),
+            Path::new(""),
+        )
+        .unwrap();
+
+        let made = std::fs::metadata(destination.path().join("data")).unwrap();
+        assert!(made.is_dir(), "the file must give way to the directory");
+        assert_eq!(
+            made.permissions().mode() & 0o777,
+            0o750,
+            "the directory that takes the place of a file must have the mode of its source"
+        );
+        assert_eq!(
+            made.modified().unwrap(),
+            modified,
+            "the directory that takes the place of a file must have the time of its source"
+        );
+        assert_eq!(
+            std::fs::read(destination.path().join("data/file")).unwrap(),
+            b"new"
+        );
+    }
+
     #[test]
     fn seed_fails_on_an_existing_target_path() {
         let source = tempfile::tempdir().unwrap();
