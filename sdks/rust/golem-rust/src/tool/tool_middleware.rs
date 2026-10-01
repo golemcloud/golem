@@ -276,16 +276,6 @@ impl<T, E> TypedUnderlyingInvocation<T, E> {
         })
     }
 
-    /// Waits for the structured result while forwarding the underlying stdout
-    /// to the writer supplied to this middleware invocation.
-    #[cfg(feature = "export_golem_agentic")]
-    pub async fn get_forwarding_stdout(
-        self,
-        stdout: Option<OutputStream>,
-    ) -> Result<T, ToolInvokeError<E>> {
-        self.get_forwarding_outputs(stdout, None).await
-    }
-
     /// Waits for the structured result while forwarding both underlying outputs
     /// to the writers supplied to this middleware invocation.
     pub async fn get_forwarding_outputs(
@@ -524,34 +514,6 @@ impl UnderlyingTool {
             Ok(Some(RawCustomToolError::from_payload(name, payload)))
         })
         .await
-    }
-
-    /// Invokes the next layer while forwarding its stdout to the writer
-    /// supplied to this middleware invocation.
-    #[cfg(feature = "export_golem_agentic")]
-    pub async fn invoke_forwarding_stdout(
-        &self,
-        command_path: Vec<String>,
-        input: TypedSchemaValue,
-        stdin: Option<InputStream>,
-        stdout: Option<OutputStream>,
-    ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
-        let mut invocation = self.start(command_path, input, stdin).await?;
-        let forwarded = forward_output("stdout", invocation.stdout.take(), stdout);
-        let stderr = forward_output("stderr", invocation.stderr.take(), None);
-        let (result, forwarded, stderr) = join_three(invocation.get(), forwarded, stderr).await;
-        match result {
-            Err(error) => Err(error),
-            Ok(result) => {
-                forwarded?;
-                stderr?;
-                Ok(InvocationResult {
-                    result,
-                    stdout: None,
-                    stderr: None,
-                })
-            }
-        }
     }
 
     /// Invokes the next layer while forwarding both outputs to the writers

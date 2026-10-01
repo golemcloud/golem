@@ -77,7 +77,7 @@ Inputs use the human-readable JSON shapes advertised by `tools/list`, including 
 
 ### Finite stdin, stdout, and stderr
 
-MCP buffers each byte stream, with a separate **16 MiB limit for stdin, stdout, and stderr**. Declared stdin becomes an `_stdin` string argument, required only when the tool requires stdin. It contains UTF-8 text when every declared MIME type is textual, or base64 otherwise. Stdout and stderr are drained concurrently while stdin is being sent. Each becomes text, image, audio, or an embedded resource according to its declared MIME type.
+MCP buffers each byte stream, with a separate **16 MiB limit for stdin, stdout, and stderr**. Exceeding any limit fails the MCP call; Golem does not truncate stream data. Declared stdin becomes an `_stdin` string argument, required only when the tool requires stdin. It contains UTF-8 text when every declared MIME type is textual, or base64 otherwise. Stdout and stderr are drained concurrently while stdin is being sent. Each becomes text, image, audio, or an embedded resource according to its declared MIME type. An output declared only with `text/*` MIME types must contain valid UTF-8 or the MCP call fails.
 
 MCP has no native fd 2, so successful content lists stdout before stderr and tags every projected block with `_meta["golem.cloud/tool-channel"]` set to `"stdout"` or `"stderr"`. Binary resources use distinct `/stdout` and `/stderr` URIs. This order does not imply cross-channel byte ordering, and stderr content alone does not set `isError`. On tool failure Golem still drains both outputs but omits their content, matching the existing stdout limitation.
 

@@ -19,7 +19,7 @@ use crate::repo::RepoError;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
     ExistsResult, blob_file_name_to_string, blob_parent_to_string, blob_path_is_root,
-    blob_path_to_string, validate_range, validate_relative_blob_path,
+    blob_path_to_string, join_blob_key, validate_range, validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -429,12 +429,17 @@ impl BlobStorage for SqliteBlobStorage {
                 .bind(Self::namespace(namespace))
                 .bind(blob_path_to_string(path)?);
 
+        let path = blob_path_to_string(path)?;
         let result = self
             .pool
             .with_ro(target_label, op_label)
             .fetch_all_as::<(String,), _>(query)
             .await
-            .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())?;
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| PathBuf::from(join_blob_key(&path, &row.0)))
+                    .collect()
+            })?;
 
         Ok(result)
     }

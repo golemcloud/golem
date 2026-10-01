@@ -991,16 +991,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             } => (acceptance, early_output, early_inbound),
             AcceptanceRace::InvocationFinished(result) => {
                 let (reason, error, worker_error) = match result {
-                    Ok(_) => (
-                        InvocationRejectionReason::Internal,
-                        "invocation completed before acceptance".to_string(),
-                        None,
-                    ),
-                    Err(error) => (
-                        pre_acceptance_rejection_reason(&error),
-                        error.to_string(),
-                        Some(error.into()),
-                    ),
+                    Ok(_) => {
+                        tracing::warn!(
+                            agent_id = ?start.agent_id,
+                            attempt_id = ?start.attempt_id,
+                            error = "invocation completed before acceptance",
+                            "Invocation session start was rejected"
+                        );
+                        (
+                            InvocationRejectionReason::Internal,
+                            "invocation completed before acceptance".to_string(),
+                            None,
+                        )
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            agent_id = ?start.agent_id,
+                            attempt_id = ?start.attempt_id,
+                            error = %error,
+                            "Invocation session start was rejected"
+                        );
+                        (
+                            pre_acceptance_rejection_reason(&error),
+                            error.to_string(),
+                            Some(error.into()),
+                        )
+                    }
                 };
                 send_rejection_with_worker_error(&responses, reason, error, worker_error, &start)
                     .await;
@@ -1046,6 +1062,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             match durable_streams.input_high_waters().await {
                 Ok(high_waters) => high_waters,
                 Err(error) => {
+                    tracing::warn!(
+                        agent_id = ?start.agent_id,
+                        attempt_id = ?start.attempt_id,
+                        error = %error,
+                        "Invocation session input high-water lookup failed"
+                    );
                     // A refused write is rejected as the worker error it is, which the worker
                     // service reads as a routing miss.
                     let worker_error = match &error {
@@ -1760,6 +1782,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut acceptance = match result {
             Ok(acceptance) => acceptance,
             Err(error) => {
+                tracing::warn!(
+                    agent_id = ?resume.agent_id,
+                    attempt_id = ?resume.attempt_id,
+                    error = %error,
+                    "Durable invocation session resume was rejected"
+                );
                 let rejection = InvocationResponse {
                     response: Some(invocation_response::Response::Rejected(
                         InvocationRejected {
@@ -1828,6 +1856,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (acceptance, cursor_map, terminal_cursor_stream_ids) = match result {
             Ok(result) => result,
             Err(error) => {
+                tracing::warn!(
+                    agent_id = ?resume.agent_id,
+                    attempt_id = ?resume.attempt_id,
+                    error = %error,
+                    "Durable invocation session resume preparation was rejected"
+                );
                 let rejection = InvocationResponse {
                     response: Some(invocation_response::Response::Rejected(
                         InvocationRejected {

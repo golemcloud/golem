@@ -257,6 +257,16 @@ the authoritative source remains intact, and threshold, scheduled or sweep maint
 with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
 An archive read needed for replay still fails recovery rather than being treated as absent data.
 
+Producer-targeted attachment controls (consumer-side finalization, activation, refresh) reach the
+producer's executor through `Rpc::control_durable_stream_attachment`, which returns
+`DurableStreamRemoteError` like slot reads. A producer that is recovering, fenced, or being deleted
+answers `Unavailable`; the caller retries with backoff instead of failing. A producer that no longer
+exists answers not-found, and consumer-side finalization treats that as success because the
+producer's own deletion cascade already dropped the attachment. Consumer deletion bounds each
+producer finalization with a timeout so a producer that never becomes reachable fails the deletion
+attempt instead of hanging it; the attempt can be retried. Producer deletion never waits for
+consumer cooperation.
+
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
 shared attempt independently of request cancellation. `finish_construction` prepares resolved data
 privately; failure drains and joins attempt-owned work before returning to `Unresolved`, without

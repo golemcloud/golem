@@ -8,7 +8,7 @@ use crate::durable_host::schema_value_stream::ExecutorProjectionStreams;
 use crate::durable_host::stream_bus::LiveStreamEventPayload;
 use crate::durable_host::stream_transport::{output_stream_pair, test_output_stream_pair};
 use crate::services::oplog::{CommitLevel, DurableStreamOplogRecord};
-use crate::services::rpc::{DurableStreamReadError, RpcDemand, RpcError};
+use crate::services::rpc::{DurableStreamRemoteError, RpcDemand, RpcError};
 use golem_api_grpc::proto::golem::schema::{ListValue, SchemaValueStreamReference, schema_value};
 use golem_common::base_model::component::{ComponentId, ComponentRevision};
 use golem_common::base_model::durable_stream::{
@@ -1908,7 +1908,7 @@ struct AttachedProducerRpc {
     producer: Arc<DurableStreamStore>,
     cancellation_owner: Option<Arc<DurableStreamStore>>,
     stall_next_cancel: std::sync::atomic::AtomicBool,
-    scripted_reads: Mutex<VecDeque<Result<Vec<u8>, DurableStreamReadError<RpcError>>>>,
+    scripted_reads: Mutex<VecDeque<Result<Vec<u8>, DurableStreamRemoteError<RpcError>>>>,
     pending_read: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     read_requests:
         Mutex<Vec<golem_common::base_model::durable_stream::AttachedStreamSegmentRequest>>,
@@ -1920,7 +1920,7 @@ impl Rpc for AttachedProducerRpc {
         &self,
         request: golem_common::base_model::durable_stream::StreamAttachmentControlRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         if self.stall_next_cancel.swap(false, Ordering::SeqCst) {
             std::future::pending::<()>().await;
         }
@@ -1949,8 +1949,10 @@ impl Rpc for AttachedProducerRpc {
                     .map(|_| false),
                 _ => panic!("unexpected control RPC"),
             }
-            .map_err(|error| RpcError::ProtocolError {
-                details: error.to_string(),
+            .map_err(|error| {
+                DurableStreamRemoteError::Other(RpcError::ProtocolError {
+                    details: error.to_string(),
+                })
             });
         }
         let owner = self.cancellation_owner.as_ref().unwrap();
@@ -2003,7 +2005,7 @@ impl Rpc for AttachedProducerRpc {
         &self,
         request: golem_common::base_model::durable_stream::DurableStreamReadRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         let golem_common::base_model::durable_stream::DurableStreamReadRequest::AttachedConsumer(
             request,
         ) = request
@@ -2038,7 +2040,7 @@ impl Rpc for AttachedProducerRpc {
                 .await
         }
         .map_err(|error| {
-            DurableStreamReadError::from_producer(error, |details| RpcError::ProtocolError {
+            DurableStreamRemoteError::from_producer(error, |details| RpcError::ProtocolError {
                 details,
             })
         })?;
@@ -2141,8 +2143,8 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
             }
         };
         rpc.scripted_reads.lock().await.extend([
-            Err(DurableStreamReadError::Unavailable),
-            Err(DurableStreamReadError::Unavailable),
+            Err(DurableStreamRemoteError::Unavailable),
+            Err(DurableStreamRemoteError::Unavailable),
             Ok(golem_common::serialization::serialize(&expected).unwrap()),
         ]);
         assert_eq!(read().await.unwrap(), expected);
@@ -2162,7 +2164,7 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
         rpc.scripted_reads
             .lock()
             .await
-            .push_back(Err(DurableStreamReadError::Other(RpcError::Denied {
+            .push_back(Err(DurableStreamRemoteError::Other(RpcError::Denied {
                 details: "access revoked".to_string(),
             })));
         assert!(
@@ -2174,7 +2176,7 @@ async fn routed_attached_reads_retry_only_unavailable_without_changing_the_curso
         rpc.scripted_reads
             .lock()
             .await
-            .push_back(Err(DurableStreamReadError::Unavailable));
+            .push_back(Err(DurableStreamRemoteError::Unavailable));
         let mut pending = Box::pin(read());
         assert!(futures::poll!(pending.as_mut()).is_pending());
         assert_eq!(rpc.read_requests.lock().await.len(), 1);

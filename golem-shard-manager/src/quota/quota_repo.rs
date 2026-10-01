@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::sharding::error::ShardManagerError;
-use crate::sharding::etcd_retry::retry_retriable_until;
+use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until};
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::persistence::{ExternalRevision, NO_REVISION};
 use async_trait::async_trait;
@@ -37,8 +37,6 @@ use indoc::indoc;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::Instant;
 use tonic::Code;
 use tracing::{Instrument, debug, info_span};
 use uuid::Uuid;
@@ -635,9 +633,6 @@ const READ_PAGE_SIZE: i64 = 1000;
 /// before its last page arrived.
 const READ_COMPACTED_RESTARTS: u32 = 3;
 
-/// How long a read of the quota state may spend retrying transient failures.
-const READ_RETRY_BUDGET: Duration = Duration::from_secs(10);
-
 /// The value stored at a resource's `state` key.
 #[derive(Debug, Clone, BinaryCodec)]
 #[desert(evolution())]
@@ -751,6 +746,8 @@ fn etcd_error(err: etcd_client::Error) -> QuotaRepoError {
 pub struct EtcdQuotaRepo {
     client: Client,
     fence: LeaderFence,
+    /// How a read of the quota state retries transient failures.
+    read_retry: ReadRetry,
     page_size: i64,
     between_pages: Option<BetweenPages>,
 }
@@ -768,10 +765,11 @@ enum PageError {
 }
 
 impl EtcdQuotaRepo {
-    pub fn new(client: Client, fence: LeaderFence) -> Self {
+    pub fn new(client: Client, fence: LeaderFence, read_retry: ReadRetry) -> Self {
         Self {
             client,
             fence,
+            read_retry,
             page_size: READ_PAGE_SIZE,
             between_pages: None,
         }
@@ -789,8 +787,12 @@ impl EtcdQuotaRepo {
         self
     }
 
-    pub fn logged(client: Client, fence: LeaderFence) -> LoggedQuotaRepo<Self> {
-        LoggedQuotaRepo::new(Self::new(client, fence))
+    pub fn logged(
+        client: Client,
+        fence: LeaderFence,
+        read_retry: ReadRetry,
+    ) -> LoggedQuotaRepo<Self> {
+        LoggedQuotaRepo::new(Self::new(client, fence, read_retry))
     }
 
     fn state_value(record: &QuotaResourceRecord) -> Result<Vec<u8>, QuotaRepoError> {
@@ -1044,6 +1046,7 @@ impl EtcdQuotaRepo {
         key: &[u8],
         options: GetOptions,
     ) -> Result<etcd_client::GetResponse, PageError> {
+        let deadline = self.read_retry.deadline().map_err(PageError::Other)?;
         retry_retriable_until(
             "reading the quota state",
             || {
@@ -1052,7 +1055,9 @@ impl EtcdQuotaRepo {
                 let options = options.clone();
                 async move { Ok::<_, ShardManagerError>(kv.get(key, Some(options)).await?) }
             },
-            Instant::now() + READ_RETRY_BUDGET,
+            deadline,
+            self.read_retry.min_delay,
+            self.read_retry.max_delay,
         )
         .await
         .map_err(|err| match &err {

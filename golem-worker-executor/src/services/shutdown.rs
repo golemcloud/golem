@@ -40,7 +40,7 @@ const _: () = assert!(DEREGISTER_DEADLINE_MILLIS < SHUTDOWN_GRACE_MILLIS);
 // deregistration that had to wait for a busy manager - the shards would then sit out a whole
 // lease instead of being handed back.
 const _: () =
-    assert!(DEREGISTER_DEADLINE_MILLIS > shard_lease::SHARD_LEASE_STATE_WRITE_BUDGET_MILLIS);
+    assert!(DEREGISTER_DEADLINE_MILLIS > shard_lease::MAX_SHARD_LEASE_STATE_WRITE_TIMEOUT_MILLIS);
 // Stopping never waits longer than renewing would.
 const _: () =
     assert!(DEREGISTER_DEADLINE_MILLIS <= shard_lease::SHARD_LEASE_RPC_DEADLINE_FLOOR_MILLIS);
