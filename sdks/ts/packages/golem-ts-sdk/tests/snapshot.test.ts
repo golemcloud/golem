@@ -1102,6 +1102,43 @@ describe('snapshot — in-memory and file-backed databases', () => {
     },
   );
 
+  it('warms a database once when a custom load puts it in two fields', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'AliasedDatabase',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => ({ count: 0 }),
+        methods: {},
+        snapshot: {
+          load() {
+            const fileDb = new env.FakeDatabaseSync('/data/app.db');
+            return { count: 8, fileDb, alias: fileDb };
+          },
+        },
+      });
+    env.select('AliasedDatabase');
+
+    await env.isolatedGuest.loadSnapshot.load({
+      payload: new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          principal: { tag: 'anonymous' },
+          state: { count: 8 },
+          fileDatabases: {},
+        }),
+      ),
+      mimeType: 'application/json',
+    });
+
+    expect(env.warmed).toEqual(['/data/app.db: SELECT count(*) FROM sqlite_master']);
+    expect(env.serializeDatabaseSync).toHaveBeenCalledTimes(1);
+  });
+
   it('does not warm a database that a custom load leaves closed', async () => {
     const env = await isolate();
     env
