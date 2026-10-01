@@ -530,7 +530,7 @@ async fn get_oplog_with_api_changing_updates(
 
     let _ = executor.check_oplog_is_queryable(&worker_id).await;
 
-    assert_eq!(oplog.len(), 15);
+    assert_eq!(oplog.len(), 16);
 
     Ok(())
 }
