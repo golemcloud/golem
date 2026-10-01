@@ -18,7 +18,13 @@ only the passed cwd (and settings brought back from a file), invalid-cwd rejecti
 requests, streaming (an endless response piped into
 `head -c 5` must end, which only a client that forwards each chunk allows), completed-call crash
 recovery, idempotency, and subsequent clean invocations. Each invocation prints its elapsed time. Its stderr
-assertions concern the shell's captured stderr; the fixture's commands declare no stderr of their own.
+assertions concern the shell's captured stderr; the commands it calls declare no stderr of their own.
+
+`app::builtin_bash::bound_bash_routes_a_siblings_stderr` calls the fixture's `interleave`, which
+declares a stderr channel and writes to it and stdout in turn. It checks that the sibling's stdout
+and stderr reach the command's fd 1 and fd 2 as they do for a local command (`2>/dev/null`, `2>&1`,
+`|&`, a pipe that changes only stdout, `2>file`), with stdout first, and that a declared error
+follows the sibling's own stderr with its declared status.
 
 `app::builtin_bash::bound_bash_recovers_a_crash_while_a_sibling_is_pending` crashes the owner
 while the fixture's `checkpoint` sibling is parked on a GET to an in-test HTTP endpoint, once with
@@ -43,7 +49,7 @@ POST runs again from the start with a new one. It is quarantined too: since #396
 recovery never re-sends the request, GET or POST.
 
 Run the quarantined scenarios with `-- app::builtin_bash --include-ignored`. The filter above runs
-the other two.
+the other three.
 
 The standalone conformance matrix, which compares the shell with Bash 5 and GNU tools without a
 Golem server, lives in [builtin-tools/bash/conformance](../../../../builtin-tools/bash/conformance/README.md).

@@ -1195,6 +1195,48 @@ async fn bound_bash_background_jobs_signal_and_cancel_siblings() {
     );
 }
 
+// A sibling that declares stderr: its two channels reach the command's fd 1 and fd 2, where
+// redirections apply, and its stderr comes before the call's own diagnostics.
+#[test]
+#[timeout("20 minutes")]
+async fn bound_bash_routes_a_siblings_stderr() {
+    let ctx = context().await;
+    let incoming = invoke(
+        &ctx,
+        OWNER,
+        "",
+        "mkdir -p /tmp/builtin-bash/stderr; cd /tmp/builtin-bash/stderr",
+    )
+    .await;
+    assert_result(&incoming, "", "", 0);
+    let cwd = incoming.cwd.as_str();
+    let both = "out-1\nout-2\nerr-1\nerr-2\n";
+    for (script, stdout, stderr) in [
+        ("fixture interleave ok", "out-1\nout-2\n", "err-1\nerr-2\n"),
+        ("fixture interleave ok 2>/dev/null", "out-1\nout-2\n", ""),
+        // Nothing records how the channels interleaved: stdout comes first.
+        ("fixture interleave ok 2>&1", both, ""),
+        ("fixture interleave ok |& cat", both, ""),
+        (
+            "fixture interleave ok | tr a-z A-Z",
+            "OUT-1\nOUT-2\n",
+            "err-1\nerr-2\n",
+        ),
+        ("fixture interleave ok 2>err; cat err", both, ""),
+    ] {
+        let result = invoke(&ctx, OWNER, cwd, script).await;
+        assert_result(&result, stdout, stderr, 0);
+    }
+    // A declared error follows the provider's stderr, with its declared status.
+    let result = invoke(&ctx, OWNER, cwd, "fixture interleave fail").await;
+    assert_result(
+        &result,
+        "out-1\nout-2\n",
+        "err-1\nerr-2\ntool error: selected: \"interleave failure\"\n",
+        42,
+    );
+}
+
 // Quarantined: after `simulate-crash`, an owner parked on a background job's pending sibling call
 // is sometimes never reconstructed, so the recovered call's request never arrives (3 of 7 runs,
 // locally and in CI). Nothing in the bash tool runs in that window; it looks like the executor's

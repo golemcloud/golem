@@ -84,6 +84,15 @@ pub trait Fixture {
     async fn delayed(&self, path: String) -> Result<String, FixtureError>;
     /// Append `before`, wait for the test to release an HTTP checkpoint, then append `after`.
     async fn checkpoint(&self, path: String, authority: String) -> Result<String, FixtureError>;
+    /// Write `out-1`, `err-1`, `out-2`, `err-2` alternately to stdout and stderr; `fail` then
+    /// returns the selected error.
+    #[arg(diagnostics, channel = "stderr")]
+    async fn interleave(
+        &self,
+        mode: String,
+        stdout: OutputStream,
+        diagnostics: OutputStream,
+    ) -> Result<String, FixtureError>;
 }
 
 struct FixtureImpl;
@@ -132,6 +141,28 @@ impl Fixture for FixtureImpl {
         wait_at_checkpoint(&authority).await?;
         append(&path, "after\n")?;
         Ok("completed".into())
+    }
+
+    async fn interleave(
+        &self,
+        mode: String,
+        mut stdout: OutputStream,
+        mut diagnostics: OutputStream,
+    ) -> Result<String, FixtureError> {
+        for n in 1..=2 {
+            stdout
+                .write(format!("out-{n}\n").into_bytes())
+                .await
+                .unwrap();
+            diagnostics
+                .write(format!("err-{n}\n").into_bytes())
+                .await
+                .unwrap();
+        }
+        if mode == "fail" {
+            return Err(FixtureError::Selected("interleave failure".into()));
+        }
+        Ok("done".into())
     }
 }
 
