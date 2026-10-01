@@ -14,8 +14,8 @@
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
-      "version": "0.0.2",
-      "sha256": "e42fe80bf84d9ce36f89ef85494f91263fd5ef37661ccae48f530622beb64c8b"
+      "version": "0.0.3",
+      "sha256": "251a787e4d6f54814781181a3879c9187663ff91fbf1e3e4b724e89103fb0bf0"
     },
     "typescript_tools": {
       "component": "typescript-tools",
