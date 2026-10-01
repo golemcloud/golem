@@ -671,7 +671,10 @@ describe('snapshot — in-memory and file-backed databases', () => {
     }));
     const existingFiles = new Set(['/data/app.db', '/data/other.db']);
     const existsSync = vi.fn((path: string) => existingFiles.has(path));
-    vi.doMock('../src/internal/fileSystem', () => ({ existsSync }));
+    vi.doMock('node:fs', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('node:fs')>()),
+      existsSync,
+    }));
     const [
       { defineAgent: isolatedDefineAgent },
       isolatedGuest,
@@ -726,7 +729,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
 
   afterEach(() => {
     vi.doUnmock('../src/internal/sqlite');
-    vi.doUnmock('../src/internal/fileSystem');
+    vi.doUnmock('node:fs');
     vi.resetModules();
   });
 

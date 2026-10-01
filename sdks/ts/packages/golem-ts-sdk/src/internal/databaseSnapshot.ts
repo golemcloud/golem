@@ -24,7 +24,7 @@ import {
   SQLTagStore,
   StatementSync,
 } from './sqlite';
-import { existsSync } from './fileSystem';
+import { existsSync } from 'node:fs';
 import type { MultipartPart } from './multipart';
 
 /** The SQLite databases of a typed snapshot, keyed by the agent field that holds each one. */
