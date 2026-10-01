@@ -3313,13 +3313,12 @@ impl ComponentProperties {
             initial_card: merged.initial_card.value().clone(),
         };
 
-        for (name, value) in [("componentWasm", &properties.component_wasm)] {
-            if value.is_empty() {
-                validation.add_error(format!(
-                    "Property {} is empty or undefined",
-                    name.log_color_highlight()
-                ));
-            }
+        let (name, value) = ("componentWasm", &properties.component_wasm);
+        if value.is_empty() {
+            validation.add_error(format!(
+                "Property {} is empty or undefined",
+                name.log_color_highlight()
+            ));
         }
 
         properties
