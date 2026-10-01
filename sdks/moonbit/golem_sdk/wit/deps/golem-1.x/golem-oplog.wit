@@ -497,6 +497,8 @@ interface oplog {
     variant update-description {
         /// Automatic update by replaying the oplog on the new version
         auto-update,
+        /// Automatic update assisted by the latest eligible periodic snapshot
+        snapshot-assisted-automatic,
         /// Custom update by loading a given snapshot on the new version
         snapshot-based(snapshot)
     }
@@ -504,20 +506,39 @@ interface oplog {
     record pending-update-parameters {
         timestamp: datetime,
         target-revision: component-revision,
-        description: update-description
+        description: update-description,
+        update-attempt-index: oplog-index,
     }
 
     record successful-update-parameters {
         timestamp: datetime,
         target-revision: component-revision,
         new-component-size: u64,
-        new-active-plugins: list<plugin-installation-description>
+        new-active-plugins: list<plugin-installation-description>,
+        snapshot-assisted-details: option<snapshot-assisted-update-details>
+    }
+
+    record snapshot-assisted-update-details {
+        pending-update-index: oplog-index,
+        source-component-revision: component-revision,
+        source-revision-start-index: oplog-index,
+        snapshot-index: oplog-index,
     }
 
     record failed-update-parameters {
         timestamp: datetime,
         target-revision: component-revision,
-        details: option<string>
+        details: option<string>,
+        snapshot-assisted-details: option<failed-snapshot-assisted-update-details>,
+        update-attempt-index: option<oplog-index>,
+    }
+
+    record failed-snapshot-assisted-update-details {
+        pending-update-index: oplog-index,
+        source-component-revision: component-revision,
+        source-revision-start-index: oplog-index,
+        snapshot-index: option<oplog-index>,
+        ineligibility-reason: option<string>,
     }
 
     record grow-memory-parameters {
@@ -801,8 +822,18 @@ interface oplog {
     variant raw-update-description {
         /// Automatic update by replaying the oplog on the new version
         automatic(component-revision),
+        /// Automatic update assisted by the latest eligible periodic snapshot
+        snapshot-assisted-automatic(raw-snapshot-assisted-automatic-update),
         /// Custom update by loading a given snapshot on the new version
         snapshot-based(raw-snapshot-based-update)
+    }
+
+    record raw-snapshot-assisted-automatic-update {
+        target-revision: component-revision,
+        source-component-revision: component-revision,
+        source-revision-start-index: oplog-index,
+        snapshot-index: oplog-index,
+        snapshot-revision: component-revision
     }
 
     record raw-snapshot-based-update {
@@ -813,14 +844,16 @@ interface oplog {
 
     record raw-pending-update-parameters {
         timestamp: datetime,
-        description: raw-update-description
+        description: raw-update-description,
+        update-attempt-index: option<oplog-index>,
     }
 
     record raw-successful-update-parameters {
         timestamp: datetime,
         target-revision: component-revision,
         new-component-size: u64,
-        new-active-plugins: list<environment-plugin-grant-id>
+        new-active-plugins: list<environment-plugin-grant-id>,
+        snapshot-assisted-details: option<snapshot-assisted-update-details>
     }
 
     record resource-type-id {

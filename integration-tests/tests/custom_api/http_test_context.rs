@@ -13,6 +13,7 @@ use golem_test_framework::dsl::{EnvironmentOptions, TestDsl, TestDslExtended};
 use reqwest::Url;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 
 #[allow(dead_code)]
 pub struct HttpTestContext {
@@ -75,6 +76,31 @@ pub async fn make_test_context_with_files(
     openapi_endpoint: String,
     files: &[(&str, Vec<golem_test_framework::model::IFSEntry>)],
 ) -> anyhow::Result<HttpTestContext> {
+    make_test_context_with_files_and_setup(
+        deps,
+        agent_and_http_options,
+        component_name,
+        package_name,
+        openapi_endpoint,
+        files,
+        |_, _, _| async { Ok(()) },
+    )
+    .await
+}
+
+pub async fn make_test_context_with_files_and_setup<F, Fut>(
+    deps: &EnvBasedTestDependencies,
+    agent_and_http_options: Vec<(AgentTypeName, HttpApiDeploymentAgentOptions)>,
+    component_name: &str,
+    package_name: &str,
+    openapi_endpoint: String,
+    files: &[(&str, Vec<golem_test_framework::model::IFSEntry>)],
+    setup: F,
+) -> anyhow::Result<HttpTestContext>
+where
+    F: FnOnce(TestUserContext<EnvBasedTestDependencies>, EnvironmentId, Domain) -> Fut,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
     let user = deps.user().await?.with_auto_deploy(false);
     let client = deps.registry_service().client(&user.token).await;
     let (application, env) = user
@@ -95,6 +121,8 @@ pub async fn make_test_context_with_files(
             },
         )
         .await?;
+
+    setup(user.clone(), env.id, domain.clone()).await?;
 
     let mut component = user.component(&env.id, component_name).name(package_name);
     for (agent_type, files) in files {
@@ -122,6 +150,7 @@ pub async fn make_test_context_with_files(
         headers.insert("Host", host_header.clone());
         reqwest::Client::builder()
             .default_headers(headers)
+            .redirect(reqwest::redirect::Policy::none())
             .build()?
     };
 

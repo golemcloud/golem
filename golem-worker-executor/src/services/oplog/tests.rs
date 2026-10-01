@@ -4685,6 +4685,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     let entry4 = OplogEntry::PendingUpdate {
         timestamp: Timestamp::now_utc(),
         description: desc.clone(),
+        update_attempt_index: None,
     }
     .rounded();
     oplog.add(entry4.clone()).await.unwrap();
@@ -5151,6 +5152,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     let entry4 = OplogEntry::PendingUpdate {
         timestamp: Timestamp::now_utc(),
         description: desc.clone(),
+        update_attempt_index: None,
     }
     .rounded();
     oplog.add(entry4.clone()).await.unwrap();
@@ -9540,6 +9542,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
         .add(OplogEntry::PendingUpdate {
             timestamp: Timestamp::now_utc(),
             description: inline_description,
+            update_attempt_index: None,
         })
         .await
         .unwrap();
@@ -9547,6 +9550,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
         .add(OplogEntry::PendingUpdate {
             timestamp: Timestamp::now_utc(),
             description: external_description,
+            update_attempt_index: None,
         })
         .await
         .unwrap();

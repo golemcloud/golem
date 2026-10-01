@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.4"
+  WASM_RQUICKJS_VERSION: "0.4.5"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -142,6 +142,8 @@ jobs:
         run: cargo make --profile ci check-reflection-conformance
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
+      - name: Check built-in artifact pins
+        run: cargo make --profile ci check-builtin-artifacts
       - name: Check WIT deps are synced
         run: cargo make --profile ci check-wit
       - name: Unit tests
@@ -397,6 +399,9 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
+      - name: Install browser WASM target
+        if: matrix.group.shard == 'bridge_gen_rust'
+        run: rustup target add wasm32-unknown-unknown
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.49.0
         with:
@@ -1166,6 +1171,10 @@ jobs:
           GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem-cli
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
+      - name: Fetch released built-in artifacts
+        if: matrix.chunk.name == 'rust-1'
+        run: cargo make --profile ci fetch-builtin-artifacts
+
       - name: Collect built WASMs
         env:
           EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}
@@ -1176,6 +1185,12 @@ jobs:
             cp "test-components/$EXPECTED_ARTIFACT" tmp/test-components-wasm/
           else
             cp test-components/*.wasm tmp/test-components-wasm/ 2>/dev/null || true
+          fi
+          if [[ "${{ matrix.chunk.name }}" == "rust-1" ]]; then
+            cp builtin-tools/filesystem-tools.wasm tmp/test-components-wasm/__builtin-filesystem-tools.wasm
+            cp builtin-tools/javascript-tools.wasm tmp/test-components-wasm/__builtin-javascript-tools.wasm
+            cp builtin-tools/typescript-tools.wasm tmp/test-components-wasm/__builtin-typescript-tools.wasm
+            cp plugins/otlp-exporter.wasm tmp/test-components-wasm/__builtin-otlp-exporter.wasm
           fi
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Built $count WASM files in chunk ${{ matrix.chunk.name }}"

@@ -195,7 +195,19 @@ impl RequestHandler {
 
             RichRouteBehaviour::OidcCallback(OidcCallbackBehaviour { security_scheme }) => {
                 self.oidc_handler
-                    .handle_oidc_callback_behaviour(request, security_scheme)
+                    .handle_oidc_callback_behaviour(request, resolved_route, security_scheme)
+                    .await
+            }
+
+            RichRouteBehaviour::OidcPkceAuthorize(behaviour) => {
+                self.oidc_handler
+                    .handle_pkce_authorization(request, resolved_route, &behaviour.security_scheme)
+                    .await
+            }
+
+            RichRouteBehaviour::OidcPkceToken(behaviour) => {
+                self.oidc_handler
+                    .handle_pkce_token(request, resolved_route, &behaviour.security_scheme)
                     .await
             }
 

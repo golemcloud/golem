@@ -208,7 +208,7 @@ impl OpenApiService {
                 let mount = render_full_path(&route.path);
                 let identity = format!("{}:{}:{mount}", router.component_id, router.agent_type.0);
                 let document = provider_document::parse(&identity, &text)?;
-                let security = build_security(&route.security, &mut schemes)
+                let security = build_security(&route.security, &mut schemes, &inputs.public_origin)
                     .map_err(|_| OpenApiError::new("mount-security"))?;
                 contributions.push(ProviderContribution {
                     router: identity,

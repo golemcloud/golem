@@ -102,6 +102,14 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("javascript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("typescript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("tool_streaming_ts_provider")]
     PrecompiledComponent
 );
@@ -724,6 +732,13 @@ struct ClockedStreamEvidence {
     stream: StreamEvidence,
 }
 
+#[derive(Debug, FromSchema)]
+struct CliToolEvidence {
+    exit_code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
 #[derive(Debug, PartialEq, Eq, FromSchema)]
 struct TypedOutputEvidence {
     label: String,
@@ -959,7 +974,59 @@ async fn invoke_filesystem_tool(
         .command_index_by_path(&[])
         .expect("filesystem tool command exists");
     let input_schema = definition.canonical_input_record_schema(command_index)?;
-    let (_, input_value) = input.into_parts();
+    let (provided_schema, provided_value) = input.into_parts();
+    let SchemaType::Record {
+        fields: provided_fields,
+        ..
+    } = provided_schema.root
+    else {
+        anyhow::bail!("test tool input schema must be a record");
+    };
+    let SchemaValue::Record {
+        fields: provided_values,
+    } = provided_value
+    else {
+        anyhow::bail!("test tool input value must be a record");
+    };
+    anyhow::ensure!(
+        provided_fields.len() == provided_values.len(),
+        "test tool input schema/value field counts differ"
+    );
+    let mut values_by_name = BTreeMap::new();
+    for (field, value) in provided_fields.into_iter().zip(provided_values) {
+        anyhow::ensure!(
+            values_by_name.insert(field.name.clone(), value).is_none(),
+            "duplicate test tool input field '{}'",
+            field.name
+        );
+    }
+    let SchemaType::Record {
+        fields: canonical_fields,
+        ..
+    } = &input_schema.root
+    else {
+        anyhow::bail!("canonical tool input schema must be a record");
+    };
+    let mut canonical_values = Vec::with_capacity(canonical_fields.len());
+    for field in canonical_fields {
+        canonical_values.push(
+            values_by_name
+                .remove(&field.name)
+                .ok_or_else(|| anyhow::anyhow!("missing test tool input field '{}'", field.name))?,
+        );
+    }
+    anyhow::ensure!(
+        values_by_name.is_empty(),
+        "unexpected test tool input fields: {}",
+        values_by_name
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let input_value = SchemaValue::Record {
+        fields: canonical_values,
+    };
     let output = executor
         .invoke_external_tool(
             worker_id,
@@ -1003,6 +1070,90 @@ async fn invoke_filesystem_tool_success(
         Ok(None) => anyhow::bail!("filesystem tool '{tool_name}' returned no value"),
         Err(error) => anyhow::bail!("filesystem tool '{tool_name}' failed: {error:?}"),
     }
+}
+
+async fn invoke_cli_tool_version(
+    executor: &TestWorkerExecutor,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    environment_state: &TestEnvironmentStateService,
+    caller_component: &golem_common::model::component::ComponentDto,
+    provider: &PrecompiledComponent,
+    package_name: &str,
+    tool_name: &str,
+    expected_version: &str,
+    expected_stdout: &str,
+) -> anyhow::Result<()> {
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        package_name,
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let evidence: CliToolEvidence = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id!("ToolStreamingCaller", format!("{tool_name}-version")),
+            "builtin_cli",
+            data_value!(tool_name, "/workspace", vec!["--version"]),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(evidence.exit_code, 0);
+    assert!(evidence.stderr.is_empty());
+    let stdout = String::from_utf8(evidence.stdout)?;
+    if expected_version.is_empty() {
+        assert!(stdout.starts_with('v'));
+        assert!(stdout.ends_with('\n'));
+    } else {
+        assert_eq!(stdout, expected_stdout);
+    }
+    Ok(())
+}
+
+async fn invoke_cli_tool(
+    executor: &TestWorkerExecutor,
+    caller_component: &golem_common::model::component::ComponentDto,
+    agent_name: &str,
+    tool_name: &str,
+    cwd: &str,
+    args: Vec<&str>,
+) -> anyhow::Result<CliToolEvidence> {
+    executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id!("ToolStreamingCaller", agent_name),
+            "builtin_cli",
+            data_value!(tool_name, cwd, args),
+        )
+        .await?
+        .into_typed()
 }
 
 fn assert_filesystem_tool_error(
@@ -10421,6 +10572,300 @@ async fn builtin_filesystem_tools_have_expected_behavior(
         filesystem_tools,
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("10m")]
+async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+
+    for (provider, package, tool, version, stdout) in [
+        (javascript_tools, "golem:javascript-tools", "node", "", ""),
+        (
+            javascript_tools,
+            "golem:javascript-tools",
+            "npm",
+            "10.9.9",
+            "10.9.9\n",
+        ),
+        (
+            javascript_tools,
+            "golem:javascript-tools",
+            "npx",
+            "10.9.9",
+            "10.9.9\n",
+        ),
+        (
+            typescript_tools,
+            "golem:typescript-tools",
+            "tsc",
+            "5.9.2",
+            "Version 5.9.2\n",
+        ),
+    ] {
+        invoke_cli_tool_version(
+            &executor,
+            deps,
+            &context,
+            &environment_state,
+            &caller_component,
+            provider,
+            package,
+            tool,
+            version,
+            stdout,
+        )
+        .await?;
+    }
+
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let javascript_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let typescript_component = executor
+        .component_dep(&context.default_environment_id, typescript_tools)
+        .store()
+        .await?;
+    let typescript_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", typescript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        javascript_metadata.tools,
+    );
+    let typescript_deployment = deployment_state(
+        context.account_id,
+        typescript_component.id,
+        typescript_component.revision,
+        "golem:typescript-tools",
+        "ToolStreamingCaller",
+        typescript_metadata.tools,
+    );
+    deployment
+        .registered_tools
+        .extend(typescript_deployment.registered_tools);
+    for (owner, bindings) in typescript_deployment.tool_bindings {
+        deployment
+            .tool_bindings
+            .entry(owner)
+            .or_default()
+            .extend(bindings);
+    }
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let delayed_output = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "node-delayed-output",
+        "node",
+        "/workspace",
+        vec!["-e", "setTimeout(() => console.log('late'), 20)"],
+    )
+    .await?;
+    assert_eq!(delayed_output.exit_code, 0);
+    assert_eq!(delayed_output.stdout, b"late\n");
+    assert!(delayed_output.stderr.is_empty());
+
+    let immediate_exit = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "node-immediate-exit",
+        "node",
+        "/workspace",
+        vec!["-e", "process.exit(7); console.log('unexpected')"],
+    )
+    .await?;
+    assert_eq!(immediate_exit.exit_code, 7);
+    assert!(immediate_exit.stdout.is_empty());
+    assert!(immediate_exit.stderr.is_empty());
+
+    let behavior_agent = "js-ts-behavior";
+    let fixture_source = r##"
+const fs = require('node:fs');
+fs.mkdirSync('local-pkg', { recursive: true });
+fs.writeFileSync('package.json', JSON.stringify({
+  name: 'builtin-tools-fixture',
+  version: '1.0.0',
+  private: true,
+  scripts: { probe: "node -e \"console.log('npm-script-ok')\"" }
+}));
+fs.writeFileSync('local-pkg/package.json', JSON.stringify({
+  name: 'local-tool',
+  version: '1.0.0',
+  bin: { 'local-tool': 'cli.js' }
+}));
+fs.writeFileSync(
+  'local-pkg/cli.js',
+  "#!/usr/bin/env node\nconsole.log('npx:' + process.argv.slice(2).join(','));\n",
+  { mode: 0o755 }
+);
+fs.writeFileSync('valid.ts', 'const value: number = 42;\nconsole.log(value);\n');
+fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
+"##;
+    let fixture = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec!["-e", fixture_source],
+    )
+    .await?;
+    assert_eq!(
+        fixture.exit_code,
+        0,
+        "fixture stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&fixture.stdout),
+        String::from_utf8_lossy(&fixture.stderr)
+    );
+    assert!(fixture.stdout.is_empty());
+    assert!(fixture.stderr.is_empty());
+
+    let npm_install = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec![
+            "install",
+            "./local-pkg",
+            "--offline",
+            "--ignore-scripts",
+            "--no-package-lock",
+            "--no-audit",
+            "--no-fund",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        npm_install.exit_code,
+        0,
+        "npm install stderr: {}",
+        String::from_utf8_lossy(&npm_install.stderr)
+    );
+
+    let npm_script = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec!["run", "probe"],
+    )
+    .await?;
+    assert_eq!(npm_script.exit_code, 0);
+    assert!(String::from_utf8(npm_script.stdout)?.contains("npm-script-ok"));
+    assert!(npm_script.stderr.is_empty());
+
+    let npx = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npx",
+        "/workspace",
+        vec!["--no-install", "local-tool", "one", "two"],
+    )
+    .await?;
+    assert_eq!(npx.exit_code, 0);
+    assert_eq!(npx.stdout, b"npx:one,two\n");
+    assert!(npx.stderr.is_empty());
+
+    let tsc_success = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--pretty", "false", "--target", "es2022", "--module", "commonjs", "--outDir", "dist",
+            "valid.ts",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        tsc_success.exit_code,
+        0,
+        "tsc stderr: {}",
+        String::from_utf8_lossy(&tsc_success.stderr)
+    );
+    assert!(tsc_success.stdout.is_empty());
+
+    let tsc_failure = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec!["--pretty", "false", "--noEmit", "invalid.ts"],
+    )
+    .await?;
+    assert_ne!(tsc_failure.exit_code, 0);
+    assert!(String::from_utf8(tsc_failure.stdout)?.contains("error TS2322"));
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let reconstructed = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec![
+            "-e",
+            "const fs = require('node:fs'); console.log(fs.readFileSync('dist/valid.js', 'utf8').includes('const value = 42'))",
+        ],
+    )
+    .await?;
+    assert_eq!(reconstructed.exit_code, 0);
+    assert_eq!(reconstructed.stdout, b"true\n");
+    assert!(reconstructed.stderr.is_empty());
     Ok(())
 }
 
