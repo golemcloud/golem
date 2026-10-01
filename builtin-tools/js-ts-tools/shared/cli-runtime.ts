@@ -119,10 +119,11 @@ export async function runCli(
         const awaitRuntimeIdle = (
           process as NodeJS.Process & { _awaitRuntimeIdle?: () => Promise<void> }
         )._awaitRuntimeIdle;
-        if (typeof awaitRuntimeIdle !== 'function') {
-          throw new Error('the JavaScript runtime does not provide an idle boundary');
+        if (typeof awaitRuntimeIdle === 'function') {
+          await awaitRuntimeIdle();
+        } else {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
         }
-        await awaitRuntimeIdle();
       } else {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }

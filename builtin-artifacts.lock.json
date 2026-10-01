@@ -9,8 +9,8 @@
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.3",
-      "sha256": "60f705875a93d42e36311addab69d7ff08f5c5703a2bb6ba3113b6e10f05a629"
+      "version": "0.0.4",
+      "sha256": "918e755b6124859db49013da0da043cc9beb90d080d2a59eaacc2b8fa80ad595"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
