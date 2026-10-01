@@ -755,7 +755,7 @@ uu_builtin!(
 uu_builtin!(Sort, "sort", "sort lines of text", uu_sort::uumain);
 uu_builtin!(Rm, "rm", "remove files and directories", uu_rm::uumain);
 uu_builtin!(Mv, "mv", "move or rename files", uu_mv::uumain);
-uu_builtin!(Cp, "cp", "copy files and directories", uu_cp::uumain);
+uu_builtin!(Cp, "cp", "copy files and directories", cp_main);
 // mkdir uses the same convention as the others: brush passes the command name as argv[0], which is
 // what uumain expects — do NOT skip it, or flags like `-p` get dropped (dropping `-p` turned
 // `mkdir -p /tmp/a/b` into a non-recursive mkdir that fails when an intermediate dir is missing).
@@ -824,25 +824,82 @@ uu_builtin!(
 );
 uu_builtin!(Ln, "ln", "create links between files", ln_main);
 
-/// `ln`, refusing symbolic links to absolute paths up front: WASI (and so an agent's filesystem)
-/// cannot create them, and the failure would otherwise read only "Permission denied".
+/// `ln`, refusing a symbolic link target WASI either can't create (an absolute path, where the
+/// failure would otherwise read only "Permission denied") or that, once followed, would resolve
+/// above the sandbox root (a relative path with enough `..` to climb past wherever the link
+/// itself lives) — following one of those wedges the whole agent rather than failing just this
+/// call, so it's refused up front the same way.
 fn ln_main(args: impl uucore::Args) -> i32 {
     let args: Vec<std::ffi::OsString> = args.collect();
-    if let Some(target) = absolute_symlink_target(&args) {
-        eprintln!(
-            "ln: failed to create symbolic link to '{target}': links to absolute paths are \
-             unsupported in bash-tool; use a relative target"
-        );
-        return 1;
+    // Can't tell where a relative link would land without the process's own directory (bridged
+    // to the shell's `cd` for the duration of this call — see `ShellCwd`); an absolute target is
+    // still refused either way, so only the escape check is skipped when it's unavailable.
+    let cwd = std::env::current_dir().ok();
+    match unsupported_symlink_target(&args, cwd.as_deref()) {
+        Some(BadSymlinkTarget::Absolute(target)) => {
+            eprintln!(
+                "ln: failed to create symbolic link to '{target}': links to absolute paths are \
+                 unsupported in bash-tool; use a relative target"
+            );
+            1
+        }
+        Some(BadSymlinkTarget::Escaping(target)) => {
+            eprintln!(
+                "ln: failed to create symbolic link to '{target}': relative links that resolve \
+                 above the sandbox root are unsupported in bash-tool"
+            );
+            1
+        }
+        None => uu_ln::uumain(args.into_iter()),
     }
-    uu_ln::uumain(args.into_iter())
 }
 
-/// The first absolute target of a symbolic `ln`, if any. With `-r` the link holds a relative
-/// path to it, which WASI can create.
-fn absolute_symlink_target(args: &[std::ffi::OsString]) -> Option<String> {
+/// Why a symbolic link target is refused; see [`unsupported_symlink_target`].
+enum BadSymlinkTarget {
+    Absolute(String),
+    Escaping(String),
+}
+
+/// The first symbolic-link target `ln` would refuse, if any. `None` when `ln` isn't creating a
+/// symbolic link, or is using `-r`/`--relative`: that computes the relative text itself from a
+/// target already inside the sandbox, so it can never climb past root.
+fn unsupported_symlink_target(
+    args: &[std::ffi::OsString],
+    cwd: Option<&std::path::Path>,
+) -> Option<BadSymlinkTarget> {
+    let shape = ln_shape(args);
+    if !shape.symbolic || shape.relative {
+        return None;
+    }
+    if let Some(target) = shape.targets.iter().find(|target| target.starts_with('/')) {
+        return Some(BadSymlinkTarget::Absolute(target.clone()));
+    }
+    let base = normalized_components(cwd?, &shape.link_dir);
+    shape
+        .targets
+        .into_iter()
+        .find(|target| resolves_above_root(&base, target))
+        .map(BadSymlinkTarget::Escaping)
+}
+
+/// The parts of an `ln` invocation [`unsupported_symlink_target`] needs: whether it makes a
+/// symbolic link and uses `-r`/`--relative`, where the new link(s) are created, and the
+/// operand(s) that become their target text.
+struct LnShape {
+    symbolic: bool,
+    relative: bool,
+    /// Where the link(s) are created: `-t DIR`'s (or `--target-directory`'s) argument, the
+    /// trailing directory operand when there are more than two operands, or the directory
+    /// holding the lone `LINK_NAME` (`.` for the one-operand form) otherwise. A single `ln`
+    /// invocation always creates every one of its links in the same directory.
+    link_dir: String,
+    targets: Vec<String>,
+}
+
+fn ln_shape(args: &[std::ffi::OsString]) -> LnShape {
     let (mut symbolic, mut into_directory, mut options) = (false, false, true);
     let mut relative = false;
+    let mut target_dir: Option<String> = None;
     let mut operands = Vec::new();
     let mut args = args.iter().skip(1).map(|arg| arg.to_string_lossy());
     while let Some(arg) = args.next() {
@@ -853,9 +910,10 @@ fn absolute_symlink_target(args: &[std::ffi::OsString]) -> Option<String> {
             relative |= arg == "--relative";
             if arg.starts_with("--target-directory") {
                 into_directory = true;
-                if !arg.contains('=') {
-                    args.next();
-                }
+                target_dir = arg
+                    .strip_prefix("--target-directory=")
+                    .map(str::to_owned)
+                    .or_else(|| args.next().map(std::borrow::Cow::into_owned));
             } else if arg == "--suffix" {
                 args.next();
             }
@@ -864,23 +922,275 @@ fn absolute_symlink_target(args: &[std::ffi::OsString]) -> Option<String> {
             relative |= arg.contains('r');
             into_directory |= arg.contains('t');
             // `-t DIR` and `-S SUFFIX` take the next argument when they end the cluster.
-            if arg.ends_with('t') || arg.ends_with('S') {
+            if arg.ends_with('t') {
+                target_dir = args.next().map(std::borrow::Cow::into_owned);
+            } else if arg.ends_with('S') {
                 args.next();
             }
         } else {
             operands.push(arg.into_owned());
         }
     }
+    let link_dir = target_dir.unwrap_or_else(|| {
+        if into_directory {
+            ".".to_owned()
+        } else if operands.len() == 2 {
+            std::path::Path::new(&operands[1])
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map_or_else(
+                    || ".".to_owned(),
+                    |parent| parent.to_string_lossy().into_owned(),
+                )
+        } else if operands.len() > 2 {
+            operands.last().cloned().unwrap_or_else(|| ".".to_owned())
+        } else {
+            ".".to_owned()
+        }
+    });
     let targets = match operands.len() {
-        _ if into_directory => &operands[..],
-        0 | 1 => &operands[..],
-        count => &operands[..count - 1],
+        _ if into_directory => operands,
+        0 | 1 => operands,
+        count => {
+            operands.truncate(count - 1);
+            operands
+        }
     };
-    targets
-        .iter()
-        .find(|target| symbolic && !relative && target.starts_with('/'))
-        .cloned()
+    LnShape {
+        symbolic,
+        relative,
+        link_dir,
+        targets,
+    }
 }
+
+/// `base` (an absolute path already inside the sandbox) joined with the possibly-relative
+/// `extra`, as the component stack a filesystem would end up at — without touching the
+/// filesystem, and never popping past what `base` itself has to give (a `..` in `extra` that
+/// climbs past that is [`resolves_above_root`]'s job to catch, not this function's to perform).
+fn normalized_components(base: &std::path::Path, extra: &str) -> Vec<String> {
+    let mut stack: Vec<String> = Vec::new();
+    if !extra.starts_with('/') {
+        for part in base.components() {
+            if let std::path::Component::Normal(part) = part {
+                stack.push(part.to_string_lossy().into_owned());
+            }
+        }
+    }
+    for part in extra.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                stack.pop();
+            }
+            other => stack.push(other.to_owned()),
+        }
+    }
+    stack
+}
+
+/// Whether resolving the symlink target `target` from a link that lives at `base` (already
+/// normalized — see [`normalized_components`]) needs to climb with `..` past everything `base`
+/// has left to give: above the sandbox root.
+fn resolves_above_root(base: &[String], target: &str) -> bool {
+    let mut depth = base.len();
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                if depth == 0 {
+                    return true;
+                }
+                depth -= 1;
+            }
+            _ => depth += 1,
+        }
+    }
+    false
+}
+
+/// `cp`, refusing the same two classes of symbolic-link target `ln` refuses (see
+/// [`unsupported_symlink_target`]), reached through `cp`'s own two ways of producing a symbolic
+/// link: `-s`/`--symbolic-link` (a source operand becomes the new link's target text directly,
+/// exactly like `ln -s`) and `-a`/`-d`/`-P`/`--no-dereference` copying a source that is *already*
+/// a symbolic link (its target text is read back and recreated verbatim at the destination —
+/// which may sit in a shallower directory than the original, so text that stayed inside the
+/// sandbox at its old depth can climb out at the new one).
+fn cp_main(args: impl uucore::Args) -> i32 {
+    let args: Vec<std::ffi::OsString> = args.collect();
+    let cwd = std::env::current_dir().ok();
+    match unsupported_cp_symlink(&args, cwd.as_deref()) {
+        Some(BadSymlinkTarget::Absolute(target)) => {
+            eprintln!(
+                "cp: failed to create symbolic link to '{target}': links to absolute paths are \
+                 unsupported in bash-tool; use a relative target"
+            );
+            1
+        }
+        Some(BadSymlinkTarget::Escaping(target)) => {
+            eprintln!(
+                "cp: failed to create symbolic link to '{target}': relative links that resolve \
+                 above the sandbox root are unsupported in bash-tool"
+            );
+            1
+        }
+        None => uu_cp::uumain(args.into_iter()),
+    }
+}
+
+/// The first symbolic-link target `cp` would refuse, if any. `None` when `cp` isn't making or
+/// preserving a symbolic link, or `cwd` is unavailable (see `ln_main`'s identical note — the
+/// bridged shell directory this call runs with).
+///
+/// Only a source operand that is directly a symbolic link is checked; one discovered by
+/// recursing into a copied directory (`cp -a DIR DEST` finding a symlink somewhere inside `DIR`)
+/// is not — that would need walking the tree before `uu_cp` does, which this guard doesn't do.
+fn unsupported_cp_symlink(
+    args: &[std::ffi::OsString],
+    cwd: Option<&std::path::Path>,
+) -> Option<BadSymlinkTarget> {
+    let shape = cp_shape(args);
+    if !shape.make_symlink && !shape.preserve_links {
+        return None;
+    }
+    let base = normalized_components(cwd?, &shape.link_dir);
+    if shape.make_symlink {
+        return shape.sources.iter().find_map(|source| {
+            if source.starts_with('/') {
+                Some(BadSymlinkTarget::Absolute(source.clone()))
+            } else if resolves_above_root(&base, source) {
+                Some(BadSymlinkTarget::Escaping(source.clone()))
+            } else {
+                None
+            }
+        });
+    }
+    shape.sources.iter().find_map(|source| {
+        let target = std::fs::read_link(source)
+            .ok()?
+            .to_string_lossy()
+            .into_owned();
+        if target.starts_with('/') {
+            Some(BadSymlinkTarget::Absolute(target))
+        } else if resolves_above_root(&base, &target) {
+            Some(BadSymlinkTarget::Escaping(target))
+        } else {
+            None
+        }
+    })
+}
+
+/// The parts of a `cp` invocation [`unsupported_cp_symlink`] needs: whether it makes new
+/// symbolic links (`-s`/`--symbolic-link`) or preserves existing ones found among its sources
+/// (`-a`/`-d`/`-P`/`--no-dereference`, undone by a later `-L`/`--dereference`), where the copies
+/// land, and the source operand(s). A single `cp` invocation always creates every one of its
+/// outputs in the same directory, as with [`ln_shape`]'s `link_dir` — but unlike `ln`, `cp`'s own
+/// two-operand form can go either way (a rename, or into an existing directory), so this one
+/// checks the filesystem to tell them apart; see `destination_is_directory` below.
+///
+/// A plain `-r`/`-R`/`--recursive` alone does *not* set `preserve_links`: whether a symlink found
+/// while recursing into a copied directory would be dereferenced depends on combinations this
+/// heuristic doesn't try to track, and that case isn't covered by this guard regardless (see
+/// [`unsupported_cp_symlink`]'s doc).
+struct CpShape {
+    make_symlink: bool,
+    preserve_links: bool,
+    link_dir: String,
+    sources: Vec<String>,
+}
+
+fn cp_shape(args: &[std::ffi::OsString]) -> CpShape {
+    let (mut make_symlink, mut preserve_links, mut into_directory) = (false, false, false);
+    let mut target_dir: Option<String> = None;
+    let mut operands = Vec::new();
+    let mut args = args.iter().skip(1).map(|arg| arg.to_string_lossy());
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            operands.extend(args.map(std::borrow::Cow::into_owned));
+            break;
+        } else if arg.starts_with("--") {
+            make_symlink |= arg == "--symbolic-link";
+            if arg == "--no-dereference" || arg == "--archive" {
+                preserve_links = true;
+            } else if arg == "--dereference" {
+                preserve_links = false;
+            }
+            if arg.starts_with("--target-directory") {
+                into_directory = true;
+                target_dir = arg
+                    .strip_prefix("--target-directory=")
+                    .map(str::to_owned)
+                    .or_else(|| args.next().map(std::borrow::Cow::into_owned));
+            } else if arg == "--suffix" {
+                args.next();
+            }
+        } else if arg.starts_with('-') && arg != "-" {
+            make_symlink |= arg.contains('s');
+            if arg.contains('a') || arg.contains('d') || arg.contains('P') {
+                preserve_links = true;
+            }
+            if arg.contains('L') {
+                preserve_links = false;
+            }
+            into_directory |= arg.contains('t');
+            // `-t DIR` and `-S SUFFIX` take the next argument when they end the cluster.
+            if arg.ends_with('t') {
+                target_dir = args.next().map(std::borrow::Cow::into_owned);
+            } else if arg.ends_with('S') {
+                args.next();
+            }
+        } else {
+            operands.push(arg.into_owned());
+        }
+    }
+    // Unlike `ln`'s own simplified shape (see `ln_shape`), `cp` has to get the common case
+    // right: `cp SOURCE DIR` (an existing directory, or one named with a trailing `/`) places
+    // the copy inside `DIR`, the same as three or more operands always do, rather than treating
+    // `DIR` as the literal new name — the check this function exists for would otherwise land on
+    // the wrong directory for the overwhelmingly common `cp -a src existing-dir/` shape. This
+    // only changes which operand `link_dir` is read from below: whichever operand is the
+    // directory is never a source either way, so it doesn't change `sources`.
+    let destination_is_directory = |operand: &str| {
+        operand.ends_with('/')
+            || std::fs::metadata(operand)
+                .map(|metadata| metadata.is_dir())
+                .unwrap_or(false)
+    };
+    let link_dir = target_dir.unwrap_or_else(|| {
+        if into_directory {
+            ".".to_owned()
+        } else if operands.len() == 2 && destination_is_directory(&operands[1]) {
+            operands[1].clone()
+        } else if operands.len() == 2 {
+            std::path::Path::new(&operands[1])
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map_or_else(
+                    || ".".to_owned(),
+                    |parent| parent.to_string_lossy().into_owned(),
+                )
+        } else if operands.len() > 2 {
+            operands.last().cloned().unwrap_or_else(|| ".".to_owned())
+        } else {
+            ".".to_owned()
+        }
+    });
+    let sources = match operands.len() {
+        _ if into_directory => operands,
+        0 | 1 => operands,
+        count => {
+            operands.truncate(count - 1);
+            operands
+        }
+    };
+    CpShape {
+        make_symlink,
+        preserve_links,
+        link_dir,
+        sources,
+    }
+}
+
 uu_builtin!(
     Link,
     "link",
@@ -2235,7 +2545,7 @@ pub(crate) fn manifests() -> Vec<crate::manifest::Manifest> {
 
 #[cfg(test)]
 mod tests {
-    use super::absolute_symlink_target;
+    use super::{BadSymlinkTarget, normalized_components, resolves_above_root};
 
     #[test]
     fn exported_functions_are_indented_one_blank_per_level() {
@@ -2251,12 +2561,20 @@ mod tests {
         );
     }
 
+    /// `cwd` fixed at `/work/w` for every case (an arbitrary two-level directory: deep enough
+    /// that a target climbing one or two levels stays inside it, shallow enough that one
+    /// climbing three or more always escapes).
     fn target(args: &[&str]) -> Option<String> {
         let args: Vec<std::ffi::OsString> = std::iter::once("ln")
             .chain(args.iter().copied())
             .map(Into::into)
             .collect();
-        absolute_symlink_target(&args)
+        match super::unsupported_symlink_target(&args, Some(std::path::Path::new("/work/w"))) {
+            Some(BadSymlinkTarget::Absolute(target) | BadSymlinkTarget::Escaping(target)) => {
+                Some(target)
+            }
+            None => None,
+        }
     }
 
     #[test]
@@ -2271,8 +2589,189 @@ mod tests {
         );
         assert_eq!(target(&["-s", "-t", "/dir", "/a"]).as_deref(), Some("/a"));
         assert_eq!(target(&["-s", "/only"]).as_deref(), Some("/only"));
-        assert_eq!(target(&["-s", "rel", "/tmp/link"]), None);
         assert_eq!(target(&["/tmp/hard", "/tmp/link"]), None);
         assert_eq!(target(&["-S", "s", "/a", "b"]), None);
+        // `-r` computes the relative text itself from an absolute target already inside the
+        // sandbox, so it's exempt from both checks.
+        assert_eq!(target(&["-sr", "/tmp/d", "link"]), None);
+    }
+
+    #[test]
+    fn finds_escaping_relative_symbolic_targets() {
+        // cwd is `/work/w`, two levels deep: `link` is created there, so up to two `..` still
+        // lands inside the sandbox (the second landing exactly on its root), and a third climbs
+        // past it.
+        assert_eq!(target(&["-s", "../etc", "link"]).as_deref(), None);
+        assert_eq!(target(&["-s", "../../etc", "link"]).as_deref(), None);
+        assert_eq!(
+            target(&["-s", "../../../etc", "link"]).as_deref(),
+            Some("../../../etc")
+        );
+        // Same depth, reached through a descent first: the descent only cancels one `..` back
+        // out, so it takes one more to escape than the plain climb above.
+        assert_eq!(target(&["-s", "a/../../../etc", "link"]).as_deref(), None);
+        assert_eq!(
+            target(&["-s", "a/../../../../etc", "link"]).as_deref(),
+            Some("a/../../../../etc")
+        );
+        // Into an explicit directory: the link's own directory is `DIR`, not cwd, so the same
+        // climb that's safe three levels deep escapes two levels deep.
+        assert_eq!(target(&["-s", "-t", "/work/w/d", "../../etc"]), None);
+        assert_eq!(target(&["-s", "-t", "/work/d", "../../etc"]), None);
+        assert_eq!(
+            target(&["-s", "-t", "/work/d", "../../../etc"]).as_deref(),
+            Some("../../../etc")
+        );
+        // Into a directory named as the trailing operand (more than two operands): every
+        // target is checked against that one shared directory.
+        assert_eq!(target(&["-s", "../a", "../b", "/work/w/dir"]), None);
+        assert_eq!(
+            target(&["-s", "../b", "../../../a", "/work/dir"]).as_deref(),
+            Some("../../../a")
+        );
+        // `LINK_NAME` nested under cwd moves the link's own directory deeper, so the same `..`
+        // count that would escape from cwd itself doesn't.
+        assert_eq!(target(&["-s", "../../etc", "sub/link"]), None);
+        // `-r` is exempt even when the given target already looks like it climbs far.
+        assert_eq!(target(&["-sr", "../../../../etc", "link"]), None);
+    }
+
+    #[test]
+    fn normalizes_components_without_touching_the_filesystem() {
+        let base = std::path::Path::new("/a/b");
+        assert_eq!(normalized_components(base, "."), vec!["a", "b"]);
+        assert_eq!(normalized_components(base, "c"), vec!["a", "b", "c"]);
+        assert_eq!(normalized_components(base, ".."), vec!["a"]);
+        // More `..` than `base` has components: clamps at the root instead of underflowing.
+        assert_eq!(
+            normalized_components(base, "../../../.."),
+            Vec::<String>::new()
+        );
+        // An absolute `extra` replaces `base` entirely, as a real filesystem would.
+        assert_eq!(normalized_components(base, "/x/y"), vec!["x", "y"]);
+    }
+
+    #[test]
+    fn resolves_above_root_counts_the_climb_against_base_depth() {
+        let base = ["a".to_owned(), "b".to_owned()];
+        assert!(!resolves_above_root(&base, "../c"));
+        assert!(!resolves_above_root(&base, "../.."));
+        assert!(resolves_above_root(&base, "../../.."));
+        // A descent first still only cancels its own climb back out.
+        assert!(!resolves_above_root(&base, "x/../../.."));
+        assert!(resolves_above_root(&base, "x/../../../.."));
+        assert!(!resolves_above_root(&[], "x"));
+        assert!(resolves_above_root(&[], ".."));
+    }
+
+    /// `cwd` fixed at `/work/w`, same as [`target`] above.
+    fn unsupported_cp(args: &[&str], cwd: &str) -> Option<BadSymlinkTarget> {
+        let args: Vec<std::ffi::OsString> = std::iter::once("cp")
+            .chain(args.iter().copied())
+            .map(Into::into)
+            .collect();
+        super::unsupported_cp_symlink(&args, Some(std::path::Path::new(cwd)))
+    }
+
+    fn cp_symlink_target(args: &[&str]) -> Option<String> {
+        match unsupported_cp(args, "/work/w") {
+            Some(BadSymlinkTarget::Absolute(target) | BadSymlinkTarget::Escaping(target)) => {
+                Some(target)
+            }
+            None => None,
+        }
+    }
+
+    #[test]
+    fn cp_dash_s_is_checked_the_same_way_ln_dash_s_is() {
+        assert_eq!(
+            cp_symlink_target(&["-s", "/etc/passwd", "link"]).as_deref(),
+            Some("/etc/passwd")
+        );
+        assert_eq!(
+            cp_symlink_target(&["-s", "../../../etc", "link"]).as_deref(),
+            Some("../../../etc")
+        );
+        assert_eq!(cp_symlink_target(&["-s", "../etc", "link"]), None);
+        // An ordinary copy, or a hard link (`-l`), never creates a symbolic link at all.
+        assert_eq!(cp_symlink_target(&["a", "b"]), None);
+        assert_eq!(cp_symlink_target(&["-al", "../../../etc", "link"]), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    // `tempfile` and `std::os::unix::fs::symlink` are native-only (see grep.rs's identical
+    // symlink tests for the same reasoning).
+    fn cp_preserving_a_symlink_checks_its_target_against_the_new_directory_not_the_old_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let escaping = dir.path().join("escaping");
+        std::os::unix::fs::symlink("../../etc", &escaping).unwrap();
+        let absolute = dir.path().join("absolute");
+        std::os::unix::fs::symlink("/etc/passwd", &absolute).unwrap();
+        let escaping = escaping.to_str().unwrap();
+        let absolute = absolute.to_str().unwrap();
+
+        // Into `/a`: one level deep, so the two-level climb in `escaping`'s target text escapes.
+        assert!(matches!(
+            unsupported_cp(&["-a", escaping, "/a/dest"], "/work/w"),
+            Some(BadSymlinkTarget::Escaping(ref t)) if t == "../../etc"
+        ));
+        // Into `/a/b/c`: three levels deep, so the same climb stays inside.
+        assert!(unsupported_cp(&["-a", escaping, "/a/b/c/dest"], "/work/w").is_none());
+        // An absolute preserved target is refused regardless of the destination.
+        assert!(matches!(
+            unsupported_cp(&["-P", absolute, "/a/b/c/dest"], "/work/w"),
+            Some(BadSymlinkTarget::Absolute(ref t)) if t == "/etc/passwd"
+        ));
+        // Without a preserve-links flag, `cp` follows the symlink and copies its contents
+        // instead of recreating it — nothing for this guard to check.
+        assert!(unsupported_cp(&["-f", escaping, "/a/dest"], "/work/w").is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    // `cp SOURCE DIR` (an existing directory) places the copy inside `DIR`, as `basename(SOURCE)`
+    // — unlike `cp SOURCE NAME` (`NAME` not an existing directory), a rename to that exact new
+    // path. Getting this wrong would check a preserved symlink's target against the wrong
+    // directory for the ordinary, overwhelmingly common `cp -a src existing-dir` shape; checked
+    // directly against `cp_shape`'s own `link_dir`/`sources`, not through the escape detection
+    // above, since a real directory's absolute depth (unlike the synthetic `/work/w` those cases
+    // use) isn't under this test's control.
+    fn cp_tells_an_existing_directory_destination_from_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let sub = sub.to_str().unwrap();
+        let src = "src";
+
+        // Into the existing directory (no trailing slash): `sub` itself is where the copy lands,
+        // not a literal new link named `sub`.
+        let args: Vec<std::ffi::OsString> =
+            ["cp", "-a", src, sub].into_iter().map(Into::into).collect();
+        let shape = super::cp_shape(&args);
+        assert_eq!(shape.link_dir, sub);
+        assert_eq!(shape.sources, vec![src.to_owned()]);
+
+        // A trailing slash says the same thing even without checking the filesystem (a
+        // directory that doesn't exist yet, as `mkdir -p nonexistent/ && true` would still take
+        // `nonexistent` as a directory operand rather than an error about it already existing).
+        let with_slash = format!("{sub}/");
+        let args: Vec<std::ffi::OsString> = ["cp", "-a", src, &with_slash]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        assert_eq!(super::cp_shape(&args).link_dir, with_slash);
+
+        // A destination that does *not* exist (no trailing slash either) is a rename to that
+        // exact name: its *parent* is the directory the copy lands in.
+        let not_yet_created = dir.path().join("not-yet-created");
+        let not_yet_created = not_yet_created.to_str().unwrap();
+        let args: Vec<std::ffi::OsString> = ["cp", "-a", src, not_yet_created]
+            .into_iter()
+            .map(Into::into)
+            .collect();
+        let shape = super::cp_shape(&args);
+        assert_eq!(shape.link_dir, dir.path().to_str().unwrap());
+        assert_eq!(shape.sources, vec![src.to_owned()]);
     }
 }

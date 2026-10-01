@@ -1208,6 +1208,7 @@ fn head_impl<SE: ShellExtensions>(
         let headers =
             matches.get_flag("VERBOSE") || (paths.len() > 1 && !matches.get_flag("QUIET"));
         let delimiter = if matches.get_flag("ZERO") { 0 } else { b'\n' };
+        let services = context.shell.execution_services();
         let mut first = true;
         let mut failed = false;
         let mut stdout = context.stdout();
@@ -1243,6 +1244,7 @@ fn head_impl<SE: ShellExtensions>(
                 bytes_mode,
                 all_but_last,
                 delimiter,
+                services,
             )
             .await;
             if let Err(error) = result {
@@ -1266,6 +1268,9 @@ fn head_impl<SE: ShellExtensions>(
     })
 }
 
+// `services` is only read from the wasm-only yield below; a native build still takes it (plain,
+// `Send` data — a pair of function pointers) rather than split this signature by target.
+#[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
 async fn head_stream(
     source: &mut OpenFile,
     stdout: &mut OpenFile,
@@ -1273,12 +1278,20 @@ async fn head_stream(
     bytes_mode: bool,
     all_but_last: bool,
     delimiter: u8,
+    services: brush_core::execution::ExecutionServices,
 ) -> io::Result<()> {
     let mut buffer = vec![0; 16 * 1024];
     let mut remaining = count;
     let mut window = VecDeque::new();
     let mut byte_window: VecDeque<u8> = VecDeque::new();
     let mut record = Vec::new();
+    // Only the wasm build has a cooperative scheduler (and a watchdog racing `timeout`/the
+    // call's time limit) to yield to — `ExecutionServices::yield_now` always returns a future
+    // that isn't `Send`, which the native build's tool dispatch requires, so native never
+    // awaits it (`services` is still plain, `Send` data either way: a pair of function
+    // pointers).
+    #[cfg(target_arch = "wasm32")]
+    let mut since_yield: u32 = 0;
     while all_but_last || remaining > 0 {
         let limit = if bytes_mode && !all_but_last {
             usize::try_from(remaining)
@@ -1290,6 +1303,18 @@ async fn head_stream(
         let n = source.async_io().read(&mut buffer[..limit]).await?;
         if n == 0 {
             break;
+        }
+        // Same hazard as grep's and sed's own read loops: `head -c N f >> f` (or `-n`, with
+        // `-` for "all but the last N") reads a file it is itself growing, so a read is always
+        // ready at once and this call's `timeout`/time limit never gets a chance to interrupt
+        // it without an explicit yield.
+        #[cfg(target_arch = "wasm32")]
+        {
+            since_yield += 1;
+            if since_yield >= 256 {
+                since_yield = 0;
+                (services.yield_now)().await;
+            }
         }
         if all_but_last {
             if bytes_mode {
@@ -3269,7 +3294,7 @@ async fn follow_files<SE: ShellExtensions>(
     unsafe_code,
     reason = "fstat initializes its output on success; the owned File stays open"
 )]
-fn file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
+pub(crate) fn file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
     use std::os::fd::AsRawFd;
     let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
     // SAFETY: a live descriptor and a correctly sized writable stat allocation. Read only
@@ -3284,7 +3309,7 @@ fn file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
 
 /// A file's device and inode.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
+pub(crate) fn file_identity(file: &std::fs::File) -> io::Result<(u64, u64)> {
     use std::os::unix::fs::MetadataExt;
     let metadata = file.metadata()?;
     Ok((metadata.dev(), metadata.ino()))

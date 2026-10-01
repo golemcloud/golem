@@ -757,30 +757,63 @@ enum Op {
     JumpIfTrue(usize),
 }
 
+/// A step still pending in [`emit`]'s explicit work stack, standing in for the point an ordinary
+/// recursive call would be paused at.
+enum EmitStep {
+    /// Emit this node next.
+    Node(Node),
+    /// `left` of an `And` has just been emitted; push its jump-if-false placeholder, then emit
+    /// `right`, then patch the placeholder (`AndPatch`) once that's done.
+    AndRight(Box<Node>),
+    AndPatch(usize),
+    /// Same shape as `AndRight`/`AndPatch`, for `Or`'s jump-if-true.
+    OrRight(Box<Node>),
+    OrPatch(usize),
+    /// `inner` of a `Not` has just been emitted; push the `Not` op.
+    Not,
+}
+
+/// Compiles `node` into `code`. Driven by an explicit stack rather than recursion — a
+/// left-associated chain from a flat `-a`/`-o`/`,` list of any length is still one deep tree of
+/// `And`/`Or`/`Comma` nodes, and a genuinely nested expression is capped by
+/// [`MAX_EXPRESSION_NESTING`] well before it reaches here, but neither guard would help if this
+/// compiler itself recursed once per node the way the old version did.
 fn emit(node: Node, code: &mut Vec<Op>) {
-    match node {
-        Node::Leaf(index) => code.push(Op::Eval(index)),
-        Node::Not(inner) => {
-            emit(*inner, code);
-            code.push(Op::Not);
-        }
-        Node::And(left, right) => {
-            emit(*left, code);
-            let jump = code.len();
-            code.push(Op::JumpIfFalse(0));
-            emit(*right, code);
-            code[jump] = Op::JumpIfFalse(code.len());
-        }
-        Node::Or(left, right) => {
-            emit(*left, code);
-            let jump = code.len();
-            code.push(Op::JumpIfTrue(0));
-            emit(*right, code);
-            code[jump] = Op::JumpIfTrue(code.len());
-        }
-        Node::Comma(left, right) => {
-            emit(*left, code);
-            emit(*right, code);
+    let mut steps = vec![EmitStep::Node(node)];
+    while let Some(step) = steps.pop() {
+        match step {
+            EmitStep::Node(Node::Leaf(index)) => code.push(Op::Eval(index)),
+            EmitStep::Node(Node::Not(inner)) => {
+                steps.push(EmitStep::Not);
+                steps.push(EmitStep::Node(*inner));
+            }
+            EmitStep::Node(Node::And(left, right)) => {
+                steps.push(EmitStep::AndRight(right));
+                steps.push(EmitStep::Node(*left));
+            }
+            EmitStep::Node(Node::Or(left, right)) => {
+                steps.push(EmitStep::OrRight(right));
+                steps.push(EmitStep::Node(*left));
+            }
+            EmitStep::Node(Node::Comma(left, right)) => {
+                steps.push(EmitStep::Node(*right));
+                steps.push(EmitStep::Node(*left));
+            }
+            EmitStep::AndRight(right) => {
+                let jump = code.len();
+                code.push(Op::JumpIfFalse(0));
+                steps.push(EmitStep::AndPatch(jump));
+                steps.push(EmitStep::Node(*right));
+            }
+            EmitStep::AndPatch(jump) => code[jump] = Op::JumpIfFalse(code.len()),
+            EmitStep::OrRight(right) => {
+                let jump = code.len();
+                code.push(Op::JumpIfTrue(0));
+                steps.push(EmitStep::OrPatch(jump));
+                steps.push(EmitStep::Node(*right));
+            }
+            EmitStep::OrPatch(jump) => code[jump] = Op::JumpIfTrue(code.len()),
+            EmitStep::Not => code.push(Op::Not),
         }
     }
 }
@@ -802,6 +835,24 @@ fn fail(message: impl Into<String>) -> Usage {
 fn refuse(feature: &str) -> Usage {
     Usage {
         lines: vec![format!("{feature} is unsupported in bash-tool")],
+        code: 2,
+    }
+}
+
+/// How deeply the expression may nest real parentheses and `!`/`-not`: each level costs five
+/// native stack frames in the recursive-descent parser (`expression` -> `alternation` ->
+/// `conjunction` -> `negation` -> `primary`), which a deep-enough tree would otherwise exhaust
+/// as a WASM trap rather than a diagnostic. A flat `-a`/`-o`/`,` chain of any length doesn't
+/// count against this — the parser builds those with a loop, not recursion.
+const MAX_EXPRESSION_NESTING: usize = 1000;
+
+/// find's refusal once [`MAX_EXPRESSION_NESTING`] is reached, in the shell's usual wording for a
+/// nesting limit.
+fn nested_too_deeply() -> Usage {
+    Usage {
+        lines: vec![
+            "maximum nesting level exceeded: deeper nesting is unsupported in bash-tool".to_owned(),
+        ],
         code: 2,
     }
 }
@@ -845,6 +896,8 @@ struct Parser<'a> {
     has_delete: bool,
     /// The most recent predicate, named in GNU's unquoted-pattern hint.
     last_predicate: Option<String>,
+    /// Current depth of real parenthesis/`!`/`-not` nesting; see [`MAX_EXPRESSION_NESTING`].
+    nesting: usize,
 }
 
 impl Parser<'_> {
@@ -916,7 +969,13 @@ impl Parser<'_> {
             if self.operand_missing() {
                 return Err(fail(format!("expected an expression after '{operator}'")));
             }
-            return Ok(Node::Not(Box::new(self.negation()?)));
+            self.nesting += 1;
+            if self.nesting > MAX_EXPRESSION_NESTING {
+                return Err(nested_too_deeply());
+            }
+            let inner = self.negation()?;
+            self.nesting -= 1;
+            return Ok(Node::Not(Box::new(inner)));
         }
         self.primary()
     }
@@ -939,7 +998,12 @@ impl Parser<'_> {
                          you need an extra predicate after '('",
                     ));
                 }
+                self.nesting += 1;
+                if self.nesting > MAX_EXPRESSION_NESTING {
+                    return Err(nested_too_deeply());
+                }
                 let inner = self.expression()?;
+                self.nesting -= 1;
                 if self.peek() != Some(")") {
                     return Err(fail(
                         "invalid expression; I was expecting to find a ')' somewhere but did not \
@@ -1410,6 +1474,7 @@ fn parse(args: &[String], resolve: &dyn Fn(&str) -> PathBuf, now: Ts) -> Result<
         has_prune: false,
         has_delete: false,
         last_predicate: None,
+        nesting: 0,
     };
     let tree = if parser.peek().is_some() {
         let tree = parser.expression()?;

@@ -264,7 +264,12 @@ the shell read or write the path, `-x` holds only for directories (nothing can b
 and `-G` hold for every existing path (the agent owns its whole filesystem), and `-ef` compares
 device and inode. A symbolic
 link to an absolute path cannot be created on WASI, so `ln -s /abs/path link` is refused with that
-reason; relative targets work. Nor can a file whose name holds bytes that are not UTF-8, since WASI
+reason; so is a relative target that climbs back above the sandbox root with enough `..` (`ln -s
+../../../etc esc`) — following one, once created, reaches outside the agent's own filesystem —
+so only a relative target that stays inside the sandbox works. `cp -s` (which creates a symbolic
+link the same way `ln -s` does) and `cp -a`/`-d`/`-P` of a source that is already a symbolic link
+(which recreates its target text verbatim at the new location) get the same two checks. Nor can a
+file whose name holds bytes that are not UTF-8, since WASI
 names files with Unicode strings: creating one fails with `Illegal byte sequence`. Shell values
 themselves keep such bytes, as bash's do. A script with a syntax error is refused whole, before any of it runs,
 with bash's message (``bash: -c: line 2: syntax error near unexpected token `then'``).
@@ -434,7 +439,10 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   `${ }` expansions, here-document bodies included) is refused before it runs (`shell code is
   nested too deeply for bash-tool`). Text built at run time and nested more than 128 levels deep
   (a subscript from a variable's value, text given to brace expansion) fails with `maximum
-  nesting level exceeded: deeper nesting is unsupported in bash-tool` (status 1).
+  nesting level exceeded: deeper nesting is unsupported in bash-tool` (status 1). `find`'s
+  expression parser nests once per real `(` or `!`/`-not`, so an expression with more than 1,000
+  of those nested (not a flat `-a`/`-o`/`,` chain, which parses as a loop) is refused the same way
+  (`find: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool`, status 2).
 - **Output.** A call returns at most 2 MiB of stdout and 2 MiB of stderr, counted as the text it
   returns: a byte that is not UTF-8 counts as the three bytes of the U+FFFD that replaces it. Golem
   carries a result to its caller (and to `--lookup`) in one gRPC message of at most 32 MiB, and

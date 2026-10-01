@@ -77,8 +77,23 @@ async fn grep_run<SE: ShellExtensions>(
     use crate::tools::grep::{self, Prepared, Search, Step, Target};
     let resolve = |path: &str| context.shell.absolute_path(Path::new(path));
     let utf8 = grep::utf8_locale(&crate::tools::coreutils::exported_env(context));
+    // Only the wasm build has a cooperative scheduler (and a watchdog racing `timeout`/the
+    // call's time limit) to yield to — `ExecutionServices::yield_now` always returns a future
+    // that isn't `Send`, which the native build's tool dispatch requires, so native skips this
+    // entirely rather than trying to yield to nothing.
+    #[cfg(target_arch = "wasm32")]
+    let services = context.shell.execution_services();
     let mut stdout = context.stdout();
     let mut stderr = context.stderr();
+    // The file stdout is redirected to, if any: a target that turns out to be the very file
+    // grep is writing to (named directly, or — with `-r` — discovered by the walk, as `grep -r
+    // pattern . > out` discovers `out` itself) would grow forever, each match read back
+    // feeding another match written, the same hazard `cat f >> f` has. GNU grep refuses it up
+    // front rather than let it run; checked once here against every target below.
+    let output_identity = match &stdout {
+        OpenFile::File(file) => crate::tools::streaming::file_identity(file).ok(),
+        _ => None,
+    };
     // Pattern files are read while the arguments are parsed, synchronously; one that is standard
     // input (`-f -`, `-f /dev/stdin`) is read first and the arguments parsed again.
     let names_stdin = |path: &str| {
@@ -170,6 +185,18 @@ async fn grep_run<SE: ShellExtensions>(
                     (OpenFile::from(file), pre_binary)
                 })
             } {
+                Ok((OpenFile::File(file), _))
+                    if output_identity.is_some()
+                        && crate::tools::streaming::file_identity(&file).ok()
+                            == output_identity =>
+                {
+                    failed = true;
+                    if !options.no_messages() {
+                        let message = format!("grep: {name}: input file is also the output\n");
+                        stderr.async_io().write_all(message.as_bytes()).await?;
+                    }
+                    continue;
+                }
                 Ok((source, pre_binary)) => (name, source, pre_binary),
                 Err(error) => {
                     failed = true;
@@ -203,12 +230,28 @@ async fn grep_run<SE: ShellExtensions>(
         let mut records = Records::new(source, delimiter);
         let mut output = Vec::new();
         let mut diagnostics = Vec::new();
+        #[cfg(target_arch = "wasm32")]
+        let mut since_yield: u32 = 0;
         while let Some(record) = records.next().await? {
             output.clear();
             diagnostics.clear();
             let step = search.record(&record, &mut output, &mut diagnostics);
             stdout.async_io().write_all(&output).await?;
             stderr.async_io().write_all(&diagnostics).await?;
+            // A target that grows as fast as it's read (searching the very file stdout feeds,
+            // past the check above, through a symlink or a hard link the identity check doesn't
+            // catch) would otherwise never reach an `.await` that actually suspends: every read
+            // has data ready at once, so the task never hands control back to the scheduler
+            // racing this call's `timeout`/time limit against it. Yielding periodically, as
+            // `tail -f`'s own read loop does, gives that race an opening.
+            #[cfg(target_arch = "wasm32")]
+            {
+                since_yield += 1;
+                if since_yield >= 256 {
+                    since_yield = 0;
+                    (services.yield_now)().await;
+                }
+            }
             match step {
                 Step::Continue => (),
                 Step::NextFile => break,
@@ -328,6 +371,9 @@ async fn sed_run<SE: ShellExtensions>(
         })
     };
     use uu_sed::sed::incremental::Flow;
+    // See `grep_run`'s identical comment: only the wasm build has a scheduler to yield to.
+    #[cfg(target_arch = "wasm32")]
+    let services = context.shell.execution_services();
     let mut stdout = context.stdout();
     let mut stderr = context.stderr();
     let mut status = 0;
@@ -373,7 +419,20 @@ async fn sed_run<SE: ShellExtensions>(
     let mut current = next_record(&mut sources).await?;
     let mut output = Vec::new();
     let mut current_name: Option<String> = None;
+    #[cfg(target_arch = "wasm32")]
+    let mut since_yield: u32 = 0;
     while let Some((name, record)) = current {
+        // Same hazard as grep's (see its own read loop): a script writing back into the file
+        // it's reading (`sed p f >> f`) never sees a read actually suspend, so this call's
+        // `timeout`/time limit needs an explicit opening to interrupt it.
+        #[cfg(target_arch = "wasm32")]
+        {
+            since_yield += 1;
+            if since_yield >= 256 {
+                since_yield = 0;
+                (services.yield_now)().await;
+            }
+        }
         let next = if lookahead {
             next_record(&mut sources).await?
         } else {

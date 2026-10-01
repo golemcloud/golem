@@ -1553,16 +1553,40 @@ fn glob_matches(globs: &[String], name: &str) -> bool {
         .any(|glob| super::find::fnmatch(glob, name, false))
 }
 
-/// Recursive directory walk for `-r`/`-R`. `visited` holds the canonicalized real path of
-/// every directory on the path from the root down to the one currently being read — the
-/// current *ancestor chain*, not every directory seen so far, so two symlinks that happen
-/// to reach the same real directory from unrelated branches aren't mistaken for a cycle.
-/// With `-R` (`options.follow_links`), a symlink can lead back to an ancestor and recurse
-/// forever, so each directory is checked against this chain before `walk` descends into
-/// it, the same way GNU grep detects a "recursive directory loop". Without `-R`,
-/// symlinked directories are never followed (`options.follow_links` is false, so
-/// `symlink_metadata` reports them as non-directories) and a loop through ordinary
-/// directories alone isn't possible, so `visited` never grows.
+/// Sorted, already-`filter_map(Result::ok)`'d children of `directory`, the same set [`walk`]
+/// iterated per level before it was made iterative.
+fn sorted_children(directory: &Path) -> std::io::Result<std::vec::IntoIter<std::fs::DirEntry>> {
+    let mut children: Vec<_> = std::fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .collect();
+    children.sort_by_key(std::fs::DirEntry::file_name);
+    Ok(children.into_iter())
+}
+
+/// One directory still being walked: its remaining children and, when `-R` is following
+/// symlinks, the canonicalized real path to drop from `visited` once every child of this
+/// directory has been handled.
+struct WalkFrame {
+    children: std::vec::IntoIter<std::fs::DirEntry>,
+    shown: String,
+    real: Option<PathBuf>,
+}
+
+/// Directory walk for `-r`/`-R`, driven by an explicit stack rather than recursion so a deep
+/// tree can't exhaust the native stack (`find`'s walk uses the same shape). `visited` holds the
+/// canonicalized real path of every directory on the path from the root down to the one
+/// currently being read — the current *ancestor chain*, not every directory seen so far, so two
+/// symlinks that happen to reach the same real directory from unrelated branches aren't mistaken
+/// for a cycle. With `-R` (`options.follow_links`), a symlink can lead back to an ancestor and
+/// recurse forever, so each directory is checked against this chain before descending into it,
+/// the same way GNU grep detects a "recursive directory loop". Without `-R`, symlinked
+/// directories are never followed (`options.follow_links` is false, so `symlink_metadata`
+/// reports them as non-directories) and a loop through ordinary directories alone isn't
+/// possible, so `visited` never grows.
+///
+/// Emits into `targets` in the same order the old recursive version did: a directory's entries
+/// in sorted order, descending into a subdirectory (and returning to the rest of the parent's
+/// entries afterwards) exactly where the recursive call would have.
 fn walk(
     options: &Options,
     directory: &Path,
@@ -1570,8 +1594,13 @@ fn walk(
     targets: &mut Vec<Target>,
     visited: &mut HashSet<PathBuf>,
 ) {
-    let entries = match std::fs::read_dir(directory) {
-        Ok(entries) => entries,
+    let mut stack: Vec<WalkFrame> = Vec::new();
+    match sorted_children(directory) {
+        Ok(children) => stack.push(WalkFrame {
+            children,
+            shown: shown.to_owned(),
+            real: None,
+        }),
         Err(error) => {
             targets.push(Target::Error(format!(
                 "grep: {shown}: {}\n",
@@ -1579,17 +1608,23 @@ fn walk(
             )));
             return;
         }
-    };
-    let mut children: Vec<_> = entries.filter_map(Result::ok).collect();
-    children.sort_by_key(std::fs::DirEntry::file_name);
-    for child in children {
+    }
+
+    while let Some(frame) = stack.last_mut() {
+        let Some(child) = frame.children.next() else {
+            let frame = stack.pop().expect("just borrowed via last_mut");
+            if let Some(real) = frame.real {
+                visited.remove(&real);
+            }
+            continue;
+        };
         let name = child.file_name().to_string_lossy().into_owned();
-        let display = if shown.is_empty() {
+        let display = if frame.shown.is_empty() {
             name.clone()
-        } else if shown.ends_with('/') {
-            format!("{shown}{name}")
+        } else if frame.shown.ends_with('/') {
+            format!("{}{name}", frame.shown)
         } else {
-            format!("{shown}/{name}")
+            format!("{}/{name}", frame.shown)
         };
         let path = child.path();
         let metadata = if options.follow_links {
@@ -1617,10 +1652,34 @@ fn walk(
                     )));
                     continue;
                 }
-                walk(options, &path, &display, targets, visited);
-                visited.remove(&real);
+                match sorted_children(&path) {
+                    Ok(children) => stack.push(WalkFrame {
+                        children,
+                        shown: display,
+                        real: Some(real),
+                    }),
+                    Err(error) => {
+                        visited.remove(&real);
+                        targets.push(Target::Error(format!(
+                            "grep: {display}: {}\n",
+                            super::io_message(&error)
+                        )));
+                    }
+                }
             } else {
-                walk(options, &path, &display, targets, visited);
+                match sorted_children(&path) {
+                    Ok(children) => stack.push(WalkFrame {
+                        children,
+                        shown: display,
+                        real: None,
+                    }),
+                    Err(error) => {
+                        targets.push(Target::Error(format!(
+                            "grep: {display}: {}\n",
+                            super::io_message(&error)
+                        )));
+                    }
+                }
             }
             continue;
         } else if metadata.is_file()

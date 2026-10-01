@@ -1308,6 +1308,45 @@ fn build_recursive_header(opts: &DiffOptions, da: &str, db: &str) -> String {
     parts.join(" ")
 }
 
+/// One directory pair still being walked under `-r`: its merged, sorted entries (`name`, present
+/// in `a`, present in `b`) and where to resume.
+struct PairFrame {
+    a_disp: String,
+    b_disp: String,
+    real_a: PathBuf,
+    real_b: PathBuf,
+    entries: Vec<(String, bool, bool)>,
+    next: usize,
+}
+
+fn make_pair_frame(
+    a_disp: &str,
+    b_disp: &str,
+    resolve: &dyn Fn(&str) -> PathBuf,
+) -> std::io::Result<PairFrame> {
+    let real_a = resolve(a_disp);
+    let real_b = resolve(b_disp);
+    let names_a = list_dir_names(&real_a)?;
+    let names_b = list_dir_names(&real_b)?;
+    let entries = names_a
+        .union(&names_b)
+        .map(|name| (name.clone(), names_a.contains(name), names_b.contains(name)))
+        .collect();
+    Ok(PairFrame {
+        a_disp: a_disp.to_owned(),
+        b_disp: b_disp.to_owned(),
+        real_a,
+        real_b,
+        entries,
+        next: 0,
+    })
+}
+
+/// Recursive-diff walk for `-r`, driven by an explicit stack rather than recursion so a deep
+/// tree of common subdirectories can't exhaust the native stack (`find`'s walk uses the same
+/// shape). Visits entries in the same order the old recursive version did: a directory pair's
+/// merged, sorted names in turn, descending into a common subdirectory (and returning to the
+/// rest of the parent pair's names afterwards) exactly where the recursive call would have.
 fn walk_pair(
     a_disp: &str,
     b_disp: &str,
@@ -1319,14 +1358,21 @@ fn walk_pair(
     err: &mut dyn Write,
     status: &mut i32,
 ) -> std::io::Result<()> {
-    let real_a = resolve(a_disp);
-    let real_b = resolve(b_disp);
-    let names_a = list_dir_names(&real_a)?;
-    let names_b = list_dir_names(&real_b)?;
+    let mut stack = vec![make_pair_frame(a_disp, b_disp, resolve)?];
 
-    for name in names_a.union(&names_b) {
-        let in_a = names_a.contains(name);
-        let in_b = names_b.contains(name);
+    while let Some(frame) = stack.last() {
+        if frame.next >= frame.entries.len() {
+            stack.pop();
+            continue;
+        }
+        // Pull everything this iteration needs out of the frame before any `stack.push` below,
+        // since that needs `stack` free of borrows.
+        let index = frame.next;
+        let (name, in_a, in_b) = frame.entries[index].clone();
+        let (a_disp, b_disp) = (frame.a_disp.clone(), frame.b_disp.clone());
+        let (real_a, real_b) = (frame.real_a.clone(), frame.real_b.clone());
+        stack.last_mut().expect("just checked non-empty").next += 1;
+
         let da = format!("{a_disp}/{name}");
         let db = format!("{b_disp}/{name}");
         match (in_a, in_b) {
@@ -1334,12 +1380,12 @@ fn walk_pair(
             // (so the resulting patch can actually create/delete it) instead of being reported
             // as "Only in ..." — a directory present on only one side still gets "Only in ...",
             // matching GNU (which recurses to report every file under it individually).
-            (true, false) if opts.new_file && !real_a.join(name).is_dir() => {
+            (true, false) if opts.new_file && !real_a.join(&name).is_dir() => {
                 let prefix = build_recursive_header(opts, &da, &db);
                 let code = compare_pair(&da, &db, stdin, resolve, opts, Some(&prefix), out, err)?;
                 *status = (*status).max(code);
             }
-            (false, true) if opts.new_file && !real_b.join(name).is_dir() => {
+            (false, true) if opts.new_file && !real_b.join(&name).is_dir() => {
                 let prefix = build_recursive_header(opts, &da, &db);
                 let code = compare_pair(&da, &db, stdin, resolve, opts, Some(&prefix), out, err)?;
                 *status = (*status).max(code);
@@ -1353,11 +1399,11 @@ fn walk_pair(
                 *status = (*status).max(1);
             }
             (true, true) => {
-                let pa = real_a.join(name);
-                let pb = real_b.join(name);
+                let pa = real_a.join(&name);
+                let pb = real_b.join(&name);
                 match (pa.is_dir(), pb.is_dir()) {
                     (true, true) if recurse => {
-                        walk_pair(&da, &db, stdin, resolve, opts, recurse, out, err, status)?;
+                        stack.push(make_pair_frame(&da, &db, resolve)?);
                     }
                     (true, true) => {
                         writeln!(out, "Common subdirectories: {da} and {db}")?;
