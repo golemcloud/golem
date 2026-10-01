@@ -658,7 +658,7 @@ class ResolvedAgentImpl {
   async saveSnapshot(): Promise<SavedAgentSnapshot> {
     if (this.customSnapshot?.save) {
       const data = await this.customSnapshot.save.call(this.instance);
-      return { data, mimeType: 'application/octet-stream', fileDatabases: {} };
+      return { kind: 'custom', data };
     }
     if (!this.reg.snapshotStateSchema) {
       throw 'snapshot saving requires a declared state schema or custom save/load functions';
@@ -678,7 +678,7 @@ class ResolvedAgentImpl {
 
     const stateJson = new TextEncoder().encode(JSON.stringify(state));
     if (databaseParts.length === 0) {
-      return { data: stateJson, mimeType: 'application/json', fileDatabases };
+      return { kind: 'typed', data: stateJson, mimeType: 'application/json', fileDatabases };
     }
     const parts: MultipartPart[] = [
       { name: 'state', contentType: 'application/json', body: stateJson },
@@ -686,6 +686,7 @@ class ResolvedAgentImpl {
     ];
     const { data, boundary } = encodeMultipart(parts);
     return {
+      kind: 'typed',
       data,
       mimeType: `multipart/mixed; boundary=${boundary}`,
       fileDatabases,

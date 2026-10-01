@@ -10,7 +10,7 @@ import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { Principal } from '../src/principal';
 
 interface Resolved {
-  saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }>;
+  saveSnapshot(): Promise<{ kind: 'custom' | 'typed'; data: Uint8Array; mimeType?: string }>;
 }
 
 async function initiate(name: string): Promise<Resolved> {
@@ -312,7 +312,7 @@ describe('snapshot — custom save/load', () => {
   it('uses the user bytes verbatim (octet-stream) and restores from them', async () => {
     const agent = await initiate('SnapCustom');
     const snap = await agent.saveSnapshot();
-    expect(snap.mimeType).toBe('application/octet-stream');
+    expect(snap.kind).toBe('custom');
     expect(new TextDecoder().decode(snap.data)).toBe('count=5');
 
     const restored = await restore('SnapCustom', new TextEncoder().encode('count=99'));

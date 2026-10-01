@@ -35,12 +35,10 @@ export interface ResolvedAgent {
 }
 
 /**
- * The snapshot of an agent before the guest adds its envelope. `fileDatabases` holds the
- * location of each file-backed SQLite database of a typed snapshot, keyed by its field; a custom
- * save has none.
+ * The snapshot of an agent before the guest adds its envelope: the bytes of a custom save, or a
+ * typed snapshot (JSON or multipart) with the location of each file-backed SQLite database,
+ * keyed by its field.
  */
-export type SavedAgentSnapshot = {
-  data: Uint8Array;
-  mimeType: string;
-  fileDatabases: Record<string, string>;
-};
+export type SavedAgentSnapshot =
+  | { kind: 'custom'; data: Uint8Array }
+  | { kind: 'typed'; data: Uint8Array; mimeType: string; fileDatabases: Record<string, string> };
