@@ -449,7 +449,7 @@ impl<'a> ComponentStager<'a> {
                 self.component_deploy_properties
                     .component_initial_card
                     .clone(),
-                self.manifest_component_files().await?,
+                &self.component_deploy_properties.component_files,
                 &component_initial_permission_recipient_context(environment, component_name),
             ),
             env: self.component_deploy_properties.component_env.clone(),
