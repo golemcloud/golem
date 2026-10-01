@@ -221,6 +221,7 @@ object AgentHostApi {
     def Automatic: UpdateMode = "automatic"
 
     def SnapshotBased: UpdateMode = "snapshot-based"
+
   }
 
   object FilterComparator {
