@@ -97,11 +97,11 @@ fn passed_since(time: Timestamp, now: Timestamp, grace: Duration) -> bool {
 /// settled bytes, so when the named bytes give false, the records need no read.
 fn may_be_due(
     ledger: &PruneLedger,
-    named_bytes: u64,
+    freed_bytes: u64,
     repository_bytes: u64,
     threshold: Percent,
 ) -> bool {
-    named_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal
+    freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal
 }
 
 /// Gives the size of the repository of the scope: the sum of the sizes of its packs.
@@ -569,7 +569,7 @@ async fn write_leased_marker(
 /// Writes the first marker of the claim at the path `marker`, then takes the claim, and tells
 /// whether this delete holds the claim. The caller makes the path and the lease before the write,
 /// so the claim can delete the marker when the delete stops during the write. A delete that loses
-/// the claim deletes its marker.
+/// the claim tries to delete its marker. A failed delete gives a warning.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
     claim: &ClaimName,
@@ -908,16 +908,16 @@ async fn observe(
     }))
 }
 
-/// The most steps of a due check: one for each kind of listing. These are the ledger entries, the
+/// The most passes of a due check: one for each kind of listing. These are the ledger entries, the
 /// names of the records, the packs, the records with the snapshot files, and the claims.
 const MOST_PASSES: usize = 5;
 
 /// Tells whether a prune of the scope is due, and which claim the delete takes for it.
 ///
-/// Each pass makes the storage calls of the step that [`next`] asked for, then reads the clock one
-/// time after those calls, and asks [`next`] again with that reading. The passes after `Stop` or
-/// `Claim` make no call and read no clock. So each comparison with a time from storage
-/// uses a clock reading from after the listing that gave that time. A listing can take up to one
+/// Each pass before a stop or a claim makes the storage calls of the step that [`next`] asked for,
+/// then reads the clock one time after those calls, and asks [`next`] again with that reading. The
+/// passes after `Stop` or `Claim` make no call and read no clock. So each comparison with a time
+/// from storage uses a clock reading from after the listing that gave that time. A listing can take up to one
 /// storage call deadline, and a stale reading can put a marker that another host wrote within the
 /// margin beyond the margin. A failed call gives its error.
 pub(super) async fn due_prune(
