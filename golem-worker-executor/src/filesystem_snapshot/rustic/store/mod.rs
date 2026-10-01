@@ -27,11 +27,9 @@ use super::fault::{
 use super::files::{Lease, SnapshotFiles};
 use super::priority::LowPriority;
 use super::prune::{
-    ClaimChoice, Percent, claim_hold, claims_directory, hold_passed, keep_claim_fresh, lease_span,
-    list_claims, list_freed_names, marker_path, marker_time, may_be_due, named_bytes,
-    needs_repository_size, next_claim, prune_due, read_ledger, record_freed, refresh_period,
-    release_claim, remove_freed, remove_old_claims, remove_older_ledgers, repository_bytes,
-    settle_freed, take_claim, write_ledger, write_marker,
+    Percent, PrunePolicy, claims_directory, due_prune, keep_claim_fresh, lease_span, marker_path,
+    marker_time, read_ledger, record_freed, refresh_period, release_claim, remove_freed,
+    remove_old_claims, remove_older_ledgers, take_claim, write_ledger, write_marker,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
 use super::scope::{copy_scope, delete_scope};
@@ -514,6 +512,15 @@ impl RusticSnapshotStore {
         Ok(BlobBackend::new(files, runtime()?, KEPT_PACKS_LIMIT).tracked_by(self.tracker.token()))
     }
 
+    /// Gives the values of the prune decision from the policy of the store.
+    fn prune_policy(&self) -> PrunePolicy {
+        PrunePolicy {
+            grace: self.policy.prune.keep_delete,
+            deadline: self.policy.deadline,
+            threshold: self.policy.prune_threshold,
+        }
+    }
+
     /// Gives a backend over the repository of the scope for the operation with the token.
     fn scope_backend(
         &self,
@@ -570,54 +577,14 @@ impl RusticSnapshotStore {
         let files = self.files(scope, token);
         let grace = self.policy.prune.keep_delete;
         let deadline = self.policy.deadline;
-        let threshold = self.policy.prune_threshold;
-        let ledger = read_ledger(&files, &*self.clock)
+        let Some(due) = due_prune(&files, &*self.clock, &self.prune_policy())
             .await
-            .map_err(storage_failure)?;
-        // Each comparison with a time from storage uses a clock reading from after the listing
-        // that gave that time. A listing can take up to one storage call deadline, and a stale
-        // reading can put a marker that another host wrote within the margin beyond the margin.
-        // Each step below runs only when a prune can still be due, so a delete within the hold
-        // reads no record, and a delete whose records are too small reads no record content.
-        if !hold_passed(&ledger, self.clock.now(), grace, deadline) {
-            return Ok(());
-        }
-        let listed = list_freed_names(&files).await.map_err(storage_failure)?;
-        let upper = named_bytes(&listed);
-        if upper == 0 && !ledger.awaiting_removal {
-            return Ok(());
-        }
-        let size = if needs_repository_size(&ledger, upper, self.clock.now(), grace, deadline) {
-            repository_bytes(&files).await.map_err(storage_failure)?
-        } else {
-            0
-        };
-        if !may_be_due(&ledger, upper, size, threshold) {
-            return Ok(());
-        }
-        let records = settle_freed(&files, &listed)
-            .await
-            .map_err(storage_failure)?;
-        if !prune_due(
-            &ledger,
-            records.bytes,
-            self.clock.now(),
-            size,
-            threshold,
-            grace,
-            deadline,
-        ) {
-            return Ok(());
-        }
-        let claims: Arc<Path> = claims_directory(&ledger).into();
-        let listed = list_claims(&files, &claims)
-            .await
-            .map_err(storage_failure)?;
-        let ClaimChoice::Claim(number) =
-            next_claim(&listed, self.clock.now(), claim_hold(grace, deadline))
+            .map_err(storage_failure)?
         else {
             return Ok(());
         };
+        let claims = due.claim.directory.clone();
+        let number = due.claim.number;
         // The token of the tracker comes before the check of the cancel, so either the delete sees
         // a shut down and makes no more storage calls, or `shut_down` waits for the guard and for
         // each call that the guard makes.
@@ -683,7 +650,7 @@ impl RusticSnapshotStore {
             .await
             .map_err(storage_failure)?;
         remove_older_ledgers(&files, ended).await;
-        remove_freed(&files, &records).await;
+        remove_freed(&files, &due.records).await;
         remove_old_claims(&files, ended).await;
         Ok(())
     }

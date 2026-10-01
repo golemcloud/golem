@@ -31,7 +31,7 @@ use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
 use std::collections::HashSet;
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -74,12 +74,7 @@ impl Percent {
 /// Tells whether the hold of a claim passed at `now` since the last prune. The time of the last
 /// prune is after its final marker, so the next prune waits a full hold from the newest claim
 /// marker that the last prune wrote. A time more than the margin after `now` counts as missing.
-pub(super) fn hold_passed(
-    ledger: &PruneLedger,
-    now: Timestamp,
-    grace: Duration,
-    deadline: Duration,
-) -> bool {
+fn hold_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration, deadline: Duration) -> bool {
     ledger
         .last_prune
         .filter(|last| !beyond_margin(*last, now))
@@ -94,41 +89,12 @@ fn passed_since(time: Timestamp, now: Timestamp, grace: Duration) -> bool {
             .saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// Tells whether [`prune_due`] needs the size of the repository at `now`. Only freed bytes after
-/// the hold of a claim, without marked packs, need it.
-pub(super) fn needs_repository_size(
-    ledger: &PruneLedger,
-    freed_bytes: u64,
-    now: Timestamp,
-    grace: Duration,
-    deadline: Duration,
-) -> bool {
-    hold_passed(ledger, now, grace, deadline) && freed_bytes > 0 && !ledger.awaiting_removal
-}
-
-/// Tells whether a prune is due at `now`.
-///
-/// A prune is due when the hold of a claim passed since the last prune, and the freed bytes reach the
-/// threshold share of `repository_bytes`, rounded down to a whole byte, or the last prune marked
-/// packs. A threshold of zero bytes counts as one byte, so a prune never runs for a scope that
-/// freed nothing and marked nothing.
-pub(super) fn prune_due(
-    ledger: &PruneLedger,
-    freed_bytes: u64,
-    now: Timestamp,
-    repository_bytes: u64,
-    threshold: Percent,
-    grace: Duration,
-    deadline: Duration,
-) -> bool {
-    let work = freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal;
-    hold_passed(ledger, now, grace, deadline) && work
-}
-
-/// Tells whether the freed bytes in the names of the records, which are at least the settled
-/// freed bytes, can make a prune due with the size of the repository. When this gives false,
-/// [`prune_due`] gives false for the settled bytes too, so the records need no read.
-pub(super) fn may_be_due(
+/// Tells whether the freed bytes can make a prune due with the size of the repository: they reach
+/// the threshold share of `repository_bytes`, rounded down to a whole byte, or the last prune
+/// marked packs. A threshold of zero bytes counts as one byte, so a prune never runs for a scope
+/// that freed nothing and marked nothing. The bytes in the names of the records are at least the
+/// settled bytes, so when the named bytes give false, the records need no read.
+fn may_be_due(
     ledger: &PruneLedger,
     named_bytes: u64,
     repository_bytes: u64,
@@ -138,7 +104,7 @@ pub(super) fn may_be_due(
 }
 
 /// Gives the size of the repository of the scope: the sum of the sizes of its packs.
-pub(super) async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u64> {
+async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u64> {
     Ok(files
         .list_below("list_data", Path::new(DATA_PATH))
         .await?
@@ -793,6 +759,217 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, ended: Timestamp) {
         .await;
 }
 
+/// The values of the prune decision: the grace period of a pack that a prune marks, the deadline
+/// of one storage call, and the share of the size of the repository that freed bytes must reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PrunePolicy {
+    pub(super) grace: Duration,
+    pub(super) deadline: Duration,
+    pub(super) threshold: Percent,
+}
+
+/// A claim of a prune: the directory of the claims of its ledger, and its number.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClaimName {
+    pub(super) directory: Arc<Path>,
+    pub(super) number: u64,
+}
+
+/// A prune that is due: the claim that the delete takes, and the settled records that the prune
+/// counts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DuePrune {
+    pub(super) claim: ClaimName,
+    pub(super) records: FreedRecords,
+}
+
+/// What a delete found on its way to a prune. A field is `None` until its step ran.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Observed {
+    /// The ledger, from the first listing of the ledger entries.
+    ledger: Option<PruneLedger>,
+    /// The records of freed bytes that the listing of their names found.
+    freed: Option<Box<[ListedFreed]>>,
+    /// The size of the repository.
+    size: Option<u64>,
+    /// The settled records.
+    settled: Option<FreedRecords>,
+    /// The entries of the claim directory of the ledger.
+    claims: Option<Box<[ClaimEntry]>>,
+}
+
+/// The next step of a due check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Next {
+    /// List the ledger entries.
+    ListLedgers,
+    /// List the names of the records of freed bytes.
+    ListFreed,
+    /// List the packs for the size of the repository.
+    ListPacks,
+    /// Read the records of freed bytes and list the snapshot files.
+    SettleFreed,
+    /// List the claim directory of the ledger.
+    ListClaims(Arc<Path>),
+    /// No prune is due, or another delete holds the claims of the ledger.
+    Stop,
+    /// Take the claim.
+    Claim(ClaimName),
+}
+
+/// What one step of a due check found.
+#[derive(Debug)]
+enum Found {
+    Ledgers(Box<[ListedBlob]>),
+    Freed(Box<[ListedFreed]>),
+    Packs(u64),
+    Settled(FreedRecords),
+    Claims(Box<[ClaimEntry]>),
+}
+
+impl Observed {
+    /// Adds what a step found. The ledger is the newest entry within the margin of `now`.
+    fn with(self, found: Found, now: Timestamp) -> Self {
+        match found {
+            Found::Ledgers(listed) => Self {
+                ledger: Some(newest_ledger(&listed, now)),
+                ..self
+            },
+            Found::Freed(freed) => Self {
+                freed: Some(freed),
+                ..self
+            },
+            Found::Packs(size) => Self {
+                size: Some(size),
+                ..self
+            },
+            Found::Settled(settled) => Self {
+                settled: Some(settled),
+                ..self
+            },
+            Found::Claims(claims) => Self {
+                claims: Some(claims),
+                ..self
+            },
+        }
+    }
+}
+
+/// Decides the next step of a due check from what the delete found, at `now`.
+///
+/// A prune is due when the hold of a claim passed since the last prune, and the settled freed
+/// bytes can make a prune due with the size of the repository (see [`may_be_due`]). The check
+/// reads only what can still make a prune due. Within the hold it reads nothing more. It lists the
+/// packs only when the records name freed bytes and the last prune marked no packs, because marked
+/// packs make a prune due at any size. It reads the records only when the bytes in their names can
+/// make a prune due. When a prune is due, the delete takes the claim that [`next_claim`] chooses
+/// from the claims of the ledger, or it stops when another delete holds them.
+fn next(observed: &Observed, now: Timestamp, policy: &PrunePolicy) -> Next {
+    let Some(ledger) = observed.ledger else {
+        return Next::ListLedgers;
+    };
+    if !hold_passed(&ledger, now, policy.grace, policy.deadline) {
+        return Next::Stop;
+    }
+    let Some(freed) = &observed.freed else {
+        return Next::ListFreed;
+    };
+    let named = named_bytes(freed);
+    if named == 0 && !ledger.awaiting_removal {
+        return Next::Stop;
+    }
+    let size = match observed.size {
+        Some(size) => size,
+        None if !ledger.awaiting_removal => return Next::ListPacks,
+        None => 0,
+    };
+    if !may_be_due(&ledger, named, size, policy.threshold) {
+        return Next::Stop;
+    }
+    let Some(settled) = &observed.settled else {
+        return Next::SettleFreed;
+    };
+    if !may_be_due(&ledger, settled.bytes, size, policy.threshold) {
+        return Next::Stop;
+    }
+    let directory: Arc<Path> = claims_directory(&ledger).into();
+    let Some(claims) = &observed.claims else {
+        return Next::ListClaims(directory);
+    };
+    match next_claim(claims, now, claim_hold(policy.grace, policy.deadline)) {
+        ClaimChoice::Claim(number) => Next::Claim(ClaimName { directory, number }),
+        ClaimChoice::Held => Next::Stop,
+    }
+}
+
+/// Makes the storage calls of the step, and gives what they found. `Stop` and `Claim` make no call
+/// and give `None`.
+async fn observe(
+    files: &SnapshotFiles,
+    observed: &Observed,
+    step: &Next,
+) -> anyhow::Result<Option<Found>> {
+    Ok(Some(match step {
+        Next::ListLedgers => Found::Ledgers(
+            files
+                .list_below("read_ledger", Path::new(LEDGERS_PATH))
+                .await?,
+        ),
+        Next::ListFreed => Found::Freed(list_freed_names(files).await?),
+        Next::ListPacks => Found::Packs(repository_bytes(files).await?),
+        Next::SettleFreed => Found::Settled(
+            settle_freed(files, observed.freed.as_deref().unwrap_or_default()).await?,
+        ),
+        Next::ListClaims(directory) => Found::Claims(list_claims(files, directory).await?),
+        Next::Stop | Next::Claim(_) => return Ok(None),
+    }))
+}
+
+/// The most steps of a due check: one for each kind of listing. These are the ledger entries, the
+/// names of the records, the packs, the records with the snapshot files, and the claims.
+const MOST_PASSES: usize = 5;
+
+/// Tells whether a prune of the scope is due, and which claim the delete takes for it.
+///
+/// Each pass makes the storage calls of the step that [`next`] asked for, then reads the clock one
+/// time, and asks [`next`] again with that reading. So each comparison with a time from storage
+/// uses a clock reading from after the listing that gave that time. A listing can take up to one
+/// storage call deadline, and a stale reading can put a marker that another host wrote within the
+/// margin beyond the margin. A failed call gives its error.
+pub(super) async fn due_prune(
+    files: &SnapshotFiles,
+    clock: &dyn Clock,
+    policy: &PrunePolicy,
+) -> anyhow::Result<Option<DuePrune>> {
+    let (observed, step) = stream::iter(0..MOST_PASSES)
+        .map(Ok)
+        .try_fold(
+            (Observed::default(), Next::ListLedgers),
+            |(observed, step), _| async move {
+                let Some(found) = observe(files, &observed, &step).await? else {
+                    return Ok((observed, step));
+                };
+                let now = clock.now();
+                let observed = observed.with(found, now);
+                let step = next(&observed, now, policy);
+                anyhow::Ok((observed, step))
+            },
+        )
+        .await?;
+    Ok(match step {
+        Next::Claim(claim) => Some(DuePrune {
+            claim,
+            records: observed.settled.unwrap_or_default(),
+        }),
+        Next::ListLedgers
+        | Next::ListFreed
+        | Next::ListPacks
+        | Next::SettleFreed
+        | Next::ListClaims(_)
+        | Next::Stop => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
@@ -801,13 +978,13 @@ mod tests {
     use super::super::tests::files_of;
     use super::super::tests::scripted::{Script, ScriptedBlobStorage};
     use super::{
-        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
-        FreedRecords, LEDGERS_PATH, Lease, Percent, PruneLedger, claim_hold, claims_directory,
-        keep_claim_fresh, lease_span, list_claims, list_freed_names, marker_path, marker_time,
-        may_be_due, named_bytes, needs_repository_size, newest_ledger, next_claim,
-        old_claim_directories, older_entries, parse_claim_entry, parse_freed, parse_ledger_entry,
-        parse_record, prune_due, read_ledger, record_content, record_freed, refresh_period, settle,
-        settle_freed, take_claim, write_ledger,
+        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, ClaimName, FREED_PATH,
+        FreedRecord, FreedRecords, LEDGERS_PATH, Lease, ListedFreed, Next, Observed, Percent,
+        PruneLedger, PrunePolicy, claim_hold, claims_directory, keep_claim_fresh, lease_span,
+        list_claims, list_freed_names, marker_path, marker_time, may_be_due, named_bytes,
+        newest_ledger, next, next_claim, old_claim_directories, older_entries, parse_claim_entry,
+        parse_freed, parse_ledger_entry, parse_record, read_ledger, record_content, record_freed,
+        refresh_period, settle, settle_freed, take_claim, write_ledger,
     };
     use crate::filesystem_snapshot::clock::SystemClock;
     use futures::StreamExt;
@@ -848,6 +1025,67 @@ mod tests {
         }
     }
 
+    /// Gives one listed record of freed bytes whose name holds the bytes.
+    fn named(bytes: u64) -> Box<[ListedFreed]> {
+        Box::new([ListedFreed {
+            path: Path::new(FREED_PATH).join(format!("{bytes}-a")).into(),
+            bytes,
+        }])
+    }
+
+    /// Tells whether a prune is due, through [`next`]: the delete found the ledger, a record whose
+    /// name holds the freed bytes, the size of the repository, and settled records with the freed
+    /// bytes. The prune is due when [`next`] then asks for the claims.
+    fn prune_due(
+        ledger: &PruneLedger,
+        freed_bytes: u64,
+        now: Timestamp,
+        repository_bytes: u64,
+        threshold: Percent,
+        grace: Duration,
+        deadline: Duration,
+    ) -> bool {
+        let observed = Observed {
+            ledger: Some(*ledger),
+            freed: Some(named(freed_bytes)),
+            size: Some(repository_bytes),
+            settled: Some(FreedRecords {
+                bytes: freed_bytes,
+                counted: Box::default(),
+            }),
+            claims: None,
+        };
+        let policy = PrunePolicy {
+            grace,
+            deadline,
+            threshold,
+        };
+        matches!(next(&observed, now, &policy), Next::ListClaims(_))
+    }
+
+    /// Tells whether the due check needs the size of the repository, through [`next`]: the delete
+    /// found the ledger and a record whose name holds the freed bytes, and [`next`] then asks for
+    /// the packs.
+    fn needs_repository_size(
+        ledger: &PruneLedger,
+        freed_bytes: u64,
+        now: Timestamp,
+        grace: Duration,
+        deadline: Duration,
+    ) -> bool {
+        let observed = Observed {
+            ledger: Some(*ledger),
+            freed: Some(named(freed_bytes)),
+            ..Observed::default()
+        };
+        let policy = PrunePolicy {
+            grace,
+            deadline,
+            threshold: TEN_PERCENT,
+        };
+        next(&observed, now, &policy) == Next::ListPacks
+    }
+
     fn new_files() -> SnapshotFiles {
         files_over(Arc::new(InMemoryBlobStorage::new()))
     }
@@ -868,6 +1106,157 @@ mod tests {
             DEADLINE,
             cancel,
         )
+    }
+
+    /// The policy of the value tests of the due check: the grace period, the deadline and 10%.
+    const POLICY: PrunePolicy = PrunePolicy {
+        grace: GRACE,
+        deadline: DEADLINE,
+        threshold: TEN_PERCENT,
+    };
+
+    fn settled(bytes: u64) -> FreedRecords {
+        FreedRecords {
+            bytes,
+            counted: Box::default(),
+        }
+    }
+
+    #[test]
+    fn a_due_check_lists_each_kind_once_in_order_and_ends_with_the_claim_after_the_largest() {
+        let now = at(10_000_000);
+        let last = ledger(Some(10_000_000 - HOLD_MILLIS), false);
+        let directory: Arc<Path> = claims_directory(&last).into();
+        let ledger_found = Observed {
+            ledger: Some(last),
+            ..Observed::default()
+        };
+        let freed_found = Observed {
+            freed: Some(named(200)),
+            ..ledger_found.clone()
+        };
+        let size_found = Observed {
+            size: Some(1000),
+            ..freed_found.clone()
+        };
+        let settled_found = Observed {
+            settled: Some(settled(150)),
+            ..size_found.clone()
+        };
+        let claims_found = Observed {
+            claims: Some(Box::new([ClaimEntry::Claim(3)])),
+            ..settled_found.clone()
+        };
+
+        assert_eq!(
+            [
+                &Observed::default(),
+                &ledger_found,
+                &freed_found,
+                &size_found,
+                &settled_found,
+                &claims_found,
+            ]
+            .map(|observed| next(observed, now, &POLICY)),
+            [
+                Next::ListLedgers,
+                Next::ListFreed,
+                Next::ListPacks,
+                Next::SettleFreed,
+                Next::ListClaims(directory.clone()),
+                Next::Claim(ClaimName {
+                    directory,
+                    number: 4,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_due_check_stops_as_soon_as_no_prune_can_be_due_and_reads_no_more() {
+        let now = at(10_000_000);
+        let passed = Some(10_000_000 - HOLD_MILLIS);
+        let observed = |ledger, freed, size, settled, claims| Observed {
+            ledger: Some(ledger),
+            freed: Some(named(freed)),
+            size,
+            settled,
+            claims,
+        };
+        let decide = |observed: Observed| next(&observed, now, &POLICY);
+
+        assert_eq!(
+            [
+                // Within the hold, nothing more is read.
+                decide(Observed {
+                    ledger: Some(ledger(Some(10_000_000 - HOLD_MILLIS + 1), true)),
+                    ..Observed::default()
+                }),
+                // Nothing freed and nothing marked.
+                decide(observed(ledger(passed, false), 0, None, None, None)),
+                // Marked packs need no size, so the records come next.
+                decide(observed(ledger(passed, true), 0, None, None, None)),
+                // The named bytes are below the threshold, so no record is read.
+                decide(observed(ledger(passed, false), 99, Some(1000), None, None)),
+                // The settled bytes are below the threshold.
+                decide(observed(
+                    ledger(passed, false),
+                    200,
+                    Some(1000),
+                    Some(settled(99)),
+                    None
+                )),
+                // A young marker of another delete holds the claims.
+                decide(observed(
+                    ledger(passed, false),
+                    200,
+                    Some(1000),
+                    Some(settled(100)),
+                    Some(Box::new([ClaimEntry::Marker(0, at(10_000_000 - 1))])),
+                )),
+            ],
+            [
+                Next::Stop,
+                Next::Stop,
+                Next::SettleFreed,
+                Next::Stop,
+                Next::Stop,
+                Next::Stop,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_due_check_that_observed_everything_gives_a_claim_or_stops() {
+        // The loop of the due check makes at most one pass for each kind of listing, so `next`
+        // must not ask for a listing again once each one ran.
+        let now = at(10_000_000);
+        let ledgers = [
+            ledger(None, false),
+            ledger(None, true),
+            ledger(Some(10_000_000), false),
+            ledger(Some(10_000_000 - HOLD_MILLIS), true),
+        ];
+        let claims: [Box<[ClaimEntry]>; 2] = [
+            Box::new([]),
+            Box::new([ClaimEntry::Marker(0, at(10_000_000))]),
+        ];
+        let terminal = ledgers.iter().all(|ledger| {
+            [0, 99, 100, 5000].iter().all(|bytes| {
+                claims.iter().all(|claims| {
+                    let observed = Observed {
+                        ledger: Some(*ledger),
+                        freed: Some(named(*bytes)),
+                        size: Some(1000),
+                        settled: Some(settled(*bytes)),
+                        claims: Some(claims.clone()),
+                    };
+                    matches!(next(&observed, now, &POLICY), Next::Stop | Next::Claim(_))
+                })
+            })
+        });
+
+        assert!(terminal);
     }
 
     #[test]
