@@ -5521,13 +5521,13 @@
    }
   },
   "gram control xtrace pipeline": {
-   "script": "a4597187e2b3b941",
+   "script": "ea6f45732ac1a77c",
    "status": 0,
    "stderr": {
     "text": ""
    },
    "stdout": {
-    "text": "p\n+ cat\n+ echo p\n"
+    "text": "p\n+ cat\n"
    }
   },
   "gram control xtrace quoted arguments": {

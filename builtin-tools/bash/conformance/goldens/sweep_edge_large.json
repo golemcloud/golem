@@ -1801,13 +1801,13 @@
    }
   },
   "edge large: recursion with locals": {
-   "script": "e4049fe66a2cfbc9",
+   "script": "05acf23a50dc4a1c",
    "status": 0,
    "stderr": {
     "text": ""
    },
    "stdout": {
-    "text": "60\n"
+    "text": "bounded\n"
    }
   },
   "edge large: rev long lines": {

@@ -444,7 +444,9 @@ for label, script in [
     ("function call", "f() { echo in; }; set -x; f arg"),
     ("subshell depth", "set -x; ( echo sub; ( echo deeper ) )"),
     ("command substitution", "set -x; x=$(echo inner)"),
-    ("pipeline", "(set -x; echo p | cat) 2>/tmp/trace; sort /tmp/trace"),  # the stages trace in either order
+    # Only one stage traces: two stages write their trace lines at the same time, and bash can
+    # interleave them within a line.
+    ("pipeline", "echo p | (set -x; cat) 2>/tmp/trace; cat /tmp/trace"),
     ("redirection is not shown", "set -x; echo r > /tmp/x; cat < /tmp/x"),
     ("here-document", "set -x; cat <<EOF\nhd\nEOF"),
     ("custom PS4", "PS4='>> '; set -x; echo ps4"),
