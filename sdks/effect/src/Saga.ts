@@ -483,55 +483,54 @@ export const fallibleTransaction = <A, E, R>(
     const { value: contextValue, readError } = yield* makeSagaContextValue("fallible")
     const causeStore: CauseStoreValue = { cause: null }
 
-    return yield* Effect.scopedWith((scope) =>
-      Effect.gen(function* () {
-        const exit = yield* Effect.exit(
-          (body as Effect.Effect<A, E, R | Scope.Scope>).pipe(
-            Effect.provideService(InsideSagaRef, contextValue),
-            Effect.provideService(CauseStoreRef, causeStore),
-            Scope.provide(scope),
-          ),
+    const scope = yield* Scope.make()
+    return yield* Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        (body as Effect.Effect<A, E, R | Scope.Scope>).pipe(
+          Effect.provideService(InsideSagaRef, contextValue),
+          Effect.provideService(CauseStoreRef, causeStore),
+          Scope.provide(scope),
+        ),
+      )
+      if (exit._tag === "Success") return exit.value
+
+      if (!shouldCompensateCause(exit.cause)) {
+        // Defect path — call the host's uncatchable trap so user code
+        // outside the saga cannot observe the unexpected throw and
+        // continue with a half-rolled-back state. Mirrors the
+        // `catch (e) { trap(...); throw e }` pattern in
+        // `golem-ts-sdk` `host/transaction.ts`.
+        const host = yield* AgentHostClient
+        yield* Effect.sync(() =>
+          host.trap(`fallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
         )
-        if (exit._tag === "Success") return exit.value
+        return yield* Effect.failCause(exit.cause)
+      }
 
-        if (!shouldCompensateCause(exit.cause)) {
-          // Defect path — call the host's uncatchable trap so user code
-          // outside the saga cannot observe the unexpected throw and
-          // continue with a half-rolled-back state. Mirrors the
-          // `catch (e) { trap(...); throw e }` pattern in
-          // `golem-ts-sdk` `host/transaction.ts`.
-          const host = yield* AgentHostClient
-          yield* Effect.sync(() =>
-            host.trap(`fallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
-          )
-          return yield* Effect.failCause(exit.cause)
-        }
+      // Make the cause visible to the registered compensations,
+      // then close the scope to drain them in LIFO order.
+      causeStore.cause = exit.cause as Cause.Cause<unknown>
+      yield* Scope.close(scope, exit).pipe(Effect.orDie)
 
-        // Make the cause visible to the registered compensations,
-        // then close the scope to drain them in LIFO order.
-        causeStore.cause = exit.cause as Cause.Cause<unknown>
-        yield* Scope.close(scope, exit).pipe(Effect.orDie)
-
-        const failures = exit.cause.reasons.filter(Cause.isFailReason) as Array<Cause.Fail<E>>
-        if (failures.length === 0) {
-          // Interrupt-only cause — propagate interruption unchanged.
-          return yield* Effect.failCause(exit.cause)
-        }
-        const error = failures[0]!.error
-        const compensationError = yield* readError
-        if (compensationError !== undefined) {
-          return yield* Effect.fail({
-            _tag: "FailedAndRolledBackPartially",
-            error,
-            compensationError,
-          } as const satisfies TransactionFailure<E>)
-        }
+      const failures = exit.cause.reasons.filter(Cause.isFailReason) as Array<Cause.Fail<E>>
+      if (failures.length === 0) {
+        // Interrupt-only cause — propagate interruption unchanged.
+        return yield* Effect.failCause(exit.cause)
+      }
+      const error = failures[0]!.error
+      const compensationError = yield* readError
+      if (compensationError !== undefined) {
         return yield* Effect.fail({
-          _tag: "FailedAndRolledBackCompletely",
+          _tag: "FailedAndRolledBackPartially",
           error,
+          compensationError,
         } as const satisfies TransactionFailure<E>)
-      }),
-    )
+      }
+      return yield* Effect.fail({
+        _tag: "FailedAndRolledBackCompletely",
+        error,
+      } as const satisfies TransactionFailure<E>)
+    }).pipe(Effect.onExit((exit) => Scope.close(scope, exit)))
   }) as Effect.Effect<
     A,
     TransactionFailure<E> | DurabilityHostError | OplogHostError | NestedSagaError,
@@ -589,32 +588,31 @@ export const infallibleTransaction = <A, R>(
     const { value: contextValue } = yield* makeSagaContextValue("infallible")
     const causeStore: CauseStoreValue = { cause: null }
 
-    return yield* Effect.scopedWith((scope) =>
-      Effect.gen(function* () {
-        const exit = yield* Effect.exit(
-          (body as Effect.Effect<A, never, R | Scope.Scope>).pipe(
-            Effect.provideService(InsideSagaRef, contextValue),
-            Effect.provideService(CauseStoreRef, causeStore),
-            Scope.provide(scope),
-          ),
+    const scope = yield* Scope.make()
+    return yield* Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        (body as Effect.Effect<A, never, R | Scope.Scope>).pipe(
+          Effect.provideService(InsideSagaRef, contextValue),
+          Effect.provideService(CauseStoreRef, causeStore),
+          Scope.provide(scope),
+        ),
+      )
+      if (exit._tag === "Success") return exit.value
+
+      if (!shouldCompensateCause(exit.cause)) {
+        // Defect path — same trap protocol as `fallibleTransaction`.
+        const host = yield* AgentHostClient
+        yield* Effect.sync(() =>
+          host.trap(`infallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
         )
-        if (exit._tag === "Success") return exit.value
+        return yield* Effect.failCause(exit.cause)
+      }
 
-        if (!shouldCompensateCause(exit.cause)) {
-          // Defect path — same trap protocol as `fallibleTransaction`.
-          const host = yield* AgentHostClient
-          yield* Effect.sync(() =>
-            host.trap(`infallibleTransaction failed: ${formatCauseForTrap(exit.cause)}`),
-          )
-          return yield* Effect.failCause(exit.cause)
-        }
+      causeStore.cause = exit.cause
+      yield* Scope.close(scope, exit).pipe(Effect.orDie)
 
-        causeStore.cause = exit.cause
-        yield* Scope.close(scope, exit).pipe(Effect.orDie)
-
-        return yield* rewindAndSuspend(checkpoint)
-      }),
-    )
+      return yield* rewindAndSuspend(checkpoint)
+    }).pipe(Effect.onExit((exit) => Scope.close(scope, exit)))
   }) as Effect.Effect<
     A,
     DurabilityHostError | OplogHostError | NestedSagaError,

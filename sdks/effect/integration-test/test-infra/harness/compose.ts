@@ -11,7 +11,7 @@
  * reports `healthy`.
  */
 import { Cause, Console, Data, Duration, Effect, Layer, Schedule, Stream } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as path from "node:path"
 import * as url from "node:url"
 
