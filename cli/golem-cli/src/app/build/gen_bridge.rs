@@ -1521,9 +1521,11 @@ mod tests {
     #[test]
     fn configured_internal_target_is_applied_to_the_consumed_dependency_bridge() {
         for custom_output in [false, true] {
-            let output_dir = custom_output
-                .then_some("      outputDir: generated/internal\n")
-                .unwrap_or_default();
+            let output_dir = if custom_output {
+                "      outputDir: generated/internal\n"
+            } else {
+                ""
+            };
             let (application, _dir) = application_from_manifest(&format!(
                 r#"
 app: configured-internal

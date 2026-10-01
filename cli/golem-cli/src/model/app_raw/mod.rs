@@ -703,7 +703,7 @@ impl ToolMiddlewareInstallation {
                 account: value.account.map(AccountEmail::new),
                 secret_keys_readable: value
                     .secret_keys_readable
-                    .map(&into_secret_key_scope)
+                    .map(into_secret_key_scope)
                     .transpose()?,
                 secret_keys_revealable: value
                     .secret_keys_revealable
