@@ -5616,7 +5616,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let growth = self.memory_growth.lock().unwrap();
         growth
             .delta
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
                 Some(pending.saturating_add(delta))
             })
             .ok();
