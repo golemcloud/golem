@@ -24,7 +24,7 @@
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
 use golem_common::model::{
-    AgentStatusRecord, PendingUpdateKind, SnapshotFiles, UsableAutomaticSnapshot,
+    AgentStatusRecord, AutomaticSnapshot, PendingUpdateKind, SnapshotFiles, UsableAutomaticSnapshot,
 };
 use std::collections::{BTreeSet, HashSet};
 
@@ -173,32 +173,27 @@ fn select_automatic_snapshot(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> Option<UsableAutomaticSnapshot> {
-    let last = status.last_automatic_snapshot.as_ref().filter(|last| {
-        !matches!(last.files, SnapshotFiles::Unconfirmed(_))
-            && passes(
-                status,
-                filter,
-                last.index,
-                last.component_revision,
-                last.files.name().is_some(),
-            )
-    });
-    match last {
-        Some(last) => last.usable(),
-        None => status
-            .previous_usable_automatic_snapshot
-            .as_ref()
-            .filter(|previous| {
-                passes(
-                    status,
-                    filter,
-                    previous.index,
-                    previous.component_revision,
-                    previous.filesystem_snapshot.is_some(),
-                )
-            })
-            .cloned(),
-    }
+    let usable_passes = |usable: &UsableAutomaticSnapshot| {
+        passes(
+            status,
+            filter,
+            usable.index,
+            usable.component_revision,
+            usable.filesystem_snapshot.is_some(),
+        )
+    };
+    status
+        .last_automatic_snapshot
+        .clone()
+        .and_then(AutomaticSnapshot::into_usable)
+        .filter(usable_passes)
+        .or_else(|| {
+            status
+                .previous_usable_automatic_snapshot
+                .as_ref()
+                .filter(|previous| usable_passes(previous))
+                .cloned()
+        })
 }
 
 /// Gives the filesystem snapshot name of the last automatic snapshot record when the record is
@@ -308,7 +303,6 @@ fn component_revision_for_replay(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::AutomaticSnapshot;
     use golem_common::model::PendingUpdateRef;
     use golem_common::model::Timestamp;
     use golem_common::model::oplog::FilesystemSnapshotName;

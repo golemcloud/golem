@@ -2218,7 +2218,7 @@ async fn snapshot_confirmed_with_same_name_sets_flag() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     run_test_case(test_case).await;
 }
@@ -2257,7 +2257,7 @@ async fn snapshot_confirmed_after_successful_update_is_ignored() {
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     run_test_case(test_case).await;
 }
@@ -2294,7 +2294,7 @@ async fn snapshot_confirmed_after_reverted_snapshot_is_ignored() {
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     run_test_case(test_case).await;
 }
@@ -2330,7 +2330,7 @@ async fn snapshot_confirmed_matches_only_the_newest_snapshot() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     run_test_case(test_case).await;
 }
@@ -2365,7 +2365,7 @@ async fn snapshot_after_confirmed_snapshot_starts_an_unconfirmed_candidate() {
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     run_test_case(test_case).await;
 }
@@ -2400,7 +2400,7 @@ async fn snapshot_confirmed_for_unknown_name_is_ignored() {
         !final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     run_test_case(test_case).await;
 }
@@ -2503,7 +2503,7 @@ async fn a_record_that_reuses_a_confirmed_name_is_confirmed_and_moves_the_record
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     assert_eq!(
         final_status
@@ -2606,7 +2606,7 @@ async fn a_revert_of_the_newer_records_restores_the_previous_usable_snapshot() {
         final_status
             .last_automatic_snapshot
             .as_ref()
-            .is_some_and(|last| last.files.is_confirmed())
+            .is_some_and(|last| matches!(last.files, SnapshotFiles::Confirmed(_)))
     );
     assert_eq!(final_status.previous_usable_automatic_snapshot, None);
     run_test_case(test_case).await;
@@ -3059,7 +3059,7 @@ impl TestCaseBuilder {
             },
             move |mut status| {
                 if let Some(last) = &status.last_automatic_snapshot
-                    && (last.files.is_confirmed() || last.files.name().is_none())
+                    && !matches!(last.files, SnapshotFiles::Unconfirmed(_))
                 {
                     status.previous_usable_automatic_snapshot = Some(UsableAutomaticSnapshot {
                         index: last.index,
@@ -5399,4 +5399,139 @@ fn card_revoked_entry_is_recorded_even_in_deleted_region() {
             .is_in_deleted_region(OplogIndex::from_u64(2))
     );
     assert!(status.revoked_cards.contains(&card_id));
+}
+
+fn update_fields_snapshot(filesystem_snapshot: Option<FilesystemSnapshotName>) -> OplogEntry {
+    OplogEntry::Snapshot {
+        timestamp: Timestamp::from(1_000),
+        data: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards: Vec::new(),
+        wallet_generation: 0,
+        filesystem_snapshot,
+    }
+}
+
+fn empty_update_fields() -> super::UpdateFields {
+    super::UpdateFields {
+        pending_updates: std::collections::VecDeque::new(),
+        failed_updates: Vec::new(),
+        successful_updates: Vec::new(),
+        component_revision: ComponentRevision::new(3).unwrap(),
+        component_size: 10,
+        component_revision_for_replay: ComponentRevision::new(1).unwrap(),
+        last_manual_update_snapshot_index: None,
+        last_automatic_snapshot: None,
+        previous_usable_automatic_snapshot: None,
+    }
+}
+
+#[test]
+fn update_fields_after_snapshot_entries_keep_one_candidate_and_its_usable_predecessor() {
+    let first = FilesystemSnapshotName::periodic();
+    let second = FilesystemSnapshotName::periodic();
+
+    let fields = empty_update_fields()
+        .after(
+            OplogIndex::from_u64(2),
+            &update_fields_snapshot(Some(first.clone())),
+        )
+        .after(
+            OplogIndex::from_u64(3),
+            &OplogEntry::snapshot_confirmed(first.clone()),
+        )
+        .after(
+            OplogIndex::from_u64(4),
+            &update_fields_snapshot(Some(second.clone())),
+        )
+        .after(
+            OplogIndex::from_u64(5),
+            &OplogEntry::snapshot_confirmed(first.clone()),
+        );
+
+    assert_eq!(
+        fields.last_automatic_snapshot,
+        Some(AutomaticSnapshot {
+            index: OplogIndex::from_u64(4),
+            timestamp: Timestamp::from(1_000),
+            component_revision: ComponentRevision::new(3).unwrap(),
+            files: SnapshotFiles::Unconfirmed(second),
+        })
+    );
+    assert_eq!(
+        fields.previous_usable_automatic_snapshot,
+        Some(UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(2),
+            component_revision: ComponentRevision::new(3).unwrap(),
+            filesystem_snapshot: Some(first),
+        })
+    );
+}
+
+#[test]
+fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_snapshots() {
+    let target = ComponentRevision::new(4).unwrap();
+    let fields = empty_update_fields()
+        .after(OplogIndex::from_u64(2), &update_fields_snapshot(None))
+        .after(OplogIndex::from_u64(3), &update_fields_snapshot(None))
+        .after(
+            OplogIndex::from_u64(4),
+            &OplogEntry::PendingUpdate {
+                timestamp: Timestamp::from(2_000),
+                description: UpdateDescription::SnapshotBased {
+                    target_revision: target,
+                    payload: OplogPayload::Inline(Box::new(vec![])),
+                    mime_type: "application/octet-stream".to_string(),
+                    filesystem_snapshot: None,
+                },
+            },
+        )
+        .after(
+            OplogIndex::from_u64(5),
+            &OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::from(3_000),
+                target_revision: target,
+                new_component_size: 20,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+            },
+        );
+
+    assert_eq!(fields.last_automatic_snapshot, None);
+    assert_eq!(fields.previous_usable_automatic_snapshot, None);
+    assert!(fields.pending_updates.is_empty());
+    assert_eq!(fields.component_revision, target);
+    assert_eq!(fields.component_size, 20);
+    assert_eq!(fields.component_revision_for_replay, target);
+    assert_eq!(
+        fields.last_manual_update_snapshot_index,
+        Some(OplogIndex::from_u64(4))
+    );
+    assert_eq!(fields.successful_updates.len(), 1);
+}
+
+#[test]
+fn update_fields_skip_the_entries_in_a_deleted_region() {
+    let name = FilesystemSnapshotName::periodic();
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::from_u64(2),
+            update_fields_snapshot(Some(name.clone())),
+        ),
+        (
+            OplogIndex::from_u64(3),
+            OplogEntry::snapshot_confirmed(name.clone()),
+        ),
+    ]);
+    let deleted = DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+        OplogIndex::from_u64(3)..=OplogIndex::from_u64(3),
+    )])
+    .build();
+
+    let fields = super::calculate_update_fields(empty_update_fields(), &deleted, &entries);
+
+    assert_eq!(
+        fields.last_automatic_snapshot.map(|last| last.files),
+        Some(SnapshotFiles::Unconfirmed(name))
+    );
 }
