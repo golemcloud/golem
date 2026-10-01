@@ -220,7 +220,7 @@ export {
   getToolType as getReflectedToolType,
 } from './reflection';
 export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
-export type { StartedToolInvocation } from './bridge/tool';
+export type { CollectedToolInvocation, StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
 let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;

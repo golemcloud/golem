@@ -124,7 +124,16 @@ message RawUpdateDescription {
   oneof description {
     uint64 automatic_target_revision = 1;
     RawSnapshotBasedUpdate snapshot_based = 2;
+    RawSnapshotAssistedAutomaticUpdate snapshot_assisted_automatic = 3;
   }
+}
+
+message RawSnapshotAssistedAutomaticUpdate {
+  uint64 target_revision = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
+  uint64 snapshot_revision = 5;
 }
 
 message RawSnapshotBasedUpdate {
@@ -291,6 +300,7 @@ message RawPendingAgentInvocationParameters {
 
 message RawPendingUpdateParameters {
   RawUpdateDescription description = 1;
+  optional uint64 update_attempt_index = 2;
 }
 
 message RawSuccessfulUpdateParameters {
@@ -298,11 +308,29 @@ message RawSuccessfulUpdateParameters {
   uint64 new_component_size = 2;
   repeated golem.component.EnvironmentPluginGrantId new_active_plugins = 3;
   optional uint64 new_total_linear_memory_size = 4;
+  optional RawSnapshotAssistedUpdateDetails snapshot_assisted_details = 5;
+}
+
+message RawSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
 }
 
 message RawFailedUpdateParameters {
   uint64 target_revision = 1;
   optional string details = 2;
+  optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
+  optional uint64 update_attempt_index = 4;
+}
+
+message RawFailedSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  optional uint64 snapshot_index = 4;
+  optional string ineligibility_reason = 5;
 }
 
 message RawGrowMemoryParameters {

@@ -695,6 +695,13 @@ pub trait TestDsl {
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
 
+    async fn snapshot_assisted_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()>;
+
     async fn manual_update_worker(
         &self,
         agent_id: &AgentId,
@@ -1306,6 +1313,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         ),
         WorkerExecutorError::Runtime { details } => {
             format!("Runtime error: {}", details)
+        }
+        WorkerExecutorError::RecoveryRequired { details, .. } => {
+            format!("Runtime reconstruction required: {}", details)
         }
         WorkerExecutorError::InvalidShardId {
             shard_id,

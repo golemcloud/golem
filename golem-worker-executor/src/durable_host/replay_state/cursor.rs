@@ -3658,12 +3658,20 @@ impl ReplayState {
                         let invocation_payload = self
                             .cursor
                             .oplog
-                            .download_payload(payload)
+                            .download_payload_classified(payload)
                             .await
-                            .map_err(|err| {
-                                WorkerExecutorError::runtime(format!(
-                                    "failed to deserialize agent invocation payload: {err}"
-                                ))
+                            .map_err(|error| match error {
+                                crate::services::oplog::OplogPayloadDownloadError::Backend(
+                                    error,
+                                ) => WorkerExecutorError::recovery_required(format!(
+                                    "failed to download agent invocation payload: {error:#}"
+                                )),
+                                crate::services::oplog::OplogPayloadDownloadError::Corrupt(
+                                    error,
+                                ) => WorkerExecutorError::unexpected_oplog_entry(
+                                    "valid agent invocation payload",
+                                    format!("{error:#}"),
+                                ),
                             })?;
 
                         let invocation_context =

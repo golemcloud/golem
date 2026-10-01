@@ -191,6 +191,7 @@ fn encode(
         (SchemaType::Url { .. }, SchemaValue::Url { url }) => {
             canonical::url::to_json(url).map_err(RenderError::from)
         }
+        (SchemaType::Uuid { .. }, SchemaValue::Uuid(value)) => Ok(canonical::uuid::to_json(value)),
         (SchemaType::Datetime { .. }, SchemaValue::Datetime { value }) => {
             canonical::datetime::to_json(value).map_err(RenderError::from)
         }
@@ -622,6 +623,10 @@ fn from_json_body(
         SchemaType::Url { .. } => {
             let s = canonical::url::from_json(json)?;
             Ok(SchemaValue::Url { url: s })
+        }
+        SchemaType::Uuid { .. } => {
+            let value = canonical::uuid::from_json(json)?;
+            Ok(SchemaValue::Uuid(value))
         }
         SchemaType::Datetime { .. } => {
             let dt = canonical::datetime::from_json(json)?;
@@ -1202,6 +1207,7 @@ fn type_name(ty: &SchemaType) -> &'static str {
         SchemaType::Binary { .. } => "binary",
         SchemaType::Path { .. } => "path",
         SchemaType::Url { .. } => "url",
+        SchemaType::Uuid { .. } => "uuid",
         SchemaType::Datetime { .. } => "datetime",
         SchemaType::Duration { .. } => "duration",
         SchemaType::Quantity { .. } => "quantity",
@@ -1243,6 +1249,7 @@ fn value_name(value: &SchemaValue) -> &'static str {
         SchemaValue::Binary(_) => "binary",
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
+        SchemaValue::Uuid(_) => "uuid",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",

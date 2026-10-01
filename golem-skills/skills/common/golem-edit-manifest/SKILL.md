@@ -481,7 +481,7 @@ bridge:
         - my-app:billing             # Component name (all agents in that component)
       outputDir: ./bridge-sdk/rust
       additionalDerives:
-        - '^Order.*=serde::Serialize,serde::Deserialize'
+        - '^Order.*=PartialEq,Eq'
         - 'Response$=custom_derive::ApiType'
       additionalDependencies:
         anyhow: "1"
@@ -501,7 +501,7 @@ The low-level equivalent uses repeatable options and parses each dependency as C
 
 ```shell
 golem generate-bridge --language rust \
-  --derive-rule '^Order.*=serde::Serialize,serde::Deserialize' \
+  --derive-rule '^Order.*=PartialEq,Eq' \
   --rust-dependency 'custom_derive = { package = "custom-derive-macros", path = "./crates/custom-derive", features = ["api"], default-features = false }'
 ```
 

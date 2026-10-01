@@ -149,6 +149,7 @@ impl SchemaGraph {
                 | SchemaType::Binary { .. }
                 | SchemaType::Path { .. }
                 | SchemaType::Url { .. }
+                | SchemaType::Uuid { .. }
                 | SchemaType::Datetime { .. }
                 | SchemaType::Duration { .. }
                 | SchemaType::Quantity { .. }
@@ -442,6 +443,7 @@ fn collect_refs<'a>(ty: &'a SchemaType, out: &mut Vec<&'a TypeId>) {
         | SchemaType::Binary { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
+        | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. }
         | SchemaType::Quantity { .. }

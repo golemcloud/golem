@@ -148,6 +148,7 @@ fn discriminant_name(typ: &SchemaType) -> &'static str {
         SchemaType::Binary { .. } => "Binary",
         SchemaType::Path { .. } => "Path",
         SchemaType::Url { .. } => "Url",
+        SchemaType::Uuid { .. } => "Uuid",
         SchemaType::Datetime { .. } => "Datetime",
         SchemaType::Duration { .. } => "Duration",
         SchemaType::Quantity { .. } => "Quantity",

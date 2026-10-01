@@ -18,6 +18,7 @@ fn schema_kind_name(body : @model.SchemaTypeBody) -> String {
     Text(_) => "text"
     Path(_) => "path"
     Url(_) => "url"
+    Uuid => "uuid"
     Record(_) => "record"
     Variant(_) => "variant"
     Enum(_) => "enum"

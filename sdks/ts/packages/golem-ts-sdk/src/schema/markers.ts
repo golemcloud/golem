@@ -76,6 +76,7 @@ import { StandardSchemaV1 } from './standardSchema';
 import { Result } from '../host/result';
 import { Principal, sdkPrincipalToHost, sdkPrincipalFromHost } from '../principal';
 import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from './agentStream';
+import { Uuid } from '../uuid';
 import type {
   Principal as HostPrincipal,
   OidcPrincipal as HostOidcPrincipal,
@@ -330,6 +331,23 @@ function charMarker(): MarkerSchema<string> {
     graph: { defs: new Map(), root: t.char() },
     toValue: (value) => v.char(value as string),
     fromValue: (sv) => (sv as { tag: 'char'; value: string }).value,
+  });
+  return marker(validate, descriptor);
+}
+
+function uuidMarker(): MarkerSchema<Uuid> {
+  const validate: Validator<Uuid> = (value) =>
+    value instanceof Uuid &&
+    value.highBits >= 0n &&
+    value.highBits < 1n << 64n &&
+    value.lowBits >= 0n &&
+    value.lowBits < 1n << 64n
+      ? ok(value)
+      : fail('Expected a Uuid with unsigned 64-bit halves');
+  const descriptor: MarkerDescriptor = () => ({
+    graph: { defs: new Map(), root: t.uuid() },
+    toValue: (value) => v.uuid(value as Uuid),
+    fromValue: (sv) => (sv as { tag: 'uuid'; value: Uuid }).value,
   });
   return marker(validate, descriptor);
 }
@@ -1043,8 +1061,7 @@ function resultMarker<Ok, Err>(
 const PRINCIPAL_TAGS = ['oidc', 'agent', 'golem-user', 'anonymous'];
 
 // --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType =>
-  t.record([field('highBits', t.u64()), field('lowBits', t.u64())]);
+const uuidType = (): SchemaType => t.uuid();
 const componentIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
 const agentIdType = (): SchemaType =>
   t.record([field('componentId', componentIdType()), field('agentId', t.string())]);
@@ -1068,7 +1085,6 @@ const golemUserType = (): SchemaType => t.record([field('accountId', accountIdTy
 // --- SchemaValue field accessors (positional record reads) ---
 const recFields = (sv: SchemaValue): SchemaValue[] =>
   (sv as { tag: 'record'; fields: SchemaValue[] }).fields;
-const u64Of = (f: SchemaValue): bigint => (f as { tag: 'u64'; value: bigint }).value;
 const strOf = (f: SchemaValue): string => (f as { tag: 'string'; value: string }).value;
 const boolOf = (f: SchemaValue): boolean => (f as { tag: 'bool'; value: boolean }).value;
 const optOf = (f: SchemaValue): SchemaValue | undefined =>
@@ -1078,11 +1094,11 @@ const optOf = (f: SchemaValue): SchemaValue | undefined =>
 type HostUuid = { highBits: bigint; lowBits: bigint };
 
 function uuidToValue(u: HostUuid): SchemaValue {
-  return v.record([v.u64(u.highBits), v.u64(u.lowBits)]);
+  return v.uuid(Uuid.from(u));
 }
 function uuidFromValue(sv: SchemaValue): HostUuid {
-  const f = recFields(sv);
-  return { highBits: u64Of(f[0]), lowBits: u64Of(f[1]) };
+  const uuid = (sv as { tag: 'uuid'; value: Uuid }).value;
+  return { highBits: uuid.highBits, lowBits: uuid.lowBits };
 }
 
 function agentIdToValue(a: HostAgentId): SchemaValue {
@@ -1239,6 +1255,7 @@ export const s = {
 
   // Scalars Standard Schema can't pin.
   char: () => charMarker(),
+  uuid: () => uuidMarker(),
   datetime: () => datetimeMarker(),
   duration: () => durationMarker(),
   url: () => urlMarker(),

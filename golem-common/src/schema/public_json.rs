@@ -1095,6 +1095,7 @@ fn inspect_schema_value(
         | SchemaValue::U64(_)
         | SchemaValue::Char(_)
         | SchemaValue::String(_)
+        | SchemaValue::Uuid(_)
         | SchemaValue::Secret(_)
         | SchemaValue::QuotaToken(_)
         | SchemaValue::PermissionCard(_) => {
@@ -1184,6 +1185,7 @@ fn external_value_charge(
         SchemaValue::S64(_) | SchemaValue::U64(_) | SchemaValue::F64(_) => 8,
         SchemaValue::Char(value) => value.len_utf8() as u64,
         SchemaValue::String(value) => value.len() as u64,
+        SchemaValue::Uuid(_) => 36,
         SchemaValue::Record { fields } => collection(fields.len())? + sum(fields)?,
         SchemaValue::Variant(value) => {
             4 + value
@@ -1462,6 +1464,10 @@ fn scalar_payload_charge(value: &SchemaValue, json: &Value) -> Result<u64, Publi
                 .unwrap_or_default()),
         SchemaValue::Path { path } => Ok(path.len() as u64),
         SchemaValue::Url { url } => Ok(url.len() as u64),
+        SchemaValue::Uuid(_) => json
+            .as_str()
+            .map(|value| value.len() as u64)
+            .ok_or_else(|| PublicSchemaValueError::validation("uuid must be a string")),
         SchemaValue::Datetime { .. } => json
             .as_str()
             .map(|value| value.len() as u64)

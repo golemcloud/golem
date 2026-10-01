@@ -2141,6 +2141,13 @@ pub mod api {
             Custom,
         }
 
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+        #[clap(rename_all = "kebab-case")]
+        pub enum LoginModeArg {
+            Cookie,
+            AuthorizationCodePkce,
+        }
+
         impl From<ProviderKindArg> for ProviderKind {
             fn from(value: ProviderKindArg) -> Self {
                 match value {
@@ -2189,6 +2196,15 @@ pub mod api {
                 /// given values instead of failing
                 #[arg(long)]
                 update_existing: bool,
+                /// Login mode used by protected HTTP APIs
+                #[arg(long, value_enum, default_value = "cookie")]
+                login_mode: LoginModeArg,
+                /// Exact allowed frontend redirect URI (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Get HTTP API Security Scheme
@@ -2228,6 +2244,15 @@ pub mod api {
                 /// Security Scheme redirect URL
                 #[arg(long)]
                 redirect_url: Option<String>,
+                /// Replace the complete login-mode configuration
+                #[arg(long, value_enum)]
+                login_mode: Option<LoginModeArg>,
+                /// Exact allowed frontend redirect URI (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Delete HTTP API Security Scheme

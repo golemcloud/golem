@@ -980,7 +980,12 @@ pub async fn serve_public_invocation_session(
             return;
         }
     };
-    if initial_state.initialize(&started).is_err() {
+    if let Err(error) = initial_state.initialize(&started) {
+        tracing::warn!(
+            attempt_id = %attempt_id,
+            error = ?error,
+            "Invocation session adapter initialization failed"
+        );
         let message = safe_rejection_message(PublicErrorCode::InternalError);
         send_rejection(
             &outbound,
@@ -1862,6 +1867,14 @@ async fn translate_private_response(
         }
         invocation_response::Response::Rejected(rejected) => {
             let code = rejection_code(&rejected);
+            tracing::warn!(
+                attempt_id = %attempt_id,
+                reason = rejected.reason,
+                public_code = ?code,
+                error = %rejected.error,
+                worker_error = ?rejected.worker_error,
+                "Private invocation session response was rejected"
+            );
             Ok(vec![frame(text_message(
                 &PublicServerMessage::InvocationRejected {
                     attempt_id: Some(attempt_id),

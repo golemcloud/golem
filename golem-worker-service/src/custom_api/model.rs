@@ -82,6 +82,8 @@ pub enum RichRouteBehaviour {
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
     OidcCallback(OidcCallbackBehaviour),
+    OidcPkceAuthorize(OidcPkceBehaviour),
+    OidcPkceToken(OidcPkceBehaviour),
     HttpRouter(HttpRouterBehaviour),
     AgentFilesystem(AgentFilesystemBehaviour),
 }
@@ -101,6 +103,11 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
 
 #[derive(Debug)]
 pub struct OidcCallbackBehaviour {
+    pub security_scheme: Arc<SecuritySchemeDetails>,
+}
+
+#[derive(Debug)]
+pub struct OidcPkceBehaviour {
     pub security_scheme: Arc<SecuritySchemeDetails>,
 }
 

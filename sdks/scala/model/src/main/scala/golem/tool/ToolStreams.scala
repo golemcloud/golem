@@ -16,7 +16,11 @@
 
 package golem.tool
 
+import zio.blocks.async.*
+import zio.blocks.streams.Stream
+
 import scala.concurrent.{ExecutionContext, Future}
+import scala.util.Success
 
 /**
  * Opaque handle to the byte stream supplied as a tool invocation's stdin. A
@@ -26,12 +30,13 @@ import scala.concurrent.{ExecutionContext, Future}
  */
 trait ToolInputStream {
 
-  /** Reads the next chunk. `Right(None)` is clean EOF. */
-  def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-    Future.failed(new UnsupportedOperationException("tool input stream is not readable"))
+  /**
+   * The invocation-scoped byte stream. It must be materialized at most once.
+   */
+  def stream: Stream[ByteStreamFailure, Byte]
 
   /** Stops further consumption and releases any blocked read. */
-  def cancel(): Future[Unit]               = close()
+  def cancel(): Future[Unit]
   private[golem] def close(): Future[Unit] = Future.successful(())
 }
 
@@ -110,36 +115,21 @@ final case class ToolInvocation[+E, +A](
 ) {
 
   /** Drains both outputs concurrently with the structured result. */
-  def collect()(implicit ec: ExecutionContext): Future[Either[ToolError[E], CollectedToolInvocation[A]]] = {
-    def drain(stream: ToolInputStream, chunks: Vector[Array[Byte]]): Future[Array[Byte]] =
-      stream.read().flatMap {
-        case Right(Some(chunk)) => drain(stream, chunks :+ chunk)
-        case Right(None)        => Future.successful(chunks.flatten.toArray)
-        case Left(failure)      => Future.failed(new ToolStreamException(failure))
-      }
-    def collectOutput(stream: Option[ToolInputStream]): Future[Either[Throwable, Option[Array[Byte]]]] =
+  def collect()(implicit ec: ExecutionContext): Future[CollectedToolInvocation[E, A]] = {
+    def collectOutput(stream: Option[ToolInputStream]): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
       stream
-        .fold(Future.successful(Option.empty[Array[Byte]]))(value => drain(value, Vector.empty).map(Some(_)))
-        .map(Right(_): Either[Throwable, Option[Array[Byte]]])
-        .recover { case t => Left(t) }
+        .fold(Future.successful(Right(Option.empty[Array[Byte]]): Either[ByteStreamFailure, Option[Array[Byte]]]))(
+          value => value.stream.runCollectAsync.toFuture.map(_.map(bytes => Some(bytes.toArray)))
+        )
 
-    val terminal = result.map(Right(_): Either[Throwable, Either[ToolError[E], A]]).recover { case t => Left(t) }
-    terminal.zip(collectOutput(stdout)).zip(collectOutput(stderr)).flatMap {
-      case ((Right(Left(error)), _), _)                          => Future.successful(Left(error))
-      case ((Left(error), _), _)                                 => Future.failed(error)
-      case ((_, Left(error)), _)                                 => Future.failed(error)
-      case ((_, _), Left(error))                                 => Future.failed(error)
-      case ((Right(Right(value)), Right(stdout)), Right(stderr)) =>
-        Future.successful(Right(CollectedToolInvocation(value, stdout, stderr)))
+    result.transform(Success(_)).zip(collectOutput(stdout)).zip(collectOutput(stderr)).map {
+      case ((result, stdout), stderr) => CollectedToolInvocation(result.get, stdout, stderr)
     }
   }
 }
 
-final case class CollectedToolInvocation[+A](
-  result: A,
-  stdout: Option[Array[Byte]],
-  stderr: Option[Array[Byte]]
+final case class CollectedToolInvocation[+E, +A](
+  result: Either[ToolError[E], A],
+  stdout: Either[ByteStreamFailure, Option[Array[Byte]]],
+  stderr: Either[ByteStreamFailure, Option[Array[Byte]]]
 )
-
-final class ToolStreamException(val failure: ByteStreamFailure)
-    extends RuntimeException(s"tool byte stream failed: $failure")

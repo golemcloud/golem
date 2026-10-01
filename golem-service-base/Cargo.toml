@@ -91,6 +91,7 @@ tonic = { workspace = true, features = [ "_tls-any" ] }
 tonic-tracing-opentelemetry = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
+typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }

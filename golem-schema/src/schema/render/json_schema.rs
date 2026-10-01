@@ -826,6 +826,10 @@ pub(super) fn render_type(
         SchemaType::Binary { restrictions, .. } => Value::Object(binary_schema(restrictions)),
         SchemaType::Path { spec, .. } => Value::Object(path_schema(spec)),
         SchemaType::Url { restrictions, .. } => Value::Object(url_schema(restrictions)),
+        SchemaType::Uuid { .. } => obj([
+            ("type", Value::String("string".to_string())),
+            ("format", Value::String("uuid".to_string())),
+        ]),
         SchemaType::Datetime { .. } => obj([
             ("type", Value::String("string".to_string())),
             ("format", Value::String("date-time".to_string())),

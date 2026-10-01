@@ -4591,6 +4591,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - record
           value:
             type: object
@@ -4946,6 +4958,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -4955,6 +4968,13 @@ components:
           format: uint64
         details:
           type: string
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
     FallibleResultParameters:
       type: object
       title: FallibleResultParameters
@@ -5665,6 +5685,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -5672,6 +5693,13 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
     PermissionCardSpec:
       type: object
       required:
@@ -6225,6 +6253,28 @@ components:
             - Failure
             example: Failure
       - $ref: '#/components/schemas/SerializableToolRpcError'
+    PublicFailedSnapshotAssistedUpdateDetails:
+      type: object
+      title: PublicFailedSnapshotAssistedUpdateDetails
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        ineligibilityReason:
+          type: string
     PublicInvocationWalletPin:
       type: object
       title: PublicInvocationWalletPin
@@ -7406,6 +7456,27 @@ components:
             - Wrapper
             example: Wrapper
       - $ref: '#/components/schemas/PublicRetryPolicyStateWrapper'
+    PublicSnapshotAssistedUpdateDetails:
+      type: object
+      title: PublicSnapshotAssistedUpdateDetails
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
     PublicSnapshotData:
       type: object
       oneOf:
@@ -7636,11 +7707,13 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
       - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
       discriminator:
         propertyName: type
         mapping:
           Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotAssistedAutomatic: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
           SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
     PublicUpdateDescription_Empty:
       allOf:
@@ -7654,6 +7727,18 @@ components:
             - Automatic
             example: Automatic
       - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SnapshotAssistedAutomatic
+            example: SnapshotAssistedAutomatic
+      - $ref: '#/components/schemas/SnapshotAssistedAutomaticUpdateParameters'
     PublicUpdateDescription_SnapshotBasedUpdateParameters:
       allOf:
       - type: object
@@ -8528,6 +8613,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -9075,6 +9174,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -9348,6 +9459,30 @@ components:
             - ResourceExhausted
           value:
             type: string
+    SnapshotAssistedAutomaticUpdateParameters:
+      type: object
+      title: SnapshotAssistedAutomaticUpdateParameters
+    SnapshotAssistedUpdateMetadata:
+      type: object
+      title: SnapshotAssistedUpdateMetadata
+      required:
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      properties:
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        snapshotRevision:
+          type: integer
+          format: uint64
+        ineligibilityReason:
+          type: string
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters
@@ -9433,6 +9568,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -9440,6 +9576,13 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
     TailPositional:
       type: object
       required:
@@ -9658,6 +9801,12 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
+      required:
+      - updateAttemptIndex
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     UrlRestrictions:
       type: object
       properties:
@@ -10346,6 +10495,11 @@ components:
           format: uint64
         details:
           type: string
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     r#GrowMemoryParams:
       type: object
       title: r#GrowMemoryParams
@@ -10474,6 +10628,7 @@ components:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
       properties:
         timestamp:
           type: string
@@ -10483,6 +10638,9 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams
@@ -10707,6 +10865,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
     r#SuspendParams:
       type: object
       title: r#SuspendParams

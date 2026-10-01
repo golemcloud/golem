@@ -16839,6 +16839,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - record
           value:
             type: object
@@ -17203,9 +17215,17 @@ components:
           format: uint64
         details:
           type: string
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     FallibleResultParameters:
       title: FallibleResultParameters
       type: object
@@ -17920,9 +17940,17 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     PermissionCardSpec:
       type: object
       properties:
@@ -18476,6 +18504,28 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SerializableToolRpcError'
+    PublicFailedSnapshotAssistedUpdateDetails:
+      title: PublicFailedSnapshotAssistedUpdateDetails
+      type: object
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        ineligibilityReason:
+          type: string
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
     PublicInvocationWalletPin:
       title: PublicInvocationWalletPin
       type: object
@@ -19657,6 +19707,27 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicRetryPolicyStateWrapper'
+    PublicSnapshotAssistedUpdateDetails:
+      title: PublicSnapshotAssistedUpdateDetails
+      type: object
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
     PublicSnapshotData:
       discriminator:
         propertyName: type
@@ -19888,10 +19959,12 @@ components:
         propertyName: type
         mapping:
           Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotAssistedAutomatic: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
           SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
       - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
     PublicUpdateDescription_Empty:
       allOf:
@@ -19905,6 +19978,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SnapshotAssistedAutomatic
+            type: string
+            enum:
+            - SnapshotAssistedAutomatic
+        required:
+        - type
+      - $ref: '#/components/schemas/SnapshotAssistedAutomaticUpdateParameters'
     PublicUpdateDescription_SnapshotBasedUpdateParameters:
       allOf:
       - type: object
@@ -20776,6 +20861,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -21323,6 +21422,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -21599,6 +21710,30 @@ components:
         required:
         - type
         - value
+    SnapshotAssistedAutomaticUpdateParameters:
+      title: SnapshotAssistedAutomaticUpdateParameters
+      type: object
+    SnapshotAssistedUpdateMetadata:
+      title: SnapshotAssistedUpdateMetadata
+      type: object
+      properties:
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        snapshotRevision:
+          type: integer
+          format: uint64
+        ineligibilityReason:
+          type: string
+      required:
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -21688,9 +21823,17 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     TailPositional:
       type: object
       properties:
@@ -21909,6 +22052,12 @@ components:
     UpdateWorkerResponse:
       title: UpdateWorkerResponse
       type: object
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
+      required:
+      - updateAttemptIndex
     UrlRestrictions:
       type: object
       properties:
@@ -22594,6 +22743,11 @@ components:
           format: uint64
         details:
           type: string
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
@@ -22730,10 +22884,14 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
     r#PreCommitRemoteTransactionParams:
       title: r#PreCommitRemoteTransactionParams
       type: object
@@ -22953,6 +23111,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
       required:
       - timestamp
       - targetRevision
@@ -23588,6 +23748,21 @@ components:
           type: string
       required:
       - currentRevision
+    AuthorizationCodePkceConfig:
+      title: AuthorizationCodePkceConfig
+      type: object
+      properties:
+        redirectUris:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
+      required:
+      - redirectUris
+      - origins
     AutoInjectedKind:
       type: string
       enum:
@@ -27431,6 +27606,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - name
       - providerType
@@ -27438,6 +27615,7 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+      - login
     SecuritySchemeDto:
       title: SecuritySchemeDto
       type: object
@@ -27463,6 +27641,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - id
       - revision
@@ -27472,6 +27652,41 @@ components:
       - clientId
       - redirectUrl
       - scopes
+      - login
+    SecuritySchemeLogin:
+      discriminator:
+        propertyName: type
+        mapping:
+          Cookie: '#/components/schemas/SecuritySchemeLogin_Empty'
+          AuthorizationCodePkce: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SecuritySchemeLogin_Empty'
+      - $ref: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_AuthorizationCodePkceConfig:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AuthorizationCodePkce
+            type: string
+            enum:
+            - AuthorizationCodePkce
+        required:
+        - type
+      - $ref: '#/components/schemas/AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Cookie
+            type: string
+            enum:
+            - Cookie
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
     SecuritySchemeUpdate:
       title: SecuritySchemeUpdate
       type: object
@@ -27491,6 +27706,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - currentRevision
     SetMemoryLimit:

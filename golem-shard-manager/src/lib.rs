@@ -16,7 +16,7 @@ pub mod config;
 pub mod error;
 mod grpc;
 mod metrics;
-mod quota;
+pub mod quota;
 mod registry_event_subscriber;
 pub(crate) mod sharding;
 
@@ -24,9 +24,7 @@ use self::grpc::ShardManagerServiceImpl;
 #[cfg(feature = "kubernetes")]
 use crate::config::HealthCheckK8sConfig;
 use crate::config::{EtcdConfig, HealthCheckMode, PersistenceConfig};
-use crate::quota::{
-    DbQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService, UnavailableQuotaRepo,
-};
+use crate::quota::{DbQuotaRepo, EtcdQuotaRepo, GrpcResourceDefinitionFetcher, QuotaService};
 use crate::registry_event_subscriber::ShardManagerRegistryInvalidationHandler;
 use crate::sharding::etcd_connection::connect_for_requests;
 use crate::sharding::etcd_retry::{is_retriable_read, retry_retriable};
@@ -45,6 +43,7 @@ use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use include_dir::include_dir;
 use prometheus::Registry;
 pub use sharding::error::{HealthCheckError, ShardManagerError};
+pub use sharding::etcd_retry::ReadRetry;
 pub use sharding::healthcheck::HealthCheck;
 pub use sharding::leader_election::{
     Elected, LEADER_ELECTION_NAME, LeaderElection, LeaderFence, LeadershipHandle, LeaseKeepAlive,
@@ -80,8 +79,8 @@ test_r::enable!();
 
 #[cfg(test)]
 mod lease_timing_tests {
-    use super::validate_lease_timing;
-    use crate::config::ShardManagerConfig;
+    use super::validate_timing_config;
+    use crate::config::{EtcdConfig, PersistenceConfig, ShardManagerConfig};
     use golem_common::base_model::shard_lease;
     use std::time::Duration;
     use test_r::test;
@@ -98,7 +97,7 @@ mod lease_timing_tests {
     /// a value it never set.
     #[test]
     fn the_default_lease_starts_silently() {
-        let warnings = validate_lease_timing(&ShardManagerConfig::default())
+        let warnings = validate_timing_config(&ShardManagerConfig::default())
             .expect("the shipped default must be accepted");
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
     }
@@ -109,8 +108,9 @@ mod lease_timing_tests {
     /// of several durations to move.
     #[test]
     fn a_short_but_workable_lease_warns_and_names_the_key() {
-        let warnings = validate_lease_timing(&config_with(shard_lease::min_shard_lease_duration()))
-            .expect("a lease at the minimum must still start");
+        let warnings =
+            validate_timing_config(&config_with(shard_lease::min_shard_lease_duration()))
+                .expect("a lease at the minimum must still start");
         assert_eq!(warnings.len(), 1);
         assert!(
             warnings[0].contains("shard_lease_duration"),
@@ -124,7 +124,7 @@ mod lease_timing_tests {
     /// every replica shares the setting, so a cluster would fail the same way at the same time.
     #[test]
     fn a_lease_too_short_to_renew_is_refused() {
-        let error = validate_lease_timing(&config_with(
+        let error = validate_timing_config(&config_with(
             shard_lease::min_shard_lease_duration() - Duration::from_millis(1),
         ))
         .expect_err("a lease below the minimum must be refused");
@@ -137,7 +137,147 @@ mod lease_timing_tests {
 
     #[test]
     fn a_zero_lease_is_still_refused() {
-        assert!(validate_lease_timing(&config_with(Duration::ZERO)).is_err());
+        assert!(validate_timing_config(&config_with(Duration::ZERO)).is_err());
+    }
+
+    #[test]
+    fn the_maximum_state_write_timeout_is_accepted() {
+        let config = ShardManagerConfig {
+            state_write_timeout: shard_lease::max_state_write_timeout(),
+            ..ShardManagerConfig::default()
+        };
+        validate_timing_config(&config).expect("the supported maximum must be accepted");
+    }
+
+    #[test]
+    fn state_write_timeouts_outside_the_protocol_range_are_refused() {
+        for state_write_timeout in [
+            Duration::ZERO,
+            shard_lease::max_state_write_timeout() + Duration::from_millis(1),
+        ] {
+            let config = ShardManagerConfig {
+                state_write_timeout,
+                ..ShardManagerConfig::default()
+            };
+            let error = validate_timing_config(&config)
+                .expect_err("an unsupported state write timeout must be refused");
+            assert!(
+                error.to_string().contains("state_write_timeout"),
+                "the refusal must name the invalid key: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_startup_timeouts_are_refused() {
+        let invalid = [
+            ("state_read_timeout", Duration::ZERO, None),
+            (
+                "state_read_timeout",
+                shard_lease::default_state_write_timeout(),
+                None,
+            ),
+            (
+                "initial_health_check_timeout",
+                ShardManagerConfig::default().state_read_timeout,
+                Some(Duration::ZERO),
+            ),
+        ];
+
+        for (key, state_read_timeout, initial_health_check_timeout) in invalid {
+            let config = ShardManagerConfig {
+                state_read_timeout,
+                initial_health_check_timeout: initial_health_check_timeout
+                    .unwrap_or_else(|| ShardManagerConfig::default().initial_health_check_timeout),
+                ..ShardManagerConfig::default()
+            };
+            let error = validate_timing_config(&config)
+                .expect_err("an invalid startup timeout must be refused");
+            assert!(
+                error.to_string().contains(key),
+                "the refusal must name {key}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_etcd_retry_settings_are_refused() {
+        let invalid = [
+            (
+                "read_retry_timeout",
+                EtcdConfig {
+                    read_retry_timeout: Duration::ZERO,
+                    ..EtcdConfig::default()
+                },
+            ),
+            (
+                "retry_min_delay",
+                EtcdConfig {
+                    retry_min_delay: Duration::ZERO,
+                    ..EtcdConfig::default()
+                },
+            ),
+            (
+                "retry_max_delay",
+                EtcdConfig {
+                    retry_min_delay: Duration::from_secs(2),
+                    retry_max_delay: Duration::from_secs(1),
+                    ..EtcdConfig::default()
+                },
+            ),
+            (
+                "retry_max_delay",
+                EtcdConfig {
+                    retry_max_delay: Duration::MAX,
+                    ..EtcdConfig::default()
+                },
+            ),
+            (
+                "read_retry_timeout",
+                EtcdConfig {
+                    read_retry_timeout: Duration::from_secs(26),
+                    ..EtcdConfig::default()
+                },
+            ),
+        ];
+
+        for (key, etcd) in invalid {
+            let config = ShardManagerConfig {
+                persistence: PersistenceConfig::Etcd(etcd),
+                ..ShardManagerConfig::default()
+            };
+            let error = validate_timing_config(&config)
+                .expect_err("an invalid etcd retry setting must be refused");
+            assert!(
+                error.to_string().contains(key),
+                "the refusal must name {key}: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn etcd_retry_timeout_that_cannot_form_an_instant_is_refused() {
+        let request_timeout = Duration::from_secs(1);
+        let etcd = EtcdConfig {
+            request_timeout,
+            read_retry_timeout: Duration::MAX - request_timeout,
+            ..EtcdConfig::default()
+        };
+
+        let config = ShardManagerConfig {
+            state_read_timeout: Duration::MAX,
+            persistence: PersistenceConfig::Etcd(etcd),
+            ..ShardManagerConfig::default()
+        };
+
+        assert!(
+            std::time::Instant::now()
+                .checked_add(Duration::MAX - request_timeout)
+                .is_none(),
+            "the test value must exceed this platform's Instant range"
+        );
+        validate_timing_config(&config)
+            .expect_err("startup must reject a retry timeout that panics when added to Instant");
     }
 }
 
@@ -277,6 +417,8 @@ async fn start_distributed_mode(
                 })
         },
         &shutdown,
+        etcd.retry_min_delay,
+        etcd.retry_max_delay,
     )
     .await?;
     if let Some(stored) = stored_count {
@@ -320,15 +462,77 @@ async fn start_distributed_mode(
     Ok((kv, elected.fence, leadership))
 }
 
-/// Checks `shard_lease_duration` against the timing the protocol derives from it, returning the
-/// warnings worth logging and refusing outright what cannot work.
+/// Checks the configured startup, persistence, retry, and lease timings, returning warnings worth
+/// logging and refusing outright combinations that cannot work.
 ///
 /// The executor renews at a third of the lease and gives up on one attempt at half of that, never
 /// below a floor, and the shard manager needs its own write budget to fit inside that attempt.
 /// Those relations live in [`golem_common::base_model::shard_lease`]; this is where the configured
 /// duration meets them, because the lease duration is the shard manager's config and the executor
 /// only ever learns it from the wire.
-fn validate_lease_timing(config: &ShardManagerConfig) -> anyhow::Result<Vec<String>> {
+fn validate_timing_config(config: &ShardManagerConfig) -> anyhow::Result<Vec<String>> {
+    anyhow::ensure!(
+        !config.state_read_timeout.is_zero(),
+        "state_read_timeout must be greater than zero"
+    );
+    anyhow::ensure!(
+        !config.state_write_timeout.is_zero()
+            && config.state_write_timeout <= shard_lease::max_state_write_timeout(),
+        "state_write_timeout must be greater than zero and at most {:?}, but is {:?}",
+        shard_lease::max_state_write_timeout(),
+        config.state_write_timeout
+    );
+    anyhow::ensure!(
+        config.state_read_timeout > config.state_write_timeout,
+        "state_read_timeout must be greater than state_write_timeout, but is {:?} against {:?}",
+        config.state_read_timeout,
+        config.state_write_timeout
+    );
+    anyhow::ensure!(
+        !config.initial_health_check_timeout.is_zero(),
+        "initial_health_check_timeout must be greater than zero"
+    );
+    if let PersistenceConfig::Etcd(etcd) = &config.persistence {
+        anyhow::ensure!(
+            !etcd.read_retry_timeout.is_zero(),
+            "persistence.config.read_retry_timeout must be greater than zero"
+        );
+        anyhow::ensure!(
+            std::time::Instant::now()
+                .checked_add(etcd.read_retry_timeout)
+                .is_some(),
+            "persistence.config.read_retry_timeout is too large for a retry deadline"
+        );
+        anyhow::ensure!(
+            !etcd.retry_min_delay.is_zero(),
+            "persistence.config.retry_min_delay must be greater than zero"
+        );
+        anyhow::ensure!(
+            etcd.retry_max_delay >= etcd.retry_min_delay,
+            "persistence.config.retry_max_delay must be at least retry_min_delay, but is {:?} \
+             against {:?}",
+            etcd.retry_max_delay,
+            etcd.retry_min_delay
+        );
+        anyhow::ensure!(
+            tokio::time::Instant::now()
+                .checked_add(etcd.retry_max_delay)
+                .is_some(),
+            "persistence.config.retry_max_delay is too large for a retry backoff"
+        );
+        anyhow::ensure!(
+            etcd.read_retry_timeout
+                .checked_add(etcd.request_timeout)
+                .is_some_and(|read_with_final_attempt| {
+                    read_with_final_attempt <= config.state_read_timeout
+                }),
+            "persistence.config.read_retry_timeout plus request_timeout must fit within \
+             state_read_timeout, but {:?} plus {:?} exceeds {:?}",
+            etcd.read_retry_timeout,
+            etcd.request_timeout,
+            config.state_read_timeout
+        );
+    }
     anyhow::ensure!(
         !config.shard_lease_duration.is_zero(),
         "shard_lease_duration must be greater than zero"
@@ -371,7 +575,7 @@ pub async fn run(
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing shard manager");
 
-    for warning in validate_lease_timing(shard_manager_config)? {
+    for warning in validate_timing_config(shard_manager_config)? {
         warn!("{warning}");
     }
 
@@ -463,17 +667,21 @@ pub async fn run(
                 )
                 .await?;
 
-                // Distributed mode. The shard lease state is durable in etcd, but the quota
-                // tables have not moved there and there is no SQL pool here to hold them, so
-                // quota operations fail rather than silently succeeding against nothing.
+                // Distributed mode: the shard lease state and the quota state both live in etcd,
+                // over one connection, and every write to either carries the leadership fence.
                 (
                     Arc::new(EtcdRoutingTablePersistence::with_client(
-                        kv,
+                        kv.clone(),
                         shard_manager_config.number_of_shards,
-                        fence,
+                        fence.clone(),
                         etcd.compaction_retention_revisions,
+                        ReadRetry::from_config(etcd),
                     )),
-                    Arc::new(UnavailableQuotaRepo),
+                    Arc::new(EtcdQuotaRepo::logged(
+                        kv,
+                        fence,
+                        ReadRetry::from_config(etcd),
+                    )),
                     Some(leadership),
                 )
             }
@@ -512,12 +720,15 @@ pub async fn run(
         });
 
         let shard_management = Arc::new(
-            ShardManagement::new(
+            ShardManagement::new_with_timeouts(
                 persistence_service.clone(),
                 worker_executors.clone(),
                 health_check.clone(),
                 shard_manager_config.rebalance_threshold,
                 shard_manager_config.shard_lease_duration,
+                shard_manager_config.state_read_timeout,
+                shard_manager_config.state_write_timeout,
+                shard_manager_config.initial_health_check_timeout,
                 shard_manager_config.number_of_shards,
                 join_set,
             )

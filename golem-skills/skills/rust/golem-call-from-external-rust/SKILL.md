@@ -24,7 +24,7 @@ bridge:
       #   - my-app:billing
       outputDir: ./bridge-sdk/rust   # Optional custom output directory
       additionalDerives:
-        - '^Order.*=serde::Serialize,serde::Deserialize'
+        - '^Order.*=PartialEq,Eq'
         - 'Response$=my_derives::ApiType'
       additionalDependencies:
         anyhow: "1"                 # Version shorthand
@@ -56,7 +56,7 @@ The equivalent low-level CLI options are repeatable and use Cargo TOML syntax fo
 
 ```shell
 golem generate-bridge --language rust \
-  --derive-rule '^Order.*=serde::Serialize,serde::Deserialize' \
+  --derive-rule '^Order.*=PartialEq,Eq' \
   --derive-rule 'Response$=my_derives::ApiType' \
   --rust-dependency 'anyhow = "1"' \
   --rust-dependency 'my_derives = { package = "my-derive-macros", path = "./crates/my-derives", features = ["api"], default-features = false }'
@@ -72,6 +72,35 @@ Add the generated crate as a path dependency in your external Rust project's `Ca
 [dependencies]
 my-agent-client = { path = "../path/to/bridge-sdk/rust/my-agent-client" }
 ```
+
+This default enables the complete client, including configuration, REST invocation, scheduling,
+and streaming. To use only generated portable model types, without Golem or HTTP client
+dependencies, disable default features:
+
+```toml
+[dependencies]
+my-agent-client = {
+  path = "../path/to/bridge-sdk/rust/my-agent-client",
+  default-features = false,
+}
+```
+
+Enable the independent `serde` feature when those model types need serialization:
+
+```toml
+[dependencies]
+my-agent-client = {
+  path = "../path/to/bridge-sdk/rust/my-agent-client",
+  default-features = false,
+  features = ["serde"],
+}
+```
+
+Type-only mode includes generated records, variants, enums, flags, multimodal types, bare
+`AgentBinary`, and unstructured text/binary helpers whose schemas do not transitively contain a
+stream. Streams are runtime capabilities rather than portable data, so stream-bearing named and
+multimodal types are available only with the `client` feature. Do not expect placeholders for
+those types in a no-default build.
 
 Then use the generated client:
 
@@ -137,9 +166,15 @@ let agent = MyAgent::get_with_config(
 ).await?;
 ```
 
-## Generated Crate Dependencies
+## Generated Crate Features and Dependencies
 
-The generated crate depends on `golem-client`, `golem-common`, `golem-wasm`, `reqwest`, `serde_json`, `uuid`, and `chrono`. These are resolved from crates.io or from the Golem repository depending on the SDK version.
+Generated external crates use `default = ["client"]`. The `client` feature owns the Golem client,
+HTTP, runtime, scheduling, and streaming dependencies. The separate `serde` feature adds serde
+derives to portable generated models and helpers; `client` does not imply `serde`.
+
+With default features disabled, the generated crate does not activate `golem-client`,
+`golem-common`, `reqwest`, or `reqwest-middleware`, making the portable subset suitable for targets
+such as `wasm32-unknown-unknown`.
 
 ## Key Points
 
@@ -148,3 +183,5 @@ The generated crate depends on `golem-client`, `golem-common`, `golem-wasm`, `re
 - All custom types (records, variants, enums, flags) are generated as corresponding Rust types
 - The client uses async/await with `reqwest` for HTTP communication
 - Each agent type gets its own crate with a `Cargo.toml` and `src/lib.rs`
+- Use `default-features = false` only for the portable, stream-free model subset; agent client
+  structs and stream-bearing types require the default `client` feature

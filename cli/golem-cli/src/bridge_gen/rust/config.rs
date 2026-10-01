@@ -140,7 +140,7 @@ impl RustBridgeGeneratorConfig {
     ) -> Vec<SynPath> {
         let mut seen = builtins
             .iter()
-            .map(|value| DeriveKey::Builtin((*value).to_string()))
+            .map(|value| derive_key(value))
             .collect::<BTreeSet<_>>();
         self.derive_rules
             .iter()
@@ -152,9 +152,7 @@ impl RustBridgeGeneratorConfig {
                     && (allow_clone || builtin != Some("Clone"))
             })
             .filter_map(|path| {
-                let key = builtin_derive_name(path)
-                    .map(|name| DeriveKey::Builtin(name.to_string()))
-                    .unwrap_or_else(|| DeriveKey::Path(path.clone()));
+                let key = derive_key(path);
                 seen.insert(key)
                     .then(|| syn::parse_str::<SynPath>(path).expect("validated Rust derive path"))
             })
@@ -176,12 +174,22 @@ enum DeriveKey {
     Path(String),
 }
 
+fn derive_key(path: &str) -> DeriveKey {
+    builtin_derive_name(path)
+        .map(|name| DeriveKey::Builtin(name.to_string()))
+        .unwrap_or_else(|| DeriveKey::Path(canonical_derive_path(path).to_string()))
+}
+
 fn builtin_derive_name(path: &str) -> Option<&'static str> {
-    match path.rsplit("::").next()? {
-        "Debug" => Some("Debug"),
-        "Clone" => Some("Clone"),
+    match canonical_derive_path(path) {
+        "Debug" | "std::fmt::Debug" | "core::fmt::Debug" => Some("Debug"),
+        "Clone" | "std::clone::Clone" | "core::clone::Clone" => Some("Clone"),
         _ => None,
     }
+}
+
+fn canonical_derive_path(path: &str) -> &str {
+    path.strip_prefix("::").unwrap_or(path)
 }
 
 fn parse_derive_rule(rule: &str) -> anyhow::Result<RustDeriveRule> {
@@ -300,7 +308,11 @@ fn dependency_from_toml(item: &Item) -> anyhow::Result<RustBridgeDependency> {
 }
 
 fn validate_dependency_name(name: &str) -> anyhow::Result<()> {
-    if RESERVED_DEPENDENCIES.contains(&name) {
+    let rust_identifier = name.replace('-', "_");
+    if RESERVED_DEPENDENCIES
+        .iter()
+        .any(|reserved| reserved.replace('-', "_") == rust_identifier)
+    {
         bail!("dependency name '{name}' is owned by the Rust bridge generator")
     }
     if name.is_empty() {
@@ -447,6 +459,22 @@ mod tests {
     }
 
     #[test]
+    fn reserved_dependency_rust_identifier_aliases_are_rejected() {
+        for dependency in [
+            "golem_client = { package = \"anyhow\", version = \"1\" }",
+            "golem_common = { package = \"anyhow\", version = \"1\" }",
+            "golem_rust = { package = \"anyhow\", version = \"1\" }",
+            "reqwest_middleware = { package = \"anyhow\", version = \"1\" }",
+        ] {
+            assert!(
+                RustBridgeGeneratorConfig::from_cli(&[], &[dependency.into()], Path::new("/work"),)
+                    .is_err(),
+                "accepted dependency whose Rust crate identifier collides with a generated dependency: {dependency}"
+            );
+        }
+    }
+
+    #[test]
     fn dependency_paths_resolve_from_manifest_source_and_cli_working_directory() {
         let manifest_target = crate::model::app_raw::RustBridgeSdkExternalTargets {
             common: crate::model::app_raw::BridgeSdkExternalTargets {
@@ -546,5 +574,53 @@ mod tests {
             .map(|path| quote::quote!(#path).to_string())
             .collect::<Vec<_>>();
         assert_eq!(restricted, ["serde :: Serialize"]);
+
+        let with_conditional_serde_builtin = config
+            .derives_for("Order", &["serde::Serialize"], true, true)
+            .into_iter()
+            .map(|path| quote::quote!(#path).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            with_conditional_serde_builtin,
+            ["std :: clone :: Clone", "std :: fmt :: Debug"]
+        );
+    }
+
+    #[test]
+    fn absolute_serde_derive_is_deduplicated_against_conditional_builtin() {
+        let config = RustBridgeGeneratorConfig::from_cli(
+            &[".*=::serde::Serialize,::serde::Deserialize".into()],
+            &[],
+            Path::new("/work"),
+        )
+        .unwrap();
+
+        assert!(
+            config
+                .derives_for(
+                    "Order",
+                    &["serde::Serialize", "serde::Deserialize"],
+                    true,
+                    true,
+                )
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn custom_derive_named_clone_is_not_confused_with_builtin_clone() {
+        let config = RustBridgeGeneratorConfig::from_cli(
+            &[".*=custom_derive::Clone".into()],
+            &[],
+            Path::new("/work"),
+        )
+        .unwrap();
+
+        let derives = config
+            .derives_for("Order", &["Clone"], true, true)
+            .into_iter()
+            .map(|path| quote::quote!(#path).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(derives, ["custom_derive :: Clone"]);
     }
 }
