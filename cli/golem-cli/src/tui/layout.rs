@@ -129,7 +129,6 @@ pub(super) struct Region {
 #[derive(Debug, Clone)]
 pub(super) struct LayoutSnapshot {
     pub(super) header: Rect,
-    pub(super) body: Rect,
     pub(super) workspace_body: Rect,
     pub(super) footer: Rect,
     pub(super) regions: Vec<Region>,
@@ -227,7 +226,6 @@ pub(super) fn compute(input: LayoutInput) -> LayoutSnapshot {
 
     LayoutSnapshot {
         header,
-        body,
         workspace_body: body,
         footer,
         regions,
@@ -726,7 +724,7 @@ mod tests {
                 .region(RegionKind::DevViewTitle(DevView::BuildDeploy))
                 .unwrap()
                 .width,
-            snapshot.body.width
+            snapshot.workspace_body.width
         );
         assert!(snapshot.region(RegionKind::DevPrimarySplit).is_none());
     }
@@ -855,7 +853,7 @@ mod tests {
             input.area = area;
             let snapshot = compute(input);
             assert!(snapshot.header.bottom() <= area.bottom());
-            assert!(snapshot.body.bottom() <= area.bottom());
+            assert!(snapshot.workspace_body.bottom() <= area.bottom());
             assert!(snapshot.footer.bottom() <= area.bottom());
         }
     }

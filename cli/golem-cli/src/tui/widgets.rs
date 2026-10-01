@@ -103,7 +103,6 @@ pub(super) enum StatusKind {
     Running,
     Idle,
     Failed,
-    Attention,
 }
 
 impl StatusKind {
@@ -112,7 +111,6 @@ impl StatusKind {
             Self::Running => "●",
             Self::Idle => "○",
             Self::Failed => "×",
-            Self::Attention => "!",
         }
     }
 
@@ -121,7 +119,6 @@ impl StatusKind {
             Self::Running => visual.success,
             Self::Idle => visual.text_muted,
             Self::Failed => visual.error,
-            Self::Attention => visual.marker,
         })
     }
 }
@@ -143,8 +140,6 @@ impl StatusMarker<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NoticeKind {
     Info,
-    Active,
-    Success,
     Loading,
     Warning,
     Error,
@@ -161,8 +156,6 @@ impl Notice<'_> {
     pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
         let (label, glyph, color) = match self.kind {
             NoticeKind::Info => ("Notice", "i", visual.text_secondary),
-            NoticeKind::Active => ("Active", "●", visual.success),
-            NoticeKind::Success => ("Success", "✓", visual.success),
             NoticeKind::Loading => ("Loading", "…", visual.accent),
             NoticeKind::Warning => ("Warning", "!", visual.marker),
             NoticeKind::Error => ("Error", "×", visual.error),
@@ -208,24 +201,10 @@ fn notice_line(
     ])
 }
 
-pub(super) struct ContentTableRow<'a> {
-    pub cells: &'a [&'a str],
-    pub widths: &'a [usize],
-    pub header: bool,
-    pub selected: bool,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CellPolicy {
     Ellipsis,
     WrapSelected,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TableDecoration {
-    Minimal,
-    Rules,
-    Zebra,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -542,7 +521,6 @@ pub(super) struct PaneTable<'a> {
     pub columns: &'a [PaneTableColumn<'a>],
     pub rows: &'a [&'a [&'a str]],
     pub state: &'a PaneTableState,
-    pub decoration: TableDecoration,
     pub cell_tones: Option<&'a [&'a [Option<CellTone>]]>,
     pub rich_cells: Option<&'a [&'a [Option<PaneTableCell>]]>,
     pub row_markers: Option<&'a [&'a str]>,
@@ -635,7 +613,7 @@ impl PaneTable<'_> {
             let (selected, alternate, row_marker) =
                 markers.get(row as usize).copied().unwrap_or_default();
             let background = if has_line {
-                table_row_background(selected, alternate, self.decoration, visual)
+                table_row_background(selected, alternate, visual)
             } else {
                 visual.surface
             };
@@ -666,10 +644,6 @@ impl PaneTable<'_> {
                 }
             }
         }
-    }
-
-    pub fn window(&self, viewport_height: u16) -> PaneTableWindow {
-        self.window_from(viewport_height, 0)
     }
 
     pub fn window_from(&self, viewport_height: u16, first_visible_row: usize) -> PaneTableWindow {
@@ -723,7 +697,7 @@ impl PaneTable<'_> {
     }
 
     fn row_height(&self, index: usize, row: &[&str]) -> usize {
-        if index != self.state.selected || self.decoration != TableDecoration::Zebra {
+        if index != self.state.selected {
             return 1;
         }
         self.visible_columns()
@@ -744,9 +718,7 @@ impl PaneTable<'_> {
                     .enumerate()
                     .map(|(column_index, column)| {
                         let value = row.get(column_index).copied().unwrap_or("");
-                        if index == self.state.selected
-                            && self.decoration == TableDecoration::Zebra
-                            && column.policy == CellPolicy::WrapSelected
+                        if index == self.state.selected && column.policy == CellPolicy::WrapSelected
                         {
                             wrap_cell(value, column.width)
                                 .get(line_index)
@@ -773,16 +745,12 @@ impl PaneTable<'_> {
         alternate: bool,
         visual: &TuiVisualStyle,
     ) -> Line<'static> {
-        let background = table_row_background(selected, alternate, self.decoration, visual);
+        let background = table_row_background(selected, alternate, visual);
         let mut spans = Vec::new();
         for (visible_index, (column_index, column)) in self.visible_columns().enumerate() {
             if visible_index > 0 {
-                let separator = match self.decoration {
-                    TableDecoration::Rules => "│",
-                    TableDecoration::Minimal | TableDecoration::Zebra => " ",
-                };
                 spans.push(Span::styled(
-                    separator,
+                    " ",
                     Style::default().fg(visual.border_subtle).bg(background),
                 ));
             }
@@ -913,16 +881,8 @@ pub(super) fn pane_table_virtual_width(
 fn table_row_background(
     selected: bool,
     alternate: bool,
-    decoration: TableDecoration,
     visual: &TuiVisualStyle,
 ) -> ratatui::style::Color {
-    if decoration != TableDecoration::Zebra {
-        return if selected {
-            visual.table_selected_odd_background
-        } else {
-            visual.surface
-        };
-    }
     match (alternate, selected) {
         (false, false) => visual.table_odd_background,
         (true, false) => visual.table_even_background,
@@ -963,63 +923,6 @@ fn wrap_cell(text: &str, width: u16) -> Vec<String> {
         lines.push(" ".repeat(width));
     }
     lines
-}
-
-impl ContentTableRow<'_> {
-    pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
-        let row_style = if self.selected {
-            Style::default()
-                .fg(visual.selection_text)
-                .bg(visual.selection_background)
-        } else {
-            Style::default().fg(visual.text)
-        };
-        let mut spans = vec![Span::styled(
-            if self.selected { "▌ " } else { "  " },
-            if self.selected {
-                selected_marker_style(visual)
-            } else {
-                row_style
-            },
-        )];
-        for (index, (cell, width)) in self.cells.iter().zip(self.widths).enumerate() {
-            let color = if self.header {
-                visual.text_muted
-            } else if index == 0 {
-                visual.text
-            } else {
-                visual.text_secondary
-            };
-            let style = if self.selected {
-                row_style
-            } else {
-                Style::default().fg(color)
-            };
-            spans.push(Span::styled(fit(cell, *width), style));
-            if index + 1 < self.widths.len() {
-                spans.push(Span::styled(" ", style));
-            }
-        }
-        Line::from(spans)
-    }
-}
-
-pub(super) struct OutputLine<'a> {
-    pub stream: &'a str,
-    pub text: &'a str,
-}
-
-impl OutputLine<'_> {
-    pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
-        let prefix = format!("{} ", self.stream);
-        Line::from(vec![
-            Span::styled(prefix.clone(), Style::default().fg(visual.text_muted)),
-            Span::styled(
-                fit(self.text, width.saturating_sub(prefix.chars().count())),
-                Style::default().fg(visual.text_secondary),
-            ),
-        ])
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -1243,12 +1146,6 @@ impl PaneChrome {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct PaneSpec<'a> {
-    pub title: &'a str,
-    pub focus: PaneFocus,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PaneLayout {
     pub panes: Vec<Rect>,
@@ -1400,35 +1297,6 @@ impl PaneLayout {
         None
     }
 
-    pub fn render_headers(
-        &self,
-        frame: &mut Frame<'_>,
-        specs: &[PaneSpec<'_>],
-        visual: &TuiVisualStyle,
-    ) {
-        for (index, (area, spec)) in self.panes.iter().zip(specs).enumerate() {
-            PaneHeader {
-                title: spec.title,
-                focus: spec.focus,
-                left_connector: (index == 0).then_some("├"),
-                ending: if index + 1 == self.panes.len() {
-                    PaneEnding::Top
-                } else {
-                    PaneEnding::Continue
-                },
-            }
-            .render(frame, *area, visual);
-        }
-        let style = Style::default().fg(visual.border_subtle).bg(visual.surface);
-        for divider in &self.dividers {
-            if divider.width > 0 && divider.height > 0 {
-                frame.buffer_mut()[(divider.x, divider.y)]
-                    .set_symbol("┬")
-                    .set_style(style);
-            }
-        }
-    }
-
     pub fn render_body_boundaries(
         &self,
         frame: &mut Frame<'_>,
@@ -1450,10 +1318,6 @@ impl PaneLayout {
                     .set_style(style);
             }
         }
-    }
-
-    pub fn junctions(&self) -> Vec<u16> {
-        self.dividers.iter().map(|area| area.x).collect()
     }
 }
 
@@ -1657,35 +1521,6 @@ pub(super) struct ShortcutRow<'a> {
 }
 
 impl ShortcutRow<'_> {
-    pub fn pack<'a>(items: &[KeyHint<'a>], width: u16, max_rows: usize) -> Vec<Vec<KeyHint<'a>>> {
-        if items.is_empty() || max_rows == 0 {
-            return Vec::new();
-        }
-        let available = width.saturating_sub(2) as usize;
-        let item_width =
-            |item: &KeyHint<'_>| item.key.chars().count() + item.label.chars().count() + 1;
-        let mut rows: Vec<Vec<KeyHint<'a>>> = Vec::new();
-        let mut used = 0usize;
-        for item in items {
-            let separator = usize::from(used > 0) * 3;
-            let required = separator + item_width(item);
-            if used > 0 && used + required > available {
-                if rows.len() >= max_rows {
-                    break;
-                }
-                rows.push(Vec::new());
-                used = 0;
-            }
-            if rows.is_empty() {
-                rows.push(Vec::new());
-            }
-            let separator = usize::from(used > 0) * 3;
-            used += separator + item_width(item);
-            rows.last_mut().expect("shortcut row").push(*item);
-        }
-        rows
-    }
-
     pub fn render(self, frame: &mut Frame<'_>, area: Rect, visual: &TuiVisualStyle) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -2381,7 +2216,7 @@ mod tests {
 
     #[test]
     fn pane_focus_is_visible_without_color_and_owns_its_ending() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let buffer = render(40, 2, |frame| {
             PaneHeader {
                 title: "Active",
@@ -2407,15 +2242,14 @@ mod tests {
     }
 
     #[test]
-    fn pane_layout_owns_one_or_more_pane_geometry_and_decorators() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+    fn pane_layout_owns_one_or_more_pane_geometry_and_body_boundaries() {
+        let visual = TuiVisualStyle::production();
         let single = PaneLayout::horizontal(Rect::new(0, 0, 80, 1), &[1]);
         assert_eq!(single.panes, vec![Rect::new(0, 0, 80, 1)]);
         assert!(single.dividers.is_empty());
 
-        let layout = PaneLayout::horizontal(Rect::new(0, 0, 80, 1), &[3, 2, 1]);
-        let body_layout = PaneLayout::horizontal(Rect::new(0, 1, 80, 4), &[3, 2, 1]);
-        let body_regions = body_layout.regions(&[0, 0, 0]);
+        let layout = PaneLayout::horizontal(Rect::new(0, 0, 80, 5), &[3, 2, 1]);
+        let regions = layout.regions(&[0, 0, 0]);
         assert_eq!(layout.panes.len(), 3);
         assert_eq!(layout.dividers.len(), 2);
         assert!(
@@ -2427,40 +2261,19 @@ mod tests {
                     && divider.right() == panes[1].x)
         );
         let buffer = render(80, 5, |frame| {
-            layout.render_headers(
-                frame,
-                &[
-                    PaneSpec {
-                        title: "Primary",
-                        focus: PaneFocus::Active,
-                    },
-                    PaneSpec {
-                        title: "Secondary",
-                        focus: PaneFocus::Idle,
-                    },
-                    PaneSpec {
-                        title: "Third",
-                        focus: PaneFocus::Idle,
-                    },
-                ],
-                &visual,
-            );
-            body_layout.render_body_boundaries(frame, &body_regions, &visual);
+            layout.render_body_boundaries(frame, &regions, &visual);
         });
-        assert!((1..5).all(|y| buffer[(0, y)].symbol() == "│"));
-        for (divider, body_divider) in layout.dividers.iter().zip(&body_layout.dividers) {
-            assert_eq!(divider.x, body_divider.x);
-            assert_eq!(buffer[(divider.x, 0)].symbol(), "┬");
-            assert!((1..5).all(|y| buffer[(divider.x, y)].symbol() == "│"));
-            assert!((1..5).all(|y| buffer[(divider.x + 1, y)].symbol() != "│"));
+        assert!((0..5).all(|y| buffer[(0, y)].symbol() == "│"));
+        for divider in &layout.dividers {
+            assert!((0..5).all(|y| buffer[(divider.x, y)].symbol() == "│"));
+            assert!((0..5).all(|y| buffer[(divider.x + 1, y)].symbol() != "│"));
         }
-        assert_eq!(buffer[(79, 0)].symbol(), "┐");
-        assert!((1..5).all(|y| buffer[(79, y)].symbol() == " "));
+        assert!((0..5).all(|y| buffer[(79, y)].symbol() == " "));
     }
 
     #[test]
     fn pane_chrome_owns_recursive_headers_spines_and_dividers() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let chrome = PaneChrome {
             area: Rect::new(0, 0, 40, 8),
         };
@@ -2630,41 +2443,24 @@ mod tests {
 
     #[test]
     fn left_pane_scrollbar_uses_the_trailing_edge_and_preserves_the_body_spine() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
-        let header = PaneLayout::horizontal(Rect::new(0, 0, 20, 1), &[1, 1]);
-        let body = PaneLayout::horizontal(Rect::new(0, 1, 20, 3), &[1, 1]);
+        let visual = TuiVisualStyle::production();
+        let body = PaneLayout::horizontal(Rect::new(0, 0, 20, 4), &[1, 1]);
         let regions = body.regions(&[10, 0]);
         let buffer = render(20, 4, |frame| {
-            header.render_headers(
-                frame,
-                &[
-                    PaneSpec {
-                        title: "Left",
-                        focus: PaneFocus::Active,
-                    },
-                    PaneSpec {
-                        title: "Right",
-                        focus: PaneFocus::Idle,
-                    },
-                ],
-                &visual,
-            );
             body.render_body_boundaries(frame, &regions, &visual);
-            let mut state = ScrollbarState::new(10).viewport_content_length(3);
+            let mut state = ScrollbarState::new(10).viewport_content_length(4);
             render_scrollbar(frame, regions[0].scrollbar.unwrap(), &mut state, &visual);
         });
-        assert_eq!(buffer[(0, 0)].symbol(), "├");
-        assert_eq!(buffer[(0, 1)].symbol(), "│");
+        assert!((0..4).all(|y| buffer[(0, y)].symbol() == "│"));
         let slot = regions[0].scrollbar.unwrap();
         assert_eq!(slot.area.x, regions[0].pane_area.right() - 1);
         assert_ne!(buffer[(slot.area.x, slot.area.y)].symbol(), " ");
-        assert_eq!(buffer[(header.dividers[0].x, 0)].symbol(), "┬");
-        assert_eq!(buffer[(body.dividers[0].x, 1)].symbol(), "│");
+        assert!((0..4).all(|y| buffer[(body.dividers[0].x, y)].symbol() == "│"));
     }
 
     #[test]
     fn header_and_workspace_selector_own_connected_shell_grammar() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let buffer = render(72, 2, |frame| {
             ContextHeader {
                 pairs: &[
@@ -2705,7 +2501,7 @@ mod tests {
 
     #[test]
     fn header_and_workspace_selector_reduce_before_clipping() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let buffer = render(50, 2, |frame| {
             ContextHeader {
                 pairs: &[
@@ -2756,7 +2552,7 @@ mod tests {
 
     #[test]
     fn workspace_selector_never_overwrites_a_label_with_a_junction() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let buffer = render(32, 1, |frame| {
             WorkspaceSelector {
                 items: &[WorkspaceItem {
@@ -2774,7 +2570,7 @@ mod tests {
 
     #[test]
     fn search_rows_share_alignment_and_selection_width() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let input = SearchInput { query: "dep" }.line(20, &visual);
         let selected = SelectableRow {
             label: "Deploy",
@@ -2791,23 +2587,6 @@ mod tests {
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
         assert_eq!(buffer[(0, 1)].fg, visual.accent);
         assert!((0..20).all(|x| buffer[(x, 1)].bg == visual.selection_background));
-    }
-
-    #[test]
-    fn content_table_truncates_by_terminal_width_and_fills_selected_width() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
-        let line = ContentTableRow {
-            cells: &["checkout-service", "running"],
-            widths: &[8, 7],
-            header: false,
-            selected: true,
-        }
-        .line(&visual);
-        let buffer = render(18, 1, |frame| {
-            frame.render_widget(Paragraph::new(line), frame.area());
-        });
-        assert!(text(&buffer).starts_with("▌ checkou… running"));
-        assert!((0..18).all(|x| buffer[(x, 0)].bg == visual.selection_background));
     }
 
     #[test]
@@ -2898,7 +2677,7 @@ mod tests {
 
     #[test]
     fn pane_table_horizontal_offset_clamps_and_keeps_marker_frozen() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let columns = pane_table_columns();
         let mut state = PaneTableState::new(&columns, 0);
         state.horizontal_offset = u16::MAX;
@@ -2912,7 +2691,6 @@ mod tests {
                 columns: &columns,
                 rows,
                 state: &state,
-                decoration: TableDecoration::Minimal,
                 cell_tones: None,
                 rich_cells: None,
                 row_markers: None,
@@ -2927,7 +2705,7 @@ mod tests {
 
     #[test]
     fn pane_table_wraps_only_selected_rows_and_fills_their_full_height() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let columns = pane_table_columns();
         let state = PaneTableState::new(&columns, 0);
         let rows: &[&[&str]] = &[
@@ -2939,41 +2717,12 @@ mod tests {
             columns: &columns,
             rows,
             state: &state,
-            decoration: TableDecoration::Zebra,
             cell_tones: None,
             rich_cells: None,
             row_markers: Some(&row_markers),
             first_row_index: 0,
         };
         assert_eq!(table.height(), 4);
-        assert_eq!(
-            PaneTable {
-                columns: &columns,
-                rows,
-                state: &state,
-                decoration: TableDecoration::Minimal,
-                cell_tones: None,
-                rich_cells: None,
-                row_markers: None,
-                first_row_index: 0,
-            }
-            .height(),
-            3
-        );
-        assert_eq!(
-            PaneTable {
-                columns: &columns,
-                rows,
-                state: &state,
-                decoration: TableDecoration::Rules,
-                cell_tones: None,
-                rich_cells: None,
-                row_markers: None,
-                first_row_index: 0,
-            }
-            .height(),
-            3
-        );
         let buffer = render(24, 4, |frame| table.render(frame, frame.area(), &visual));
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
         assert_eq!(buffer[(0, 2)].symbol(), "▌");
@@ -3001,14 +2750,13 @@ mod tests {
             columns: &columns,
             rows,
             state: &state,
-            decoration: TableDecoration::Zebra,
             cell_tones: None,
             rich_cells: None,
             row_markers: None,
             first_row_index: 0,
         };
 
-        let window = table.window(3);
+        let window = table.window_from(3, 0);
         assert_eq!(window.start_row, 1);
         assert_eq!(window.selected_row, 0);
         assert_eq!(table.row_at_visual_line(window.start_row, 0), Some(1));
@@ -3033,7 +2781,6 @@ mod tests {
             columns: &columns,
             rows,
             state: &state,
-            decoration: TableDecoration::Minimal,
             cell_tones: None,
             rich_cells: None,
             row_markers: None,
@@ -3068,7 +2815,7 @@ mod tests {
 
     #[test]
     fn help_and_command_rows_are_left_aligned_single_line_tables() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let help = HelpRow {
             key: "ctrl+x v",
             label: "Switch Overview / Metrics",
@@ -3094,18 +2841,17 @@ mod tests {
     }
 
     #[test]
-    fn pane_table_decorations_are_independent_candidates() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+    fn pane_table_uses_distinct_zebra_and_selected_backgrounds() {
+        let visual = TuiVisualStyle::production();
         let columns = pane_table_columns();
         let rows: &[&[&str]] = &[&["first", "one", "short"], &["second", "two", "short"]];
-        let render_table = |decoration, selected| {
+        let render_table = |selected| {
             let state = PaneTableState::new(&columns, selected);
             render(24, 3, |frame| {
                 PaneTable {
                     columns: &columns,
                     rows,
                     state: &state,
-                    decoration,
                     cell_tones: None,
                     rich_cells: None,
                     row_markers: None,
@@ -3114,14 +2860,9 @@ mod tests {
                 .render(frame, frame.area(), &visual);
             })
         };
-        let minimal = render_table(TableDecoration::Minimal, usize::MAX);
-        let rules = render_table(TableDecoration::Rules, usize::MAX);
-        let zebra = render_table(TableDecoration::Zebra, usize::MAX);
-        let selected_odd = render_table(TableDecoration::Zebra, 0);
-        let selected_even = render_table(TableDecoration::Zebra, 1);
-        assert!(!text(&minimal).contains('│'));
-        assert!(text(&rules).contains('│'));
-        assert!(text(&rules).contains("Name  │"));
+        let zebra = render_table(usize::MAX);
+        let selected_odd = render_table(0);
+        let selected_even = render_table(1);
         assert_eq!(zebra[(2, 1)].bg, visual.table_odd_background);
         assert_eq!(zebra[(2, 2)].bg, visual.table_even_background);
         assert_eq!(
@@ -3136,7 +2877,7 @@ mod tests {
 
     #[test]
     fn pane_table_rich_cells_keep_semantic_colors_selection_and_width() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let columns = [PaneTableColumn {
             id: "agent-id",
             title: "AgentID",
@@ -3169,7 +2910,6 @@ mod tests {
                 columns: &columns,
                 rows,
                 state: &state,
-                decoration: TableDecoration::Zebra,
                 cell_tones: None,
                 rich_cells: Some(rich_rows),
                 row_markers: None,
@@ -3186,7 +2926,7 @@ mod tests {
 
     #[test]
     fn pane_table_uses_surface_below_short_content_across_the_full_width() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let columns = pane_table_columns();
         let rows: &[&[&str]] = &[&["one", "", "short"]];
         let state = PaneTableState::new(&columns, usize::MAX);
@@ -3195,7 +2935,6 @@ mod tests {
                 columns: &columns,
                 rows,
                 state: &state,
-                decoration: TableDecoration::Zebra,
                 cell_tones: None,
                 rich_cells: None,
                 row_markers: None,
@@ -3211,7 +2950,7 @@ mod tests {
 
     #[test]
     fn decision_table_cells_have_an_explicit_width_safe_separator() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let line = DecisionTableRow {
             cells: &["tui-observability-demo:agent", "Any"],
             widths: &[12, 3],
@@ -3234,7 +2973,7 @@ mod tests {
 
     #[test]
     fn pane_header_status_uses_active_and_idle_delimiter_shapes() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let buffer = render(48, 3, |frame| {
             PaneHeaderStatus {
                 label: "auto 5s",
@@ -3264,7 +3003,7 @@ mod tests {
 
     #[test]
     fn content_states_have_stable_non_color_identity() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let mut spans = Vec::new();
         for marker in [
             StatusMarker {
@@ -3279,16 +3018,10 @@ mod tests {
                 kind: StatusKind::Failed,
                 label: "failed",
             },
-            StatusMarker {
-                kind: StatusKind::Attention,
-                label: "attention",
-            },
         ] {
             spans.extend(marker.spans(&visual));
         }
         let notices = [
-            NoticeKind::Active,
-            NoticeKind::Success,
             NoticeKind::Loading,
             NoticeKind::Warning,
             NoticeKind::Unavailable,
@@ -3303,7 +3036,7 @@ mod tests {
             }
             .line(&visual)
         });
-        let buffer = render(80, 9, |frame| {
+        let buffer = render(80, 7, |frame| {
             frame.render_widget(
                 Paragraph::new(
                     std::iter::once(Line::from(spans))
@@ -3318,10 +3051,7 @@ mod tests {
             "● running",
             "○ idle",
             "× failed",
-            "! attention",
             "[… Loading] message",
-            "[● Active] message",
-            "[✓ Success] message",
             "[! Warning] message",
             "[— Unavailable] message",
             "[× Error] message",
@@ -3330,44 +3060,38 @@ mod tests {
         ] {
             assert!(text.contains(expected), "missing {expected:?}");
         }
-        let active_row = text
+        let warning_row = text
             .lines()
-            .position(|line| line.contains("[● Active]"))
-            .expect("active notice row") as u16;
-        assert_eq!(buffer[(0, active_row)].fg, visual.border_subtle);
-        assert_eq!(buffer[(1, active_row)].fg, visual.success);
-        assert_eq!(buffer[(2, active_row)].fg, visual.text_muted);
+            .position(|line| line.contains("[! Warning]"))
+            .expect("warning notice row") as u16;
+        assert_eq!(buffer[(0, warning_row)].fg, visual.border_subtle);
+        assert_eq!(buffer[(1, warning_row)].fg, visual.marker);
+        assert_eq!(buffer[(2, warning_row)].fg, visual.text_muted);
     }
 
     #[test]
-    fn fields_and_output_share_alignment_and_safe_truncation() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
-        let buffer = render(20, 2, |frame| {
+    fn fields_share_stable_label_alignment() {
+        let visual = TuiVisualStyle::production();
+        let buffer = render(20, 1, |frame| {
             frame.render_widget(
-                Paragraph::new(vec![
+                Paragraph::new(
                     FieldRow {
                         label: "Context",
                         value: "local",
                         label_width: 10,
                     }
                     .line(&visual),
-                    OutputLine {
-                        stream: "out",
-                        text: "a deliberately long output line",
-                    }
-                    .line(20, &visual),
-                ]),
+                ),
                 frame.area(),
             );
         });
         let text = text(&buffer);
         assert!(text.contains("Context     local"));
-        assert!(text.contains("out a deliberately …"));
     }
 
     #[test]
     fn shortcuts_share_lowercase_muted_amber_grammar() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let line = shortcut_line(
             &[KeyHint {
                 key: "enter",
@@ -3387,7 +3111,7 @@ mod tests {
 
     #[test]
     fn contextual_shortcut_rows_keep_the_spine_left_and_align_hints_right() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let buffer = render(40, 1, |frame| {
             ShortcutRow {
                 items: &[
@@ -3415,39 +3139,8 @@ mod tests {
     }
 
     #[test]
-    fn contextual_shortcuts_use_one_row_when_possible_and_at_most_two_when_narrow() {
-        let items = [
-            KeyHint {
-                key: "r",
-                label: "Run",
-            },
-            KeyHint {
-                key: "ctrl+x l",
-                label: "Layout",
-            },
-            KeyHint {
-                key: "ctrl+x e",
-                label: "Context",
-            },
-            KeyHint {
-                key: "enter",
-                label: "Open",
-            },
-            KeyHint {
-                key: "u",
-                label: "Refresh",
-            },
-        ];
-        let wide = ShortcutRow::pack(&items, 100, 2);
-        assert_eq!(wide, vec![items.to_vec()]);
-        let narrow = ShortcutRow::pack(&items, 42, 2);
-        assert_eq!(narrow.len(), 2);
-        assert!(narrow.iter().all(|row| !row.is_empty()));
-    }
-
-    #[test]
     fn shortcut_row_without_a_fallback_never_invents_a_key() {
-        let visual = TuiVisualStyle::for_variant(crate::tui::visual::TuiVisualVariant::FrameBase);
+        let visual = TuiVisualStyle::production();
         let items = [
             KeyHint {
                 key: "ctrl+x r",
