@@ -109,6 +109,8 @@ When the existing application has a single component with `dir: "."` (source fil
 
 The CLI shows the planned file moves and asks for confirmation (auto-confirmed with `--yes`).
 
+> **Go:** a single Go component lives in a `module/` directory (`dir: "module"`), not at the app root (its `go.mod` stays sealed away from `golem.yaml`/`golem-temp`). Promotion renames that directory to the component's name (e.g. `module/` → `go-main/`) and creates a sibling directory for the new component.
+
 ## Agent Name Conflicts
 
 Default templates all create an agent named `CounterAgent`. When adding a new component using a default template (e.g., `rust`, `ts`, `scala`), the generated agent will conflict with any existing `CounterAgent` in other components, causing deployment failures.

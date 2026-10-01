@@ -81,6 +81,7 @@ bigdecimal = { version = "0.4.7", features = ["serde", "string-only"] }
 bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
+bzip2 = "0.6.1"
 bytes = "1.10.1"
 camino = "1.1.10"
 cap-fs-ext = "3.4.5" # keep in sync with wasmtime
@@ -266,6 +267,7 @@ synoptic = "2.2.9"
 sysinfo = "0.33.1"
 system-interface = "0.27.3"
 tap = "1.0.1"
+tar = "0.4.46"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
 test-r = { version = "3.0.12", default-features = true }
@@ -297,6 +299,7 @@ tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
 tree-sitter = "0.26.5"
+tree-sitter-go = "0.23.4"
 tree-sitter-json = "0.24.8"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"

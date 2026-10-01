@@ -1,0 +1,4 @@
+{
+  "type": "agent",
+  "description": "An agent that customizes state snapshotting"
+}

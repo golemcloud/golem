@@ -4,4 +4,4 @@
 # Add more tool crates as members.
 [workspace]
 resolver = "2"
-members = ["dir-mirror"]
+members = ["dir-mirror", "go-bindgen-fixup"]

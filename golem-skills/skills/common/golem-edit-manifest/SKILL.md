@@ -69,7 +69,7 @@ Components are keyed by `namespace:name` (e.g., `my-app:billing`).
 ```yaml
 components:
   my-app:billing:
-    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps
+    dir: billing                   # Base directory (relative to golem.yaml). Use "." for single-component apps ("module" for Go)
     templates:                     # Parent template names (inherit build, env, plugins, files)
       - rust
     componentWasm: target/wasm32-wasip2/debug/billing.wasm   # Path to built WASM
@@ -102,7 +102,7 @@ components:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `dir` | string | Base directory for resolving paths. `"."` for single-component apps |
+| `dir` | string | Base directory for resolving paths. `"."` for single-component apps (Go uses `"module"`) |
 | `templates` | string or string[] | Parent template name(s) to inherit from |
 | `componentWasm` | string | Path to the built WASM component |
 | `outputWasm` | string | Path for the final output WASM ready for upload |
@@ -141,7 +141,7 @@ components:
 
 Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`, but a template may be inherited only through a single path: using two templates that both inherit the same template (e.g. `templates: [my-ts, ts-extra]` where both inherit `ts`) is rejected. The same applies to the `templates` lists of agents and tools. The built-in templates (`rust`, `ts`, `effect`, `scala` and `moonbit`) are provided by the CLI; don't define templates with these names.
 
-Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala` or `moonbit`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
+Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala`, `moonbit` or `go`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
 
 ## Agents
 
@@ -480,7 +480,12 @@ bridge:
         - MyAgent                    # Agent type name
         - my-app:billing             # Component name (all agents in that component)
       outputDir: ./bridge-sdk/rust
+  go:
+    external:
+      agents: "*"                    # One Go module per agent type
 ```
+
+The languages are `ts`, `effect`, `rust`, `scala`, `moonbit` and `go`.
 
 ## Plugin Installations
 

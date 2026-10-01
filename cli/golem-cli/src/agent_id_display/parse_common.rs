@@ -14,7 +14,7 @@
 
 use super::lexer::{LexError, Lexer, Token};
 use chrono::DateTime;
-use golem_common::schema::agent::NamedField;
+use golem_common::schema::agent::{FieldSource, NamedField};
 use golem_common::schema::canonical::{
     binary as canon_binary, datetime as canon_datetime, duration as canon_duration,
     path as canon_path, permission_card as canon_permission_card, quantity as canon_quantity,
@@ -165,7 +165,12 @@ pub(super) fn parse_input_schema_params<D: Dialect>(
 ) -> Result<SchemaValue, ParseError> {
     let mut lexer = Lexer::new(input);
     let mut values = Vec::with_capacity(fields.len());
-    for (i, field) in fields.iter().enumerate() {
+    // Auto-injected fields (the principal) are filled by the host and are not
+    // part of an agent id.
+    let fields = fields
+        .iter()
+        .filter(|field| matches!(field.source, FieldSource::UserSupplied));
+    for (i, field) in fields.enumerate() {
         if i > 0 {
             lexer.expect(&Token::Comma)?;
         }
