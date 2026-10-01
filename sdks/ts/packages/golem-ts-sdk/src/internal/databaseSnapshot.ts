@@ -197,56 +197,112 @@ export function decodeSnapshotDatabases(
   };
 }
 
+/** What a load finds in one field of the restored state. */
+type LoadedField =
+  | { kind: 'empty' }
+  | { kind: 'database'; instance: number; open: boolean; location: string | null }
+  | { kind: 'other' };
+
 /**
- * Puts the snapshot databases into `state`. An entry whose field is `undefined` gets a new
- * database: an in-memory one, or one opened at its location, which fails the load when no file
- * exists there. A field that holds any other value that is not a `DatabaseSync`, `null`
- * included, fails the load. The bytes of each in-memory entry are restored into its database.
- * Each open database then reads its schema and, when file-backed, every page, so that the first
+ * The steps of a load, in order: the databases to open (in memory when `location` is null, else
+ * at `location` after a check that a file exists there), the bytes to restore, and the
+ * databases to warm, by field name.
+ */
+type RestorePlan = {
+  open: Array<{ name: string; location: string | null }>;
+  restore: Array<{ name: string; bytes: Uint8Array }>;
+  warm: Array<{ name: string; allPages: boolean }>;
+};
+
+/**
+ * Decides how a load puts the snapshot databases into the restored state. A field that holds a
+ * database keeps it. An empty field gets a new database: in memory for an in-memory entry, at
+ * its location for a file entry. A field that holds any other value fails the load. The bytes
+ * of each in-memory entry are restored into its database. Each open database is then warmed
+ * once: it reads its schema and, when file-backed, every page.
+ */
+export function planRestore(
+  fields: ReadonlyArray<readonly [string, LoadedField]>,
+  databases: SnapshotDatabases,
+): { tag: 'ok'; val: RestorePlan } | { tag: 'err'; val: string } {
+  const byName = new Map<string, LoadedField>(fields);
+  const names = fields.map(([name]) => name);
+  const plan: RestorePlan = { open: [], restore: [], warm: [] };
+  const entries: Array<[string, string | null]> = [
+    ...databases.inMemory.map(({ name }): [string, null] => [name, null]),
+    ...Object.entries(databases.fileDatabases),
+  ];
+  for (const [name, location] of entries) {
+    const field = byName.get(name) ?? { kind: 'empty' };
+    if (field.kind === 'other') {
+      return { tag: 'err', val: `snapshot database field "${name}" is not a DatabaseSync` };
+    }
+    if (field.kind === 'empty') {
+      plan.open.push({ name, location });
+      byName.set(name, { kind: 'database', instance: -plan.open.length, open: true, location });
+      names.push(name);
+    }
+  }
+  plan.restore = databases.inMemory.map(({ name, bytes }) => ({ name, bytes }));
+  const warmed = new Set<number>();
+  for (const name of names) {
+    const field = byName.get(name);
+    if (field?.kind === 'database' && field.open && !warmed.has(field.instance)) {
+      warmed.add(field.instance);
+      plan.warm.push({ name, allPages: field.location !== null });
+    }
+  }
+  return { tag: 'ok', val: plan };
+}
+
+/**
+ * Puts the snapshot databases into `state` as `planRestore` decides, and fails the load when no
+ * file exists at the location of a database that it must open. The warm-up makes the first
  * recorded statements after the load match a live connection that holds its pages in cache;
- * otherwise snapshot recovery falls back to a full replay.
+ * otherwise snapshot recovery falls back to an older snapshot or a full replay.
  */
 export function restoreDatabases(state: Record<string, unknown>, databases: SnapshotDatabases) {
-  for (const { name, bytes } of databases.inMemory) {
-    const database = databaseAt(state, name, () => openDatabase(IN_MEMORY_LOCATION));
-    restoreDatabaseSync(database, bytes);
+  const instances = new Map<DatabaseSync, number>();
+  const plan = planRestore(
+    Object.entries(state).map(([name, value]) => [name, loadedField(value, instances)]),
+    databases,
+  );
+  if (plan.tag === 'err') {
+    throw new Error(plan.val);
   }
-  for (const [name, location] of Object.entries(databases.fileDatabases)) {
-    databaseAt(state, name, () => {
-      if (!existsSync(location)) {
-        throw new Error(`snapshot database field "${name}": no database file at ${location}`);
-      }
-      return openDatabase(location);
-    });
+  for (const { name, location } of plan.val.open) {
+    if (location !== null && !existsSync(location)) {
+      throw new Error(`snapshot database field "${name}": no database file at ${location}`);
+    }
   }
-  const warmed = new Set<DatabaseSync>();
-  for (const value of Object.values(state)) {
-    if (isDatabaseSync(value) && value.isOpen && !warmed.has(value)) {
-      warmed.add(value);
-      value.prepare('SELECT count(*) FROM sqlite_master').get();
-      if (value.location() !== null) {
-        serializeDatabaseSync(value);
-      }
+  for (const { name, location } of plan.val.open) {
+    state[name] = new DatabaseSync(location ?? IN_MEMORY_LOCATION, REOPENED_DATABASE_OPTIONS);
+  }
+  for (const { name, bytes } of plan.val.restore) {
+    restoreDatabaseSync(state[name] as DatabaseSync, bytes);
+  }
+  for (const { name, allPages } of plan.val.warm) {
+    const database = state[name] as DatabaseSync;
+    database.prepare('SELECT count(*) FROM sqlite_master').get();
+    if (allPages) {
+      serializeDatabaseSync(database);
     }
   }
 }
 
-function openDatabase(location: string): DatabaseSync {
-  return new DatabaseSync(location, REOPENED_DATABASE_OPTIONS);
-}
-
-function databaseAt(
-  state: Record<string, unknown>,
-  name: string,
-  open: () => DatabaseSync,
-): DatabaseSync {
-  let target = state[name];
-  if (target === undefined) {
-    target = open();
-    state[name] = target;
+function loadedField(value: unknown, instances: Map<DatabaseSync, number>): LoadedField {
+  if (value === undefined) {
+    return { kind: 'empty' };
   }
-  if (!isDatabaseSync(target)) {
-    throw new Error(`snapshot database field "${name}" is not a DatabaseSync`);
+  if (!isDatabaseSync(value)) {
+    return { kind: 'other' };
   }
-  return target;
+  const instance = instances.get(value) ?? instances.size;
+  instances.set(value, instance);
+  return {
+    kind: 'database',
+    instance,
+    open: value.isOpen,
+    location: value.isOpen ? value.location() : null,
+  };
 }

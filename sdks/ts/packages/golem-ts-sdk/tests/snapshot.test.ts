@@ -538,6 +538,73 @@ describe('snapshot — database plan', () => {
   });
 });
 
+describe('snapshot — restore plan', () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+
+  it('opens a new database for each empty field and warms every new database once', async () => {
+    const { planRestore } = await import('../src/internal/databaseSnapshot');
+    expect(
+      planRestore([['count', { kind: 'other' }]], {
+        inMemory: [{ name: 'memDb', bytes }],
+        fileDatabases: { fileDb: '/data/app.db' },
+      }),
+    ).toEqual({
+      tag: 'ok',
+      val: {
+        open: [
+          { name: 'memDb', location: null },
+          { name: 'fileDb', location: '/data/app.db' },
+        ],
+        restore: [{ name: 'memDb', bytes }],
+        warm: [
+          { name: 'memDb', allPages: false },
+          { name: 'fileDb', allPages: true },
+        ],
+      },
+    });
+  });
+
+  it('keeps the databases that the state holds and warms each open one once', async () => {
+    const { planRestore } = await import('../src/internal/databaseSnapshot');
+    expect(
+      planRestore(
+        [
+          ['memDb', { kind: 'database', instance: 0, open: true, location: null }],
+          ['fileDb', { kind: 'database', instance: 1, open: true, location: '/data/app.db' }],
+          ['alias', { kind: 'database', instance: 1, open: true, location: '/data/app.db' }],
+          ['closedDb', { kind: 'database', instance: 2, open: false, location: null }],
+          ['otherDb', { kind: 'database', instance: 3, open: true, location: '/data/other.db' }],
+        ],
+        { inMemory: [{ name: 'memDb', bytes }], fileDatabases: { fileDb: '/data/app.db' } },
+      ),
+    ).toEqual({
+      tag: 'ok',
+      val: {
+        open: [],
+        restore: [{ name: 'memDb', bytes }],
+        warm: [
+          { name: 'memDb', allPages: false },
+          { name: 'fileDb', allPages: true },
+          { name: 'otherDb', allPages: true },
+        ],
+      },
+    });
+  });
+
+  it('fails when a recorded field holds a value that is not a database', async () => {
+    const { planRestore } = await import('../src/internal/databaseSnapshot');
+    for (const databases of [
+      { inMemory: [{ name: 'db', bytes }], fileDatabases: {} },
+      { inMemory: [], fileDatabases: { db: '/data/app.db' } },
+    ]) {
+      expect(planRestore([['db', { kind: 'other' }]], databases)).toEqual({
+        tag: 'err',
+        val: 'snapshot database field "db" is not a DatabaseSync',
+      });
+    }
+  });
+});
+
 describe('snapshot — in-memory and file-backed databases', () => {
   type Constructed = { path: string; options: unknown };
 
