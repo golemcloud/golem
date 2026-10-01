@@ -72,6 +72,10 @@ These options have the following meaning:
 
 The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Once archival is complete, Golem clears the cached status and its checkpoint. If the agent is recovered later, Golem reconstructs the metadata from the archived oplog.
 
+## Filesystem snapshots
+
+When [filesystem snapshots](/next/operate/filesystem_snapshots) are enabled, the worker executor keeps a copy of each agent's files in the **blob storage**, next to the application snapshots of the agent. With S3, it uses the bucket that `filesystem_snapshots_bucket` names.
+
 ## Promises and schedules
 
 The worker executor stores **promise information** in its **key-value storage**, with one entry for each promise's completion state. Scheduled actions, including promise completion used to wake agents after long sleeps, use the separate **scheduler storage**.

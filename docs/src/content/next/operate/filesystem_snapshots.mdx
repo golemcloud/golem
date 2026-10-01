@@ -1,0 +1,238 @@
+import { Callout, Steps } from "nextra/components"
+
+# Filesystem Snapshots
+
+A filesystem snapshot is a copy of an agent's files that the worker executor keeps in blob storage next to an application snapshot. With filesystem snapshots, an agent keeps its files after a start from a snapshot record and after a manual update. [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots) describes what agents see. This page describes how to enable and operate the feature.
+
+Filesystem snapshots are disabled by default. A disabled executor keeps the earlier behaviour: it writes no filesystem snapshot name into snapshot records, and it does not save agent files.
+
+## Requirements
+
+- The executor runs on Linux and uses managed XFS storage for the agent filesystems. See [Prepare managed XFS storage](#prepare-managed-xfs-storage).
+- All executors that can run the same agents use the same blob storage and the same `repository_key`.
+- With S3 blob storage, the bucket that `filesystem_snapshots_bucket` names exists. The executor does not create buckets.
+
+An executor that enables filesystem snapshots without managed XFS storage does not start. Its startup fails with this error:
+
+```text
+filesystem snapshots require managed XFS storage
+```
+
+## Prepare managed XFS storage
+
+Set `managed_xfs_root_dir` in the `[filesystem_storage]` section to the mount point of a dedicated XFS filesystem:
+
+```toml
+[filesystem_storage]
+managed_xfs_root_dir = "/var/lib/golem/agents"
+```
+
+At startup, the executor checks the volume and refuses to start when a check fails:
+
+- The path is the root of an XFS mount.
+- Project quota accounting and enforcement are on. Mount the filesystem with the `prjquota` option.
+- The executor can query and change XFS project quotas, and a new directory inherits the project of its parent.
+- Reflink copies work. Make the filesystem with reflink enabled, for example `mkfs.xfs -m reflink=1`.
+- `deterministic_root_dir` is not set. The two storage modes exclude each other.
+
+The executor makes the host directories `.scratch` and `.initial-files` directly under the root, outside every agent's quota project. A capture goes into `.scratch`. At startup, the executor removes what an earlier process left in these directories.
+
+## Enable filesystem snapshots
+
+<Steps>
+
+### Make a repository key
+
+The key encrypts the snapshots. It is 64 bytes, written as 128 hex characters. For example:
+
+```shell
+openssl rand -hex 64
+```
+
+Keep the key secret, and give the same key to every executor. The executor opens each stored snapshot repository with this key, so a different key cannot read the snapshots that the earlier key wrote. When a start cannot restore a filesystem snapshot, it falls back to an older baseline or to a full replay.
+
+### Set the blob storage bucket
+
+With S3 blob storage, set `filesystem_snapshots_bucket` in the `[blob_storage.config]` section. The field is required in an S3 configuration. The example configuration uses this value:
+
+```toml
+[blob_storage.config]
+filesystem_snapshots_bucket = "filesystem-snapshots"
+```
+
+The executor keeps the snapshots of each agent under their own key prefix in that bucket. The prefix is made from `object_prefix`, when it is set, the environment id and the agent id. The file system and SQLite blob storage backends also keep filesystem snapshots, in their own namespace.
+
+### Set the type to `Managed`
+
+```toml
+[filesystem_snapshots]
+type = "Managed"
+
+[filesystem_snapshots.config]
+repository_key = "<128 hex characters>"
+```
+
+Give the key through the environment variable instead of the file:
+
+```shell
+GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Managed
+GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY=<128 hex characters>
+```
+
+The other settings have defaults. See [Configuration](#configuration).
+
+### Keep memory outside the agents
+
+Each restore and each upload uses threads and memory outside the memory of the agents. Set `[memory] worker_memory_ratio` so that the share of the executor's memory that agents get leaves room for them. See [Memory](#memory).
+
+</Steps>
+
+<Callout type="warning">
+    Enable filesystem snapshots on every executor of a deployment. A record with a filesystem snapshot name can reach an executor where the feature is disabled. There, a start does not use an automatic snapshot record with a name, and uses an older baseline or a full replay. A start from a manual-update record with a name fails with this cause: `the record names a filesystem snapshot, and filesystem snapshots are disabled on this executor`.
+</Callout>
+
+## Configuration
+
+All settings except `type` are in the `[filesystem_snapshots.config]` section. The executor reads them only when `type = "Managed"`. This is the full set with the default values:
+
+```toml
+[filesystem_snapshots]
+type = "Managed"
+
+[filesystem_snapshots.config]
+repository_key = "<128 hex characters>"
+max_concurrent_uploads = 4
+max_concurrent_restores = 8
+storage_call_deadline = "60s"
+restore_reader_threads = 6
+save_threads = 2
+confirmation_wait = "60s"
+store_check_limit = "5s"
+capture_wait = "5s"
+retained_periodic_snapshots = 2
+retained_update_snapshots = 2
+
+[filesystem_snapshots.config.upload_retry]
+max_attempts = 5
+min_delay = "2s"
+max_delay = "2m"
+multiplier = 4.0
+```
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `repository_key` | none, required | The key that encrypts the snapshots, as 128 hex characters. Environment variable: `GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY`. |
+| `max_concurrent_uploads` | `4` | The number of store operations that save or delete at the same time on one executor. An upload holds a slot only while it calls the store, and gives it back while it waits for a retry. Retention deletes and clean-ups also take a slot. |
+| `max_concurrent_restores` | `8` | The number of restores that run at the same time on one executor. A start that finds no free slot waits for one. |
+| `storage_call_deadline` | `60s` | The longest time that one blob storage call of a save, a restore or a delete waits for an answer. A call that gets no answer in this time fails. Keep it well above the slowest normal call of your storage. It stops a call that never returns, and is not a limit for a slow call. |
+| `restore_reader_threads` | `6` | The number of threads that read data in one restore. |
+| `save_threads` | `2` | The number of threads of each parallel stage of one save. |
+| `confirmation_wait` | `60s` | How long a start of an agent waits for an upload of the same agent that runs on this executor. A manual update also waits for at most this time for a running upload of the agent. |
+| `store_check_limit` | `5s` | How long a start that did not wait for an upload may check the store for the snapshot of the agent's newest unconfirmed record. |
+| `capture_wait` | `5s` | How long a capture waits for the agent's open file calls. When a call is still open after this time, the capture gives up and Golem skips the snapshot. |
+| `retained_periodic_snapshots` | `2` | The number of automatic filesystem snapshots that retention keeps for each agent. |
+| `retained_update_snapshots` | `2` | The number of manual-update filesystem snapshots that retention keeps for each agent. |
+| `upload_retry` | see below | The retry policy of each store operation of an upload and of a clean-up. |
+
+Write each duration in the [humantime](https://docs.rs/humantime) format, for example `"500ms"`, `"60s"` or `"2m"`. Each count and each duration must be greater than zero. The executor refuses to start with an invalid value and names the setting in the error, for example `max_concurrent_restores must be greater than zero` or `repository_key must be 128 hex characters`.
+
+The default values of `max_concurrent_restores` and `restore_reader_threads` were measured for an executor node with 16 vCPU and 32 GiB of memory. A smaller node needs smaller values. For example, a node with 8 vCPU reached its CPU limit at 4 restores with 4 reader threads each.
+
+### Upload retries
+
+An upload saves the capture with retries. When the store gives an error that it marks as temporary, the executor waits and tries again:
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `max_attempts` | `5` | The number of attempts, including the first one. Must be greater than zero. |
+| `min_delay` | `2s` | The delay after the first failed attempt. Must not be greater than `max_delay`. |
+| `max_delay` | `2m` | The longest delay. |
+| `multiplier` | `4.0` | The factor by which the delay grows after each failed attempt. Must be at least 1. Golem uses the whole-number part of the value. |
+| `max_jitter_factor` | none | Optional. A random part, from 0 to this factor, of each delay is added to it. Must be between 0 and 1. |
+
+When you set `[filesystem_snapshots.config.upload_retry]`, give `max_attempts`, `min_delay`, `max_delay` and `multiplier`. With the defaults, the delays are 2 s, 8 s, 32 s and 2 minutes. When the last attempt fails, the executor gives up the upload. The snapshot record stays without a confirmation, and a start uses the previous baseline. The clean-ups and the retention deletes use the same policy.
+
+## How the executor uses the settings
+
+### Captures
+
+At a snapshot boundary, the executor first admits the snapshot. It refuses the snapshot, and the agent's snapshot code does not run, in these cases:
+
+- An upload of the agent still runs. At most one upload runs for each agent.
+- The free space or the free filesystem objects of the volume are below the targets of `[filesystem_storage.pressure]` (`target_available_bytes` and `target_available_filesystem_objects`).
+
+For a manual update, these refusals fail the update. The only exception is a running upload of the agent: the update waits once for its end, for at most `confirmation_wait`, and then asks again.
+
+Then the capture stops the agent's file calls, waits for the open calls for at most `capture_wait`, and makes a reflink copy of the files into `.scratch`. The copy shares the data blocks of the files, so it uses no space when it is made. When the agent then writes to a shared block, that block gets its own copy. Deleted files also keep their blocks until the upload ends and the executor removes the capture.
+
+A guest that returns from an invocation with an unflushed write to a WASI output stream keeps a file call open. Its captures time out after `capture_wait`. The executor logs `Skipping the snapshot: the agent filesystem was not captured` with the error `agent filesystem has an open call`, and counts the capture with the outcome `busy`.
+
+### Uploads and confirmations
+
+The executor uploads a capture in the background, under the retry policy. When the upload is complete, the running agent writes a confirmation entry into its oplog. The stop of an agent does not wait for its upload. When the agent no longer runs at the end of the upload, the executor keeps the snapshot. The next start confirms it:
+
+1. A start on the executor that runs the upload waits for the upload, for at most `confirmation_wait`. This happens before the start takes an account slot or memory. A stop or a terminal interrupt ends the wait.
+2. Then the start checks the store once, for at most the rest of `confirmation_wait`, or for at most `store_check_limit` when it did not wait.
+3. When the store holds the whole snapshot, the start writes the confirmation entry itself.
+
+A start on another executor does only steps 2 and 3. An upload that still runs when the agent moves to another executor is lost for that start, and the start uses the previous baseline.
+
+When an update or a revert replaced the snapshot record during the upload, the confirmation finds no record with the name. The executor then deletes the snapshot and counts a dropped confirmation.
+
+### Restores
+
+A start restores the filesystem snapshot of its baseline before the agent's code runs. A restore downloads the whole tree, so a large tree makes the start slower. At most `max_concurrent_restores` restores run at the same time, each with `restore_reader_threads` reader threads. A restored tree counts against the agent's storage quota, as the files did before.
+
+### Retention
+
+{/* GOL-579: recheck */}
+
+After a confirmed automatic snapshot, the upload deletes the older automatic snapshots of the agent. It keeps its own snapshot and the `retained_periodic_snapshots - 1` newest older ones. It never counts or deletes a snapshot whose time is less than 2 minutes before its own, because another executor's clock can differ.
+
+After a manual update record is written, the executor applies the same rule to the manual-update snapshots with `retained_update_snapshots`. It never deletes the snapshot of the last successful manual update.
+
+Retention counts snapshots by age only. It can delete an older snapshot that a start could still use as a fallback baseline. Such a start then falls back further, to an older baseline or to a full replay. A failed retention delete is logged, and the next retention tries again.
+
+### Delete, revert and fork
+
+{/* GOL-579: recheck */}
+
+The executor does not yet clean up filesystem snapshots on agent operations:
+
+- A deleted agent's filesystem snapshots stay in blob storage.
+- A revert does not delete the snapshots of the reverted records. Retention deletes them later.
+- A fork does not copy the snapshots to the new agent. A start of the forked agent falls back from each automatic snapshot record with a name. A start of a forked agent whose baseline is a manual-update record with a name fails.
+
+### Memory
+
+Each restore holds memory for each of its reader threads, and each upload holds memory while it saves. This memory is outside the memory that the executor gives to agents. On a node with 16 vCPU and 32 GiB of memory, 4 uploads and 8 restores with the default thread counts needed about 6 GiB. For example, on a pod limit of about 28 GiB, set the agent share to about 0.78:
+
+```toml
+[memory]
+worker_memory_ratio = 0.78
+```
+
+Measure again for another node type or for other values of the settings.
+
+## Metrics
+
+The worker executor exports these metrics for filesystem snapshots. The labels have fixed values and hold no agent identifiers. See [Metrics](/next/operate/metrics) for the other metrics.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `filesystem_snapshot_capture_seconds` | histogram | `outcome` | The time that a capture stops the agent's file calls. `outcome` is `captured`, `unchanged`, `initial_files`, `busy`, `invalidated` or `failed`. |
+| `filesystem_snapshot_upload_seconds` | histogram | `kind`, `outcome` | The time of an upload with its retries, until its confirmation. `kind` is `periodic` or `update`. `outcome` is `confirmed`, `superseded`, `deferred` or `failed` for an automatic snapshot, and `saved` or `failed` for a manual update. |
+| `filesystem_snapshot_uploaded_bytes_total` | counter | `kind` | The bytes of the trees of the uploaded snapshots. |
+| `filesystem_snapshot_uploads_in_progress` | gauge | | The store attempts of uploads that hold a slot now. |
+| `filesystem_snapshot_restore_seconds` | histogram | `outcome` | The time of a restore, without the wait for a slot. `outcome` is `restored` or `failed`. |
+| `filesystem_snapshot_dropped_confirmations_total` | counter | `reason` | Uploaded snapshots that no confirmation entry names. `reason` is `superseded`. |
+| `filesystem_snapshot_leaked_cleanups_total` | counter | `operation` | Deletes of snapshots that failed after their retries. The data stays in blob storage. `operation` is `delete` or `delete_all`. |
+
+Watch these values:
+
+- **Busy captures.** `filesystem_snapshot_capture_seconds_count{outcome="busy"}` counts the snapshots that Golem skipped because a guest left a file call open.
+- **Deferred uploads.** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` counts uploads that ended after their agent stopped. A later start can still confirm them. A high rate can mean that `confirmation_wait` is too short for your uploads.
+- **Dropped confirmations.** `filesystem_snapshot_dropped_confirmations_total` counts uploads that an update or a revert made useless.
+- **Failed uploads.** `filesystem_snapshot_upload_seconds_count{outcome="failed"}` counts uploads that failed after their retries. The executor also logs `Failed to upload a filesystem snapshot; no confirmation record follows its record`.
+- **Leaked clean-ups.** `filesystem_snapshot_leaked_cleanups_total` counts deletes that left data in blob storage.
+- **Restore time.** `filesystem_snapshot_restore_seconds` shows how much a restore adds to the start of an agent.

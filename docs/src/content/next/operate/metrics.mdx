@@ -124,6 +124,20 @@ Worker executors expose the following Prometheus metrics:
 
 For configuration, recovery, and deletion diagnostics, see [Operating Durable Stream Sessions](/next/operate/durable_streams).
 
+#### Filesystem Snapshots
+
+| Metric                                            | Type      | Labels            | Description                                                                 |
+| ------------------------------------------------- | --------- | ----------------- | --------------------------------------------------------------------------- |
+| `filesystem_snapshot_capture_seconds`             | histogram | `outcome`         | Time that a capture of an agent filesystem stops the file calls             |
+| `filesystem_snapshot_upload_seconds`              | histogram | `kind`, `outcome` | Time of an upload of a filesystem snapshot, with its retries                |
+| `filesystem_snapshot_uploaded_bytes_total`        | counter   | `kind`            | Bytes of the trees of the uploaded filesystem snapshots                     |
+| `filesystem_snapshot_uploads_in_progress`         | gauge     |                   | Store attempts of uploads that hold a slot now                              |
+| `filesystem_snapshot_restore_seconds`             | histogram | `outcome`         | Time of a restore of a filesystem snapshot, without the wait for a slot     |
+| `filesystem_snapshot_dropped_confirmations_total` | counter   | `reason`          | Uploaded filesystem snapshots that no confirmation entry names              |
+| `filesystem_snapshot_leaked_cleanups_total`       | counter   | `operation`       | Deletes of filesystem snapshots that failed after their retries             |
+
+For the label values and what to watch, see [Filesystem Snapshots](/next/operate/filesystem_snapshots#metrics).
+
 ### Worker Service
 
 Worker service exposes the following Prometheus metrics:
