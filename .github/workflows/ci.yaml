@@ -1180,6 +1180,15 @@ jobs:
         if: matrix.chunk.name == 'rust-1'
         run: cargo make --profile ci fetch-builtin-artifacts
 
+      - name: Build filesystem tools from this revision
+        if: matrix.chunk.name == 'rust-1'
+        working-directory: builtin-tools/filesystem-tools
+        env:
+          GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem-cli
+        run: |
+          "$GOLEM_CLI" build -P release --force-build --yes
+          "$GOLEM_CLI" exec -P release copy
+
       - name: Collect built WASMs
         env:
           EXPECTED_ARTIFACT: ${{ matrix.chunk.expected-artifact }}

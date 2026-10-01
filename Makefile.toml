@@ -604,7 +604,7 @@ command = "cargo"
 args = ["test", "--manifest-path", "dev-tools/Cargo.toml", "--lib"]
 
 [tasks.worker-executor-tests]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit"]
 description = "Runs worker executor tests only"
 env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
 command = "cargo"
@@ -619,7 +619,7 @@ args = [
 ]
 
 [tasks.worker-executor-tests-misc]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit"]
 description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -641,7 +641,7 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_
 '''
 
 [tasks.worker-executor-tests-group1]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -650,7 +650,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group2]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 2/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -661,7 +661,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group3]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 3/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -670,7 +670,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 '''
 
 [tasks.worker-executor-tests-group4]
-dependencies = ["wit", "fetch-builtin-artifacts"]
+dependencies = ["wit"]
 description = "Runs worker executor tests only (group 4/4)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
@@ -1794,7 +1794,7 @@ elif equals ${component} filesystem-tools
     build_task = set build-filesystem-tools
     wasm = set builtin-tools/filesystem-tools.wasm
     artifact_id = set filesystem_tools
-    exports_json = set "{\"tools\":[\"read-file@0.3.0\",\"write-file@0.3.0\",\"edit-file@0.3.0\"]}"
+    exports_json = set "{\"tools\":[\"read-file@0.1.0\",\"write-file@0.1.0\",\"edit-file@0.1.0\",\"ls@0.1.0\",\"grep@0.1.0\"]}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} javascript-tools
