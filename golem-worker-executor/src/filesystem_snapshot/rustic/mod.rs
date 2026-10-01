@@ -19,6 +19,7 @@
 //! module.
 
 mod backend;
+mod claim;
 mod fault;
 mod files;
 mod priority;

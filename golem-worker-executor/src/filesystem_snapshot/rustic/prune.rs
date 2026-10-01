@@ -26,12 +26,13 @@
 
 use super::files::{Lease, SnapshotFiles};
 use crate::filesystem_snapshot::clock::Clock;
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
 use std::collections::HashSet;
+use std::future::ready;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -551,45 +552,42 @@ pub(super) async fn write_marker(
     Ok(path)
 }
 
-/// Writes a marker of the claim with the number. A write that succeeds and started before the end
-/// of the lease moves the end to `span` after the start of the write, when that is later. A write
-/// that started at or after the end does not move it.
+/// Writes a marker of the claim. A write that succeeds and started before the end of the lease
+/// moves the end to `span` after the start of the write, when that is later. A write that started
+/// at or after the end does not move it.
 async fn write_leased_marker(
     files: &SnapshotFiles,
     op_label: &'static str,
-    directory: &Path,
-    number: u64,
+    claim: &ClaimName,
     lease: &Lease,
     span: Duration,
     clock: &dyn Clock,
 ) -> anyhow::Result<Box<Path>> {
     let (started, time) = marker_time(clock);
-    let marker = write_marker(files, op_label, directory, number, time).await?;
+    let marker = write_marker(files, op_label, &claim.directory, claim.number, time).await?;
     lease.extend_from(started, span);
     Ok(marker)
 }
 
-/// Writes the first marker of the claim with the number at the path `marker`, then takes the
-/// claim, and gives the lease of the prune when this delete holds the claim. The caller makes the
-/// path before the write, so a guard can delete the marker when the delete stops during the write.
-/// A delete that loses the claim deletes its marker. The lease starts with the marker write: it
-/// ends `span` after `started`, the instant that [`marker_time`] gave with the time in the name of
-/// the marker.
+/// Writes the first marker of the claim at the path `marker`, then takes the claim, and tells
+/// whether this delete holds the claim. The caller makes the path and the lease before the write,
+/// so a guard can delete the marker when the delete stops during the write. A delete that loses
+/// the claim deletes its marker.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
-    directory: &Path,
-    number: u64,
+    claim: &ClaimName,
     marker: &Path,
-    started: Instant,
-    span: Duration,
-) -> anyhow::Result<Option<Lease>> {
+) -> anyhow::Result<bool> {
     write_marker_at(files, "write_marker", marker).await?;
-    let lease = Lease::until(started + span);
     let written = files
-        .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
+        .put_if_absent(
+            "write_claim",
+            &claim.directory.join(claim.number.to_string()),
+            &[],
+        )
         .await?;
     if written == PutIfAbsent::Written {
-        return Ok(Some(lease));
+        return Ok(true);
     }
     if let Err(error) = files.delete("delete_marker", marker).await {
         warn!(
@@ -597,7 +595,7 @@ pub(super) async fn take_claim(
             "Failed to delete the marker of a prune claim that a filesystem snapshot delete lost"
         );
     }
-    Ok(None)
+    Ok(false)
 }
 
 /// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
@@ -612,47 +610,35 @@ pub(super) fn refresh_period(grace: Duration, deadline: Duration) -> Duration {
     (base / 4).min(lease_span(grace, deadline) / 4)
 }
 
-/// Writes a new marker of the claim with the number at each period, until the caller drops the
-/// future or the operation of the files is cancelled, and adds the path of each written marker to
-/// `written`. A write that succeeds and started before the end of the lease moves the end to
-/// `span` after its start, when that is later. A write that started at or after the end does not
-/// move it. A failed write gives a warning, and the next period tries again.
-pub(super) async fn keep_claim_fresh(
-    files: &SnapshotFiles,
-    directory: &Path,
-    number: u64,
+/// Writes a new marker of the claim at each period, until the caller drops the stream or the
+/// operation of the files is cancelled, and gives the path of each marker that it wrote. A write
+/// that succeeds and started before the end of the lease moves the end to `span` after its start,
+/// when that is later. A write that started at or after the end does not move it. A failed write
+/// gives a warning, and the next period tries again.
+pub(super) fn keep_claim_fresh<'a>(
+    files: &'a SnapshotFiles,
+    claim: &'a ClaimName,
     period: Duration,
-    written: &Mutex<Vec<Box<Path>>>,
-    lease: &Lease,
+    lease: &'a Lease,
     span: Duration,
-    clock: &dyn Clock,
-) {
+    clock: &'a dyn Clock,
+) -> impl Stream<Item = Box<Path>> + 'a {
     stream::repeat(())
-        .then(|()| tokio::time::sleep(period))
+        .then(move |()| tokio::time::sleep(period))
         .take_until(files.cancelled())
-        .for_each(|()| async move {
-            let marker = write_leased_marker(
-                files,
-                "refresh_claim",
-                directory,
-                number,
-                lease,
-                span,
-                clock,
+        .then(move |()| write_leased_marker(files, "refresh_claim", claim, lease, span, clock))
+        .filter_map(|written| {
+            ready(
+                written
+                    .inspect_err(|error| {
+                        warn!(
+                            error = %format!("{error:#}"),
+                            "Failed to write a new marker of the prune claim of a filesystem snapshot scope"
+                        )
+                    })
+                    .ok(),
             )
-            .await;
-            match marker {
-                Ok(path) => written
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(path),
-                Err(error) => warn!(
-                    error = %format!("{error:#}"),
-                    "Failed to write a new marker of the prune claim of a filesystem snapshot scope"
-                ),
-            }
         })
-        .await;
 }
 
 /// Deletes the claim with the number when this delete took it, and then each of its markers by its
@@ -1588,14 +1574,13 @@ mod tests {
             Duration::from_secs(10),
             keep_claim_fresh(
                 &files,
-                &claims_directory(&ledger(None, false)),
-                0,
+                &claim_zero(),
                 Duration::from_secs(3600),
-                &std::sync::Mutex::default(),
                 &Lease::until(Instant::now()),
                 GRACE,
                 &SystemClock,
-            ),
+            )
+            .collect::<Vec<_>>(),
         )
         .await
         .is_ok();
@@ -1611,22 +1596,25 @@ mod tests {
         lease: &Lease,
         span: Duration,
     ) -> Option<Instant> {
-        let written = std::sync::Mutex::<Vec<Box<Path>>>::default();
-        let directory = claims_directory(&ledger(None, false));
-        tokio::select! {
-            () = keep_claim_fresh(files, &directory, 0, period, &written, lease, span, &SystemClock) => None,
-            ended = async {
-                futures::stream::repeat(())
-                    .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-                    .take_while(|()| {
-                        std::future::ready(
-                            written.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty(),
-                        )
-                    })
-                    .for_each(|()| std::future::ready(()))
-                    .await;
-                Instant::now()
-            } => Some(ended),
+        let claim = claim_zero();
+        std::pin::pin!(keep_claim_fresh(
+            files,
+            &claim,
+            period,
+            lease,
+            span,
+            &SystemClock
+        ))
+        .next()
+        .await
+        .map(|_| Instant::now())
+    }
+
+    /// Gives the claim 0 of the ledger without a prune.
+    fn claim_zero() -> ClaimName {
+        ClaimName {
+            directory: claims_directory(&ledger(None, false)).into(),
+            number: 0,
         }
     }
 
@@ -1731,16 +1719,14 @@ mod tests {
             let (at, time) = marker_time(&SystemClock);
             (marker_path(&directory, 0, time), at)
         };
-        let (first_marker, first_at) = marker();
-        let (second_marker, second_at) = marker();
-        let first = take_claim(&files, &directory, 0, &first_marker, first_at, GRACE)
-            .await
-            .unwrap()
-            .map(|lease| lease.expiry());
-        let again = take_claim(&files, &directory, 0, &second_marker, second_at, GRACE)
-            .await
-            .unwrap()
-            .map(|lease| lease.expiry());
+        let claim = ClaimName {
+            directory: directory.clone().into(),
+            number: 0,
+        };
+        let (first_marker, _) = marker();
+        let (second_marker, _) = marker();
+        let first = take_claim(&files, &claim, &first_marker).await.unwrap();
+        let again = take_claim(&files, &claim, &second_marker).await.unwrap();
         let listed = list_claims(&files, &directory).await.unwrap();
 
         assert_eq!(
@@ -1756,8 +1742,8 @@ mod tests {
             ),
             (
                 "golem/prune-claims/42".to_string(),
-                Some(first_at + GRACE),
-                None,
+                true,
+                false,
                 2,
                 true,
                 true,
