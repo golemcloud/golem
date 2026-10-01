@@ -8,9 +8,18 @@ import { method } from '../src/method';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { Principal } from '../src/principal';
+import type { SavedAgentSnapshot } from '../src/internal/resolvedAgent';
+import type { SnapshotDatabases } from '../src/internal/databaseSnapshot';
 
 interface Resolved {
-  saveSnapshot(): Promise<{ kind: 'custom' | 'typed'; data: Uint8Array; mimeType?: string }>;
+  saveSnapshot(): Promise<SavedAgentSnapshot>;
+}
+
+function typed(saved: SavedAgentSnapshot): Extract<SavedAgentSnapshot, { kind: 'typed' }> {
+  if (saved.kind !== 'typed') {
+    throw new Error(`expected a typed snapshot, got a ${saved.kind} one`);
+  }
+  return saved;
 }
 
 async function initiate(name: string): Promise<Resolved> {
@@ -257,7 +266,7 @@ defineAgent({
 describe('snapshot — typed state', () => {
   it('serializes the declared state fields without config or helpers', async () => {
     const agent = await initiate('SnapTypedCounter');
-    const snap = await agent.saveSnapshot();
+    const snap = typed(await agent.saveSnapshot());
     expect(snap.mimeType).toBe('application/json');
     expect(jsonOf(snap.data)).toEqual({ count: 7 });
   });
@@ -301,7 +310,7 @@ describe('snapshot — schema-backed config', () => {
 describe('snapshot — custom save/load', () => {
   it('uses typed saving with a custom load-only restoration factory', async () => {
     const initial = await initiate('SnapTypedSaveCustomLoad');
-    const snapshot = await initial.saveSnapshot();
+    const snapshot = typed(await initial.saveSnapshot());
     expect(snapshot.mimeType).toBe('application/json');
     expect(jsonOf(snapshot.data)).toEqual({ count: 4 });
 
@@ -309,7 +318,7 @@ describe('snapshot — custom save/load', () => {
     expect(jsonOf((await restored.saveSnapshot()).data)).toEqual({ count: 4 });
   });
 
-  it('uses the user bytes verbatim (octet-stream) and restores from them', async () => {
+  it('returns the bytes of a custom save as a custom result and restores from them', async () => {
     const agent = await initiate('SnapCustom');
     const snap = await agent.saveSnapshot();
     expect(snap.kind).toBe('custom');
@@ -613,10 +622,11 @@ describe('snapshot — restore plan', () => {
 
   it('fails when a recorded field holds a value that is not a database', async () => {
     const { planRestore } = await import('../src/internal/databaseSnapshot');
-    for (const databases of [
+    const cases: SnapshotDatabases[] = [
       { inMemory: [{ name: 'db', bytes }], fileDatabases: {} },
       { inMemory: [], fileDatabases: { db: '/data/app.db' } },
-    ]) {
+    ];
+    for (const databases of cases) {
       expect(planRestore([['db', { kind: 'other' }]], databases)).toEqual({
         tag: 'err',
         val: 'snapshot database field "db" is not a DatabaseSync',
@@ -700,11 +710,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         .initiate(idValue as never, { tag: 'anonymous' });
       if (result.tag === 'err') throw result.val;
       return result.val as unknown as {
-        saveSnapshot(): Promise<{
-          data: Uint8Array;
-          mimeType: string;
-          fileDatabases: Record<string, string>;
-        }>;
+        saveSnapshot(): Promise<SavedAgentSnapshot>;
       };
     };
     const boundaryOf = (mimeType: string) => mimeType.match(/boundary=([^\s;]+)/)![1];
@@ -751,7 +757,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         methods: {},
       });
 
-    const saved = await (await env.initiateIsolated('MixedDatabases')).saveSnapshot();
+    const saved = typed(await (await env.initiateIsolated('MixedDatabases')).saveSnapshot());
 
     expect(saved.mimeType).toMatch(/^multipart\/mixed; boundary=/);
     const parts = env.multipart.decodeMultipart(saved.data, env.boundaryOf(saved.mimeType));
@@ -775,7 +781,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         methods: {},
       });
 
-    const saved = await (await env.initiateIsolated('FileDatabaseOnly')).saveSnapshot();
+    const saved = typed(await (await env.initiateIsolated('FileDatabaseOnly')).saveSnapshot());
 
     expect(saved.mimeType).toBe('application/json');
     expect(jsonOf(saved.data)).toEqual({ count: 2 });
@@ -797,7 +803,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         methods: {},
       });
 
-    const saved = await (await env.initiateIsolated('TemporaryDatabase')).saveSnapshot();
+    const saved = typed(await (await env.initiateIsolated('TemporaryDatabase')).saveSnapshot());
 
     const parts = env.multipart.decodeMultipart(saved.data, env.boundaryOf(saved.mimeType));
     expect(parts.map((part) => part.name)).toEqual(['state', 'db:tempDb']);
