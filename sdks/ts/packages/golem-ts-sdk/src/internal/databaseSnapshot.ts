@@ -20,7 +20,11 @@ import {
   isAutocommitDatabaseSync,
   restoreDatabaseSync,
   serializeDatabaseSync,
+  Session,
+  SQLTagStore,
+  StatementSync,
 } from './sqlite';
+import type { MultipartPart } from './multipart';
 
 /** The SQLite databases of a typed snapshot, keyed by the agent field that holds each one. */
 export type SnapshotDatabases = {
@@ -31,7 +35,7 @@ export type SnapshotDatabases = {
 };
 
 /** What a save reads from one `DatabaseSync` field. */
-export type DatabaseField = {
+type DatabaseField = {
   name: string;
   /** False when the connection has an open transaction. */
   autocommit: boolean;
@@ -40,7 +44,7 @@ export type DatabaseField = {
 };
 
 /** Which databases go into the snapshot as bytes, and which by their location. */
-export type DatabasePlan = {
+type DatabasePlan = {
   inMemory: string[];
   fileDatabases: Record<string, string>;
 };
@@ -65,9 +69,26 @@ export const REOPENED_DATABASE_OPTIONS = {
 } as const;
 
 const IN_MEMORY_LOCATION = ':memory:';
+const DATABASE_PART_PREFIX = 'db:';
+const DATABASE_PART_CONTENT_TYPE = 'application/x-sqlite3';
 
-export function isDatabaseSync(val: unknown): val is DatabaseSync {
+function isDatabaseSync(val: unknown): val is DatabaseSync {
   return val instanceof DatabaseSync;
+}
+
+/** Whether `val` is a SQLite object that a snapshot cannot hold as plain state. */
+export function isSqliteResource(val: unknown): boolean {
+  return (
+    isDatabaseSync(val) ||
+    isInstance(val, StatementSync) ||
+    isInstance(val, Session) ||
+    isInstance(val, SQLTagStore)
+  );
+}
+
+/** `val instanceof Ctor`, including builtins whose constructors are not public. */
+function isInstance(val: unknown, Ctor: Function): boolean {
+  return typeof Ctor === 'function' && val instanceof Ctor;
 }
 
 /**
@@ -96,13 +117,33 @@ export function planDatabases(
 }
 
 /**
- * Reads the databases of a save and returns what the snapshot holds for them. Throws a string
- * when a database has an open transaction. Of a file-backed database it reads only the
- * transaction state and the location.
+ * Takes the SQLite fields out of the state fields of a save. Gives the other fields, a
+ * `db:<field>` multipart part for each in-memory database, and the location of each file-backed
+ * database. Throws a string when a field holds a `StatementSync`, `Session` or `SQLTagStore`,
+ * when two fields hold the same database, or when a database has an open transaction. Of a
+ * file-backed database it reads only the transaction state and the location.
  */
-export function takeDatabases(
-  databases: ReadonlyArray<readonly [string, DatabaseSync]>,
-): SnapshotDatabases {
+export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>): {
+  ordinary: Record<string, unknown>;
+  databaseParts: MultipartPart[];
+  fileDatabases: Record<string, string>;
+} {
+  const ordinary: Record<string, unknown> = {};
+  const databases: Array<[string, DatabaseSync]> = [];
+  const seen = new Set<DatabaseSync>();
+  for (const [name, val] of fields) {
+    if (isDatabaseSync(val)) {
+      if (seen.has(val)) {
+        throw `Multiple agent fields reference the same DatabaseSync instance (field "${name}").`;
+      }
+      seen.add(val);
+      databases.push([name, val]);
+    } else if (isSqliteResource(val)) {
+      throw `Cannot automatically snapshot resource field "${name}"; use custom save/load functions.`;
+    } else {
+      ordinary[name] = val;
+    }
+  }
   const plan = planDatabases(
     databases.map(([name, db]) => ({
       name,
@@ -115,11 +156,39 @@ export function takeDatabases(
   }
   const byName = new Map(databases);
   return {
-    inMemory: plan.val.inMemory.map((name) => ({
-      name,
-      bytes: serializeDatabaseSync(byName.get(name)!),
+    ordinary,
+    databaseParts: plan.val.inMemory.map((name) => ({
+      name: `${DATABASE_PART_PREFIX}${name}`,
+      contentType: DATABASE_PART_CONTENT_TYPE,
+      body: serializeDatabaseSync(byName.get(name)!),
     })),
     fileDatabases: plan.val.fileDatabases,
+  };
+}
+
+/**
+ * Reads the databases of a loaded snapshot from its multipart parts and its `fileDatabases`
+ * value. Throws a string, which starts with `description`, when `fileDatabases` does not map
+ * field names to locations.
+ */
+export function decodeSnapshotDatabases(
+  parts: readonly MultipartPart[],
+  fileDatabases: unknown,
+  description: string,
+): SnapshotDatabases {
+  if (
+    fileDatabases === null ||
+    typeof fileDatabases !== 'object' ||
+    Array.isArray(fileDatabases) ||
+    !Object.values(fileDatabases).every((location) => typeof location === 'string')
+  ) {
+    throw `${description} 'fileDatabases' must map field names to locations`;
+  }
+  return {
+    inMemory: parts
+      .filter((part) => part.name.startsWith(DATABASE_PART_PREFIX))
+      .map((part) => ({ name: part.name.slice(DATABASE_PART_PREFIX.length), bytes: part.body })),
+    fileDatabases: fileDatabases as Record<string, string>,
   };
 }
 

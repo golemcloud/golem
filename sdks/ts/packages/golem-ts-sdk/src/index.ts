@@ -32,7 +32,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
-import type { SnapshotDatabases } from './internal/databaseSnapshot';
+import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
@@ -906,15 +906,6 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     if (!Object.hasOwn(envelope, 'fileDatabases')) {
       throw `${description} missing 'fileDatabases' field`;
     }
-    const fileDatabases = envelope.fileDatabases;
-    if (
-      fileDatabases === null ||
-      typeof fileDatabases !== 'object' ||
-      Array.isArray(fileDatabases) ||
-      !Object.values(fileDatabases).every((location) => typeof location === 'string')
-    ) {
-      throw `${description} 'fileDatabases' must map field names to locations`;
-    }
     return envelope;
   };
 
@@ -937,19 +928,14 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
-    databases = {
-      inMemory: parts
-        .filter((part) => part.name.startsWith('db:'))
-        .map((part) => ({ name: part.name.slice(3), bytes: part.body })),
-      fileDatabases: envelope.fileDatabases,
-    };
+    databases = decodeSnapshotDatabases(parts, envelope.fileDatabases, 'multipart state part');
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
-    databases = { inMemory: [], fileDatabases: envelope.fileDatabases };
+    databases = decodeSnapshotDatabases([], envelope.fileDatabases, 'JSON snapshot');
   } else {
     // Custom binary snapshot with version envelope
     if (bytes.byteLength < 1) {

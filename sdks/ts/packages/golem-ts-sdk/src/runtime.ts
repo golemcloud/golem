@@ -49,8 +49,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { createCustomError, invalidInput, invalidMethod } from './internal/agentError';
 import { sdkPrincipalFromHost } from './principal';
 import { ParsedAgentId } from './agentId';
-import { DatabaseSync, Session, SQLTagStore, StatementSync } from './internal/sqlite';
-import { isDatabaseSync, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
+import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
 import type { SavedAgentSnapshot } from './internal/resolvedAgent';
 import { encodeMultipart, MultipartPart } from './internal/multipart';
 import { compileSchema } from './schema/adapter';
@@ -665,62 +664,33 @@ class ResolvedAgentImpl {
       throw 'snapshot saving requires a declared state schema or custom save/load functions';
     }
 
-    const databaseFields: Array<[string, DatabaseSync]> = [];
-    const ordinaryState: Record<string, unknown> = {};
-    const seen = new Set<unknown>();
-    for (const [k, val] of Object.entries(this.instance)) {
-      if (k === 'config' || k === 'getId' || k === 'getPhantomId' || k === 'getPrincipal') continue;
-      if (isDatabaseSync(val)) {
-        if (seen.has(val)) {
-          throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
-        }
-        seen.add(val);
-        databaseFields.push([k, val]);
-        continue;
-      }
-      if (
-        isInstance(val, StatementSync) ||
-        isInstance(val, Session) ||
-        isInstance(val, SQLTagStore)
-      ) {
-        throw `Cannot automatically snapshot resource field "${k}"; use custom save/load functions.`;
-      }
+    const { ordinary, databaseParts, fileDatabases } = takeDatabases(
+      Object.entries(this.instance).filter(
+        ([k]) => k !== 'config' && k !== 'getId' && k !== 'getPhantomId' && k !== 'getPrincipal',
+      ),
+    );
+    for (const [k, val] of Object.entries(ordinary)) {
       assertNoNestedSnapshotResources(val, k);
-      ordinaryState[k] = val;
     }
 
-    const databases = takeDatabases(databaseFields);
-    const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinaryState, true);
+    const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinary, true);
     assertJsonSnapshotValue(state, 'state');
 
     const stateJson = new TextEncoder().encode(JSON.stringify(state));
-    if (databases.inMemory.length === 0) {
-      return {
-        data: stateJson,
-        mimeType: 'application/json',
-        fileDatabases: databases.fileDatabases,
-      };
+    if (databaseParts.length === 0) {
+      return { data: stateJson, mimeType: 'application/json', fileDatabases };
     }
     const parts: MultipartPart[] = [
       { name: 'state', contentType: 'application/json', body: stateJson },
-      ...databases.inMemory.map((db) => ({
-        name: `db:${db.name}`,
-        contentType: 'application/x-sqlite3',
-        body: db.bytes,
-      })),
+      ...databaseParts,
     ];
     const { data, boundary } = encodeMultipart(parts);
     return {
       data,
       mimeType: `multipart/mixed; boundary=${boundary}`,
-      fileDatabases: databases.fileDatabases,
+      fileDatabases,
     };
   }
-}
-
-/** `val instanceof Ctor`, including builtins whose constructors are not public. */
-function isInstance(val: unknown, Ctor: Function): boolean {
-  return typeof Ctor === 'function' && val instanceof Ctor;
 }
 
 function assertNoNestedSnapshotResources(
@@ -732,12 +702,7 @@ function assertNoNestedSnapshotResources(
     throw `Cannot automatically snapshot function field "${path}"; use custom save/load functions.`;
   }
   if (value === null || typeof value !== 'object') return;
-  if (
-    isDatabaseSync(value) ||
-    isInstance(value, StatementSync) ||
-    isInstance(value, Session) ||
-    isInstance(value, SQLTagStore)
-  ) {
+  if (isSqliteResource(value)) {
     throw `Cannot automatically snapshot nested resource field "${path}"; use custom save/load functions.`;
   }
   if (ancestors.has(value)) return;

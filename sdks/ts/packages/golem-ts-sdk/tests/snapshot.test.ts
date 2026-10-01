@@ -617,6 +617,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const boundaryOf = (mimeType: string) => mimeType.match(/boundary=([^\s;]+)/)![1];
     return {
       FakeDatabaseSync,
+      FakeStatementSync,
       constructed,
       warmed,
       serializeDatabaseSync,
@@ -727,6 +728,47 @@ describe('snapshot — in-memory and file-backed databases', () => {
 
     await expect((await env.initiateIsolated('OpenFileDatabase')).saveSnapshot()).rejects.toContain(
       'Cannot snapshot database "fileDb": an open transaction exists',
+    );
+  });
+
+  it('fails the save when two fields hold the same database', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'SharedDatabase',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => {
+          const db = new env.FakeDatabaseSync('/data/app.db');
+          return { count: 0, first: db, second: db };
+        },
+        methods: {},
+      });
+
+    await expect((await env.initiateIsolated('SharedDatabase')).saveSnapshot()).rejects.toContain(
+      'Multiple agent fields reference the same DatabaseSync instance (field "second")',
+    );
+  });
+
+  it('fails the save when a field holds a prepared statement', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'StatementField',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => ({ count: 0, statement: new env.FakeStatementSync() }),
+        methods: {},
+      });
+
+    await expect((await env.initiateIsolated('StatementField')).saveSnapshot()).rejects.toContain(
+      'Cannot automatically snapshot resource field "statement"',
     );
   });
 
