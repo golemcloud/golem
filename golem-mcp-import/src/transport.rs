@@ -366,7 +366,7 @@ impl Client {
     ) -> Result<(i64, Request<Bytes>), TransportError> {
         let request_id = self
             .next_request_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| limit("request IDs"))?;
         let meta = RequestMetaObject::with_client_context(
             ProtocolVersion::V_2026_07_28,
