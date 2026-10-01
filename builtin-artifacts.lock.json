@@ -9,18 +9,18 @@
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.2",
-      "sha256": "f990d435cb699ce296be324d65dda0948e9adb0afacf5fc60c7c0db94870709c"
+      "version": "0.0.3",
+      "sha256": "60f705875a93d42e36311addab69d7ff08f5c5703a2bb6ba3113b6e10f05a629"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
-      "version": "0.0.1",
-      "sha256": "985fb33dabda088b3cb8652f36cc983274656b1dfc4ae5b0553d551354c71ca3"
+      "version": "0.0.2",
+      "sha256": "e42fe80bf84d9ce36f89ef85494f91263fd5ef37661ccae48f530622beb64c8b"
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.2",
-      "sha256": "4fb8606295404c2783246d8f287eea9f6debe67620fb0d0200cc0c1bc6cb3fb1"
+      "version": "0.0.3",
+      "sha256": "19c3f32163710eb90371f0584bf6e89f6fa1f23ca3daa6bd590790c46d2714ad"
     }
   }
 }
