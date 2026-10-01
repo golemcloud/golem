@@ -1060,9 +1060,9 @@ mod tests {
         let path = |path: &str| Box::<Path>::from(Path::new(path));
         let link_groups = [LinkGroup {
             first: path("a/first"),
-            others: Box::new([path("b/c/second"), path("third")]),
+            others: Box::new([path("b/c/second"), path("b/c/third")]),
         }];
-        let left_out = [path("d/kept"), path("top")];
+        let left_out = [path("d/kept")];
 
         assert_eq!(
             directories_with_changed_times(&link_groups, &left_out),
