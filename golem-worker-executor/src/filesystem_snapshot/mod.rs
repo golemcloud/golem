@@ -41,17 +41,20 @@ use rustic::RusticSnapshotStore;
 
 /// The filesystem snapshots of one agent.
 ///
-/// Each agent has one value. The value is opaque outside this module.
+/// Each agent has one value. The value is opaque outside this module. Many owners hold it, so a
+/// clone shares the namespace instead of copying it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct AgentSnapshots(BlobStorageNamespace);
+pub(crate) struct AgentSnapshots(std::sync::Arc<BlobStorageNamespace>);
 
 impl AgentSnapshots {
     /// Gives the filesystem snapshots of the agent.
     pub(crate) fn agent(agent: &OwnedAgentId) -> Self {
-        Self(BlobStorageNamespace::FilesystemSnapshots {
-            environment_id: agent.environment_id,
-            agent_id: agent.agent_id.clone(),
-        })
+        Self(std::sync::Arc::new(
+            BlobStorageNamespace::FilesystemSnapshots {
+                environment_id: agent.environment_id,
+                agent_id: agent.agent_id.clone(),
+            },
+        ))
     }
 }
 

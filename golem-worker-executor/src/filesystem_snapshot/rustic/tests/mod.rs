@@ -120,7 +120,7 @@ fn fixture_tree() -> Scratch {
 /// Gives the path of each blob of the scope, in the order of the paths.
 async fn stored_paths(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
     let mut paths = storage
-        .list_blobs_below("test", "test", scope.0.clone(), Path::new(""))
+        .list_blobs_below("test", "test", (*scope.0).clone(), Path::new(""))
         .await
         .unwrap()
         .iter()
@@ -249,7 +249,12 @@ pub(super) fn backend_of(
     deadline: Duration,
 ) -> Arc<BlobBackend> {
     Arc::new(BlobBackend::new(
-        files_of(storage, scope.0.clone(), deadline, CancellationToken::new()),
+        files_of(
+            storage,
+            (*scope.0).clone(),
+            deadline,
+            CancellationToken::new(),
+        ),
         Handle::current(),
         KEPT_PACKS_LIMIT,
     ))

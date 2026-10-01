@@ -537,7 +537,7 @@ impl RusticSnapshotStore {
     fn files(&self, scope: &AgentSnapshots, token: &CancellationToken) -> SnapshotFiles {
         SnapshotFiles::new(
             self.storage.clone(),
-            scope.0.clone(),
+            (*scope.0).clone(),
             self.policy.deadline,
             token.clone(),
             self.tracker.clone(),

@@ -177,7 +177,7 @@ async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapsho
     read_ledger(
         &files_of(
             storage.clone(),
-            scope.0.clone(),
+            (*scope.0).clone(),
             Duration::from_secs(2),
             CancellationToken::new(),
         ),
@@ -193,7 +193,7 @@ async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshot
         .list_blobs_below(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed"),
         )
         .await
@@ -849,7 +849,7 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new(&format!("snapshots/{}", "ab".repeat(32))),
             b"not a snapshot",
         )
@@ -935,14 +935,14 @@ async fn set_last_prune<S: BlobStorage + 'static>(
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed/1-test"),
             GONE_SNAPSHOT.as_bytes(),
         )
         .await
         .unwrap();
     storage
-        .delete_dir("test", "test", scope.0.clone(), Path::new(LEDGERS_PATH))
+        .delete_dir("test", "test", (*scope.0).clone(), Path::new(LEDGERS_PATH))
         .await
         .unwrap();
     put_ledger_entry(
@@ -965,7 +965,7 @@ async fn age_ledger<S: BlobStorage + 'static>(
         .last_prune
         .map_or(0, |last| last.to_millis().saturating_sub(back));
     storage
-        .delete_dir("test", "test", scope.0.clone(), Path::new(LEDGERS_PATH))
+        .delete_dir("test", "test", (*scope.0).clone(), Path::new(LEDGERS_PATH))
         .await
         .unwrap();
     put_ledger_entry(
@@ -986,7 +986,7 @@ async fn put_ledger_entry<S: BlobStorage + 'static>(
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             &Path::new(LEDGERS_PATH).join(name),
             b"",
         )
@@ -1190,7 +1190,7 @@ async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed/7-late"),
             GONE_SNAPSHOT.as_bytes(),
         )
@@ -1328,7 +1328,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSna
         .list_blobs_below(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims"),
         )
         .await
@@ -1347,7 +1347,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSna
             let (storage, scope) = (storage.clone(), scope.clone());
             async move {
                 storage
-                    .delete("test", "test", scope.0.clone(), &path)
+                    .delete("test", "test", (*scope.0).clone(), &path)
                     .await
                     .unwrap();
                 let aged = path
@@ -1355,7 +1355,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSna
                     .unwrap_or(Path::new(""))
                     .join(format!("{number}@{stale}-aged"));
                 storage
-                    .put_raw("test", "test", scope.0.clone(), &aged, b"")
+                    .put_raw("test", "test", (*scope.0).clone(), &aged, b"")
                     .await
                     .unwrap();
             }
@@ -1405,7 +1405,7 @@ async fn a_prune_refreshes_the_claim_with_its_own_number() {
         let (storage, scope) = (storage.clone(), scope.clone());
         async move {
             storage
-                .put_raw("test", "test", scope.0.clone(), Path::new(&path), &[])
+                .put_raw("test", "test", (*scope.0).clone(), Path::new(&path), &[])
                 .await
                 .unwrap();
         }
@@ -1746,7 +1746,7 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
         let (storage, scope) = (storage.clone(), scope.clone());
         async move {
             storage
-                .put_raw("test", "test", scope.0.clone(), Path::new(&path), &[])
+                .put_raw("test", "test", (*scope.0).clone(), Path::new(&path), &[])
                 .await
                 .unwrap();
         }
@@ -2224,7 +2224,7 @@ async fn a_prune_deletes_the_claims_of_old_ledgers() {
             let scope = scope.clone();
             async move {
                 storage
-                    .put_raw("test", "test", scope.0.clone(), Path::new(path), b"100")
+                    .put_raw("test", "test", (*scope.0).clone(), Path::new(path), b"100")
                     .await
                     .unwrap();
             }
@@ -2262,7 +2262,7 @@ async fn a_prune_keeps_the_claims_of_a_newer_ledger() {
             let scope = scope.clone();
             async move {
                 storage
-                    .put_raw("test", "test", scope.0.clone(), Path::new(path), b"")
+                    .put_raw("test", "test", (*scope.0).clone(), Path::new(path), b"")
                     .await
                     .unwrap();
             }
@@ -2296,7 +2296,7 @@ async fn a_prune_deletes_an_empty_claim_directory_of_an_old_ledger() {
         .create_dir(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims/100"),
         )
         .await
@@ -2305,7 +2305,7 @@ async fn a_prune_deletes_an_empty_claim_directory_of_an_old_ledger() {
         storage.list_dir(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims"),
         )
     };
@@ -2581,7 +2581,7 @@ async fn a_record_whose_snapshot_still_exists_counts_nothing_and_does_not_make_a
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed/1000000000-kept"),
             snapshot.as_bytes(),
         )
@@ -2729,7 +2729,7 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims/none/1"),
             b"",
         )
@@ -3518,7 +3518,7 @@ async fn a_claim_without_a_marker_does_not_block_a_prune() {
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims/none/0"),
             &[],
         )
@@ -3809,7 +3809,12 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     let cancel = tokio_util::sync::CancellationToken::new();
     cancel.cancel();
-    let files = files_of(storage.clone(), new_scope().0, LONG_DEADLINE, cancel);
+    let files = files_of(
+        storage.clone(),
+        (*new_scope().0).clone(),
+        LONG_DEADLINE,
+        cancel,
+    );
 
     let read = files
         .get("read_ledger", Path::new("golem/prune-ledgers/1000-0-0f0f"))
@@ -3971,7 +3976,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
             let (inner, from) = (&inner, &from);
             async move {
                 inner
-                    .delete("test", "test", from.0.clone(), Path::new(path))
+                    .delete("test", "test", (*from.0).clone(), Path::new(path))
                     .await
                     .unwrap();
             }
@@ -5039,7 +5044,13 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
         .await
         .unwrap();
     inner
-        .put_raw("test", "test", scope.0.clone(), Path::new(&gone), b"listed")
+        .put_raw(
+            "test",
+            "test",
+            (*scope.0).clone(),
+            Path::new(&gone),
+            b"listed",
+        )
         .await
         .unwrap();
 
@@ -5103,7 +5114,7 @@ async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pa
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new(&unindexed),
             b"a pack that no index lists",
         )
@@ -5273,13 +5284,13 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
         .await
         .unwrap();
     let packs = storage
-        .list_blobs_below("test", "test", scope.0.clone(), Path::new("data"))
+        .list_blobs_below("test", "test", (*scope.0).clone(), Path::new("data"))
         .await
         .unwrap();
     futures::future::join_all(packs.iter().map(|pack| {
         let zeros = vec![0; usize::try_from(pack.size).unwrap()];
         let storage = storage.clone();
-        let namespace = scope.0.clone();
+        let namespace = (*scope.0).clone();
         async move {
             storage
                 .put_raw("test", "test", namespace, &pack.path, &zeros)
