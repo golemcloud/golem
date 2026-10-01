@@ -173,6 +173,7 @@ async fn provisions_bash_release_idempotently_and_rejects_changes_without_mutati
         tool_name: "bash",
         release_version: "0.2.1",
         wasm_bytes: EMBEDDED_BASH,
+        retires_older_versions: true,
     };
     let error = provision_descriptors(
         std::slice::from_ref(&metadata_mismatch),
@@ -281,6 +282,7 @@ async fn upgrades_bash_through_a_new_component_and_supersedes_the_old_release() 
         tool_name: "bash",
         release_version: "0.2.1",
         wasm_bytes: retag_version(EMBEDDED_BASH, EMBEDDED_VERSION, "0.2.1"),
+        retires_older_versions: true,
     };
     let report = provision(&services, owner, &upgrade).await.unwrap();
     assert_eq!(
@@ -438,6 +440,7 @@ async fn upgrades_bash_through_a_new_component_and_supersedes_the_old_release() 
         tool_name: "bash",
         release_version: "0.2.2",
         wasm_bytes: retag_version(EMBEDDED_BASH, EMBEDDED_VERSION, "0.2.2"),
+        retires_older_versions: true,
     };
     assert_eq!(
         provision(&services, owner, &next).await.unwrap(),
@@ -498,6 +501,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         tool_name: "streaming",
         release_version: "1.0.0",
         wasm_bytes: wasm,
+        retires_older_versions: false,
     };
     let auth = AuthCtx::system();
 
@@ -665,12 +669,14 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         tool_name: "read-file",
         release_version: "7.2.0",
         wasm_bytes: first_wasm,
+        retires_older_versions: false,
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
         tool_name: first.tool_name,
         release_version: "7.3.0",
         wasm_bytes: changed_wasm,
+        retires_older_versions: false,
     };
 
     provision_all(&services, owner, std::slice::from_ref(&first)).await;
@@ -692,12 +698,116 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         component_source(&old_release_after_upgrade),
         (component_id, old_revision)
     );
+    assert_eq!(
+        old_release_after_upgrade.lifecycle,
+        ToolReleaseLifecycle::Published,
+        "a shared-component tool keeps every published version resolvable by coordinate"
+    );
 
     provision_all(&services, owner, std::slice::from_ref(&second)).await;
     let replayed =
         release_coordinate(&services, owner, second.tool_name, second.release_version).await;
     assert_eq!(replayed.id, new_release.id);
     assert_eq!(component_source(&replayed), (component_id, new_revision));
+}
+
+/// A registry that already has a filesystem-tools release published (as this build's own boot
+/// leaves one) keeps it published, and grantable by coordinate, once another read-file release is
+/// published alongside it. Filesystem tools share one component across versions, so there is
+/// nothing for a newer version to retire the older one out of: both stay valid targets for a
+/// manifest. This is what main's provisioner already did; the regression under test is this
+/// build's provisioner unconditionally superseding every other published release of a tool it
+/// republishes, which would apply here too since it does not distinguish shared-component tools
+/// from Bash's per-version ones.
+#[test]
+#[timeout("120s")]
+async fn older_filesystem_tool_release_stays_published_after_this_builds_first_boot() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config = registry_config(temp_dir.path());
+    let owner = config.initial_accounts["builtin_tool_owner"].id;
+    let auth = AuthCtx::system();
+    let mut join_set = JoinSet::new();
+    // Booting already publishes the real, current read-file release (this is what "this build's
+    // first boot" means in production): it stands in for the release a manifest may already be
+    // pinned to.
+    let services = Services::new(&config, &mut join_set).await.unwrap();
+    let current_release = release_coordinate(&services, owner, "read-file", "0.3.0").await;
+    assert_eq!(current_release.lifecycle, ToolReleaseLifecycle::Published);
+
+    // A later read-file release, from its own self-contained component so it cannot disturb the
+    // real filesystem-tools component's other tools. This models the shared-component tools'
+    // actual shape (a tool whose versions are not retired by the next one) without depending on
+    // the embedded artifact ever changing version.
+    let mut other_wasm = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../builtin-tools/filesystem-tools.wasm"
+    ))
+    .expect("build the filesystem tool component before running this test");
+    let mut replacements = 0;
+    for offset in 0..other_wasm.len().saturating_sub(5) {
+        if &other_wasm[offset..offset + 5] == b"0.3.0" {
+            other_wasm[offset..offset + 5].copy_from_slice(b"0.3.1");
+            replacements += 1;
+        }
+    }
+    assert!(replacements > 0);
+    let other_wasm = Box::leak(other_wasm.into_boxed_slice());
+    let other = BuiltinToolDescriptor {
+        component_name: "filesystem-tools-other",
+        tool_name: "read-file",
+        release_version: "0.3.1",
+        wasm_bytes: other_wasm,
+        retires_older_versions: false,
+    };
+    provision_all(&services, owner, std::slice::from_ref(&other)).await;
+    let other_release = release_coordinate(&services, owner, "read-file", "0.3.1").await;
+    assert_eq!(other_release.lifecycle, ToolReleaseLifecycle::Published);
+
+    // Publishing the second release must not retroactively supersede the first: filesystem-tools
+    // is a shared-component tool, so every published release stays resolvable by coordinate.
+    let current_release_after = release_coordinate(&services, owner, "read-file", "0.3.0").await;
+    assert_eq!(current_release_after.id, current_release.id);
+    assert_eq!(
+        current_release_after.lifecycle,
+        ToolReleaseLifecycle::Published,
+        "publishing another read-file release must not supersede an existing one for a \
+         shared-component tool"
+    );
+
+    // A manifest pinned to the original version by coordinate still resolves and can be granted.
+    let env = builtin_environment(&services, owner).await;
+    let pinned_coordinates = ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+        account: config.initial_accounts["builtin_tool_owner"].email.clone(),
+        name: ToolName::try_from("read-file").unwrap(),
+        version: "0.3.0".to_string(),
+    });
+    let consumer = services
+        .environment_service
+        .create(
+            env.application_id,
+            EnvironmentCreation {
+                name: EnvironmentName("consumer-of-pinned-read-file".into()),
+                compatibility_check: false,
+                tool_compatibility_mode: Default::default(),
+                version_check: false,
+                security_overrides: false,
+            },
+            &auth,
+        )
+        .await
+        .unwrap();
+    services
+        .environment_tool_grant_service
+        .create(
+            consumer.id,
+            EnvironmentToolGrantCreation {
+                release: pinned_coordinates,
+                automatic: true,
+            },
+            &auth,
+        )
+        .await
+        .unwrap();
 }
 
 #[test]
@@ -741,12 +851,14 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
         tool_name: "read-file",
         release_version: "8.2.0",
         wasm_bytes: wasm,
+        retires_older_versions: false,
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
         tool_name: "write-file",
         release_version: first.release_version,
         wasm_bytes: wasm,
+        retires_older_versions: false,
     };
 
     provision_all(&services, owner, std::slice::from_ref(&first)).await;

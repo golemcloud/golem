@@ -57,6 +57,12 @@ pub struct BuiltinToolDescriptor {
     pub tool_name: &'static str,
     pub release_version: &'static str,
     pub wasm_bytes: &'static [u8],
+    /// Whether a new version of this tool gets its own component (true), so the release it
+    /// replaces can no longer resolve by coordinate and is marked superseded once the new one
+    /// publishes; or whether new versions are revisions of one shared component (false), so
+    /// older releases stay published side by side and a manifest can keep naming any of them.
+    /// Bash is the former; the filesystem tools are the latter.
+    pub retires_older_versions: bool,
 }
 
 impl BuiltinToolDescriptor {
@@ -87,18 +93,21 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         tool_name: "read-file",
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
+        retires_older_versions: false,
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         tool_name: "write-file",
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
+        retires_older_versions: false,
     },
     BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         tool_name: "edit-file",
         release_version: "0.3.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
+        retires_older_versions: false,
     },
     // Each Bash version has its own component (`golem:bash-0-2-0`), so a new version never
     // replaces the revision an older release, and every grant of it, is pinned to; provisioning
@@ -108,6 +117,7 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         tool_name: "bash",
         release_version: "0.2.0",
         wasm_bytes: include_bytes!("../../../builtin-tools/bash.wasm"),
+        retires_older_versions: true,
     },
 ];
 
@@ -147,8 +157,10 @@ pub async fn provision_builtin_tools(
 /// When a new version names a component of its own (Bash's per-version components), every older
 /// component that implements the same tool stops implementing it in the same deployment that
 /// adds the new one, so the environment never has two implementors and never none. Older
-/// releases stay pinned to the revisions they were provisioned from, and are superseded only once
-/// the new release is published.
+/// releases stay pinned to the revisions they were provisioned from; for a tool on that
+/// per-version model they are superseded once the new release is published, while a tool whose
+/// versions share one revised component (the filesystem tools) keeps every published release
+/// resolvable by coordinate (see [`BuiltinToolDescriptor::retires_older_versions`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_descriptors(
     descriptors: &[BuiltinToolDescriptor],
@@ -380,8 +392,13 @@ pub async fn provision_descriptors(
         }
     }
     // Only now that each release is published do the ones it replaces stop resolving by
-    // coordinate; the tool always has a published release.
+    // coordinate. This applies only to tools whose versions retire one another (each version its
+    // own component); a tool whose versions share one revised component keeps every published
+    // release resolvable by coordinate, so a manifest pinned to an older version keeps deploying.
     for descriptor in published {
+        if !descriptor.retires_older_versions {
+            continue;
+        }
         let name = ToolName::try_from(descriptor.tool_name).map_err(anyhow::Error::msg)?;
         for release in releases
             .supersede_older_system_releases(&name, descriptor.release_version)
