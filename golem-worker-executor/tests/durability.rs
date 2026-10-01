@@ -1849,6 +1849,96 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     Ok(())
 }
 
+/// On an executor without filesystem snapshots, the periodic snapshots of `SqliteSnapshotAgent`
+/// have no filesystem snapshot name, so a start from one of them finds no file at the recorded
+/// locations of its file-backed databases. The load fails, each periodic snapshot is rejected in
+/// turn, and the start replays the whole oplog, which rebuilds the databases.
+#[test]
+#[tracing::instrument]
+async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-no-filesystem-snapshots");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
+        .await?;
+    let state_before = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let snapshots: Vec<_> = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(snapshot) => Some(snapshot.filesystem_snapshot.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !snapshots.is_empty(),
+        "no periodic snapshot before the restart"
+    );
+    assert!(
+        snapshots.iter().all(Option::is_none),
+        "a periodic snapshot has a filesystem snapshot name: {snapshots:?}"
+    );
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let state_after = executor
+        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
+        .await?;
+    assert_eq!(state_before, state_after);
+
+    let failures = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut failures = Vec::new();
+        while let Some(event) = events.recv().await {
+            match AgentEvent::try_from(event) {
+                Ok(AgentEvent::SnapshotRecoveryFailed { error, .. }) => failures.push(error),
+                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                    panic!("the snapshot at {snapshot_index} loaded without its database file")
+                }
+                Ok(AgentEvent::InvocationFinished { .. }) => return failures,
+                _ => {}
+            }
+        }
+        failures
+    })
+    .await?;
+    assert!(!failures.is_empty(), "no snapshot recovery failed");
+    assert!(
+        failures.iter().all(|error| error.contains("fileDb")
+            && error.contains("no database file at /tmp/sqlite-snapshot-test.db")),
+        "{failures:?}"
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    drop(executor);
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn monotonic_clock_now_replay_parity(
