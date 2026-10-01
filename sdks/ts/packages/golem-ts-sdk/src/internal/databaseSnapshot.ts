@@ -204,11 +204,10 @@ type LoadedField =
   | { kind: 'other' };
 
 /**
- * The steps of a load, by field name: the locations whose files must exist, the databases to
- * open (in memory when `location` is null), and the databases to warm.
+ * The steps of a load, by field name: the databases to open (in memory when `location` is null,
+ * else at `location`, whose file must exist), and the databases to warm.
  */
 type RestorePlan = {
-  check: string[];
   open: Array<{ name: string; location: string | null }>;
   warm: Array<{ name: string; allPages: boolean }>;
 };
@@ -226,7 +225,7 @@ export function planRestore(
 ): { tag: 'ok'; val: RestorePlan } | { tag: 'err'; val: string } {
   const byName = new Map<string, LoadedField>(fields);
   const names = fields.map(([name]) => name);
-  const plan: RestorePlan = { check: [], open: [], warm: [] };
+  const plan: RestorePlan = { open: [], warm: [] };
   const entries: Array<[string, string | null]> = [
     ...databases.inMemory.map(({ name }): [string, null] => [name, null]),
     ...Object.entries(databases.fileDatabases),
@@ -237,9 +236,6 @@ export function planRestore(
       return { tag: 'err', val: `snapshot database field "${name}" is not a DatabaseSync` };
     }
     if (field.kind === 'empty') {
-      if (location !== null) {
-        plan.check.push(location);
-      }
       plan.open.push({ name, location });
       byName.set(name, { kind: 'database', instance: -plan.open.length, open: true, location });
       names.push(name);
@@ -258,7 +254,7 @@ export function planRestore(
 
 /**
  * The error of a load that must open a file-backed database at a location where no file exists,
- * given the locations of `plan.check` that exist; null when every such file exists.
+ * given the locations of `plan.open` that exist; null when every such file exists.
  */
 export function missingDatabaseFile(
   plan: RestorePlan,
@@ -288,7 +284,11 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
   }
   const missing = missingDatabaseFile(
     plan.val,
-    new Set(plan.val.check.filter((location) => existsSync(location))),
+    new Set(
+      plan.val.open.flatMap(({ location }) =>
+        location !== null && existsSync(location) ? [location] : [],
+      ),
+    ),
   );
   if (missing !== null) {
     throw new Error(missing);

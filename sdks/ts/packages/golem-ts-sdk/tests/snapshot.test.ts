@@ -560,7 +560,6 @@ describe('snapshot — restore plan', () => {
     ).toEqual({
       tag: 'ok',
       val: {
-        check: ['/data/app.db'],
         open: [
           { name: 'memDb', location: null },
           { name: 'fileDb', location: '/data/app.db' },
@@ -589,7 +588,6 @@ describe('snapshot — restore plan', () => {
     ).toEqual({
       tag: 'ok',
       val: {
-        check: [],
         open: [],
         warm: [
           { name: 'memDb', allPages: false },
@@ -603,7 +601,6 @@ describe('snapshot — restore plan', () => {
   it('fails when a file that the load must open does not exist', async () => {
     const { missingDatabaseFile } = await import('../src/internal/databaseSnapshot');
     const plan = {
-      check: ['/data/app.db', '/data/other.db'],
       open: [
         { name: 'memDb', location: null },
         { name: 'fileDb', location: '/data/app.db' },
