@@ -21,7 +21,6 @@ use super::*;
 use crate::sandbox_filesystem::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::time::Duration;
 
@@ -36,7 +35,8 @@ pub(crate) trait RestoreTree: Send {
     fn restore(self, into: &Path) -> impl Future<Output = Result<(), RestoreError>> + Send;
 }
 
-impl RestoreTree for Infallible {
+#[cfg(test)]
+impl RestoreTree for std::convert::Infallible {
     async fn restore(self, _into: &Path) -> Result<(), RestoreError> {
         match self {}
     }
@@ -925,18 +925,12 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         &HashMap::new(),
     )
     .await?;
-    // The seed into the root keeps the time of the root, and a name that a link or a seed adds to
-    // a directory changes the time of that directory.
-    let changed_directories = std::iter::once(Path::new(""))
-        .chain(
-            link_groups
-                .iter()
-                .flat_map(|group| group.others.iter())
-                .filter_map(|other| other.parent()),
-        )
-        .chain(left_out.iter().filter_map(|path| path.parent()))
-        .collect::<BTreeSet<&Path>>();
-    restore_directory_times(sandbox, &tree, changed_directories).await?;
+    restore_directory_times(
+        sandbox,
+        &tree,
+        directories_with_changed_times(&link_groups, &left_out),
+    )
+    .await?;
     let new = declaration_view([&initial, &provisioned]);
     generation.registry.record_restore(old == new);
     let states = observe(sandbox, &old, &new, &seeded)
@@ -948,6 +942,25 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         provisioned: Arc::new(provisioned),
         installed,
     })
+}
+
+/// Gives the directories whose modification times a restore sets again: the root, which is the
+/// empty path, and each directory that gets a name from a link of `link_groups` or from a seed of a
+/// path of `left_out`. The seed into the root keeps the time of the root, and a name that a link or
+/// a seed adds to a directory changes the time of that directory.
+fn directories_with_changed_times<'a>(
+    link_groups: &'a [LinkGroup],
+    left_out: &'a [Box<Path>],
+) -> BTreeSet<&'a Path> {
+    std::iter::once(Path::new(""))
+        .chain(
+            link_groups
+                .iter()
+                .flat_map(|group| group.others.iter())
+                .filter_map(|other| other.parent()),
+        )
+        .chain(left_out.iter().filter_map(|path| path.parent()))
+        .collect()
 }
 
 /// Gives `declarations` without the paths `left_out`. Refuses a left-out path that has no read-only
@@ -1035,4 +1048,25 @@ async fn link_other_names<Adapter: SandboxFilesystemAdapter>(
                 .await
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn the_changed_directories_are_the_root_and_the_parents_of_the_links_and_the_left_out_files() {
+        let path = |path: &str| Box::<Path>::from(Path::new(path));
+        let link_groups = [LinkGroup {
+            first: path("a/first"),
+            others: Box::new([path("b/c/second"), path("third")]),
+        }];
+        let left_out = [path("d/kept"), path("top")];
+
+        assert_eq!(
+            directories_with_changed_times(&link_groups, &left_out),
+            BTreeSet::from([Path::new(""), Path::new("b/c"), Path::new("d")])
+        );
+    }
 }
