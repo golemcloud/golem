@@ -574,7 +574,8 @@ impl WorkerApi {
         params: UpdateWorkerRequest,
         auth: AuthCtx,
     ) -> Result<Json<UpdateWorkerResponse>> {
-        self.worker_service
+        let update_attempt_index = self
+            .worker_service
             .update(
                 &agent_id,
                 params.mode,
@@ -584,7 +585,9 @@ impl WorkerApi {
             )
             .await?;
 
-        Ok(Json(UpdateWorkerResponse {}))
+        Ok(Json(UpdateWorkerResponse {
+            update_attempt_index: update_attempt_index.into(),
+        }))
     }
 
     /// Get the oplog of a worker

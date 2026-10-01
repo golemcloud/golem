@@ -101,6 +101,10 @@ async fn env_vars(
     builtin_artifact_cache_dir: &Path,
 ) -> HashMap<String, String> {
     let builder = EnvVarBuilder::golem_service(verbosity)
+        .with_str(
+            "GOLEM__SECURITY_SCHEME__STRICT_ISSUER_URL_VALIDATION",
+            "false",
+        )
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
         .with_str(
             "GOLEM__BLOB_STORAGE__CONFIG__ROOT",

@@ -832,6 +832,9 @@ where
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
+    if store.with(|mut access| get_ctx(access.data_mut()).state.snapshotting_mode) {
+        return Ok(());
+    }
     let replay_state =
         store.with(|mut access| get_ctx(access.data_mut()).state.replay_state.clone());
     let replay_events = replay_state.take_new_replay_events();
@@ -1397,51 +1400,78 @@ where
         return Ok(());
     };
 
-    match pending_update.description {
-        UpdateDescription::Automatic { target_revision } => {
-            tracing::debug!("Finalizing pending automatic update");
-            if let Err(error) =
-                update_state_to_new_component_revision_access(store, get_ctx, target_revision).await
-            {
-                let stringified_error = format!("Applying worker update failed: {error}");
-                record_worker_update_failed_access(
-                    store,
-                    get_ctx,
-                    target_revision,
-                    stringified_error,
-                )
-                .await?;
-                return Err(error);
-            }
-
-            let (component_size, active_plugins) = store.with(|mut access| {
+    let target_revision = *pending_update.description.target_revision();
+    let snapshot_assisted_details = match pending_update.description {
+        UpdateDescription::Automatic { .. } => None,
+        UpdateDescription::SnapshotAssistedAutomatic { .. } => {
+            let details = store.with(|mut access| {
                 let ctx = get_ctx(access.data_mut());
-                (
-                    ctx.component_metadata().component_size,
-                    HashSet::from_iter({
-                        ctx.agent_type_provision_config()
-                            .map(|c| c.plugins.as_slice())
-                            .unwrap_or_default()
-                            .iter()
-                            .map(|installation| installation.environment_plugin_grant_id)
-                    }),
-                )
+                ctx.take_snapshot_assisted_update_details(pending_update.oplog_index)
             });
-            record_worker_update_succeeded_access(
-                store,
-                get_ctx,
-                target_revision,
-                component_size,
-                active_plugins,
-            )
-            .await?;
-            tracing::debug!("Finalizing automatic update to revision {target_revision}");
-            Ok(())
+            match details {
+                Ok(details) => Some(details),
+                Err(error) => {
+                    record_worker_update_failed_access(
+                        store,
+                        get_ctx,
+                        target_revision,
+                        format!("Applying worker update failed: {error}"),
+                        None,
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            }
         }
-        _ => Err(WorkerExecutorError::runtime(
-            "pending replay event finalization expected an automatic update description",
-        )),
+        UpdateDescription::SnapshotBased { .. } => {
+            return Err(WorkerExecutorError::runtime(
+                "pending replay event finalization expected an automatic update description",
+            ));
+        }
+    };
+
+    tracing::debug!("Finalizing pending automatic update");
+    if let Err(error) =
+        update_state_to_new_component_revision_access(store, get_ctx, target_revision).await
+    {
+        let stringified_error = format!("Applying worker update failed: {error}");
+        record_worker_update_failed_access(
+            store,
+            get_ctx,
+            target_revision,
+            stringified_error,
+            snapshot_assisted_details
+                .as_ref()
+                .map(failed_snapshot_assisted_update_details),
+        )
+        .await?;
+        return Err(error);
     }
+
+    let (component_size, active_plugins) = store.with(|mut access| {
+        let ctx = get_ctx(access.data_mut());
+        (
+            ctx.component_metadata().component_size,
+            HashSet::from_iter({
+                ctx.agent_type_provision_config()
+                    .map(|c| c.plugins.as_slice())
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|installation| installation.environment_plugin_grant_id)
+            }),
+        )
+    });
+    record_worker_update_succeeded_access(
+        store,
+        get_ctx,
+        target_revision,
+        component_size,
+        active_plugins,
+        snapshot_assisted_details,
+    )
+    .await?;
+    tracing::debug!("Finalizing automatic update to revision {target_revision}");
+    Ok(())
 }
 
 async fn update_state_to_new_component_revision_access<T, D, Ctx>(
@@ -1567,6 +1597,7 @@ async fn record_worker_update_failed_access<T, D, Ctx>(
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     target_revision: ComponentRevision,
     details: String,
+    snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
 ) -> Result<(), WorkerExecutorError>
 where
     T: 'static,
@@ -1579,6 +1610,8 @@ where
         .add_and_commit_oplog(OplogEntry::failed_update(
             target_revision,
             Some(details.clone()),
+            snapshot_assisted_details,
+            None,
         ))
         .await?;
     tracing::warn!(
@@ -1597,6 +1630,7 @@ async fn record_worker_update_succeeded_access<T, D, Ctx>(
     active_plugins: HashSet<
         golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
     >,
+    snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
 ) -> Result<(), WorkerExecutorError>
 where
     T: 'static,
@@ -1615,6 +1649,7 @@ where
             target_revision,
             component_size,
             active_plugins,
+            snapshot_assisted_details,
         )
         .await?;
     Ok(())

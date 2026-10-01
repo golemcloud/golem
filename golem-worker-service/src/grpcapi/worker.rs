@@ -385,7 +385,9 @@ impl GrpcWorkerService for WorkerGrpcApi {
             .instrument(record.span.clone())
             .await
         {
-            Ok(()) => record.succeed(update_worker_response::Result::Success(Empty {})),
+            Ok(update_attempt_index) => record.succeed(update_worker_response::Result::Success(
+                update_attempt_index.into(),
+            )),
             Err(error) => record.fail(
                 update_worker_response::Result::Error(error.clone()),
                 &mut WorkerTraceErrorKind(&error),
@@ -859,7 +861,10 @@ impl WorkerGrpcApi {
         Ok(())
     }
 
-    async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcAgentError> {
+    async fn update_worker(
+        &self,
+        request: UpdateWorkerRequest,
+    ) -> Result<OplogIndex, GrpcAgentError> {
         let worker_update_mode: AgentUpdateMode = request.mode().into();
         let disable_wakeup = request.disable_wakeup;
         let auth: AuthCtx = request
@@ -881,9 +886,8 @@ impl WorkerGrpcApi {
                 disable_wakeup,
                 auth,
             )
-            .await?;
-
-        Ok(())
+            .await
+            .map_err(Into::into)
     }
 
     async fn fork_worker(&self, request: ForkWorkerRequest) -> Result<(), GrpcAgentError> {

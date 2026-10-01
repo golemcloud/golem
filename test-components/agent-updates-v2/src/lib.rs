@@ -176,12 +176,20 @@ pub trait SnapshotUpdateTest {
     fn new() -> Self;
     fn loaded_snapshot_revision(&self) -> u32;
     fn replay_revision(&self) -> u32;
+    fn pre_snapshot_value(&mut self) -> u32;
+    fn stable_value(&mut self) -> u32;
+    async fn blocking_stable(&mut self, value: u64) -> u32;
+    fn suffix_host_value(&self) -> u32;
+    fn suffix_trap(&self) -> u32;
+    fn suffix_exit(&self) -> u32;
+    fn accumulated_value(&self) -> u32;
     fn revision_two_only(&self) -> u32;
 }
 
 struct SnapshotUpdateTestImpl {
     loaded_snapshot_revision: u32,
     replay_revision: u32,
+    accumulated_value: u32,
 }
 
 #[agent_implementation]
@@ -193,6 +201,7 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
                 .ok()
                 .and_then(|revision| revision.parse().ok())
                 .unwrap_or_default(),
+            accumulated_value: 0,
         }
     }
 
@@ -204,12 +213,52 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
         self.replay_revision
     }
 
+    fn pre_snapshot_value(&mut self) -> u32 {
+        self.accumulated_value += 2;
+        2
+    }
+
+    fn stable_value(&mut self) -> u32 {
+        self.accumulated_value += 10;
+        7
+    }
+
+    async fn blocking_stable(&mut self, value: u64) -> u32 {
+        report_f1(value).await;
+        let mut state = value;
+        for _ in 0..20_000_000 {
+            state = std::hint::black_box(state.wrapping_mul(6364136223846793005).wrapping_add(1));
+        }
+        std::hint::black_box(state);
+        self.accumulated_value += 100;
+        self.accumulated_value
+    }
+
+    fn suffix_host_value(&self) -> u32 {
+        let _ = golem_rust::wasip3::random::random::get_random_u64();
+        7
+    }
+
+    fn suffix_trap(&self) -> u32 {
+        panic!("target suffix trap")
+    }
+
+    fn suffix_exit(&self) -> u32 {
+        std::process::exit(1)
+    }
+
+    fn accumulated_value(&self) -> u32 {
+        self.accumulated_value
+    }
+
     fn revision_two_only(&self) -> u32 {
         2
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-        Ok(vec![2])
+        let mut bytes = vec![2];
+        bytes.extend_from_slice(&self.accumulated_value.to_le_bytes());
+        Ok(bytes)
     }
 
     async fn load_snapshot(
@@ -221,12 +270,18 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
             .copied()
             .map(u32::from)
             .ok_or_else(|| "Missing snapshot revision".to_string())?;
+        let accumulated_value = bytes
+            .get(1..5)
+            .and_then(|bytes| bytes.try_into().ok())
+            .map(u32::from_le_bytes)
+            .unwrap_or_default();
         Ok(Self {
             loaded_snapshot_revision,
             replay_revision: std::env::var("GOLEM_COMPONENT_REVISION")
                 .ok()
                 .and_then(|revision| revision.parse().ok())
                 .unwrap_or_default(),
+            accumulated_value,
         })
     }
 }

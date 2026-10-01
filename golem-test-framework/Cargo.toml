@@ -24,6 +24,8 @@ golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 applying = { workspace = true }
@@ -39,12 +41,14 @@ heck = { workspace = true }
 hex = { workspace = true }
 humantime-serde = { workspace = true }
 itertools = { workspace = true }
+jsonwebtoken = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
 reqwest-tracing = { workspace = true }
+rsa = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }

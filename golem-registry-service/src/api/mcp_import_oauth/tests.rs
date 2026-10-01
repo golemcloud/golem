@@ -94,6 +94,7 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
                 client_secret: "test-secret".into(),
                 redirect_url: "http://127.0.0.1:8765/callback".into(),
                 scopes: vec!["tools".into()],
+                login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
             },
             &auth,
         )

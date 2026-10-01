@@ -79,8 +79,12 @@ impl OpenApiKey {
                     let details = &inner.security_scheme;
                     fingerprint.update(
                         format!(
-                            "\0security:oidc:{}:{:?}:{:?}",
-                            details.name, details.provider_type, details.scopes
+                            "\0security:oidc:{}:{}:{:?}:{:?}:{:?}",
+                            details.id,
+                            details.revision,
+                            details.provider_type,
+                            details.scopes,
+                            details.login,
                         )
                         .as_bytes(),
                     )

@@ -422,6 +422,7 @@ impl Services {
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
             repos.security_scheme_repo.clone(),
+            repos.deployment_repo.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
             config.security_scheme.strict_issuer_url_validation,

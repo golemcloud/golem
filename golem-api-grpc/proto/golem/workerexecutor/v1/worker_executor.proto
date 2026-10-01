@@ -299,7 +299,7 @@ message UpdateWorkerRequest {
 
 message UpdateWorkerResponse {
   oneof result {
-    golem.common.Empty success = 1;
+    uint64 success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
