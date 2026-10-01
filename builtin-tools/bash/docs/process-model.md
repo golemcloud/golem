@@ -264,14 +264,15 @@ crashed is sent again on recovery: an idempotent method (GET, HEAD, PUT, DELETE,
 with the same `Idempotency-Key` header, a POST or PATCH with a new one, because Golem assumes by
 default that a non-idempotent write may be retried. The server may therefore see an interrupted
 POST or PATCH twice; a script that needs exactly-once sends its own `Idempotency-Key`, which Golem
-keeps on the resent request. `curl -m` and `wget -T` do not race a durable timer against the
-request: Golem's recovery of an interrupted POST discards the oplog range after the request's
-start by position, including the entries of a timer racing it, and the replay then failed and
-left the agent unusable. They use WASI-HTTP's own timeouts instead (see the README's HTTP
-limits). The call's own time limit (`run`'s `timeout`) cannot stay out of that range: it waits in
-steps of at most 5 s, as every wait does (see the README), and its steps run alongside the
-script. Its deadline comes from a clock reading taken before the script starts, which precedes
-anything the script does in the oplog, so such a recovery keeps it.
+keeps on the resent request. At this Golem version that recovery is unreliable (see the README).
+`curl -m` and `wget -T` do not race a durable timer against the request: Golem's recovery of an
+interrupted POST discards the oplog range after the request's start by position, including the
+entries of a timer racing it, and the replay then failed and left the agent unusable. They use
+WASI-HTTP's own timeouts instead (see the README's HTTP limits). The call's own time limit
+(`run`'s `timeout`) cannot stay out of that range: it waits in steps of at most 5 s, as every wait
+does (see the README), and its steps run alongside the script. Its deadline comes from a clock
+reading taken before the script starts, which precedes anything the script does in the oplog, so
+such a recovery keeps it.
 
 ## Error Handling
 

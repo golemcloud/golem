@@ -119,11 +119,15 @@ flowchart TD
   clock, so a script recovered after a crash sees the same times it saw before. A wait is made of
   steps of at most 5 s: Golem suspends an agent while one of its timers has 10 s or more to run
   (`suspend_after`), and the replay that resumes it cannot always reproduce the call it was in.
-- HTTP requests go through Golem's durable `wasi:http`. After a crash, a request that had not
-  finished is sent again: a GET, HEAD, PUT, DELETE, OPTIONS or TRACE with the same
+- HTTP requests go through Golem's durable `wasi:http`. After a crash, Golem is meant to send a
+  request that had not finished again: a GET, HEAD, PUT, DELETE, OPTIONS or TRACE with the same
   `Idempotency-Key` header Golem gave it, a POST or PATCH (which Golem does not assume to be
-  idempotent) with a new one, so the server may see such a POST or PATCH twice. A script that needs
-  exactly-once should send its own key, which Golem then keeps on the resent request:
+  idempotent) with a new one, so the server may see such a POST or PATCH twice. At this Golem
+  version that recovery is unreliable: in testing, fewer than a third of crashes with a request in
+  flight recovered, and the rest left the owner hung or permanently failed without sending the
+  request again (the [CLI fixture](../../cli/golem-cli/test-data/builtin-bash/README.md)'s test of
+  it is quarantined). A script that needs exactly-once should send its own key, which Golem then
+  keeps on the resent request:
   `curl -H 'Idempotency-Key: order-42' -d @order.json https://api.example.com/orders`.
 - Diagnostics that a caller could miss — a rejected directory, a tool call that failed, a job
   stopped at the end of a run, a refused script — are also written to the agent's log at `warn`
