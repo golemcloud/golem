@@ -49,6 +49,9 @@ fn receive_guard_counts(
     let guard = ReceiveGuard {
         source_wait,
         _live_call: LiveCallPermit::new(live_calls.clone()),
+        interrupt: None,
+        #[cfg(feature = "test-utils")]
+        observer: None,
     };
     (guard, live_calls, waits)
 }
@@ -159,6 +162,306 @@ async fn forwarded_input(
         .unwrap()
         .into_forwarded()
         .unwrap()
+}
+
+#[test]
+#[test_r::timeout("5s")]
+async fn quiet_durable_source_stop_preserves_journal_and_same_key_continuation() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let key = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone());
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 1,
+        handle: handle.clone(),
+        role: SessionStreamRole::Input,
+    };
+    let binding = persist_local_mapping(&producer, key.clone(), &mapping).await;
+    let streams = StreamSession::open(
+        producer.clone(),
+        oplog.clone(),
+        key.clone(),
+        [binding.clone()],
+    )
+    .await
+    .unwrap()
+    .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+    let mut input = DurableInputProducer::new(
+        streams
+            .endpoint(handle.clone(), 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+    );
+    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let (stop, signal) = oneshot::channel();
+    let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+        golem_common::model::Timestamp::now_utc(),
+    );
+    guard.interrupt = Some(Box::pin(async move { signal.await.unwrap() }));
+    input.pending = Some(input.input.receive(Some(guard)));
+    let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+    assert!(
+        input
+            .pending
+            .as_mut()
+            .unwrap()
+            .as_mut()
+            .poll(&mut cx)
+            .is_pending()
+    );
+    assert_eq!(live_calls.load(Ordering::Acquire), 1);
+    assert_eq!(waits.lock().unwrap().len(), 1);
+    let before = oplog.current_oplog_index().await;
+    stop.send(kind).unwrap();
+    let read = tokio::time::timeout(Duration::from_millis(100), input.pending.take().unwrap())
+        .await
+        .expect("quiet durable demand must observe the published stop");
+    let error = input.finish_receive(read).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+        Some(&kind)
+    );
+    assert_eq!(input.input.consumer_read_ordinal, 0);
+    assert_eq!(oplog.current_oplog_index().await, before);
+    assert_eq!(live_calls.load(Ordering::Acquire), 0);
+    assert!(waits.lock().unwrap().is_empty());
+    assert!(
+        !streams
+            .has_journaled_consumer_terminal(&mapping)
+            .await
+            .unwrap()
+    );
+    drop(input);
+
+    producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![17, 255]),
+        )
+        .await
+        .unwrap();
+    producer
+        .end(None, handle.stream_id, 2, StreamEndResult::Ok)
+        .await
+        .unwrap();
+    let reloaded = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id,
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let streams = StreamSession::open(reloaded, oplog.clone(), key, [binding])
+        .await
+        .unwrap()
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+    let mut resumed = DurableInputProducer::new(
+        streams
+            .endpoint(handle, 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+    );
+    assert!(matches!(
+        resumed.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::Item(SchemaValue::U8(17)))
+    ));
+    assert!(matches!(
+        resumed.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::Item(SchemaValue::U8(255)))
+    ));
+    assert_eq!(resumed.input.consumer_read_ordinal, 2);
+    assert!(matches!(
+        resumed.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::End)
+    ));
+    assert_eq!(resumed.input.consumer_read_ordinal, 3);
+}
+
+#[test]
+#[test_r::timeout("5s")]
+async fn source_selected_item_finishes_consumer_commit_before_later_stop() {
+    struct GatedJournal {
+        oplog: Arc<TestOplog>,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Semaphore,
+    }
+    #[async_trait::async_trait]
+    impl DurableStreamConsumerJournal for GatedJournal {
+        async fn commit(&self) -> Result<(), SessionError> {
+            self.entered.notify_one();
+            self.release.acquire().await.unwrap().forget();
+            self.oplog.commit(CommitLevel::Always).await.unwrap();
+            Ok(())
+        }
+        async fn committed_finished_index(
+            &self,
+            _: &StreamSessionKey,
+        ) -> Result<Option<OplogIndex>, SessionError> {
+            Ok(None)
+        }
+    }
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let key = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key.clone());
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 1,
+        handle: handle.clone(),
+        role: SessionStreamRole::Input,
+    };
+    let binding = persist_local_mapping(&producer, key.clone(), &mapping).await;
+    let journal = Arc::new(GatedJournal {
+        oplog: oplog.clone(),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    let streams = StreamSession::open(
+        producer.clone(),
+        oplog.clone(),
+        key.clone(),
+        [binding.clone()],
+    )
+    .await
+    .unwrap()
+    .with_consumer_journal(journal.clone());
+    producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![17, 255]),
+        )
+        .await
+        .unwrap();
+    let mut input = DurableInputProducer::new(
+        streams
+            .endpoint(handle.clone(), 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+    );
+    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let stop = tokio_util::sync::CancellationToken::new();
+    let cancelled = stop.clone();
+    let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+        golem_common::model::Timestamp::now_utc(),
+    );
+    guard.interrupt = Some(Box::pin(async move {
+        cancelled.cancelled().await;
+        kind
+    }));
+    let mut receive = input.input.receive(Some(guard));
+    let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+    tokio::select! {
+        biased;
+        _ = journal.entered.notified() => {},
+        _ = &mut receive => panic!("receive finished before its withheld journal commit"),
+    }
+    assert!(waits.lock().unwrap().is_empty());
+    assert_eq!(live_calls.load(Ordering::Acquire), 1);
+    stop.cancel();
+    assert!(
+        receive.as_mut().poll(&mut cx).is_pending(),
+        "later stop must not interrupt selected batch/journal work"
+    );
+    journal.release.add_permits(1);
+    assert!(matches!(
+        input.finish_receive(receive.await).unwrap(),
+        DurableInputEvent::Item(SchemaValue::U8(17))
+    ));
+    assert_eq!(live_calls.load(Ordering::Acquire), 0);
+    assert_eq!(input.input.consumer_read_ordinal, 1);
+    assert!(
+        !streams
+            .has_journaled_consumer_terminal(&mapping)
+            .await
+            .unwrap()
+    );
+    let reader_id = input.input.reader_id;
+    let history = streams.consumer_history(reader_id).await.unwrap();
+    assert_eq!(history.events.len(), 2);
+    let first_offset = history.events[0].offset;
+    assert_eq!(
+        history.events[1].offset.sub_index(),
+        first_offset.sub_index() + 1
+    );
+    drop(input);
+
+    let streams = StreamSession::open(producer, oplog.clone(), key, [binding])
+        .await
+        .unwrap()
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog)));
+    let mut resumed = DurableInputProducer::new(
+        streams
+            .endpoint(handle, 0, SessionStreamRole::Input)
+            .await
+            .unwrap(),
+    );
+    let (mut guard, _, _) = receive_guard_counts(false);
+    guard.interrupt = Some(Box::pin(std::future::ready(kind)));
+    let read = resumed.input.receive(Some(guard)).await.unwrap();
+    assert!(read.journaled);
+    assert_eq!(read.event.as_ref().unwrap().offset, first_offset);
+    assert!(matches!(
+        resumed.finish_receive(Ok(read)).unwrap(),
+        DurableInputEvent::Item(SchemaValue::U8(17))
+    ));
+    assert!(matches!(
+        resumed.receive_value(None).await.unwrap(),
+        Some(DurableInputEvent::Item(SchemaValue::U8(255)))
+    ));
+    assert_eq!(resumed.input.consumer_read_ordinal, 2);
 }
 
 #[test]
@@ -4170,7 +4473,8 @@ async fn root_union_stream_coordinates_use_the_selected_branch_and_survive_reloa
         StreamValuePathStep::RecordField(1),
     ];
 
-    let (input_consumer, input_stream) = output_stream_pair(4, Arc::new(|| false)).unwrap();
+    let (input_consumer, input_stream) =
+        output_stream_pair(4, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
     streams
         .materialize_agent_input(
             &stream_union_value(input_stream),
@@ -4192,7 +4496,8 @@ async fn root_union_stream_coordinates_use_the_selected_branch_and_survive_reloa
         .expect("the caller input stream must use union branch 1");
     drop(input_consumer);
 
-    let (output_consumer, output_stream) = output_stream_pair(4, Arc::new(|| false)).unwrap();
+    let (output_consumer, output_stream) =
+        output_stream_pair(4, Arc::new(|| false), Box::pin(std::future::pending())).unwrap();
     drop(output_consumer);
     streams
         .materialize_result(

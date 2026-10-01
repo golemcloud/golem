@@ -4836,7 +4836,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = access.get().stream_runtime_teardown_probe();
-                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown)
+                let interrupt = access.get().create_interrupt_signal();
+                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown, interrupt)
                     .map_err(wasmtime::Error::msg)?;
                 let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
                 reader.pipe(&mut access, sink)?;

@@ -643,6 +643,17 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     }
                 };
                 interruptible_tcp_input(native, interrupt).await
+            } else if self
+                .state
+                .open_filesystem_input_streams
+                .contains(&self_.rep())
+            {
+                let interrupt = self.create_interrupt_signal();
+                observe_file_stream(
+                    interrupt,
+                    HostInputStream::blocking_read(self.table(), self_, len),
+                )
+                .await
             } else {
                 HostInputStream::blocking_read(self.table(), self_, len).await
             }
@@ -877,6 +888,17 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                     }
                 };
                 interruptible_tcp_input(native, interrupt).await
+            } else if self
+                .state
+                .open_filesystem_input_streams
+                .contains(&self_.rep())
+            {
+                let interrupt = self.create_interrupt_signal();
+                observe_file_stream(
+                    interrupt,
+                    HostInputStream::blocking_skip(self.table(), self_, len),
+                )
+                .await
             } else {
                 HostInputStream::blocking_skip(self.table(), self_, len).await
             }
@@ -1342,7 +1364,16 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "blocking_flush");
-            HostOutputStream::blocking_flush(self.table(), self_).await
+            if self.state.open_filesystem_output_streams.contains_key(&rep) {
+                let interrupt = self.create_interrupt_signal();
+                observe_file_stream(
+                    interrupt,
+                    HostOutputStream::blocking_flush(self.table(), self_),
+                )
+                .await
+            } else {
+                HostOutputStream::blocking_flush(self.table(), self_).await
+            }
         }
     }
 
@@ -1627,7 +1658,17 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 .open_filesystem_output_streams
                 .contains_key(&stream_rep)
             {
-                let readiness = self.table().get_mut(&self_)?.write_ready().await;
+                let file_pair = self
+                    .state
+                    .open_filesystem_input_streams
+                    .contains(&src.rep());
+                let readiness = if file_pair {
+                    let interrupt = self.create_interrupt_signal();
+                    observe_file_stream(interrupt, self.table().get_mut(&self_)?.write_ready())
+                        .await
+                } else {
+                    self.table().get_mut(&self_)?.write_ready().await
+                };
                 readiness?;
             }
             let tcp_input = self.state.open_tcp_input_streams.contains(&src.rep());
@@ -1669,6 +1710,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     )
                     .await;
             }
+            let file_pair = self
+                .state
+                .open_filesystem_input_streams
+                .contains(&src.rep())
+                && self.state.open_filesystem_output_streams.contains_key(&rep);
+            let file_interrupt = file_pair.then(|| self.create_interrupt_signal());
             let interrupt = (tcp_input && raw_tcp_output).then(|| self.create_interrupt_signal());
             let native = HostOutputStream::blocking_splice(self.table(), self_, src, len);
             #[cfg(feature = "test-utils")]
@@ -1678,9 +1725,10 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     None => native.await,
                 }
             };
-            match interrupt {
-                Some(interrupt) => interruptible_tcp_input(native, interrupt).await,
-                None => native.await,
+            match (interrupt, file_interrupt) {
+                (Some(interrupt), _) => interruptible_tcp_input(native, interrupt).await,
+                (_, Some(interrupt)) => observe_file_stream(interrupt, native).await,
+                _ => native.await,
             }
         }
     }
@@ -1747,6 +1795,15 @@ fn get_http_output_stream_state<Ctx: WorkerCtx>(
         })
 }
 
+async fn observe_file_stream<T>(
+    interrupt: crate::wasi_filesystem::FilesystemInterruptSignal,
+    native: impl std::future::Future<Output = Result<T, StreamError>>,
+) -> Result<T, StreamError> {
+    crate::wasi_filesystem::observe_filesystem_operation(interrupt, native)
+        .await
+        .map_err(|kind| StreamError::Trap(wasmtime::Error::from(kind)))?
+}
+
 /// Re-reads exactly `recorded_len` bytes from a file-backed input stream during
 /// replay, reproducing the chunk the guest received when the oplog was written.
 /// The initial file system is restored to the same contents for replay, so the
@@ -1762,7 +1819,13 @@ async fn replay_file_stream_read<Ctx: WorkerCtx>(
     while (collected.len() as u64) < recorded_len {
         let remaining = recorded_len - collected.len() as u64;
         let stream = Resource::<InputStream>::new_borrow(handle);
-        match HostInputStream::blocking_read(ctx.table(), stream, remaining).await {
+        let interrupt = ctx.create_interrupt_signal();
+        match observe_file_stream(
+            interrupt,
+            HostInputStream::blocking_read(ctx.table(), stream, remaining),
+        )
+        .await
+        {
             Ok(chunk) if !chunk.is_empty() => collected.extend_from_slice(&chunk),
             Ok(_) | Err(StreamError::Closed) => {
                 return Err(file_stream_replay_divergence(
@@ -1787,7 +1850,13 @@ async fn replay_file_stream_skip<Ctx: WorkerCtx>(
     while skipped < recorded_len {
         let remaining = recorded_len - skipped;
         let stream = Resource::<InputStream>::new_borrow(handle);
-        match HostInputStream::blocking_skip(ctx.table(), stream, remaining).await {
+        let interrupt = ctx.create_interrupt_signal();
+        match observe_file_stream(
+            interrupt,
+            HostInputStream::blocking_skip(ctx.table(), stream, remaining),
+        )
+        .await
+        {
             Ok(n) if n > 0 => skipped += n,
             Ok(_) | Err(StreamError::Closed) => {
                 return Err(file_stream_replay_divergence(skipped, recorded_len));
@@ -2242,6 +2311,45 @@ mod tcp_input_tests {
             signal_tx
                 .send(InterruptKind::Suspend(Timestamp::now_utc()))
                 .is_err()
+        );
+    }
+}
+
+#[cfg(feature = "test-utils")]
+pub use crate::wasi_filesystem::FilesystemObservationGateForTest;
+
+#[cfg(test)]
+mod file_observation_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn pending_file_stream_observation_preserves_typed_stop() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let error = observe_file_stream(
+            Box::pin(std::future::ready(kind)),
+            std::future::pending::<Result<(), StreamError>>(),
+        )
+        .await
+        .unwrap_err();
+        let StreamError::Trap(error) = error else {
+            panic!("typed trap expected");
+        };
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+    }
+
+    #[test]
+    async fn file_stream_completion_wins_before_stop() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        assert_eq!(
+            observe_file_stream(
+                Box::pin(std::future::ready(kind)),
+                std::future::ready(Ok(19))
+            )
+            .await
+            .unwrap(),
+            19
         );
     }
 }

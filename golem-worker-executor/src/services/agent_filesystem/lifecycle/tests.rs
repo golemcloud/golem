@@ -7687,3 +7687,41 @@ proptest! {
         prop_assert!(second_suffix.len() <= first_suffix.len());
     }
 }
+
+#[test]
+#[timeout("5s")]
+async fn interrupted_guest_observation_retains_started_call_and_drain() {
+    let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    let generation = resident_generation_handle(&filesystem);
+    let node = OpenNode::File(open_file(&generation, &control, 620).await);
+    control.push_flush(Ok(()));
+    control.push_close(Ok(()));
+    control.push_delete_and_verify(Ok(()));
+    let gate = control.block("flush");
+    let call = flush(&generation, &node, FlushLevel::DataAndMetadata).unwrap();
+    let (stop, receive) = tokio::sync::oneshot::channel();
+    let observer = tokio::spawn(crate::wasi_filesystem::observe_filesystem_operation(
+        async { receive.await.unwrap() },
+        call,
+    ));
+    gate.wait_started().await;
+    let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+        golem_common::model::Timestamp::now_utc(),
+    );
+    stop.send(kind).unwrap();
+    assert_eq!(observer.await.unwrap().unwrap_err(), kind);
+    drop(node);
+    let mut deletion = tokio::spawn(delete(seal(filesystem)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut deletion)
+            .await
+            .is_err()
+    );
+    assert!(!has_call(&control, "delete_and_verify("));
+    gate.release();
+    gate.wait_completed().await;
+    deletion.await.unwrap().unwrap();
+    assert_eq!(call_count(&control, "flush("), 1);
+    assert_eq!(call_count(&control, "close("), 1);
+    assert_eq!(call_count(&control, "delete_and_verify("), 1);
+}

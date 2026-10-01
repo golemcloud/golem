@@ -16,11 +16,13 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::logging::policy as logging_policy;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call,
     observe_function_call_store,
 };
+use crate::durable_host::stream_transport::FrontendInterrupt;
 use crate::durable_host::tail_work::TailActivity;
 use crate::model::event::InternalWorkerEvent;
 use crate::workerctx::WorkerCtx;
@@ -186,14 +188,16 @@ struct CapturingOutputStreamConsumer {
     chunks_tx: Option<mpsc::UnboundedSender<StdioChunk>>,
     buffer: Vec<u8>,
     pending_ack: Option<oneshot::Receiver<()>>,
+    interrupt: FrontendInterrupt,
 }
 
 impl CapturingOutputStreamConsumer {
-    fn new(chunks_tx: mpsc::UnboundedSender<StdioChunk>) -> Self {
+    fn new(chunks_tx: mpsc::UnboundedSender<StdioChunk>, interrupt: FrontendInterrupt) -> Self {
         Self {
             chunks_tx: Some(chunks_tx),
             buffer: Vec::new(),
             pending_ack: None,
+            interrupt,
         }
     }
 }
@@ -216,7 +220,12 @@ impl<D> StreamConsumer<D> for CapturingOutputStreamConsumer {
         // bytes are read before this resolves, so a pending poll leaves the source intact.
         if let Some(ack_rx) = &mut self.pending_ack {
             match Pin::new(ack_rx).poll(cx) {
-                Poll::Pending => return Poll::Pending,
+                Poll::Pending => {
+                    if let Poll::Ready(kind) = self.interrupt.as_mut().poll(cx) {
+                        return Poll::Ready(Err(wasmtime::Error::from_anyhow(kind.into())));
+                    }
+                    return Poll::Pending;
+                }
                 Poll::Ready(Ok(())) => {
                     self.pending_ack = None;
                 }
@@ -323,10 +332,13 @@ where
 
 async fn wait_stdio_task_result(
     result_rx: oneshot::Receiver<wasmtime::Result<Result<(), ErrorCode>>>,
+    interrupt: FrontendInterrupt,
 ) -> wasmtime::Result<Result<(), ErrorCode>> {
-    result_rx
-        .await
-        .unwrap_or_else(|_| Err(wasmtime::Error::msg("stdio task dropped")))
+    tokio::select! {
+        biased;
+        result = result_rx => result.unwrap_or_else(|_| Err(wasmtime::Error::msg("stdio task dropped"))),
+        kind = interrupt => Err(wasmtime::Error::from_anyhow(kind.into())),
+    }
 }
 
 async fn emit_log_event_access<Ctx: WorkerCtx, U: 'static>(
@@ -394,7 +406,11 @@ where
     let (chunks_tx, chunks_rx) = mpsc::unbounded_channel();
     let (result_tx, result_rx) = oneshot::channel();
     accessor.with(|mut store| {
-        data.pipe(&mut store, CapturingOutputStreamConsumer::new(chunks_tx))?;
+        let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
+        data.pipe(
+            &mut store,
+            CapturingOutputStreamConsumer::new(chunks_tx, interrupt),
+        )?;
         let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
             .tail_work_tracker()
             .activity();
@@ -405,7 +421,8 @@ where
             activity,
             _phantom: PhantomData,
         });
-        FutureReader::new(&mut store, wait_stdio_task_result(result_rx))
+        let interrupt = durable_worker_ctx::<Ctx, U>(store.data_mut()).create_interrupt_signal();
+        FutureReader::new(&mut store, wait_stdio_task_result(result_rx, interrupt))
     })
 }
 
@@ -559,6 +576,124 @@ mod tests {
     use wasmtime::component::StreamReader;
     use wasmtime::{Config, Engine, Store};
 
+    #[test]
+    #[timeout("5s")]
+    async fn pending_stdio_result_observes_typed_stop_without_cancelling_task() {
+        let (result_tx, result_rx) = oneshot::channel();
+        let (stop, signal) = oneshot::channel();
+        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        );
+        let mut result = Box::pin(wait_stdio_task_result(
+            result_rx,
+            Box::pin(async move { signal.await.unwrap() }),
+        ));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(result.as_mut().poll(&mut cx).is_pending());
+        stop.send(kind).unwrap();
+        let observed = tokio::time::timeout(std::time::Duration::from_millis(100), result)
+            .await
+            .expect("pending stdio result must observe the published stop")
+            .unwrap_err();
+        assert_eq!(
+            observed.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+            Some(&kind)
+        );
+        // The task still owns completion after its observer is gone.
+        assert!(result_tx.send(Ok(Ok(()))).is_err());
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn pending_stdio_chunk_observes_typed_stop_and_retains_final_buffer() {
+        struct Observed(
+            CapturingOutputStreamConsumer,
+            std::sync::Arc<tokio::sync::Notify>,
+        );
+        impl<D> StreamConsumer<D> for Observed {
+            type Item = u8;
+            fn poll_consume(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                store: StoreContextMut<D>,
+                src: Source<u8>,
+                finish: bool,
+            ) -> Poll<wasmtime::Result<StreamResult>> {
+                let result = Pin::new(&mut self.0).poll_consume(cx, store, src, finish);
+                if result.is_pending() {
+                    self.1.notify_one();
+                }
+                result
+            }
+        }
+        let mut config = Config::new();
+        config.concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut store = Store::new(&engine, ());
+        let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel();
+        let pending = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (stop, signal) = oneshot::channel();
+        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        );
+        let mut input = vec![b'a'; STDIO_LOG_CHUNK_MAX_BYTES - 1];
+        input.extend_from_slice("é!".as_bytes());
+        let mut first = None;
+        let observed = store
+            .run_concurrent(async |accessor| -> wasmtime::Result<()> {
+                accessor.with(|mut store| {
+                    let reader = StreamReader::new(&mut store, input)?;
+                    reader.pipe(
+                        &mut store,
+                        Observed(
+                            CapturingOutputStreamConsumer::new(
+                                chunks_tx,
+                                Box::pin(async move { signal.await.unwrap() }),
+                            ),
+                            pending.clone(),
+                        ),
+                    )
+                })?;
+                first = Some(chunks_rx.recv().await.unwrap());
+                pending.notified().await;
+                assert!(chunks_rx.try_recv().is_err());
+                stop.send(kind).unwrap();
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                Ok(())
+            })
+            .await;
+        let error = observed.expect_err("pending acknowledgement must observe the published stop");
+        assert_eq!(
+            error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+            Some(&kind)
+        );
+        drop(store);
+        let first = first.unwrap();
+        assert_eq!(first.contents, vec![b'a'; STDIO_LOG_CHUNK_MAX_BYTES - 1]);
+        let final_chunk = chunks_rx.recv().await.unwrap();
+        assert_eq!(final_chunk.contents, vec![0xc3]);
+        assert!(chunks_rx.recv().await.is_none());
+        // Both already-handed chunks can still be emitted and acknowledged by their owner.
+        let _ = first.ack_tx.send(());
+        let _ = final_chunk.ack_tx.send(());
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn ready_stdio_result_keeps_completion_before_stop() {
+        let (result_tx, result_rx) = oneshot::channel();
+        result_tx.send(Ok(Err(ErrorCode::Pipe))).unwrap();
+        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        );
+        assert!(matches!(
+            wait_stdio_task_result(result_rx, Box::pin(std::future::ready(kind)))
+                .await
+                .unwrap(),
+            Err(ErrorCode::Pipe)
+        ));
+    }
+
     /// Splitting never happens in the middle of a multi-byte UTF-8 scalar, at most 3 bytes
     /// are held back, and invalid trailing bytes are split at the cap.
     #[test]
@@ -615,7 +750,13 @@ mod tests {
                 let mut chunk_rx = chunk_rx;
                 accessor.with(|mut store| {
                     let stream = StreamReader::new(&mut store, input)?;
-                    stream.pipe(&mut store, CapturingOutputStreamConsumer::new(chunks_tx))
+                    stream.pipe(
+                        &mut store,
+                        CapturingOutputStreamConsumer::new(
+                            chunks_tx,
+                            Box::pin(std::future::pending()),
+                        ),
+                    )
                 })?;
 
                 let mut chunks = Vec::new();
@@ -704,7 +845,13 @@ mod tests {
                             seg_idx: 0,
                         },
                     )?;
-                    stream.pipe(&mut store, CapturingOutputStreamConsumer::new(chunks_tx))
+                    stream.pipe(
+                        &mut store,
+                        CapturingOutputStreamConsumer::new(
+                            chunks_tx,
+                            Box::pin(std::future::pending()),
+                        ),
+                    )
                 })?;
 
                 let mut chunks = Vec::new();
@@ -769,7 +916,13 @@ mod tests {
                 let mut chunk_rx = chunk_rx;
                 accessor.with(|mut store| {
                     let stream = StreamReader::new(&mut store, input)?;
-                    stream.pipe(&mut store, CapturingOutputStreamConsumer::new(chunks_tx))
+                    stream.pipe(
+                        &mut store,
+                        CapturingOutputStreamConsumer::new(
+                            chunks_tx,
+                            Box::pin(std::future::pending()),
+                        ),
+                    )
                 })?;
 
                 // Receive the first chunk, then drop the receiver without

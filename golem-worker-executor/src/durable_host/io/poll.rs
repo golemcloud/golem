@@ -72,8 +72,14 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         if !was_live && is_ready {
             if self.state.file_stream_pollables.contains(&rep) {
                 let pollable = Resource::<Pollable>::new_borrow(rep);
+                let interrupt = self.create_interrupt_signal();
                 let mut view = self.as_wasi_view();
-                HostPollable::block(&mut view.io_data(), pollable).await?;
+                crate::wasi_filesystem::observe_filesystem_operation(
+                    interrupt,
+                    HostPollable::block(&mut view.io_data(), pollable),
+                )
+                .await
+                .map_err(wasmtime::Error::from)??;
             } else if self.state.tcp_connect_replay.needs_readiness(rep) {
                 self.revalidate_tcp_connect(rep, true).await?;
             }
@@ -221,8 +227,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             for rep in ready_reconstructed_pollables {
                                 if self.state.file_stream_pollables.contains(&rep) {
                                     let pollable = Resource::<Pollable>::new_borrow(rep);
+                                    let interrupt = self.create_interrupt_signal();
                                     let mut view = self.as_wasi_view();
-                                    HostPollable::block(&mut view.io_data(), pollable).await?;
+                                    crate::wasi_filesystem::observe_filesystem_operation(
+                                        interrupt,
+                                        HostPollable::block(&mut view.io_data(), pollable),
+                                    )
+                                    .await
+                                    .map_err(wasmtime::Error::from)??;
                                 } else {
                                     self.revalidate_tcp_connect(rep, false).await?;
                                 }

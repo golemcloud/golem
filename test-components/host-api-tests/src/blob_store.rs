@@ -281,3 +281,25 @@ impl BlobStore for BlobStoreImpl {
         .map_err(|error| format!("{error:?}"))
     }
 }
+
+#[agent_definition(mode = "ephemeral")]
+pub trait EphemeralStorageObservation {
+    fn new(name: String) -> Self;
+    fn container_exists(&self, container: String) -> bool;
+    fn stat_root(&self) -> bool;
+}
+
+pub struct EphemeralStorageObservationImpl;
+
+#[agent_implementation]
+impl EphemeralStorageObservation for EphemeralStorageObservationImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+    fn container_exists(&self, container: String) -> bool {
+        blobstore::container_exists(&container).unwrap()
+    }
+    fn stat_root(&self) -> bool {
+        std::fs::metadata("/").unwrap().is_dir()
+    }
+}

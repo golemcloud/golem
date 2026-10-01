@@ -53,13 +53,22 @@ use golem_common::model::oplog::{
 };
 
 use crate::wasi_filesystem::{
-    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
-    agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
-    filesystem_permission_targets, flush_level, get_agent_descriptor, push_agent_descriptor,
-    resize_attribute_changes, route_agent_flush, route_agent_namespace_edit, route_agent_open,
-    route_agent_set_attributes, route_agent_write, route_replay_timestamp_restoration,
-    run_agent_filesystem_call,
+    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, FilesystemInterruptSignal,
+    advance_write_placement, agent_descriptor_guest_path, calculate_metadata_hash_parts,
+    delete_agent_descriptor, filesystem_permission_targets, flush_level, get_agent_descriptor,
+    observe_filesystem_operation, push_agent_descriptor, resize_attribute_changes,
+    route_agent_flush, route_agent_namespace_edit, route_agent_open, route_agent_set_attributes,
+    route_agent_write, route_replay_timestamp_restoration, run_agent_filesystem_call,
 };
+
+async fn observe_p2_filesystem<T>(
+    interrupt: FilesystemInterruptSignal,
+    operation: impl Future<Output = Result<T, FsError>>,
+) -> Result<T, FsError> {
+    observe_filesystem_operation(interrupt, operation)
+        .await
+        .map_err(FsError::trap)?
+}
 
 fn p2_descriptor_guest_path(
     descriptor: &AgentDescriptor,
@@ -116,6 +125,7 @@ pub(in crate::wasi_filesystem) fn p2_agent_open_error(error: AgentOpenRouteError
         AgentOpenRouteError::Unsupported => ErrorCode::Unsupported.into(),
         AgentOpenRouteError::SymlinkLoop => ErrorCode::Loop.into(),
         AgentOpenRouteError::Filesystem(error) => p2_agent_error(error),
+        AgentOpenRouteError::Interrupted(kind) => FsError::trap(kind),
     }
 }
 
@@ -194,11 +204,13 @@ pub(crate) async fn route_open(
     path_flags: PathFlags,
     open_flags: OpenFlags,
     descriptor_flags: DescriptorFlags,
+    interrupt: FilesystemInterruptSignal,
 ) -> Result<agent_filesystem::Opened, FsError> {
     route_agent_open(
         generation_handle,
         target,
         p2_agent_open_request(path_flags, open_flags, descriptor_flags),
+        interrupt,
     )
     .await
     .map_err(p2_agent_open_error)
@@ -812,7 +824,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let _authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "sync_data");
         let operation = descriptor.with_node(|node| route_flush(&generation_handle, node, true))?;
-        operation.await
+        observe_p2_filesystem(self.create_interrupt_signal(), operation).await
     }
 
     async fn get_flags(&mut self, fd: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
@@ -842,7 +854,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         }
         let operation =
             descriptor.with_node(|node| route_set_size(&generation_handle, node, size))?;
-        operation.await
+        observe_p2_filesystem(self.create_interrupt_signal(), operation).await
     }
 
     async fn set_times(
@@ -864,7 +876,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                 data_modification_timestamp,
             )
         })?;
-        operation.await
+        observe_p2_filesystem(self.create_interrupt_signal(), operation).await
     }
 
     async fn read(
@@ -888,7 +900,10 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error))),
             OpenNode::Directory(_) => Err(ErrorCode::BadDescriptor.into()),
         })?;
-        let bytes = call.await.map_err(p2_agent_error)?;
+        let bytes = observe_filesystem_operation(self.create_interrupt_signal(), call)
+            .await
+            .map_err(FsError::trap)?
+            .map_err(p2_agent_error)?;
         let eof = bytes.is_empty();
         Ok((bytes.to_vec(), eof))
     }
@@ -910,7 +925,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             }
             OpenNode::Directory(_) => Err(ErrorCode::BadDescriptor.into()),
         })?;
-        operation.await
+        observe_p2_filesystem(self.create_interrupt_signal(), operation).await
     }
 
     async fn read_directory(
@@ -929,8 +944,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             }
             OpenNode::File(_) => Err(ErrorCode::NotDirectory.into()),
         })?;
-        let mut entries = call
+        let mut entries = observe_filesystem_operation(self.create_interrupt_signal(), call)
             .await
+            .map_err(FsError::trap)?
             .map_err(p2_agent_error)?
             .into_iter()
             .map(|entry| {
@@ -958,7 +974,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "sync");
         let operation =
             descriptor.with_node(|node| route_flush(&generation_handle, node, false))?;
-        operation.await
+        observe_p2_filesystem(self.create_interrupt_signal(), operation).await
     }
 
     async fn create_directory_at(
@@ -973,7 +989,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             authorize_paths(self, &[(FilesystemVerb::Write, guest_path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "create_directory_at");
         let target = p2_agent_path_target(&descriptor, path)?;
-        route_create_directory(&generation_handle, target).await
+        observe_p2_filesystem(
+            self.create_interrupt_signal(),
+            route_create_directory(&generation_handle, target),
+        )
+        .await
     }
 
     async fn stat(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorStat, FsError> {
@@ -986,21 +1006,34 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `DurableCallSession::run`.
-        let handle = DurableCallSession::<FilesystemTypesDescriptorStat, NotCancellable>::start(
-            self,
-            HostRequestFileSystemPath {
-                path: path.to_string_lossy().to_string(),
-            },
-            DurableFunctionType::ReadLocal,
-        )
-        .await
-        .map_err(FsError::trap)?;
+        let mut handle =
+            DurableCallSession::<FilesystemTypesDescriptorStat, NotCancellable>::start(
+                self,
+                HostRequestFileSystemPath {
+                    path: path.to_string_lossy().to_string(),
+                },
+                DurableFunctionType::ReadLocal,
+            )
+            .await
+            .map_err(FsError::trap)?;
 
         let call = descriptor.with_node(|node| {
             agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
                 .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
         })?;
-        let stat = match call.await.map_err(p2_agent_error).and_then(p2_agent_stat) {
+        #[cfg(feature = "test-utils")]
+        let call = crate::wasi_filesystem::gated_filesystem_observation_for_test(
+            crate::workerctx::InvocationManagement::get_current_idempotency_key(self).await,
+            call,
+        );
+        let native = observe_filesystem_operation(self.create_interrupt_signal(), call)
+            .await
+            .map_err(|kind| {
+                FsError::trap(wasmtime::Error::from_anyhow(
+                    handle.trap(anyhow::Error::new(kind)),
+                ))
+            })?;
+        let stat = match native.map_err(p2_agent_error).and_then(p2_agent_stat) {
             Ok(stat) => Ok(stat),
             Err(fs_error) => Err(fs_error
                 .downcast_ref()
@@ -1077,20 +1110,33 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `DurableCallSession::run`.
-        let handle = DurableCallSession::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
-            self,
-            HostRequestFileSystemPath {
-                path: full_path.to_string_lossy().to_string(),
-            },
-            DurableFunctionType::ReadLocal,
-        )
-        .await
-        .map_err(FsError::trap)?;
+        let mut handle =
+            DurableCallSession::<FilesystemTypesDescriptorStatAt, NotCancellable>::start(
+                self,
+                HostRequestFileSystemPath {
+                    path: full_path.to_string_lossy().to_string(),
+                },
+                DurableFunctionType::ReadLocal,
+            )
+            .await
+            .map_err(FsError::trap)?;
 
         let call =
             agent_filesystem::attributes(&generation_handle, AgentTarget::Path(&target, follow))
                 .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))?;
-        let stat = match call.await.map_err(p2_agent_error).and_then(p2_agent_stat) {
+        #[cfg(feature = "test-utils")]
+        let call = crate::wasi_filesystem::gated_filesystem_observation_for_test(
+            crate::workerctx::InvocationManagement::get_current_idempotency_key(self).await,
+            call,
+        );
+        let native = observe_filesystem_operation(self.create_interrupt_signal(), call)
+            .await
+            .map_err(|kind| {
+                FsError::trap(wasmtime::Error::from_anyhow(
+                    handle.trap(anyhow::Error::new(kind)),
+                ))
+            })?;
+        let stat = match native.map_err(p2_agent_error).and_then(p2_agent_stat) {
             Ok(stat) => Ok(stat),
             Err(fs_error) => Err(fs_error
                 .downcast_ref()
@@ -1170,7 +1216,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             data_access_timestamp,
             data_modification_timestamp,
         )?;
-        operation.await
+        observe_p2_filesystem(self.create_interrupt_signal(), operation).await
     }
 
     async fn link_at(
@@ -1197,7 +1243,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "link_at");
         let source = p2_agent_path_target(&source_descriptor, old_path)?;
         let destination = p2_agent_path_target(&destination_descriptor, new_path)?;
-        route_hard_link(&generation_handle, source, old_path_flags, destination).await
+        observe_p2_filesystem(
+            self.create_interrupt_signal(),
+            route_hard_link(&generation_handle, source, old_path_flags, destination),
+        )
+        .await
     }
 
     async fn open_at(
@@ -1227,7 +1277,15 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "open_at");
         let descriptor_path = descriptor.path().join(&path);
         let target = p2_agent_path_target(&descriptor, path)?;
-        let opened = route_open(&generation_handle, target, path_flags, open_flags, flags).await?;
+        let opened = route_open(
+            &generation_handle,
+            target,
+            path_flags,
+            open_flags,
+            flags,
+            self.create_interrupt_signal(),
+        )
+        .await?;
         Ok(push_agent_descriptor(
             self,
             AgentDescriptor::new(opened.node, descriptor_path),
@@ -1246,7 +1304,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "readlink_at");
         let target = p2_agent_path_target(&descriptor, path)?;
-        route_symlink_target(&generation_handle, target).await
+        observe_p2_filesystem(
+            self.create_interrupt_signal(),
+            route_symlink_target(&generation_handle, target),
+        )
+        .await
     }
 
     async fn remove_directory_at(
@@ -1261,7 +1323,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             authorize_paths(self, &[(FilesystemVerb::Delete, guest_path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "remove_directory_at");
         let target = p2_agent_path_target(&descriptor, path)?;
-        route_remove_directory(&generation_handle, target).await
+        observe_p2_filesystem(
+            self.create_interrupt_signal(),
+            route_remove_directory(&generation_handle, target),
+        )
+        .await
     }
 
     async fn rename_at(
@@ -1287,7 +1353,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         self.observe_function_call("filesystem::types::descriptor", "rename_at");
         let source = p2_agent_path_target(&source_descriptor, old_path)?;
         let destination = p2_agent_path_target(&destination_descriptor, new_path)?;
-        route_rename(&generation_handle, source, destination).await
+        observe_p2_filesystem(
+            self.create_interrupt_signal(),
+            route_rename(&generation_handle, source, destination),
+        )
+        .await
     }
 
     async fn symlink_at(
@@ -1303,7 +1373,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             authorize_paths(self, &[(FilesystemVerb::Write, destination_path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "symlink_at");
         let destination = p2_agent_path_target(&descriptor, new_path)?;
-        route_create_symlink(&generation_handle, destination, old_path).await
+        observe_p2_filesystem(
+            self.create_interrupt_signal(),
+            route_create_symlink(&generation_handle, destination, old_path),
+        )
+        .await
     }
 
     async fn unlink_file_at(
@@ -1318,7 +1392,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             authorize_paths(self, &[(FilesystemVerb::Delete, guest_path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "unlink_file_at");
         let target = p2_agent_path_target(&descriptor, path)?;
-        route_unlink(&generation_handle, target, ObjectKind::File).await
+        observe_p2_filesystem(
+            self.create_interrupt_signal(),
+            route_unlink(&generation_handle, target, ObjectKind::File),
+        )
+        .await
     }
 
     async fn is_same_object(
@@ -1333,7 +1411,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let call = AgentDescriptor::with_nodes(&left, &right, |left, right| {
             agent_filesystem::is_same_object(&generation_handle, left, right)
         })?;
-        call.await
+        observe_filesystem_operation(self.create_interrupt_signal(), call)
+            .await
+            .map_err(wasmtime::Error::from)?
             .map_err(|error| wasmtime::Error::msg(error.to_string()))
     }
 

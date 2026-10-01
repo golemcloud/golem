@@ -192,6 +192,7 @@ pub(crate) enum AgentOpenRouteError {
     Unsupported,
     SymlinkLoop,
     Filesystem(AgentFilesystemError),
+    Interrupted(golem_service_base::error::worker_executor::InterruptKind),
 }
 
 impl From<AgentOpenPolicyError> for AgentOpenRouteError {
@@ -277,6 +278,24 @@ pub(crate) async fn run_agent_filesystem_call<T: Send + 'static>(
         Ok(call) => call.await,
         Err(error) => Err(AgentFilesystemError::Access(error)),
     }
+}
+
+pub(crate) type FilesystemInterruptSignal = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = golem_service_base::error::worker_executor::InterruptKind>
+            + Send,
+    >,
+>;
+
+/// Stops guest observation only. Dropping a started FilesystemCall retains its operation and lease
+/// under the filesystem owner, so drain can still wait for backend completion.
+pub(crate) async fn observe_filesystem_operation<T>(
+    interrupt: impl std::future::Future<
+        Output = golem_service_base::error::worker_executor::InterruptKind,
+    >,
+    operation: impl std::future::Future<Output = T>,
+) -> Result<T, golem_service_base::error::worker_executor::InterruptKind> {
+    tokio::select! { biased; result = operation => Ok(result), kind = interrupt => Err(kind) }
 }
 
 /// Submits a P2/P3 file write to `agent_filesystem` and returns its deferred call.
@@ -391,6 +410,7 @@ pub(crate) async fn route_agent_open(
     generation_handle: &FilesystemGenerationHandle,
     target: PathTarget,
     request: AgentOpenRequest,
+    mut interrupt: FilesystemInterruptSignal,
 ) -> Result<Opened, AgentOpenRouteError> {
     let options = match decide_agent_open(request)? {
         AgentOpenDecision::Open(options) => options,
@@ -398,19 +418,27 @@ pub(crate) async fn route_agent_open(
             access: mode,
             follow,
         } => {
-            let attributes = run_agent_filesystem_call(agent_filesystem::attributes(
-                generation_handle,
-                Target::Path(&target, follow),
-            ))
+            let attributes = observe_filesystem_operation(
+                &mut interrupt,
+                run_agent_filesystem_call(agent_filesystem::attributes(
+                    generation_handle,
+                    Target::Path(&target, follow),
+                )),
+            )
             .await
+            .map_err(AgentOpenRouteError::Interrupted)?
             .map_err(AgentOpenRouteError::Filesystem)?;
             decide_agent_existing_open(mode, follow, attributes.kind)?
         }
     };
 
-    run_agent_filesystem_call(agent_filesystem::open(generation_handle, target, options))
-        .await
-        .map_err(AgentOpenRouteError::Filesystem)
+    observe_filesystem_operation(
+        interrupt,
+        run_agent_filesystem_call(agent_filesystem::open(generation_handle, target, options)),
+    )
+    .await
+    .map_err(AgentOpenRouteError::Interrupted)?
+    .map_err(AgentOpenRouteError::Filesystem)
 }
 
 /// Computes the stable metadata-hash words shared by P2 and P3 from modification time and size.
@@ -424,6 +452,82 @@ pub(crate) fn calculate_metadata_hash_parts(modified: Option<(u64, u32)>, size: 
     hasher.write_u64(size);
 
     hasher.finish128()
+}
+
+#[cfg(feature = "test-utils")]
+static OBSERVATION_GATES: std::sync::LazyLock<
+    Mutex<
+        std::collections::HashMap<
+            golem_common::model::IdempotencyKey,
+            Arc<FilesystemObservationGateForTest>,
+        >,
+    >,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[cfg(feature = "test-utils")]
+pub struct FilesystemObservationGateForTest {
+    key: golem_common::model::IdempotencyKey,
+    pub pending: tokio::sync::Notify,
+    pub release: tokio::sync::Semaphore,
+    pub dropped: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(feature = "test-utils")]
+impl FilesystemObservationGateForTest {
+    pub fn install(key: golem_common::model::IdempotencyKey) -> Arc<Self> {
+        let gate = Arc::new(Self {
+            key: key.clone(),
+            pending: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+            dropped: std::sync::atomic::AtomicUsize::new(0),
+        });
+        assert!(
+            OBSERVATION_GATES
+                .lock()
+                .unwrap()
+                .insert(key, gate.clone())
+                .is_none()
+        );
+        gate
+    }
+    pub fn remove(&self) {
+        OBSERVATION_GATES.lock().unwrap().remove(&self.key);
+    }
+}
+
+#[cfg(feature = "test-utils")]
+pub(crate) async fn gated_filesystem_observation_for_test<T>(
+    key: Option<golem_common::model::IdempotencyKey>,
+    call: impl std::future::Future<Output = T>,
+) -> T {
+    let gate = key.and_then(|key| OBSERVATION_GATES.lock().unwrap().get(&key).cloned());
+    if let Some(gate) = gate {
+        struct Observation(Arc<FilesystemObservationGateForTest>, bool);
+        impl Drop for Observation {
+            fn drop(&mut self) {
+                if !self.1 {
+                    self.0
+                        .dropped
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        }
+        let mut observation = Observation(gate.clone(), false);
+        let mut wait = Box::pin(gate.release.acquire());
+        let permit = std::future::poll_fn(|cx| {
+            use std::future::Future;
+            let result = wait.as_mut().poll(cx);
+            if result.is_pending() {
+                gate.pending.notify_one();
+            }
+            result
+        })
+        .await
+        .unwrap();
+        permit.forget();
+        observation.1 = true;
+    }
+    call.await
 }
 
 #[cfg(test)]

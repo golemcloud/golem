@@ -379,10 +379,79 @@ children to be dropped first, so socket cleanup need not scan unrelated subscrip
 not revalidate HTTP, UDP or TCP input pollables. Exported P2 `pollable.ready` remains a nonblocking
 live probe, as verified by `tests/api/p2_ready.rs`.
 
+### Blobstore and filesystem guest observation
+
+Live blobstore provider futures in `durable_host/blobstore/{mod,container}.rs` select the composed
+`create_interrupt_signal()`. Provider completion has priority when both helper branches are ready.
+An interruption abandons only the incomplete durable call and propagates the typed trap. Retry
+policy, End persistence, metrics, resource registration and accessor delivery remain outside the
+select. Container creation and its subsequent metadata lookup are separate waits. Buffered value
+consumers, size/drop and materialized object names do not acquire a new backend wait. Dropping a
+provider future does not undo a remote effect before End; existing incomplete-call replay semantics
+still apply.
+
+P2/P3 filesystem descriptor calls select guest observation of each admitted operation. Open selects
+its attributes and open calls separately. Stat interruption escapes as a typed trap before error
+serialization; completed stat history and replay timestamp restoration remain authoritative. Direct
+P2 file read/skip, flush readiness, file-only blocking splice and completed-record file readiness/read
+revalidation use the existing file maps. Live multi-poll retains its existing Worker subscriber.
+Mixed network/unknown streams keep their own paths.
+
+P3 file prefetch, subsequent producer demand and result-future observation use the composed signal.
+An interrupted read traps instead of reporting EOF. Streaming chunk effects and task completion are
+not selected. `FilesystemCall` Drop keeps already-started work and its generation lease under the
+filesystem module until completion. Guest observation can therefore stop while flush or write still
+runs; unload must drain that work before deletion and actual permit release. Known-local synchronous
+syscalls cannot be preempted inside a future poll, and started blocking tasks may delay drain. Cleanup
+failures and unknown writers remain observable, not successful release.
+
+`tests/api/monthly_blob_filesystem.rs` verifies representative monthly memory in both agent modes.
+Its blob override observes real provider Pending and stays withheld through physical release. Its
+keyed filesystem gate observes admitted stat waiting before native execution, not a stalled native
+syscall. Durable cases retain and complete the original Start under the same invocation key after a
+grant; ephemeral cases persist the typed monthly failure. The lifecycle test
+`interrupted_guest_observation_retains_started_call_and_drain` holds a started scripted flush and
+proves deletion waits after typed observation interruption. These are separate observation and
+physical-drain witnesses, not a native-XFS stall or universal release bound.
+
+### Non-network frontend stream observation
+
+P3 captured stdout/stderr chunks and result futures in `durable_host/p3/cli.rs` observe the
+composed signal only while awaiting an acknowledgement or task result. A ready acknowledgement
+or result wins first. The emitting task still owns log emission, acknowledgements and completion;
+consumer Drop still queues its buffered remainder. Standard input remains disabled.
+
+`stream_transport.rs` live input demand selects source receive against the same composed signal.
+Interruption traps with `InterruptKind`, not EOF or a stream terminal. Schema wrap/unwrap and the
+native-tool byte frontend pass the signal from their owning context. Pending item publication can
+stop guest observation, but the consumer keeps its already-consumed publication future for existing
+Drop completion. Terminal publication remains mandatory. A saturated primary queue can therefore
+keep retained publication pending after the guest stops. Projection keeps its existing relay
+lifecycle and Store-closure ownership; a typed durable-source interruption aborts the relay without
+publishing an error terminal.
+
+Durable schema and native-tool stdin share `DurableInputProducer::poll_value`. Receive admission
+captures the composed signal after replay admission. Only the first live `reader.next()` selects
+it. Once a source event wins, packed-batch collection, consumer-journal commit and nested mapping
+work finish before delivery. Recorded consumer ordinals and offsets remain authoritative; local
+`DurableInputError` keeps interruption separate from `SessionError`. Drop cancellation and
+attachment fencing retain their existing owners.
+
+Module tests observe actual quiet receive, bounded publication and CLI acknowledgement/result
+Pending. They verify typed interruption, retained consumed output and final buffering, ready-first
+behavior, nonidentity projection, and source-selected journal completion through a later stop.
+Durable journal reload continues under the same session key without an invented terminal.
+`tests/api/monthly_frontend_streams.rs` observes a real native-tool stdin reader's first Pending,
+then monthly memory Suspend, joined physical unload and permit/monitor release while stdin stays
+quiet. The original accepted session and invocation key subsequently consume their first packed
+bytes and finish normally after a grant. This is representative durable monthly-memory evidence,
+not an ephemeral frontend matrix, CLI log-persistence stall, arbitrary-stop guarantee or universal
+publication/cleanup release bound.
+
 Raw P2 TCP `blocking_read` and `blocking_skip` in `durable_host/io/streams.rs` select the existing
 typed interrupt signal around only the native input future. Successful `finish_connect` and
 `accept` classify the returned input stream; successful native stream drop removes that rep.
-Filesystem and unknown streams keep their existing behavior. Native stream cancellation,
+File streams use the separate filesystem observation path above; unknown streams keep their existing behavior. Native stream cancellation,
 resource deletion and invocation-result commit remain outside the select.
 
 These raw TCP calls have **no durable host Start or recorded read/skip result**. At a pending

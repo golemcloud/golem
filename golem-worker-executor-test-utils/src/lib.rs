@@ -3559,7 +3559,9 @@ struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
+    wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
+    environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
     active_agents:
         Arc<OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>>,
 }
@@ -3576,6 +3578,18 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
             wrap(storage)
         } else {
             storage
+        }
+    }
+
+    fn create_blob_store_service(
+        &self,
+        blob_storage: &Arc<dyn BlobStorage>,
+    ) -> Arc<dyn BlobStoreService> {
+        let service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
+        if let Some(wrap) = &self.wrap_blob_store_service {
+            wrap(service)
+        } else {
+            service
         }
     }
 
@@ -3620,7 +3634,9 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _config: &EnvironmentStateServiceConfig,
         _registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn EnvironmentStateService> {
-        Arc::new(DisabledEnvironmentStateService)
+        self.environment_state_service
+            .clone()
+            .unwrap_or_else(|| Arc::new(DisabledEnvironmentStateService))
     }
 
     fn create_component_service(
@@ -3832,7 +3848,9 @@ async fn run_production_context_bootstrap(
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
             wrap_rpc: overrides.wrap_rpc,
+            wrap_blob_store_service: overrides.wrap_blob_store_service,
             wrap_key_value_storage: overrides.wrap_key_value_storage,
+            environment_state_service: overrides.environment_state_service,
             active_agents: production_active_agents.clone(),
         },
         config,
@@ -7129,15 +7147,54 @@ impl BlobStoreMutationRecorder {
     }
 }
 
+pub struct BlobStoreExistsGate {
+    pub pending: tokio::sync::Notify,
+    pub release: tokio::sync::Semaphore,
+    pub attempts: std::sync::atomic::AtomicUsize,
+    pub dropped: std::sync::atomic::AtomicUsize,
+}
+
+impl Default for BlobStoreExistsGate {
+    fn default() -> Self {
+        Self {
+            pending: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            dropped: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+struct BlobExistsObservation<'a>(&'a BlobStoreExistsGate, bool);
+
+impl Drop for BlobExistsObservation<'_> {
+    fn drop(&mut self) {
+        if !self.1 {
+            self.0.dropped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
 pub struct FailingBlobStoreService {
     inner: Arc<dyn BlobStoreService>,
     remaining_get_data_failures: AtomicU32,
     remaining_write_data_failures: AtomicU32,
     remaining_delete_objects_failures: AtomicU32,
     mutation_recorder: Option<Arc<BlobStoreMutationRecorder>>,
+    exists_gate: Option<Arc<BlobStoreExistsGate>>,
 }
 
 impl FailingBlobStoreService {
+    pub fn with_exists_gate(
+        inner: Arc<dyn BlobStoreService>,
+        gate: Arc<BlobStoreExistsGate>,
+    ) -> Self {
+        Self {
+            exists_gate: Some(gate),
+            ..Self::new(inner, 0)
+        }
+    }
+
     pub fn new(inner: Arc<dyn BlobStoreService>, failure_count: u32) -> Self {
         Self {
             inner,
@@ -7145,6 +7202,7 @@ impl FailingBlobStoreService {
             remaining_write_data_failures: AtomicU32::new(0),
             remaining_delete_objects_failures: AtomicU32::new(0),
             mutation_recorder: None,
+            exists_gate: None,
         }
     }
 
@@ -7160,6 +7218,7 @@ impl FailingBlobStoreService {
             remaining_write_data_failures: AtomicU32::new(write_data_failures),
             remaining_delete_objects_failures: AtomicU32::new(delete_objects_failures),
             mutation_recorder: Some(recorder),
+            exists_gate: None,
         }
     }
 }
@@ -7179,6 +7238,22 @@ impl BlobStoreService for FailingBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<bool, BlobStoreError> {
+        if let Some(gate) = &self.exists_gate {
+            gate.attempts.fetch_add(1, Ordering::SeqCst);
+            let mut observation = BlobExistsObservation(gate, false);
+            let mut acquire = Box::pin(gate.release.acquire());
+            let permit = std::future::poll_fn(|cx| {
+                let result = acquire.as_mut().poll(cx);
+                if result.is_pending() {
+                    gate.pending.notify_one();
+                }
+                result
+            })
+            .await
+            .expect("exists gate closed");
+            permit.forget();
+            observation.1 = true;
+        }
         self.inner
             .container_exists(environment_id, container_name)
             .await

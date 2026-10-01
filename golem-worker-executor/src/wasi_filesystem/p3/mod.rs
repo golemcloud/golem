@@ -28,7 +28,7 @@ use crate::durable_host::p3::{
 };
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{
-    CallReplayOutcome, DurableCallSession, LiveAuthorizationPermit, NotCancellable,
+    CallReplayOutcome, DurabilityHost, DurableCallSession, LiveAuthorizationPermit, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
 use crate::services::agent_filesystem::{
@@ -38,11 +38,12 @@ use crate::services::agent_filesystem::{
     SymlinkTarget, Target as AgentTarget, TimeChange, TimeChanges, WritePlacement, WriteResult,
 };
 use crate::wasi_filesystem::{
-    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, advance_write_placement,
-    agent_descriptor_guest_path, calculate_metadata_hash_parts, delete_agent_descriptor,
-    filesystem_permission_targets, flush_level, get_agent_descriptor, push_agent_descriptor,
-    resize_attribute_changes, route_agent_flush, route_agent_namespace_edit, route_agent_open,
-    route_agent_set_attributes, route_agent_write, run_agent_filesystem_call,
+    AgentDescriptor, AgentOpenRequest, AgentOpenRouteError, FilesystemInterruptSignal,
+    advance_write_placement, agent_descriptor_guest_path, calculate_metadata_hash_parts,
+    delete_agent_descriptor, filesystem_permission_targets, flush_level, get_agent_descriptor,
+    observe_filesystem_operation, push_agent_descriptor, resize_attribute_changes,
+    route_agent_flush, route_agent_namespace_edit, route_agent_open, route_agent_set_attributes,
+    route_agent_write, run_agent_filesystem_call,
 };
 use crate::workerctx::WorkerCtx;
 use bytes::{Bytes, BytesMut};
@@ -57,6 +58,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestFileSystemPath, HostRequestNoInput,
     HostResponseP3FileSystemStat, HostResponseP3FileSystemWriteAdmission,
 };
+use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{
     Access, Accessor, AccessorTask, Destination, FutureReader, Linker, Resource, Source,
     StreamConsumer, StreamProducer, StreamReader, StreamResult,
@@ -65,6 +67,23 @@ use wasmtime::{AsContextMut, StoreContextMut};
 use wasmtime_wasi::filesystem::{Descriptor, WasiFilesystemView};
 use wasmtime_wasi::p3::bindings::filesystem::{preopens, types};
 use wasmtime_wasi::p3::filesystem::{FilesystemError, FilesystemResult};
+
+fn filesystem_interrupt<Ctx: WorkerCtx, U: Send + 'static>(
+    accessor: &Accessor<U, DurableP3<Ctx>>,
+) -> FilesystemInterruptSignal {
+    accessor.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+    })
+}
+
+async fn observe_p3_filesystem<T>(
+    interrupt: FilesystemInterruptSignal,
+    operation: impl Future<Output = FilesystemResult<T>>,
+) -> FilesystemResult<T> {
+    observe_filesystem_operation(interrupt, operation)
+        .await
+        .map_err(FilesystemError::trap)?
+}
 
 fn p3_descriptor_guest_path(
     descriptor: &AgentDescriptor,
@@ -129,6 +148,7 @@ fn p3_agent_open_error(error: AgentOpenRouteError) -> FilesystemError {
         AgentOpenRouteError::Unsupported => types::ErrorCode::Unsupported.into(),
         AgentOpenRouteError::SymlinkLoop => types::ErrorCode::Loop.into(),
         AgentOpenRouteError::Filesystem(error) => p3_agent_error(error),
+        AgentOpenRouteError::Interrupted(kind) => FilesystemError::trap(kind),
     }
 }
 
@@ -215,11 +235,13 @@ pub(crate) async fn route_open(
     path_flags: types::PathFlags,
     open_flags: types::OpenFlags,
     descriptor_flags: types::DescriptorFlags,
+    interrupt: FilesystemInterruptSignal,
 ) -> FilesystemResult<agent_filesystem::Opened> {
     route_agent_open(
         generation_handle,
         target,
         p3_agent_open_request(path_flags, open_flags, descriptor_flags),
+        interrupt,
     )
     .await
     .map_err(p3_agent_open_error)
@@ -522,6 +544,7 @@ const FILESYSTEM_READ_CHUNK_SIZE: usize = 64 * 1024;
 type FilesystemReadResult = wasmtime::Result<Result<(), types::ErrorCode>>;
 
 struct FilesystemReadProducer {
+    interrupt: FilesystemInterruptSignal,
     generation_handle: FilesystemGenerationHandle,
     descriptor: AgentDescriptor,
     offset: u64,
@@ -538,10 +561,12 @@ impl FilesystemReadProducer {
         descriptor: AgentDescriptor,
         offset: u64,
         result_tx: tokio::sync::oneshot::Sender<FilesystemReadResult>,
-    ) -> Self {
+        interrupt: FilesystemInterruptSignal,
+    ) -> wasmtime::Result<Self> {
         #[cfg(test)]
         let read_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut producer = Self {
+            interrupt,
             generation_handle,
             descriptor,
             offset,
@@ -555,21 +580,23 @@ impl FilesystemReadProducer {
         match prefetched {
             Ok(Some(bytes)) => producer.buffered = bytes,
             Ok(None) => producer.close(Ok(Ok(()))),
-            Err(error) => producer.close_error(error),
+            Err(error) => match error.downcast() {
+                Ok(error) => producer.close(Ok(Err(error))),
+                Err(error) => {
+                    if error.downcast_ref::<InterruptKind>().is_some() {
+                        producer.result_tx.take();
+                        return Err(error);
+                    }
+                    producer.close(Err(error));
+                }
+            },
         }
-        producer
+        Ok(producer)
     }
 
     fn close(&mut self, result: FilesystemReadResult) {
         if let Some(result_tx) = self.result_tx.take() {
             let _ = result_tx.send(result);
-        }
-    }
-
-    fn close_error(&mut self, error: FilesystemError) {
-        match error.downcast() {
-            Ok(error) => self.close(Ok(Err(error))),
-            Err(error) => self.close(Err(error)),
         }
     }
 
@@ -595,9 +622,10 @@ impl FilesystemReadProducer {
     }
 
     async fn read_chunk(&mut self, length: usize) -> FilesystemResult<Option<Bytes>> {
-        let bytes = self
-            .start_read_chunk(length)?
+        let call = self.start_read_chunk(length)?;
+        let bytes = observe_filesystem_operation(&mut self.interrupt, call)
             .await
+            .map_err(FilesystemError::trap)?
             .map_err(p3_agent_error)?;
         if bytes.is_empty() {
             return Ok(None);
@@ -639,7 +667,13 @@ impl FilesystemReadProducer {
             .as_mut()
             .poll(cx)
         {
-            Poll::Pending => return Poll::Pending,
+            Poll::Pending => {
+                if let Poll::Ready(kind) = self.interrupt.as_mut().poll(cx) {
+                    self.pending = None;
+                    return Poll::Ready(Err(FilesystemError::trap(kind)));
+                }
+                return Poll::Pending;
+            }
             Poll::Ready(result) => result,
         };
         self.pending = None;
@@ -699,7 +733,16 @@ impl<D> StreamProducer<D> for FilesystemReadProducer {
                 Poll::Ready(Ok(StreamResult::Dropped))
             }
             Poll::Ready(Err(error)) => {
-                self.close_error(error);
+                match error.downcast() {
+                    Ok(error) => self.close(Ok(Err(error))),
+                    Err(error) => {
+                        if let Some(kind) = error.downcast_ref::<InterruptKind>().copied() {
+                            self.close(Err(wasmtime::Error::from(kind)));
+                            return Poll::Ready(Err(error));
+                        }
+                        self.close(Err(error));
+                    }
+                }
                 Poll::Ready(Ok(StreamResult::Dropped))
             }
         }
@@ -1234,7 +1277,7 @@ fn serialize_stat_result(
 async fn run_local_stat<Ctx, U>(
     store: &Accessor<U, DurableP3<Ctx>>,
     fd: Resource<Descriptor>,
-) -> Result<types::DescriptorStat, SerializableP3FileSystemError>
+) -> wasmtime::Result<Result<types::DescriptorStat, SerializableP3FileSystemError>>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1245,19 +1288,26 @@ where
     let descriptor =
         match store.with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd)) {
             Ok(descriptor) => descriptor,
-            Err(error) => return Err(SerializableP3FileSystemError::Generic(error.to_string())),
+            Err(error) => {
+                return Ok(Err(SerializableP3FileSystemError::Generic(
+                    error.to_string(),
+                )));
+            }
         };
     let call = match descriptor.with_node(|node| {
         agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
             .map_err(|error| p3_agent_error(AgentFilesystemError::Access(error)))
     }) {
         Ok(call) => call,
-        Err(error) => return Err(serialize_stat_error(&error)),
+        Err(error) => return Ok(Err(serialize_stat_error(&error))),
     };
-    call.await
+    let result = observe_filesystem_operation(filesystem_interrupt::<Ctx, U>(store), call)
+        .await
+        .map_err(wasmtime::Error::from)?;
+    Ok(result
         .map_err(p3_agent_error)
         .and_then(p3_agent_stat)
-        .map_err(|error| serialize_stat_error(&error))
+        .map_err(|error| serialize_stat_error(&error)))
 }
 
 async fn run_local_stat_at<Ctx, U>(
@@ -1265,7 +1315,7 @@ async fn run_local_stat_at<Ctx, U>(
     fd: Resource<Descriptor>,
     path_flags: types::PathFlags,
     path: String,
-) -> Result<types::DescriptorStat, SerializableP3FileSystemError>
+) -> wasmtime::Result<Result<types::DescriptorStat, SerializableP3FileSystemError>>
 where
     Ctx: WorkerCtx,
     U: Send + 'static,
@@ -1276,11 +1326,15 @@ where
     let descriptor =
         match store.with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd)) {
             Ok(descriptor) => descriptor,
-            Err(error) => return Err(SerializableP3FileSystemError::Generic(error.to_string())),
+            Err(error) => {
+                return Ok(Err(SerializableP3FileSystemError::Generic(
+                    error.to_string(),
+                )));
+            }
         };
     let target = match agent_path_target(&descriptor, path) {
         Ok(target) => target,
-        Err(error) => return Err(serialize_stat_error(&error)),
+        Err(error) => return Ok(Err(serialize_stat_error(&error))),
     };
     let follow = if path_flags.contains(types::PathFlags::SYMLINK_FOLLOW) {
         agent_filesystem::Follow::Yes
@@ -1293,15 +1347,18 @@ where
     ) {
         Ok(call) => call,
         Err(error) => {
-            return Err(serialize_stat_error(&p3_agent_error(
+            return Ok(Err(serialize_stat_error(&p3_agent_error(
                 AgentFilesystemError::Access(error),
-            )));
+            ))));
         }
     };
-    call.await
+    let result = observe_filesystem_operation(filesystem_interrupt::<Ctx, U>(store), call)
+        .await
+        .map_err(wasmtime::Error::from)?;
+    Ok(result
         .map_err(p3_agent_error)
         .and_then(p3_agent_stat)
-        .map_err(|error| serialize_stat_error(&error))
+        .map_err(|error| serialize_stat_error(&error)))
 }
 
 /// Computes the metadata hash from a durable stat result, using the same hash
@@ -1342,9 +1399,11 @@ async fn apply_stat_response(
 
 async fn wait_filesystem_task_result(
     result_rx: tokio::sync::oneshot::Receiver<wasmtime::Result<Result<(), types::ErrorCode>>>,
+    interrupt: FilesystemInterruptSignal,
 ) -> wasmtime::Result<Result<(), types::ErrorCode>> {
-    result_rx
+    observe_filesystem_operation(interrupt, result_rx)
         .await
+        .map_err(wasmtime::Error::from)?
         .unwrap_or_else(|_| Err(wasmtime::Error::msg("filesystem stream task dropped")))
 }
 
@@ -1487,12 +1546,21 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         }
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let producer =
-            FilesystemReadProducer::new(generation_handle, descriptor, offset, result_tx).await;
+        let producer = FilesystemReadProducer::new(
+            generation_handle,
+            descriptor,
+            offset,
+            result_tx,
+            filesystem_interrupt::<Ctx, U>(accessor),
+        )
+        .await?;
+        let result_interrupt = filesystem_interrupt::<Ctx, U>(accessor);
         accessor.with(|mut store| {
             let mut stream = StreamReader::new(&mut store, producer)?;
-            let future = match FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
-            {
+            let future = match FutureReader::new(
+                &mut store,
+                wait_filesystem_task_result(result_rx, result_interrupt),
+            ) {
                 Ok(future) => future,
                 Err(error) => {
                     let _ = stream.close(&mut store);
@@ -1560,6 +1628,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let result_interrupt = filesystem_interrupt::<Ctx, U>(accessor);
         let future = accessor.with(|mut store| {
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
@@ -1574,7 +1643,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 authorization_permit,
             ));
 
-            FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
+            FutureReader::new(
+                &mut store,
+                wait_filesystem_task_result(result_rx, result_interrupt),
+            )
         })?;
         Ok(future)
     }
@@ -1635,6 +1707,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .with(|mut store| data.pipe(&mut store, FilesystemWriteConsumer::new(chunks_tx)))?;
 
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let result_interrupt = filesystem_interrupt::<Ctx, U>(accessor);
         let future = accessor.with(|mut store| {
             let activity = durable_worker_ctx::<Ctx, U>(store.data_mut())
                 .tail_work_tracker()
@@ -1649,7 +1722,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 authorization_permit,
             ));
 
-            FutureReader::new(&mut store, wait_filesystem_task_result(result_rx))
+            FutureReader::new(
+                &mut store,
+                wait_filesystem_task_result(result_rx, result_interrupt),
+            )
         })?;
         Ok(future)
     }
@@ -1698,7 +1774,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
         let operation = descriptor.with_node(|node| route_flush(&generation_handle, node, true))?;
-        operation.await
+        observe_p3_filesystem(filesystem_interrupt::<Ctx, U>(store), operation).await
     }
 
     async fn get_flags(
@@ -1766,7 +1842,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         }
         let operation =
             descriptor.with_node(|node| route_set_size(&generation_handle, node, size))?;
-        operation.await
+        observe_p3_filesystem(filesystem_interrupt::<Ctx, U>(accessor), operation).await
     }
 
     async fn set_times(
@@ -1799,7 +1875,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                 data_modification_timestamp,
             )
         })?;
-        operation.await
+        observe_p3_filesystem(filesystem_interrupt::<Ctx, U>(accessor), operation).await
     }
 
     async fn read_directory(
@@ -1837,25 +1913,30 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             })
         };
         let (mut entries, result) = match call {
-            Ok(call) => match call.await {
-                Ok(entries) => match entries
-                    .into_iter()
-                    .map(|entry| {
-                        Ok(types::DirectoryEntry {
-                            type_: p3_agent_descriptor_type(entry.kind),
-                            name: entry
-                                .name
-                                .into_string()
-                                .map_err(|_| types::ErrorCode::IllegalByteSequence)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, types::ErrorCode>>()
+            Ok(call) => {
+                match observe_filesystem_operation(filesystem_interrupt::<Ctx, U>(accessor), call)
+                    .await
+                    .map_err(wasmtime::Error::from)?
                 {
-                    Ok(entries) => (entries, Ok(())),
-                    Err(error) => (Vec::new(), Err(error)),
-                },
-                Err(error) => (Vec::new(), Err(p3_agent_error(error).downcast()?)),
-            },
+                    Ok(entries) => match entries
+                        .into_iter()
+                        .map(|entry| {
+                            Ok(types::DirectoryEntry {
+                                type_: p3_agent_descriptor_type(entry.kind),
+                                name: entry
+                                    .name
+                                    .into_string()
+                                    .map_err(|_| types::ErrorCode::IllegalByteSequence)?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, types::ErrorCode>>()
+                    {
+                        Ok(entries) => (entries, Ok(())),
+                        Err(error) => (Vec::new(), Err(error)),
+                    },
+                    Err(error) => (Vec::new(), Err(p3_agent_error(error).downcast()?)),
+                }
+            }
             Err(error) => (Vec::new(), Err(error.downcast()?)),
         };
         entries.sort_by_key(|entry| entry.name.clone());
@@ -1888,7 +1969,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .map_err(FilesystemError::trap)?;
         let operation =
             descriptor.with_node(|node| route_flush(&generation_handle, node, false))?;
-        operation.await
+        observe_p3_filesystem(filesystem_interrupt::<Ctx, U>(store), operation).await
     }
 
     async fn create_directory_at(
@@ -1913,7 +1994,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
         let target = agent_path_target(&descriptor, path)?;
-        route_create_directory(&generation_handle, target).await
+        observe_p3_filesystem(
+            filesystem_interrupt::<Ctx, U>(store),
+            route_create_directory(&generation_handle, target),
+        )
+        .await
     }
 
     async fn stat(
@@ -1936,7 +2021,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             },
             DurableFunctionType::ReadLocal,
             || async {
-                let stat = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep)).await;
+                let stat = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep)).await?;
                 *live_stat_for_call.lock().unwrap() = Some(stat.clone());
                 Ok(HostResponseP3FileSystemStat {
                     result: serialize_stat_result(&stat),
@@ -1948,7 +2033,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let live_stat = live_stat.lock().unwrap().take();
         let stat = match live_stat {
             Some(stat) => stat,
-            None => run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep)).await,
+            None => run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep))
+                .await
+                .map_err(FilesystemError::trap)?,
         };
 
         apply_stat_response(stat, response).await
@@ -1982,7 +2069,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
                     path_flags,
                     live_path,
                 )
-                .await;
+                .await?;
                 *live_stat_for_call.lock().unwrap() = Some(stat.clone());
                 Ok(HostResponseP3FileSystemStat {
                     result: serialize_stat_result(&stat),
@@ -1997,6 +2084,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             None => {
                 run_local_stat_at::<Ctx, U>(store, Resource::new_borrow(fd_rep), path_flags, path)
                     .await
+                    .map_err(FilesystemError::trap)?
             }
         };
 
@@ -2039,7 +2127,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             data_access_timestamp,
             data_modification_timestamp,
         )?;
-        operation.await
+        observe_p3_filesystem(filesystem_interrupt::<Ctx, U>(accessor), operation).await
     }
 
     async fn link_at(
@@ -2079,7 +2167,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .map_err(FilesystemError::trap)?;
         let source = agent_path_target(&source_descriptor, old_path)?;
         let destination = agent_path_target(&destination_descriptor, new_path)?;
-        route_hard_link(&generation_handle, source, old_path_flags, destination).await
+        observe_p3_filesystem(
+            filesystem_interrupt::<Ctx, U>(store),
+            route_hard_link(&generation_handle, source, old_path_flags, destination),
+        )
+        .await
     }
 
     async fn open_at(
@@ -2119,7 +2211,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .map_err(FilesystemError::trap)?;
         let descriptor_path = descriptor.path().join(&path);
         let target = agent_path_target(&descriptor, path)?;
-        let opened = route_open(&generation_handle, target, path_flags, open_flags, flags).await?;
+        let opened = route_open(
+            &generation_handle,
+            target,
+            path_flags,
+            open_flags,
+            flags,
+            filesystem_interrupt::<Ctx, U>(accessor),
+        )
+        .await?;
         push_agent_descriptor_from_accessor(
             accessor,
             AgentDescriptor::new(opened.node, descriptor_path),
@@ -2148,7 +2248,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
         let target = agent_path_target(&descriptor, path)?;
-        route_symlink_target(&generation_handle, target).await
+        observe_p3_filesystem(
+            filesystem_interrupt::<Ctx, U>(store),
+            route_symlink_target(&generation_handle, target),
+        )
+        .await
     }
 
     async fn remove_directory_at(
@@ -2173,7 +2277,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             .with(|mut access| agent_descriptor_from_access::<Ctx, U>(&mut access, &fd))
             .map_err(FilesystemError::trap)?;
         let target = agent_path_target(&descriptor, path)?;
-        route_remove_directory(&generation_handle, target).await
+        observe_p3_filesystem(
+            filesystem_interrupt::<Ctx, U>(store),
+            route_remove_directory(&generation_handle, target),
+        )
+        .await
     }
 
     async fn rename_at(
@@ -2212,7 +2320,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         });
         let source = agent_path_target(&source_descriptor, old_path)?;
         let destination = agent_path_target(&destination_descriptor, new_path)?;
-        route_rename(&generation_handle, source, destination).await
+        observe_p3_filesystem(
+            filesystem_interrupt::<Ctx, U>(accessor),
+            route_rename(&generation_handle, source, destination),
+        )
+        .await
     }
 
     async fn symlink_at(
@@ -2239,7 +2351,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let destination = agent_path_target(&descriptor, new_path)?;
-        route_create_symlink(&generation_handle, destination, old_path).await
+        observe_p3_filesystem(
+            filesystem_interrupt::<Ctx, U>(accessor),
+            route_create_symlink(&generation_handle, destination, old_path),
+        )
+        .await
     }
 
     async fn unlink_file_at(
@@ -2264,7 +2380,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
             )
         });
         let target = agent_path_target(&descriptor, path)?;
-        route_unlink(&generation_handle, target, ObjectKind::File).await
+        observe_p3_filesystem(
+            filesystem_interrupt::<Ctx, U>(accessor),
+            route_unlink(&generation_handle, target, ObjectKind::File),
+        )
+        .await
     }
 
     async fn is_same_object(
@@ -2289,7 +2409,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         let call = AgentDescriptor::with_nodes(&left, &right, |left, right| {
             agent_filesystem::is_same_object(&generation_handle, left, right)
         })?;
-        call.await
+        observe_filesystem_operation(filesystem_interrupt::<Ctx, U>(store), call)
+            .await
+            .map_err(wasmtime::Error::from)?
             .map_err(|error| wasmtime::Error::msg(error.to_string()))
     }
 
@@ -2434,6 +2556,7 @@ mod tests {
                 types::PathFlags::SYMLINK_FOLLOW,
                 types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE,
                 types::DescriptorFlags::READ | types::DescriptorFlags::WRITE,
+                Box::pin(std::future::pending()),
             )
             .await
             .unwrap();
@@ -2492,8 +2615,10 @@ mod tests {
             fixture.descriptor.clone(),
             0,
             result_tx,
+            Box::pin(std::future::pending()),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(producer.read_call_count(), 1);
         assert!(producer.pending.is_none());
@@ -2538,8 +2663,10 @@ mod tests {
             fixture.descriptor.clone(),
             17,
             result_tx,
+            Box::pin(std::future::pending()),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(producer.read_call_count(), 1);
         assert_eq!(
@@ -2569,8 +2696,10 @@ mod tests {
             fixture.descriptor.clone(),
             17,
             result_tx,
+            Box::pin(std::future::pending()),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert_eq!(
             producer.take_buffered(usize::MAX),
@@ -3218,6 +3347,7 @@ mod tests {
             types::PathFlags::SYMLINK_FOLLOW,
             types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE,
             types::DescriptorFlags::READ | types::DescriptorFlags::WRITE,
+            Box::pin(std::future::pending()),
         )
         .await
         .unwrap();
@@ -3539,6 +3669,7 @@ mod tests {
             types::PathFlags::SYMLINK_FOLLOW,
             types::OpenFlags::empty(),
             types::DescriptorFlags::READ,
+            Box::pin(std::future::pending()),
         )
         .await
         .unwrap();
@@ -3565,6 +3696,7 @@ mod tests {
             types::PathFlags::SYMLINK_FOLLOW,
             types::OpenFlags::DIRECTORY,
             types::DescriptorFlags::READ,
+            Box::pin(std::future::pending()),
         )
         .await
         .unwrap()
@@ -3865,5 +3997,41 @@ mod tests {
             after, before,
             "stat-at with symlink-follow is a read-only operation and must not rewrite the target"
         );
+    }
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn interrupted_p3_result_observation_does_not_cancel_task() {
+        let (sender, receive) = tokio::sync::oneshot::channel();
+        let resume = Arc::new(tokio::sync::Notify::new());
+        let effect = tokio::spawn({
+            let resume = resume.clone();
+            async move {
+                resume.notified().await;
+                sender.send(Ok(Ok(()))).is_err()
+            }
+        });
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let error = wait_filesystem_task_result(receive, Box::pin(std::future::ready(kind)))
+            .await
+            .unwrap_err();
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+        assert!(!effect.is_finished());
+        resume.notify_one();
+        assert!(effect.await.unwrap());
+    }
+
+    #[test]
+    async fn p3_result_completion_remains_authoritative() {
+        let (sender, receive) = tokio::sync::oneshot::channel();
+        sender
+            .send(Ok(Err(types::ErrorCode::NotPermitted)))
+            .unwrap();
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        assert!(matches!(
+            wait_filesystem_task_result(receive, Box::pin(std::future::ready(kind)))
+                .await
+                .unwrap(),
+            Err(types::ErrorCode::NotPermitted)
+        ));
     }
 }

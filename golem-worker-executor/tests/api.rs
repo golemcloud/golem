@@ -99,6 +99,14 @@ inherit_test_dep!(
     #[tagged_as("large_dynamic_memory")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_rust_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_rust_caller")]
+    PrecompiledComponent
+);
 #[derive(Clone, Copy, Debug)]
 enum IntegrationExhaustion {
     Compute,
@@ -1038,6 +1046,7 @@ resource_metering_configuration_test!(resource_metering_111, true, true, true);
 mod fenced_outcome;
 mod monthly;
 mod monthly_admission_owner_election;
+mod monthly_blob_filesystem;
 mod monthly_cause;
 mod monthly_compute;
 mod monthly_cutoff;
@@ -1045,6 +1054,7 @@ mod monthly_deadline;
 mod monthly_deletion;
 mod monthly_entity;
 mod monthly_failure;
+mod monthly_frontend_streams;
 mod monthly_health;
 #[path = "api/monthly_p3_http/peer.rs"]
 mod monthly_http_peer;

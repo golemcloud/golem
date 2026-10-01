@@ -15,6 +15,7 @@
 use crate::durable_host::concurrent::{
     DropEvent, LiveCallPermit, cancel_dropped_durable_input_access, finish_prepared_access_to_live,
 };
+use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
@@ -5965,16 +5966,142 @@ struct DurableInputRead {
     queued_events: VecDeque<CommittedProducerStreamEvent>,
 }
 
-type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, SessionError>>;
+#[derive(Debug)]
+enum DurableInputError {
+    Session(SessionError),
+    Interrupted(golem_service_base::error::worker_executor::InterruptKind),
+}
+
+impl From<SessionError> for DurableInputError {
+    fn from(error: SessionError) -> Self {
+        Self::Session(error)
+    }
+}
+
+impl From<String> for DurableInputError {
+    fn from(error: String) -> Self {
+        Self::Session(error.into())
+    }
+}
+
+impl From<&str> for DurableInputError {
+    fn from(error: &str) -> Self {
+        Self::Session(error.into())
+    }
+}
+
+impl DurableInputError {
+    fn into_trap(self) -> anyhow::Error {
+        match self {
+            Self::Session(error) => error.into_trap(),
+            Self::Interrupted(kind) => kind.into(),
+        }
+    }
+}
+
+type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, DurableInputError>>;
+
+#[cfg(feature = "test-utils")]
+pub struct DurableSourceObserverForTest {
+    key: golem_common::model::IdempotencyKey,
+    pub pending: tokio::sync::Notify,
+    pub ordinal: std::sync::atomic::AtomicU64,
+    pub dropped: std::sync::atomic::AtomicUsize,
+    pub returned: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(feature = "test-utils")]
+static DURABLE_SOURCE_OBSERVERS: std::sync::LazyLock<
+    std::sync::Mutex<
+        HashMap<golem_common::model::IdempotencyKey, std::sync::Weak<DurableSourceObserverForTest>>,
+    >,
+> = std::sync::LazyLock::new(Default::default);
+
+#[cfg(feature = "test-utils")]
+impl DurableSourceObserverForTest {
+    pub fn install(key: golem_common::model::IdempotencyKey) -> Arc<Self> {
+        let observer = Arc::new(Self {
+            key: key.clone(),
+            pending: Default::default(),
+            ordinal: Default::default(),
+            dropped: Default::default(),
+            returned: Default::default(),
+        });
+        DURABLE_SOURCE_OBSERVERS
+            .lock()
+            .unwrap()
+            .insert(key, Arc::downgrade(&observer));
+        observer
+    }
+
+    fn for_context<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Option<Arc<Self>> {
+        let key = ctx.state.get_current_idempotency_key()?;
+        DURABLE_SOURCE_OBSERVERS
+            .lock()
+            .unwrap()
+            .get(&key)?
+            .upgrade()
+    }
+
+    async fn observe<F: std::future::Future>(&self, future: F, ordinal: u64) -> F::Output {
+        struct Pending<'a> {
+            observer: &'a DurableSourceObserverForTest,
+            returned: bool,
+        }
+        impl Drop for Pending<'_> {
+            fn drop(&mut self) {
+                if !self.returned {
+                    self.observer.dropped.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }
+        let mut completion = Pending {
+            observer: self,
+            returned: false,
+        };
+        tokio::pin!(future);
+        let mut observed = false;
+        let result = std::future::poll_fn(|cx| {
+            let result = future.as_mut().poll(cx);
+            if result.is_pending() && !observed {
+                observed = true;
+                self.ordinal.store(ordinal, Ordering::SeqCst);
+                self.pending.notify_one();
+            }
+            result
+        })
+        .await;
+        completion.returned = true;
+        self.returned.fetch_add(1, Ordering::SeqCst);
+        result
+    }
+}
+
+#[cfg(feature = "test-utils")]
+impl Drop for DurableSourceObserverForTest {
+    fn drop(&mut self) {
+        let mut observers = DURABLE_SOURCE_OBSERVERS.lock().unwrap();
+        if observers
+            .get(&self.key)
+            .is_some_and(|observer| std::ptr::eq(observer.as_ptr(), self))
+        {
+            observers.remove(&self.key);
+        }
+    }
+}
 
 struct ReceiveGuard {
     source_wait: Option<SuspendableWaitRegistration>,
     _live_call: LiveCallPermit,
+    interrupt: Option<crate::durable_host::stream_transport::FrontendInterrupt>,
+    #[cfg(feature = "test-utils")]
+    observer: Option<Arc<DurableSourceObserverForTest>>,
 }
 
 impl ReceiveGuard {
     fn clear_source_wait(&mut self) {
         self.source_wait = None;
+        self.interrupt = None;
     }
 }
 
@@ -6110,6 +6237,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx
                         .source_wait
                         .then(|| ctx.state.register_passive_suspendable_wait()),
                     _live_call: LiveCallPermit::new(ctx.state.live_host_call_counter()),
+                    interrupt: Some(ctx.create_interrupt_signal()),
+                    #[cfg(feature = "test-utils")]
+                    observer: DurableSourceObserverForTest::for_context(ctx),
                 }
             }))
         };
@@ -6275,10 +6405,10 @@ impl DurableInputProducer {
 
     fn finish_receive(
         &mut self,
-        result: Result<DurableInputRead, SessionError>,
+        result: Result<DurableInputRead, DurableInputError>,
     ) -> anyhow::Result<DurableInputEvent> {
         self.pending = None;
-        let mut read = result.map_err(SessionError::into_trap)?;
+        let mut read = result.map_err(DurableInputError::into_trap)?;
         self.input.complete_receive(&mut read);
         let event = read.event.ok_or_else(|| {
             anyhow::anyhow!("durable input stream source closed without a terminal event")
@@ -6424,7 +6554,28 @@ impl DurableInputEndpoint {
                         record_source_journal_lag(reader.as_mut(), source_after, true).await;
                     }
                     let result = match reader.as_mut() {
-                        Some(reader) => reader.next().await,
+                        Some(reader) => {
+                            let native = reader.next();
+                            #[cfg(feature = "test-utils")]
+                            let native = {
+                                let observer =
+                                    guard.as_ref().and_then(|guard| guard.observer.clone());
+                                async move {
+                                    match observer {
+                                        Some(observer) => observer.observe(native, ordinal).await,
+                                        None => native.await,
+                                    }
+                                }
+                            };
+                            match guard.as_mut().and_then(|guard| guard.interrupt.as_mut()) {
+                                Some(interrupt) => tokio::select! {
+                                    biased;
+                                    result = native => result,
+                                    kind = interrupt => return Err(DurableInputError::Interrupted(kind)),
+                                },
+                                None => native.await,
+                            }
+                        }
                         None => Ok(None),
                     };
                     if let Some(guard) = &mut guard {
@@ -6815,6 +6966,9 @@ impl DurableInputProducer {
             self.pending = Some(self.input.receive(Some(ReceiveGuard {
                 source_wait,
                 _live_call: live_call,
+                interrupt: Some(store.data().durable_ctx().create_interrupt_signal()),
+                #[cfg(feature = "test-utils")]
+                observer: DurableSourceObserverForTest::for_context(store.data().durable_ctx()),
             })));
         }
         let receive_result = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
