@@ -19,8 +19,8 @@ use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 
 /// Runs work of the store as a task on a runtime that the store gave, and the tracker of the store
-/// counts the task. A drop guard runs its cleanup through it, so no drop looks up a runtime. When
-/// the runtime is gone, the task does not run.
+/// counts the task. The claim of a prune and a dropped publish run their cleanups through it, so
+/// no drop looks up a runtime. When the runtime is gone, the task does not run.
 #[derive(Clone, Debug)]
 pub(super) struct Spawner {
     pub(super) tracker: TaskTracker,

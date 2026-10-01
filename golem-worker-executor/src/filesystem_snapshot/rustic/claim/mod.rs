@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The claim of a prune that a delete holds, from the write of its first marker until the final
-//! marker of its prune.
+//! The claim of a prune that a delete holds, from just before the write of its first marker until
+//! the final marker of its prune.
 //!
-//! When the delete stops before its prune starts, the claim is released: the claim and each marker
-//! that this delete wrote are deleted. When the delete stops after the prune started and before
-//! the final marker is written, the final marker is written. A drop runs them in a task, so they
-//! also run when the caller drops the delete. After the start, only the delete releases the claim,
-//! when each attempt of the prune found a snapshot file gone, because such a prune changed nothing
-//! and counts as a prune that did not run.
+//! When the delete stops before its prune starts, the claim is released: each marker that this
+//! delete wrote is deleted, and the claim when this delete knows that it wrote it. When the delete
+//! stops after the prune started and before the final marker is written, the final marker is
+//! written. A drop runs them in a task, so they also run when the caller drops the delete. After
+//! the start, only the delete releases the claim, when each attempt of the prune found a snapshot
+//! file gone, because such a prune changed nothing and counts as a prune that did not run.
 //!
 //! [`transition`] holds these rules. The claim and the blocking task of its prune share the state,
 //! and each event replaces the state with the result of [`transition`] in one step under a lock. So
@@ -47,11 +47,13 @@ use tracing::warn;
 /// What a delete still owes the claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ClaimState {
-    /// The first marker is written or being written, and the claim is not written.
+    /// The first marker is written or being written, and this delete does not know that it wrote
+    /// the claim.
     Marking { markers: Vec<Box<Path>> },
     /// This delete wrote the claim, and its prune did not start.
     Claimed { markers: Vec<Box<Path>> },
-    /// The prune started, so the claim stays, and it needs its final marker.
+    /// The prune started, so the claim needs its final marker. It stays, unless no attempt of the
+    /// prune changed the repository.
     Started { markers: Vec<Box<Path>> },
     /// The claim needs nothing more from this delete.
     Ended,
@@ -96,7 +98,7 @@ enum Cleanup {
 /// Gives the state of the claim after the event, and the cleanup that the event needs.
 ///
 /// - A drop before the prune started releases the claim. The claim itself is deleted only when
-///   this delete wrote it.
+///   this delete knows that it wrote it, which is after `Won`.
 /// - The prune starts only from `Claimed`. A start after the release does nothing, and the prune
 ///   does not run.
 /// - A drop after the start writes the final marker and keeps the claim.
@@ -200,7 +202,7 @@ async fn write_final_marker(files: &SnapshotFiles, claim: &ClaimName, time: Time
 
 /// The claim of a prune that this delete holds.
 ///
-/// It exists from the write of the first marker. The spawner runs each cleanup that a drop or a
+/// It exists before the write of the first marker. The spawner runs each cleanup that a drop or a
 /// release needs, and the token of the tracker that the claim holds stays until that task is
 /// counted, so `shut_down` waits for the claim and for each of its cleanups.
 pub(super) struct Claim {
@@ -237,8 +239,8 @@ impl Claim {
     /// Writes the first marker of the claim, then takes the claim, and gives the claim when this
     /// delete holds it. The lease starts with the marker write. [`marker_time`] reads an `Instant`
     /// and the time in the name of the marker. The lease ends one lease span after that `Instant`.
-    /// The claim exists before the marker write. So a drop or an error from that write on releases
-    /// the claim.
+    /// The claim exists before the marker write. So a drop or an error from that write on deletes
+    /// the first marker.
     pub(super) async fn take(
         files: &SnapshotFiles,
         name: ClaimName,
