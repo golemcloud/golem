@@ -83,13 +83,7 @@ export const NotesAgentImpl = NotesAgent.implement({
 });
 ```
 
-> **Executors without filesystem snapshots.** Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. There, a load of a snapshot of an agent with a file-backed database finds no database file and fails:
->
-> - For an automatic snapshot, Golem falls back to an older snapshot or a full replay of the agent's history. An older snapshot of the agent fails in the same way. A full replay rebuilds the database, but makes the start slow.
-> - A snapshot-based manual update fails: Golem records the update as failed, and the agent keeps running on its current revision. Because the snapshot no longer holds file-backed databases, this happens on every such executor.
-> - A start whose baseline is a manual update that already loaded once, for example after the agent moved from an executor with filesystem snapshots, fails.
->
-> On such an executor, use an in-memory database or custom `save` and `load` functions.
+> **Filesystem snapshots are required.** A typed snapshot with a file-backed database relies on the executor's filesystem snapshots. Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. An executor without them keeps its usual behaviour: files that the agent wrote before a snapshot are not restored. On such an executor, use an in-memory database or custom `save` and `load` functions. A load fails when the database file is missing at its recorded location.
 
 Limits:
 
