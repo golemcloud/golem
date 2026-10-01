@@ -54,7 +54,7 @@ impl HostPath {
     }
 }
 
-/// The host directories of a volume. The provisioning makes both when it is built.
+/// The host directories of a volume. [`SandboxFilesystemProvisioning::provision`] makes both.
 ///
 /// Each is a plain directory directly under the volume root, outside every agent project, with no
 /// project id, no quota and no metering.

@@ -119,10 +119,8 @@ const OWNER_WRITE_BIT: libc::mode_t = 0o200;
 /// gives the current mask, and then to that mask without the owner write bit. Between the two
 /// calls, a file that another thread creates gets the usual permissions of the mask 0o022.
 ///
-/// Executor bootstrap calls this each time it starts an executor, before it starts the agent
-/// filesystem service. Windows has no file mode creation mask. There, a file is read-only
-/// only when its read-only attribute is set, and an agent cannot set that attribute, so bootstrap
-/// changes nothing.
+/// Windows has no file mode creation mask, so nothing changes there. On Windows a file is
+/// read-only only when its read-only attribute is set, and an agent cannot set that attribute.
 #[cfg(unix)]
 pub(crate) fn keep_owner_write_permission() {
     let mask = current_file_creation_mask();

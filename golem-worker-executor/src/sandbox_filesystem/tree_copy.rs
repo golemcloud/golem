@@ -938,8 +938,8 @@ mod tests {
         }
     }
 
-    /// The table of the `SeedPlacement` documentation: the source, what is at the target, the
-    /// action with `CreateNew`, and the action with `Replace`.
+    /// The rules of the `SeedPlacement` and `SeedEntry` docs, written as a table: the source, what
+    /// is at the target, the action with `CreateNew`, and the action with `Replace`.
     const PLACEMENT_TABLE: [(&str, Occupant, PlacementAction, PlacementAction); 6] = [
         (
             "directory",

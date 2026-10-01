@@ -216,11 +216,12 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     .map_err(|error| anyhow!(error))
 }
 
-/// Starts the active agents of the executor, with the agent filesystem service in them.
+/// Clears the owner write bit of the file mode creation mask of the process, and then starts the
+/// active agents of the executor, with the agent filesystem service in them.
 ///
-/// On a Unix platform it first clears bit 0o200 of the file mode creation mask of the process and
-/// keeps the other bits, so each file that an agent creates has write permission for its owner.
-/// Each executor starts its active agents here, before any of its agent filesystems exists.
+/// On a Unix platform it clears bit 0o200 of the mask and keeps the other bits, so each file that
+/// an agent creates has write permission for its owner. Other platforms have no such mask, and
+/// there the function only starts the active agents.
 async fn start_active_agents<
     Ctx: WorkerCtx,
     BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
