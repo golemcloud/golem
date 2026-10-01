@@ -695,7 +695,11 @@ class ResolvedAgentImpl {
 
     const stateJson = new TextEncoder().encode(JSON.stringify(state));
     if (databases.inMemory.length === 0) {
-      return { data: stateJson, mimeType: 'application/json', fileDatabases: databases.files };
+      return {
+        data: stateJson,
+        mimeType: 'application/json',
+        fileDatabases: databases.fileDatabases,
+      };
     }
     const parts: MultipartPart[] = [
       { name: 'state', contentType: 'application/json', body: stateJson },
@@ -709,7 +713,7 @@ class ResolvedAgentImpl {
     return {
       data,
       mimeType: `multipart/mixed; boundary=${boundary}`,
-      fileDatabases: databases.files,
+      fileDatabases: databases.fileDatabases,
     };
   }
 }

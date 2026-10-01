@@ -35,7 +35,7 @@ async function restore(name: string, data: Uint8Array): Promise<Resolved> {
     { tag: 'anonymous' },
     data,
     'application/json',
-    { inMemory: [], files: {} },
+    { inMemory: [], fileDatabases: {} },
   );
   if (res.tag !== 'ok') throw new Error(`restore failed: ${JSON.stringify(res.val)}`);
   return res.val;
@@ -520,9 +520,9 @@ describe('snapshot — database plan', () => {
       ]),
     ).toEqual({
       tag: 'ok',
-      val: { inMemory: ['memory'], files: { file: '/data/app.db' } },
+      val: { inMemory: ['memory'], fileDatabases: { file: '/data/app.db' } },
     });
-    expect(planDatabases([])).toEqual({ tag: 'ok', val: { inMemory: [], files: {} } });
+    expect(planDatabases([])).toEqual({ tag: 'ok', val: { inMemory: [], fileDatabases: {} } });
   });
 
   it('fails on an open transaction of any database and names the field', async () => {

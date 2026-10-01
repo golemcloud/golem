@@ -884,7 +884,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
-  let databases: SnapshotDatabases = { inMemory: [], files: {} };
+  let databases: SnapshotDatabases = { inMemory: [], fileDatabases: {} };
 
   const decodeJsonEnvelope = (data: Uint8Array, description: string) => {
     const envelope = JSON.parse(new TextDecoder().decode(data));
@@ -941,7 +941,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       inMemory: parts
         .filter((part) => part.name.startsWith('db:'))
         .map((part) => ({ name: part.name.slice(3), bytes: part.body })),
-      files: envelope.fileDatabases,
+      fileDatabases: envelope.fileDatabases,
     };
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
@@ -949,7 +949,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
-    databases = { inMemory: [], files: envelope.fileDatabases };
+    databases = { inMemory: [], fileDatabases: envelope.fileDatabases };
   } else {
     // Custom binary snapshot with version envelope
     if (bytes.byteLength < 1) {

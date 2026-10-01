@@ -27,7 +27,7 @@ export type SnapshotDatabases = {
   /** The bytes of each in-memory or temporary database. */
   inMemory: Array<{ name: string; bytes: Uint8Array }>;
   /** The location of each file-backed database, as `DatabaseSync.location()` reports it. */
-  files: Record<string, string>;
+  fileDatabases: Record<string, string>;
 };
 
 /** What a save reads from one `DatabaseSync` field. */
@@ -42,7 +42,7 @@ export type DatabaseField = {
 /** Which databases go into the snapshot as bytes, and which by their location. */
 export type DatabasePlan = {
   inMemory: string[];
-  files: Record<string, string>;
+  fileDatabases: Record<string, string>;
 };
 
 /**
@@ -78,7 +78,7 @@ export function isDatabaseSync(val: unknown): val is DatabaseSync {
 export function planDatabases(
   fields: readonly DatabaseField[],
 ): { tag: 'ok'; val: DatabasePlan } | { tag: 'err'; val: string } {
-  const plan: DatabasePlan = { inMemory: [], files: {} };
+  const plan: DatabasePlan = { inMemory: [], fileDatabases: {} };
   for (const field of fields) {
     if (!field.autocommit) {
       return {
@@ -89,7 +89,7 @@ export function planDatabases(
     if (field.location === null) {
       plan.inMemory.push(field.name);
     } else {
-      plan.files[field.name] = field.location;
+      plan.fileDatabases[field.name] = field.location;
     }
   }
   return { tag: 'ok', val: plan };
@@ -119,7 +119,7 @@ export function takeDatabases(
       name,
       bytes: serializeDatabaseSync(byName.get(name)!),
     })),
-    files: plan.val.files,
+    fileDatabases: plan.val.fileDatabases,
   };
 }
 
@@ -134,7 +134,7 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
   for (const { name, bytes } of databases.inMemory) {
     restoreDatabaseSync(databaseAt(state, name, IN_MEMORY_LOCATION), bytes);
   }
-  for (const [name, location] of Object.entries(databases.files)) {
+  for (const [name, location] of Object.entries(databases.fileDatabases)) {
     databaseAt(state, name, location);
   }
   const warmed = new Set<DatabaseSync>();
