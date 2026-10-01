@@ -382,9 +382,9 @@ supported sibling argument shapes. See [acceptance evidence](ACCEPTANCE.md).
 
 Bash has no fixed limit for these; the tool must, because running out of memory or stack traps
 the owning agent. Each limit ends in an error message and a nonzero status, never a trap. One
-number, 64 MiB, bounds everything bash-tool holds in memory at once for a single buffer: a call's
-stdout and stderr, each substitution, a finite command's piped input and output, and a
-synchronous builtin's output into a pipe.
+number, 64 MiB, bounds everything bash-tool holds in memory at once for a single buffer: each
+substitution, a finite command's piped input and output, and a synchronous builtin's output into a
+pipe. What a call returns is bounded lower, by what Golem can carry (see Output).
 
 - **Time.** A call runs for at most its `timeout` argument (600 s by default, at most 3600 s;
   see [Contract](#contract)). The limit reaches a loop of commands that never wait
@@ -431,10 +431,17 @@ synchronous builtin's output into a pipe.
   nested too deeply for bash-tool`). Text built at run time and nested more than 128 levels deep
   (a subscript from a variable's value, text given to brace expansion) fails with `maximum
   nesting level exceeded: deeper nesting is unsupported in bash-tool` (status 1).
-- **Output.** A call returns at most 64 MiB of stdout and 64 MiB of stderr. Past that the stream
-  acts as a pipe whose reader has gone: the writer gets SIGPIPE (status 141, or a write error under
-  `trap '' PIPE`), as `bash -c` does when its caller stops reading, and stderr ends with
-  `bash: stdout exceeds the 64 MiB output limit of bash-tool; the rest was discarded`.
+- **Output.** A call returns at most 2 MiB of stdout and 2 MiB of stderr, counted as the text it
+  returns: a byte that is not UTF-8 counts as the three bytes of the U+FFFD that replaces it. Golem
+  carries a result to its caller (and to `--lookup`) in one gRPC message of at most 32 MiB, and
+  each page of `golem agent oplog` too. The owner's oplog records a result twice, and a page of 50
+  entries can hold two calls, so a page carries up to four results: at these sizes, half the
+  limit. Past the limit the stream acts as a pipe whose reader has gone: the writer gets SIGPIPE
+  (status 141, or a write error under `trap '' PIPE`), as `bash -c` does when its caller stops
+  reading, and stderr ends with
+  `bash: stdout exceeds the 2 MiB output limit of bash-tool; the rest was discarded`. Output that
+  is not UTF-8 can reach the limit as text before its bytes do; it is then cut at the end, with
+  the same note and no SIGPIPE. Larger output belongs in a file (`> out.txt`).
 - **Embedded utilities.** A command that runs to completion (see Commands) gets at most 64 MiB of
   piped input and keeps at most 64 MiB of each output stream bound for a pipe. Past the output
   limit its writes fail as to a closed pipe. A reader that stops early (`yes | nl | head -1`,

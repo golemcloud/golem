@@ -564,8 +564,8 @@ impl Session {
         let notes = self.stop_leftover_jobs().await;
         jobs.cancel_and_join().await;
         drop(params);
-        let (out, out_truncated) = stdout.take();
-        let (mut err, err_truncated) = stderr.take();
+        let (out, out_truncated) = stdout.take_text();
+        let (mut err, err_truncated) = stderr.take_text();
         if timed_out.get() {
             let seconds = time_limit.unwrap_or_default().as_secs_f64();
             err.extend_from_slice(
@@ -580,9 +580,9 @@ impl Session {
                 log::warn!("{name} exceeded the output limit");
                 err.extend_from_slice(
                     format!(
-                        "bash: {name} exceeds the {} output limit of bash-tool; the rest was \
+                        "bash: {name} exceeds the {} MiB output limit of bash-tool; the rest was \
                          discarded\n",
-                        crate::tools::buffer_limit()
+                        MAX_OUTPUT_BYTES >> 20
                     )
                     .as_bytes(),
                 );
@@ -748,9 +748,12 @@ fn one_line(command: &str) -> String {
         .join(" ")
 }
 
-/// The most of each output stream a call returns (see `tools::MAX_BUFFER_BYTES`).
+/// The most of each output stream a call returns, counted as the text the caller receives. Golem
+/// carries a result, and each page of `golem agent oplog`, in one gRPC message of at most 32 MiB.
+/// The owner's oplog records a result twice, and a page of 50 entries can hold two calls, so it
+/// carries up to four results; at this size that stays at half the limit.
 #[cfg(target_arch = "wasm32")]
-const MAX_OUTPUT_BYTES: usize = crate::tools::MAX_BUFFER_BYTES;
+const MAX_OUTPUT_BYTES: usize = 2 << 20;
 
 /// One of the call's output streams. Past [`MAX_OUTPUT_BYTES`] it refuses writes as a pipe whose
 /// reader has gone does, so the writer gets SIGPIPE, as `bash -c` does when its caller stops
@@ -768,6 +771,31 @@ impl Buffer {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )
+    }
+
+    /// The bytes kept, cut so that their text is at most [`MAX_OUTPUT_BYTES`], and whether any
+    /// were refused or cut. The call's result converts them as `String::from_utf8_lossy` does,
+    /// so a sequence that is not UTF-8 becomes the three bytes of U+FFFD.
+    fn take_text(&self) -> (Vec<u8>, bool) {
+        let (mut bytes, refused) = self.take();
+        let mut text = 0;
+        let mut kept = 0;
+        for chunk in bytes.utf8_chunks() {
+            let valid = chunk.valid();
+            let replacement = if chunk.invalid().is_empty() {
+                0
+            } else {
+                char::REPLACEMENT_CHARACTER.len_utf8()
+            };
+            if text + valid.len() + replacement > MAX_OUTPUT_BYTES {
+                let end = kept + valid.floor_char_boundary(MAX_OUTPUT_BYTES - text);
+                bytes.truncate(end);
+                return (bytes, true);
+            }
+            text += valid.len() + replacement;
+            kept += valid.len() + chunk.invalid().len();
+        }
+        (bytes, refused)
     }
 }
 #[cfg(target_arch = "wasm32")]
@@ -986,8 +1014,30 @@ mod tests {
     fn output_within_the_limit_is_kept_whole() {
         let mut buffer = Buffer::default();
         buffer.write_all(&vec![b'y'; MAX_OUTPUT_BYTES]).unwrap();
-        let (bytes, truncated) = buffer.take();
+        let (bytes, truncated) = buffer.take_text();
         assert_eq!(bytes.len(), MAX_OUTPUT_BYTES);
         assert!(!truncated);
+    }
+
+    /// The limit counts the text the caller receives: a byte that is not UTF-8 becomes three.
+    #[test]
+    fn output_that_is_not_utf8_is_cut_to_the_limit_as_text() {
+        let mut buffer = Buffer::default();
+        buffer.write_all(&vec![0xff; MAX_OUTPUT_BYTES / 2]).unwrap();
+        let (bytes, truncated) = buffer.take_text();
+        assert!(truncated);
+        assert_eq!(bytes.len(), MAX_OUTPUT_BYTES / 3);
+        assert!(String::from_utf8_lossy(&bytes).len() <= MAX_OUTPUT_BYTES);
+    }
+
+    /// A character the limit splits is dropped whole rather than returned as U+FFFD.
+    #[test]
+    fn output_cut_inside_a_character_drops_the_character() {
+        let mut buffer = Buffer::default();
+        buffer.write_all(&vec![b'y'; MAX_OUTPUT_BYTES - 1]).unwrap();
+        assert!(buffer.write_all("é".as_bytes()).is_err());
+        let (bytes, truncated) = buffer.take_text();
+        assert!(truncated);
+        assert_eq!(bytes, vec![b'y'; MAX_OUTPUT_BYTES - 1]);
     }
 }
