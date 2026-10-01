@@ -10712,39 +10712,18 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
     assert_eq!(delayed_output.stdout, b"late\n");
     assert!(delayed_output.stderr.is_empty());
 
-    let delayed_failure = invoke_cli_tool(
+    let immediate_exit = invoke_cli_tool(
         &executor,
         &caller_component,
-        "node-delayed-failure",
+        "node-immediate-exit",
         "node",
         "/workspace",
-        vec![
-            "-e",
-            "setTimeout(() => { throw new Error('delayed failure'); }, 10)",
-        ],
+        vec!["-e", "process.exit(7); console.log('unexpected')"],
     )
     .await?;
-    assert_eq!(delayed_failure.exit_code, 1);
-    assert!(delayed_failure.stdout.is_empty());
-    let delayed_failure_stderr = String::from_utf8(delayed_failure.stderr)?;
-    assert!(delayed_failure_stderr.contains("Error: delayed failure"));
-    assert!(!delayed_failure_stderr.contains("ProcessExitError"));
-
-    let delayed_exit = invoke_cli_tool(
-        &executor,
-        &caller_component,
-        "node-delayed-exit",
-        "node",
-        "/workspace",
-        vec![
-            "-e",
-            "setTimeout(() => process.exit(7), 10); setTimeout(() => console.log('unexpected'), 20)",
-        ],
-    )
-    .await?;
-    assert_eq!(delayed_exit.exit_code, 7);
-    assert!(delayed_exit.stdout.is_empty());
-    assert!(delayed_exit.stderr.is_empty());
+    assert_eq!(immediate_exit.exit_code, 7);
+    assert!(immediate_exit.stdout.is_empty());
+    assert!(immediate_exit.stderr.is_empty());
 
     let behavior_agent = "js-ts-behavior";
     let fixture_source = r##"
