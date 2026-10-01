@@ -56,9 +56,6 @@ pub enum EnvironmentToolGrantError {
     EnvironmentToolGrantNotFound(EnvironmentToolGrantId),
     #[error("Referenced tool release not found")]
     ReferencedToolReleaseNotFound,
-    /// The referenced built-in release was superseded; the text names the version to use.
-    #[error("{0}")]
-    ReleaseSuperseded(String),
     #[error("Grant for this tool release already exists in this environment")]
     GrantAlreadyExists,
     #[error("Protected system tool grant {0} cannot be modified")]
@@ -144,9 +141,6 @@ impl EnvironmentToolGrantService {
                 ToolReleaseError::ReferencedToolReleaseNotFound
                 | ToolReleaseError::ToolReleaseNotFound(_) => {
                     EnvironmentToolGrantError::ReferencedToolReleaseNotFound
-                }
-                ToolReleaseError::SupersededSystemRelease(message) => {
-                    EnvironmentToolGrantError::ReleaseSuperseded(message)
                 }
                 other => other.into(),
             })?;
@@ -264,9 +258,6 @@ impl EnvironmentToolGrantService {
                     ToolReleaseError::ReferencedToolReleaseNotFound
                     | ToolReleaseError::ToolReleaseNotFound(_) => {
                         EnvironmentToolGrantError::ReferencedToolReleaseNotFound
-                    }
-                    ToolReleaseError::SupersededSystemRelease(message) => {
-                        EnvironmentToolGrantError::ReleaseSuperseded(message)
                     }
                     other => other.into(),
                 })?;
@@ -445,9 +436,6 @@ impl EnvironmentToolGrantService {
                 .await
             {
                 Ok(release) => resolved_ids.push(Some(release.release.tool_release_id)),
-                Err(ToolReleaseError::SupersededSystemRelease(message)) => {
-                    return Err(EnvironmentToolGrantError::ReleaseSuperseded(message));
-                }
                 Err(
                     ToolReleaseError::ReferencedToolReleaseNotFound
                     | ToolReleaseError::ToolReleaseNotFound(_)

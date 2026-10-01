@@ -20,7 +20,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Empty, IdempotencyKey, OplogIndex};
 use golem_registry_service::RegistryService as RegistryServer;
 use golem_registry_service::config::{
-    BuiltinToolsConfig, ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
+    ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
 };
 use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
 use golem_registry_service::repo::registry_change::{
@@ -87,7 +87,6 @@ async fn start_registry() -> (
         login: LoginConfig::Disabled(Empty {}),
         blob_storage: BlobStorageConfig::default_in_memory(),
         component_compilation: ComponentCompilationConfig::Disabled(Empty {}),
-        builtin_tools: BuiltinToolsConfig::Disabled(Empty {}),
         ..Default::default()
     };
     let mut join_set = JoinSet::new();

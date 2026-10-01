@@ -305,7 +305,8 @@ such a recovery keeps it.
    trap handlers, inheritance and statuses, comparing exact stdout, stderr and status. Cases print
    facts derived from numbers (equality, ordering, status), never raw numbers, since the two shells
    allocate differently.
-4. **Golem CLI integration**, with the existing checkpoint fixture:
+4. **Golem CLI integration**, with the checkpoint fixture, which comes with the change that provisions
+   Bash as a built-in:
    - `$$` no longer aborts, and each call gets a new one;
    - `kill` of a job waiting on `fixture checkpoint` cancels it, and `after` is never written;
    - end-of-run stopping cancels a pending sibling call;

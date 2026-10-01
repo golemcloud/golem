@@ -8,21 +8,9 @@ The filesystem tools are implemented in Rust under `builtin-tools/filesystem-too
 into `builtin-tools/filesystem-tools.wasm`. The component provides the `read-file`, `write-file`, and
 `edit-file` tools.
 
-The Bash tool is built from `builtin-tools/bash`, committed as `builtin-tools/bash.wasm`, and
-published as the protected system release `bash@0.2.0`. Each Bash version is provisioned from its
-own component (`golem:bash-0-2-0`); a new version retires the previous component's implementation
-of `bash` and supersedes its release, while grants of the previous release keep working. See
-[Bash's contract and examples](bash/README.md).
-
-Build and validate the embedded artifacts from the repository root:
-
-```shell
-cargo make build-builtin-tools
-```
-
-The task builds the filesystem tools through their manifest and Bash reproducibly in a pinned
-container (`builtin-tools/bash/build-bash-wasm.sh`), writes each to the path the registry service
-embeds, and validates it with `wasm-tools`.
+The Bash tool is built from `builtin-tools/bash` and committed as `builtin-tools/bash.wasm`
+(`cargo make build-builtin-tools` rebuilds it reproducibly). The registry does not provision it
+yet; see [its README](bash/README.md).
 
 ## Adding a component-implemented built-in tool
 
@@ -79,22 +67,3 @@ filesystem access but provision no files of their own. This example explicitly g
 `filesystemAccess: allowed` on the agent binding; if it is omitted and no grant is inherited,
 deployment fails with an error requesting that permission. This fails closed rather than exposing
 the agent's filesystem.
-
-Bash is selected the same way:
-
-```yaml
-tools:
-  bash:
-    release:
-      account: builtin-tool-owner@golem.cloud
-      name: bash
-      version: 0.2.0
-
-agents:
-  MyAgent:
-    tools:
-      bash: {}
-```
-
-Use `bash: { filesystemAccess: allowed }` for shell access to the owner's filesystem. Release
-availability does not grant that access.

@@ -1,8 +1,6 @@
 use super::*;
 use crate::bootstrap::Services;
-use crate::config::{
-    BuiltinToolsConfig, ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
-};
+use crate::config::{ComponentCompilationConfig, LoginConfig, RegistryServiceConfig};
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -235,7 +233,6 @@ impl Fixture {
             login: LoginConfig::Disabled(Empty {}),
             blob_storage: BlobStorageConfig::default_in_memory(),
             component_compilation: ComponentCompilationConfig::Disabled(Empty {}),
-            builtin_tools: BuiltinToolsConfig::Disabled(Empty {}),
             ..Default::default()
         };
         config

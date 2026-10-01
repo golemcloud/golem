@@ -1,13 +1,15 @@
 # Bash built-in tool
 
-This standalone Golem application builds the component embedded by the registry service as the
-grantable `bash@0.2.0` system tool. It exports one command, `run`, for finite shell execution. A
+This standalone Golem application builds the Bash tool component, `bash@0.2.0`, committed as
+`builtin-tools/bash.wasm`. Provisioning it as a built-in system tool is a separate change; until
+then the registry does not offer it. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
 ## Enable and invoke
 
-Select the exact release and explicitly bind it to an agent in the consumer's manifest:
+Once the registry provisions Bash, select the exact release and explicitly bind it to an agent in
+the consumer's manifest:
 
 ```yaml
 tools:
@@ -125,8 +127,7 @@ flowchart TD
   idempotent) with a new one, so the server may see such a POST or PATCH twice. At this Golem
   version that recovery is unreliable: in testing, fewer than a third of crashes with a request in
   flight recovered, and the rest left the owner hung or permanently failed without sending the
-  request again (the [CLI fixture](../../cli/golem-cli/test-data/builtin-bash/README.md)'s test of
-  it is quarantined). A script that needs exactly-once should send its own key, which Golem then
+  request again. A script that needs exactly-once should send its own key, which Golem then
   keeps on the resent request:
   `curl -H 'Idempotency-Key: order-42' -d @order.json https://api.example.com/orders`.
 - Diagnostics that a caller could miss — a rejected directory, a tool call that failed, a job
@@ -529,17 +530,9 @@ is always the same; the source paths that end up in panic messages are written a
 the container's output is committed. A new Rust release means updating `rust-toolchain.toml` and
 the Dockerfile's image together, then rebuilding and committing `bash.wasm`.
 
-The registry release is immutable. Any change that alters the component bytes or exported tool
-metadata requires a new tool version (`#[tool_definition(version = …)]`) and a matching
-`release_version` in the registry's descriptor; source, lockfile, descriptor, and generated WASM
-must be committed together. The registry provisions each version as its own component
-(`golem:bash-0-1-0`) in `golem-system/builtin-tools`: on the first boot with a new version it
-deploys the new component, stops the older one implementing `bash` in that same deployment,
-publishes the new release, and only then marks the older release superseded. Existing grants keep
-the release they hold (it stays pinned to its component revision); a manifest that names the older
-version must name the new one before its next deploy, which otherwise fails with
-`built-in tool bash@0.1.0 was superseded by bash@0.2.0; update the manifest to bash@0.2.0`. A boot whose release is already provisioned
-from the same bytes does not compile the component again.
+A published release is immutable: any change that alters the component bytes or exported tool
+metadata needs a new tool version (`#[tool_definition(version = …)]`), and source, lockfile and
+generated WASM are committed together.
 
 The independent workspace commits its own `Cargo.lock`. Forks are pinned by git revision in the
 workspace `[patch.crates-io]`; no local dependency overrides are required.
@@ -562,14 +555,7 @@ cargo clippy --manifest-path builtin-tools/bash/Cargo.toml --locked --workspace 
 CARGO_TARGET_WASM32_WASIP2_RUNNER="wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y --dir /tmp::/tmp" \
   cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
 cargo make test-builtin-bash-pipelines
-cargo build -p golem -p golem-cli
-cargo test -p golem-cli --test integration -- app::builtin_bash --report-time
-cargo test -p golem-registry-service --test tests provisions_bash_release_idempotently_and_rejects_changes_without_mutation -- --report-time
 ```
 
-Rebuild the server after updating embedded WASM. Registry startup deliberately rejects changing
-the bytes of an already provisioned release; use isolated test server data for development.
-The [CLI fixture](../../cli/golem-cli/test-data/builtin-bash/README.md) documents the HTTP
-and recovery tests, and the [conformance matrix](conformance/README.md) the standalone
-Bash-oracle tests. The standalone example uses WASI CLI/Wasmtime, whereas
-the real fixture invokes the embedded component through the matching Golem server.
+The [conformance matrix](conformance/README.md) documents the standalone Bash-oracle tests, which
+run the shell under WASI CLI and Wasmtime.
