@@ -96,12 +96,16 @@ not under `-c`; the tool always runs a script as `bash -c` would.
 | `cases/coreutils_errors.py` | 47 |
 | `cases/coreutils_extra.py` | 71 |
 | `cases/coreutils_edge.py` (arithmetic, format directives, locale, huge widths, non-regular inputs) | 93 |
+| `cases/deep_directory_walks.py` (`grep -r` and `diff -r` over deep trees) | 3 |
+| `cases/deep_trees.py` (`du` and `rm -r` over deep trees) | 4 |
 | `cases/diagnostics.py` | 19 |
 | `cases/diff.py` (diff, cmp, patch) | 76 |
 | `cases/env_facts.py` (what an agent's environment looks like) | 30 |
 | `cases/expansions.py` (expansions, globbing, process substitution) | 70 |
 | `cases/find.py` | 67 |
+| `cases/find_expression_limits.py` (long `find` expressions and nested parentheses) | 3 |
 | `cases/grep.py` | 66 |
+| `cases/growing_file_reads.py` (commands reading a file they are writing) | 4 |
 | `cases/inspect.py` (`file`, `stat`, `which`, `man`) | 15 |
 | `cases/job_listings.py` (`jobs` in substitutions and pipeline stages) | 5 |
 | `cases/jobs.py` (jobs, traps and signals in the process model) | 143 |
@@ -121,6 +125,7 @@ not under `-c`; the tool always runs a script as `bash -c` would.
 | `cases/siblings.py` (concurrent sibling calls) | 3 |
 | `cases/special_paths.py` (`/dev/null`, `/dev/stdin`, `-` and `/dev/stdout` as operands (generated)) | 124 |
 | `cases/state.py` (separate calls: only the working directory carries (`#--call--`)) | 15 |
+| `cases/symlink_escapes.py` (links whose target climbs above `/`) | 7 |
 | `cases/syntax.py` (syntax and syntax errors) | 20 |
 | `cases/test_operands.py` (`test` and `[` over long operand lists and nested parentheses) | 9 |
 | `cases/text_tools.py` (grep, diff, sed, jq, patch, cmp) | 69 |
@@ -128,12 +133,12 @@ not under `-c`; the tool always runs a script as `bash -c` would.
 | `cases/tool_layer.py` (resource bounds, `/dev`, the utilities' streams and environment) | 151 |
 | `cases/traps.py` (EXIT, ERR, DEBUG, RETURN) | 18 |
 | `cases/xargs.py` | 32 |
-| **Total, per PR** | **2224** |
+| **Total, per PR** | **2253** |
 | `cases/sweep_options_*.py` (sweep tier: every option of every registered command; 7 modules) | 4103 |
 | `cases/sweep_grammar_*.py` (sweep tier: Bash grammar, generated from fixed seeds; 10 modules) | 4231 |
 | `cases/sweep_realworld_*.py` (sweep tier: tldr-pages examples and coding-agent command shapes, see `cases/NOTICE`; 5 modules) | 3488 |
 | `cases/sweep_edge_*.py` (sweep tier: Unicode, invalid UTF-8, binary, empty and large input, `/dev` paths, separate calls, error paths; 7 modules) | 3940 |
-| **Total, sweep job** | **17986** |
+| **Total, sweep job** | **18015** |
 
 ## Two tiers
 
