@@ -72,7 +72,6 @@ fn files(
     (over(storage.clone()), storage, over(inner))
 }
 
-/// Gives the content of the snapshot file, when the storage below the script holds it.
 /// Gives a spawner on the runtime of the test, counted by the tracker.
 fn spawner(tracker: &TaskTracker) -> Spawner {
     Spawner {
@@ -81,6 +80,7 @@ fn spawner(tracker: &TaskTracker) -> Spawner {
     }
 }
 
+/// Gives the content of the snapshot file, when the storage below the script holds it.
 async fn stored(inner: &SnapshotFiles) -> Option<Vec<u8>> {
     inner.get("test", Path::new(SNAPSHOT_PATH)).await.unwrap()
 }
