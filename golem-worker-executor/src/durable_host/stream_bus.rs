@@ -242,7 +242,7 @@ impl<T: Clone> DurableLiveStreamBus<T> {
         }
         let reader_id = self
             .next_reader_id
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |id| id.checked_add(1))
             .map_err(|_| {
                 crate::metrics::durable_stream::record_limit_violation("reader_id");
                 crate::metrics::durable_stream::record_live_join_rejected();
