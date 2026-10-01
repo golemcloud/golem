@@ -28,7 +28,7 @@ use crate::tool::helpers::{
     SeenKeys, StreamKind, fresh_internal_ident, normalize_sdk_paths_in_item_trait,
     resolve_generated_sdk_paths, stream_type, to_kebab_case,
 };
-use crate::tool::ir::{ArgIr, ArgPlacement, CommandIr, ParamIr, ToolDefinitionIr};
+use crate::tool::ir::{ArgIr, ArgPlacement, CommandIr, OutputChannelIr, ParamIr, ToolDefinitionIr};
 use crate::tool::result::parse_result;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -437,7 +437,8 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
             mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
-            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            mut __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFuture
         where
@@ -460,6 +461,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                         __input,
                         __stdin,
                         __stdout,
+                        __stderr,
                         __principal,
                     )
                     .await
@@ -474,7 +476,8 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
             __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
-            __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
+            __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
@@ -486,6 +489,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                     __input,
                     __stdin,
                     __stdout,
+                    __stderr,
                     __principal,
                 )
                 .await
@@ -500,7 +504,8 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
             __command_path: ::std::vec::Vec<::std::string::String>,
             __input: golem_rust::golem_agentic::exports::golem::tool::guest::TypedSchemaValue,
             mut __stdin: ::std::option::Option<golem_rust::agentic::InputStream>,
-            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolStdoutWriter>,
+            mut __stdout: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
+            mut __stderr: ::std::option::Option<golem_rust::golem_agentic::golem::tool::streams::ToolOutputWriter>,
             __principal: golem_rust::golem_agentic::golem::agent::common::Principal,
         ) -> golem_rust::agentic::ToolInvokeFutureFor<'a>
         where
@@ -518,6 +523,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                     ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
                         result: ::std::option::Option::Some(__value),
                         stdout: ::std::option::Option::None,
+                        stderr: ::std::option::Option::None,
                     })
                 }
 
@@ -528,6 +534,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                     ::std::result::Result::Ok(golem_rust::golem_agentic::exports::golem::tool::guest::InvocationResult {
                         result: ::std::option::Option::None,
                         stdout: ::std::option::Option::None,
+                        stderr: ::std::option::Option::None,
                     })
                 }
 
@@ -568,6 +575,7 @@ fn synthesize_tool_invokers(ir: &ToolDefinitionIr) -> [proc_macro2::TokenStream;
                             __input_fields.take().expect("tool input is forwarded once"),
                             __stdin,
                             __stdout,
+                            __stderr,
                             __principal,
                         ).await;
                     }
@@ -615,16 +623,29 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                     );
                 }
             });
-            let stdout_required = cmd
-                .params
-                .iter()
-                .find_map(|param| match stream_type(&param.ty) {
-                    Some((StreamKind::Output, required)) => Some(required),
+            let output_channel = |param: &ParamIr| {
+                cmd.args
+                    .iter()
+                    .find(|arg| arg.param == param.ident)
+                    .and_then(|arg| arg.output_channel)
+                    .unwrap_or(OutputChannelIr::Stdout)
+            };
+            let required_output = |channel| {
+                cmd.params.iter().find_map(|param| match stream_type(&param.ty) {
+                    Some((StreamKind::Output, required)) if output_channel(param) == channel => {
+                        Some(required)
+                    }
                     _ => None,
-                });
+                })
+            };
+            let stdout_required = required_output(OutputChannelIr::Stdout);
+            let stderr_required = required_output(OutputChannelIr::Stderr);
             let stdout_writer = stdout_required
                 .is_some()
                 .then(|| fresh_command_local_ident(cmd, "__golem_stdout_writer"));
+            let stderr_writer = stderr_required
+                .is_some()
+                .then(|| fresh_command_local_ident(cmd, "__golem_stderr_writer"));
             let stdout_setup = stdout_writer.as_ref().map(|writer| {
                 if stdout_required == Some(true) {
                     quote! {
@@ -637,6 +658,21 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                 } else {
                     quote! {
                         let #writer = __stdout.take().map(golem_rust::agentic::OutputStream::new);
+                    }
+                }
+            });
+            let stderr_setup = stderr_writer.as_ref().map(|writer| {
+                if stderr_required == Some(true) {
+                    quote! {
+                        let #writer = golem_rust::agentic::OutputStream::new(__stderr.take().ok_or_else(|| {
+                            golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput(
+                                "tool invocation did not contain declared stderr stream".to_string()
+                            )
+                        })?);
+                    }
+                } else {
+                    quote! {
+                        let #writer = __stderr.take().map(golem_rust::agentic::OutputStream::new);
                     }
                 }
             });
@@ -661,9 +697,13 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                         (StreamKind::Input, false) => quote! {
                             let #ident = __stdin.take();
                         },
-                        (StreamKind::Output, _) => quote! {
-                            let #ident = #stdout_writer.clone();
-                        },
+                        (StreamKind::Output, _) => {
+                            let writer = match output_channel(param) {
+                                OutputChannelIr::Stdout => &stdout_writer,
+                                OutputChannelIr::Stderr => &stderr_writer,
+                            };
+                            quote! { let #ident = #writer.clone(); }
+                        }
                     }
                 } else {
                     quote! {
@@ -697,6 +737,25 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
             } else {
                 call
             };
+            let call = if let Some(stderr_writer) = stderr_writer.as_ref() {
+                if stderr_required == Some(true) {
+                    quote! {{
+                        let __golem_result = #call;
+                        let _ = #stderr_writer.finish().await;
+                        __golem_result
+                    }}
+                } else {
+                    quote! {{
+                        let __golem_result = #call;
+                        if let ::std::option::Option::Some(__golem_stderr_writer) = #stderr_writer {
+                            let _ = __golem_stderr_writer.finish().await;
+                        }
+                        __golem_result
+                    }}
+                }
+            } else {
+                call
+            };
             let encode = encode_invocation_result(&cmd.output, call, None);
             command_match_arm(ir, cmd, quote! {
                 #stdin_preflight
@@ -704,6 +763,7 @@ fn synthesize_invoke_arms(ir: &ToolDefinitionIr) -> Vec<proc_macro2::TokenStream
                     __input_fields.take().expect("tool input is decoded once")
                 ).map_err(golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput)?;
                 #stdout_setup
+                #stderr_setup
                 #(#args)*
                 #direct_input.finish()
                     .map_err(golem_rust::golem_agentic::exports::golem::tool::guest::ToolError::InvalidInput)?;

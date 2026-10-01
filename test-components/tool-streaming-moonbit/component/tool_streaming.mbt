@@ -11,7 +11,7 @@ enum MoonBitStreamingError {
 
 ///|
 pub async fn MoonBitStreaming::stdout_only(
-  stdout : @tool.ProviderStdout,
+  stdout : @tool.ProviderOutput,
 ) -> UInt64 {
   guard stdout.write_all_bytes(b"stdout-only:\x00\xff") else {
     abort("MoonBit stdout-only write failed")
@@ -21,12 +21,27 @@ pub async fn MoonBitStreaming::stdout_only(
 
 ///|
 pub async fn MoonBitStreaming::declared_stdout(
-  stdout : @tool.ProviderStdout,
+  stdout : @tool.ProviderOutput,
 ) -> Result[UInt64, MoonBitStreamingError] {
   guard stdout.write_all_bytes(b"moonbit-declared:") else {
     abort("MoonBit declared-error stdout write failed")
   }
   Err(Expected("expected"))
+}
+
+///|
+#derive.arg("stderr", channel="stderr")
+pub async fn MoonBitStreaming::dual_output(
+  stdout : @tool.ProviderOutput,
+  stderr : @tool.ProviderOutput,
+) -> Result[UInt64, MoonBitStreamingError] {
+  guard stdout.write_all_bytes(b"moon-out:\x00\xff") else {
+    abort("MoonBit dual stdout write failed")
+  }
+  guard stderr.write_all_bytes(b"moon-err:\x80!") else {
+    abort("MoonBit dual stderr write failed")
+  }
+  Err(Expected("dual-expected"))
 }
 
 ///|
@@ -38,7 +53,7 @@ pub fn MoonBitStreaming::no_streams() -> UInt64 {
 pub async fn MoonBitStreaming::stream(
   mode : String,
   stdin : @asyncCore.Stream[Byte],
-  stdout : @tool.ProviderStdout,
+  stdout : @tool.ProviderOutput,
 ) -> UInt64 {
   if mode == "resource-exhausted" {
     stdout.fail(@tool.ToolStreamError::ResourceExhausted)
@@ -65,6 +80,14 @@ pub async fn MoonBitStreaming::stream(
 }
 
 ///|
+#derive.golem_schema
+struct MoonBitDualOutputEvidence {
+  stdout : Array[Byte]
+  stderr : Array[Byte]
+  result : String
+}
+
+///|
 #derive.agent
 struct MoonBitToolStreamingCaller {
   name : String
@@ -73,6 +96,48 @@ struct MoonBitToolStreamingCaller {
 ///|
 fn MoonBitToolStreamingCaller::new(name : String) -> MoonBitToolStreamingCaller {
   { name, }
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::dual_output_declared_error(
+  self : Self,
+) -> MoonBitDualOutputEvidence {
+  ignore(self)
+  let client = MoonbitStreamingClient::new()
+  defer client.drop()
+  let invocation = match client.dual_output() {
+    Ok(invocation) => invocation
+    Err(_) => abort("failed to start MoonBit dual-output tool")
+  }
+  defer invocation.drop()
+  let stdout_stream = invocation.stdout.unwrap()
+  let stderr_stream = invocation.stderr.unwrap()
+  let stdout = match stdout_stream.read(65536) {
+    Some(bytes) => Array::makei(bytes.length(), i => bytes[i])
+    None => abort("MoonBit dual stdout closed before data")
+  }
+  let stderr = match stderr_stream.read(65536) {
+    Some(bytes) => Array::makei(bytes.length(), i => bytes[i])
+    None => abort("MoonBit dual stderr closed before data")
+  }
+  guard stdout_stream.read(1) is None else {
+    abort("MoonBit dual stdout contained unexpected trailing data")
+  }
+  guard stderr_stream.read(1) is None else {
+    abort("MoonBit dual stderr contained unexpected trailing data")
+  }
+  let result = match invocation.get() {
+    Err(@tool.ToolError::Tool(Expected(message))) => "declared:" + message
+    Err(@tool.ToolError::Rpc(_)) => "unexpected:rpc"
+    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(_))) =>
+      "unexpected:invalid-input"
+    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidResult(_))) =>
+      "unexpected:malformed-output"
+    Err(@tool.ToolError::RemoteTool(_)) => "unexpected:remote-tool"
+    Err(@tool.ToolError::UnknownToolError(name, _)) => "unexpected:" + name
+    Ok(_) => "ok"
+  }
+  { stdout, stderr, result, }
 }
 
 ///|
@@ -94,7 +159,8 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(
     Ok(invocation) => invocation
     Err(_) => abort("failed to start MoonBit streaming tool")
   }
-  let marker = match invocation.stdout.read(65536) {
+  let stdout = invocation.stdout.unwrap()
+  let marker = match stdout.read(65536) {
     Some(marker) => Bytes::from_array(marker)
     None => abort("MoonBit stdout closed before live marker")
   }
@@ -102,11 +168,15 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(
     abort("unexpected MoonBit live marker")
   }
   ignore(release_input.complete(()))
-  match invocation.collect() {
-    Ok((bytes_read, output)) => {
-      guard output == payload else { abort("MoonBit echoed payload differs") }
-      bytes_read
-    }
+  let collected = invocation.collect()
+  let output = match collected.stdout {
+    Ok(Some(output)) => output
+    Ok(None) => abort("MoonBit collected stdout is missing")
+    Err(_) => abort("MoonBit stdout collection failed")
+  }
+  guard output == payload else { abort("MoonBit echoed payload differs") }
+  match collected.result {
+    Ok(result) => result
     Err(_) => abort("MoonBit streaming tool failed")
   }
 }
@@ -123,7 +193,8 @@ pub async fn MoonBitToolStreamingCaller::explicit_stdout_failure(
     Ok(invocation) => invocation
     Err(_) => abort("failed to start MoonBit stdout failure tool")
   }
-  let stdout_terminal = try invocation.stdout.read(1) catch {
+  let stdout = invocation.stdout.unwrap()
+  let stdout_terminal = try stdout.read(1) catch {
     @tool.ToolStreamError::Cancelled => "cancelled"
     @tool.ToolStreamError::Abandoned => "abandoned"
     @tool.ToolStreamError::ResourceExhausted => "resource-exhausted"
@@ -137,10 +208,12 @@ pub async fn MoonBitToolStreamingCaller::explicit_stdout_failure(
     Err(@tool.ToolError::Rpc(@tool.RpcError::ResourceExhausted(_))) =>
       "resource-exhausted"
     Err(@tool.ToolError::Rpc(error)) => "rpc:" + repr(error)
-    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))) =>
-      "invalid-input:" + message
-    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidResult(message))) =>
-      "malformed-output:" + message
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))
+    ) => "invalid-input:" + message
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidResult(message))
+    ) => "malformed-output:" + message
     Err(@tool.ToolError::RemoteTool(error)) => "remote-tool:" + repr(error)
     Err(@tool.ToolError::Tool(_)) => "tool-error"
     Err(@tool.ToolError::UnknownToolError(name, _)) =>
@@ -162,14 +235,15 @@ pub async fn MoonBitToolStreamingCaller::declared_error_completion(
     Err(_) => abort("failed to start MoonBit declared-error tool")
   }
   defer invocation.drop()
-  let output = match invocation.stdout.read(65536) {
+  let stdout = invocation.stdout.unwrap()
+  let output = match stdout.read(65536) {
     Some(bytes) => Bytes::from_array(bytes)
     None => abort("MoonBit declared-error stdout closed before partial output")
   }
   guard output == b"moonbit-declared:" else {
     abort("unexpected MoonBit declared-error partial output")
   }
-  let stdout_terminal = match invocation.stdout.read(1) {
+  let stdout_terminal = match stdout.read(1) {
     None => "finished"
     Some(_) => "data"
   }

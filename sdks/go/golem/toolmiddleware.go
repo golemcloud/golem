@@ -310,7 +310,7 @@ func startUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *midd
 	if err != nil {
 		return nil, err
 	}
-	call, err := inv.under.start(ce.node.path, input, stdin)
+	call, err := inv.startBeneath(ce.node.path, input, stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +407,7 @@ func (c *UniversalToolMiddlewareContext[P]) Start(input TypedValue) (*ToolInvoca
 	if c.inv.stdin.present() {
 		stdin = c.inv.stdin
 	}
-	call, err := c.inv.under.start(c.inv.commandPath, input.wit, stdin)
+	call, err := c.inv.startBeneath(c.inv.commandPath, input.wit, stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -468,8 +468,51 @@ type middlewareInvocation struct {
 	input       types.TypedSchemaValue
 	stdin       *byteReader
 	stdout      *ToolStdout
+	stderr      *ToolStdout
 	principal   Principal
 	under       underlyingLayer
+}
+
+func (inv *middlewareInvocation) outputs() []*ToolStdout {
+	return []*ToolStdout{inv.stdout, inv.stderr}
+}
+
+// startBeneath starts a call on the layer beneath. Its standard error is
+// relayed into the middleware's own in the background, and the relay is joined
+// before the call's result is returned; without a standard error of its own,
+// the middleware releases the one beneath so it cannot hold the call up.
+func (inv *middlewareInvocation) startBeneath(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
+	call, err := inv.under.start(path, input, stdin)
+	if err != nil || call.stderr == nil {
+		return call, err
+	}
+	src := call.stderr
+	call.stderr = nil
+	if inv.stderr == nil || inv.stderr.absent != "" {
+		src.close()
+		return call, nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srcErr, dstErr := relayStdout(inv.stderr, src)
+		var se *StreamError
+		switch {
+		case dstErr != nil:
+			src.close()
+		case errors.As(srcErr, &se):
+			_ = inv.stderr.Fail(se.Failure)
+		case srcErr != nil:
+			_ = inv.stderr.Fail(StreamFailed(srcErr.Error()))
+		}
+	}()
+	wait := call.wait
+	call.wait = func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		res, rpcErr := wait()
+		<-done
+		return res, rpcErr
+	}
+	return call, nil
 }
 
 // underlyingLayer is the layer beneath a middleware. It is a struct of
@@ -576,7 +619,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 		if e.universal == nil {
 			return fail(toolDefinitionError(d))
 		}
-		out, err := runWithStdout(label, inv.stdout, func() (reflect.Value, error) {
+		out, err := runWithOutputs(label, inv.outputs(), func() (reflect.Value, error) {
 			res, err := e.universal(inv)
 			return reflect.ValueOf(res), err
 		})
@@ -608,7 +651,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 	if terr != nil {
 		return fail(*terr)
 	}
-	out, err := runWithStdout(label, inv.stdout, func() (reflect.Value, error) { return h(inv, args) })
+	out, err := runWithOutputs(label, inv.outputs(), func() (reflect.Value, error) { return h(inv, args) })
 	if err != nil {
 		return fail(d.handlerError(ce, err))
 	}
@@ -620,12 +663,12 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
 	var result Option[types.TypedSchemaValue]
-	_, err := runWithStdout("middleware "+inv.entry.name, inv.stdout, func() (reflect.Value, error) {
+	_, err := runWithOutputs("middleware "+inv.entry.name, inv.outputs(), func() (reflect.Value, error) {
 		var stdin io.Reader
 		if inv.stdin.present() {
 			stdin = inv.stdin
 		}
-		call, err := inv.under.start(inv.commandPath, inv.input, stdin)
+		call, err := inv.startBeneath(inv.commandPath, inv.input, stdin)
 		if err != nil {
 			return reflect.Value{}, err
 		}

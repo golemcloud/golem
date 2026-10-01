@@ -293,35 +293,39 @@ func wasm_stream_lift_schema_value_tree(src unsafe.Pointer) SchemaValueTree {
 
 		case 27:
 
-			variant18 = MakeSchemaValueNodeDatetimeValue(Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+			variant18 = MakeSchemaValueNodeUuidValue(Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 		case 28:
 
-			variant18 = MakeSchemaValueNodeDurationValue(DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+			variant18 = MakeSchemaValueNodeDatetimeValue(Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 		case 29:
+
+			variant18 = MakeSchemaValueNodeDurationValue(DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+		case 30:
 			value16 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 			variant18 = MakeSchemaValueNodeQuantityValueNode(QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value16})
 
-		case 30:
+		case 31:
 			value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 			variant18 = MakeSchemaValueNodeUnionValue(UnionValuePayload{Tag: value17, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-		case 31:
+		case 32:
 
 			variant18 = MakeSchemaValueNodeSecretValue(SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-		case 32:
+		case 33:
 
 			variant18 = MakeSchemaValueNodeQuotaTokenHandle(QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-		case 33:
+		case 34:
 
 			variant18 = MakeSchemaValueNodePermissionCardHandle(PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-		case 34:
+		case 35:
 
 			variant18 = MakeSchemaValueNodeStreamValue(SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -666,20 +670,26 @@ func wasm_stream_lower_schema_value_tree(
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf842)))
 
+		case SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf843 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -689,7 +699,7 @@ func wasm_stream_lower_schema_value_tree(
 
 		case SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf844 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf844)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -698,7 +708,7 @@ func wasm_stream_lower_schema_value_tree(
 
 		case SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			resource := payload
 			handle := resource.TakeHandle()
 			lifters = append(lifters, func() {
@@ -708,7 +718,7 @@ func wasm_stream_lower_schema_value_tree(
 
 		case SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			resource45 := payload
 			handle46 := resource45.TakeHandle()
 			lifters = append(lifters, func() {
@@ -718,7 +728,7 @@ func wasm_stream_lower_schema_value_tree(
 
 		case SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			resource47 := payload
 			handle48 := resource47.TakeHandle()
 			lifters = append(lifters, func() {
@@ -728,7 +738,7 @@ func wasm_stream_lower_schema_value_tree(
 
 		case SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			resource49 := payload
 			handle50 := resource49.TakeHandle()
 			lifters = append(lifters, func() {
@@ -1480,18 +1490,19 @@ const (
 	SchemaTypeBodyBinaryType   uint8 = 25
 	SchemaTypeBodyPathType     uint8 = 26
 	SchemaTypeBodyUrlType      uint8 = 27
-	SchemaTypeBodyDatetimeType uint8 = 28
-	SchemaTypeBodyDurationType uint8 = 29
-	SchemaTypeBodyQuantityType uint8 = 30
+	SchemaTypeBodyUuidType     uint8 = 28
+	SchemaTypeBodyDatetimeType uint8 = 29
+	SchemaTypeBodyDurationType uint8 = 30
+	SchemaTypeBodyQuantityType uint8 = 31
 	// --- Discriminated union (closed, inferred-tag) ---
-	SchemaTypeBodyUnionType uint8 = 31
+	SchemaTypeBodyUnionType uint8 = 32
 	// --- Capability nodes ---
-	SchemaTypeBodySecretType         uint8 = 32
-	SchemaTypeBodyQuotaTokenType     uint8 = 33
-	SchemaTypeBodyPermissionCardType uint8 = 34
+	SchemaTypeBodySecretType         uint8 = 33
+	SchemaTypeBodyQuotaTokenType     uint8 = 34
+	SchemaTypeBodyPermissionCardType uint8 = 35
 	// --- WASI P3 stubs (parseable only; no semantics yet) ---
-	SchemaTypeBodyFutureType uint8 = 35
-	SchemaTypeBodyStreamType uint8 = 36
+	SchemaTypeBodyFutureType uint8 = 36
+	SchemaTypeBodyStreamType uint8 = 37
 )
 
 // The structural body of a `schema-type-node`.
@@ -1799,6 +1810,9 @@ func MakeSchemaTypeBodyPathType(value PathSpec) SchemaTypeBody {
 func MakeSchemaTypeBodyUrlType(value UrlRestrictions) SchemaTypeBody {
 	return SchemaTypeBody{SchemaTypeBodyUrlType, value}
 }
+func MakeSchemaTypeBodyUuidType() SchemaTypeBody {
+	return SchemaTypeBody{SchemaTypeBodyUuidType, nil}
+}
 func MakeSchemaTypeBodyDatetimeType() SchemaTypeBody {
 	return SchemaTypeBody{SchemaTypeBodyDatetimeType, nil}
 }
@@ -1964,16 +1978,17 @@ const (
 	SchemaValueNodeBinaryValue       uint8 = 24
 	SchemaValueNodePathValue         uint8 = 25
 	SchemaValueNodeUrlValue          uint8 = 26
-	SchemaValueNodeDatetimeValue     uint8 = 27
-	SchemaValueNodeDurationValue     uint8 = 28
-	SchemaValueNodeQuantityValueNode uint8 = 29
+	SchemaValueNodeUuidValue         uint8 = 27
+	SchemaValueNodeDatetimeValue     uint8 = 28
+	SchemaValueNodeDurationValue     uint8 = 29
+	SchemaValueNodeQuantityValueNode uint8 = 30
 	// Discriminated union: tag is matched against schema branches.
-	SchemaValueNodeUnionValue uint8 = 30
+	SchemaValueNodeUnionValue uint8 = 31
 	// Capability nodes
-	SchemaValueNodeSecretValue          uint8 = 31
-	SchemaValueNodeQuotaTokenHandle     uint8 = 32
-	SchemaValueNodePermissionCardHandle uint8 = 33
-	SchemaValueNodeStreamValue          uint8 = 34
+	SchemaValueNodeSecretValue          uint8 = 32
+	SchemaValueNodeQuotaTokenHandle     uint8 = 33
+	SchemaValueNodePermissionCardHandle uint8 = 34
+	SchemaValueNodeStreamValue          uint8 = 35
 )
 
 type SchemaValueNode struct {
@@ -2147,6 +2162,12 @@ func (self SchemaValueNode) UrlValue() string {
 	}
 	return self.value.(string)
 }
+func (self SchemaValueNode) UuidValue() Uuid {
+	if self.tag != SchemaValueNodeUuidValue {
+		panic("tag mismatch")
+	}
+	return self.value.(Uuid)
+}
 func (self SchemaValueNode) DatetimeValue() Datetime {
 	if self.tag != SchemaValueNodeDatetimeValue {
 		panic("tag mismatch")
@@ -2276,6 +2297,9 @@ func MakeSchemaValueNodePathValue(value string) SchemaValueNode {
 }
 func MakeSchemaValueNodeUrlValue(value string) SchemaValueNode {
 	return SchemaValueNode{SchemaValueNodeUrlValue, value}
+}
+func MakeSchemaValueNodeUuidValue(value Uuid) SchemaValueNode {
+	return SchemaValueNode{SchemaValueNodeUuidValue, value}
 }
 func MakeSchemaValueNodeDatetimeValue(value Datetime) SchemaValueNode {
 	return SchemaValueNode{SchemaValueNodeDatetimeValue, value}

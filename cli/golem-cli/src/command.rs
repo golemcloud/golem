@@ -1352,14 +1352,20 @@ pub mod tool {
         /// Write raw stdout to a file instead of process stdout
         #[arg(long, requires = "stdout")]
         pub output: Option<std::path::PathBuf>,
+        /// Request raw tool stderr
+        #[arg(long)]
+        pub stderr: bool,
+        /// Write raw stderr to a file instead of process stderr
+        #[arg(long, requires = "stderr")]
+        pub stderr_output: Option<std::path::PathBuf>,
         /// Enqueue without waiting
-        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output"])]
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub trigger: bool,
         /// Look up an existing invocation without starting execution or input
-        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output"])]
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
-        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output"])]
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub schedule_at: Option<DateTime<Utc>>,
         /// Idempotency key; `-` generates a fresh key
         #[arg(long, short)]
@@ -2129,6 +2135,13 @@ pub mod api {
             Custom,
         }
 
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+        #[clap(rename_all = "kebab-case")]
+        pub enum LoginModeArg {
+            Cookie,
+            AuthorizationCodePkce,
+        }
+
         impl From<ProviderKindArg> for ProviderKind {
             fn from(value: ProviderKindArg) -> Self {
                 match value {
@@ -2177,6 +2190,15 @@ pub mod api {
                 /// given values instead of failing
                 #[arg(long)]
                 update_existing: bool,
+                /// Login mode used by protected HTTP APIs
+                #[arg(long, value_enum, default_value = "cookie")]
+                login_mode: LoginModeArg,
+                /// Exact allowed frontend redirect URI (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Get HTTP API Security Scheme
@@ -2216,6 +2238,15 @@ pub mod api {
                 /// Security Scheme redirect URL
                 #[arg(long)]
                 redirect_url: Option<String>,
+                /// Replace the complete login-mode configuration
+                #[arg(long, value_enum)]
+                login_mode: Option<LoginModeArg>,
+                /// Exact allowed frontend redirect URI (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Delete HTTP API Security Scheme
@@ -3214,8 +3245,12 @@ mod test {
         for suffix in [
             &["--trigger", "--stdin", "-"][..],
             &["--trigger", "--stdout"][..],
+            &["--trigger", "--stderr"][..],
             &["--lookup", "--input", "{}"][..],
             &["--lookup", "--stdin", "-"][..],
+            &["--lookup", "--stderr-output", "errors.bin"][..],
+            &["--output", "result.bin"][..],
+            &["--stderr-output", "errors.bin"][..],
         ] {
             assert!(
                 GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
@@ -3229,7 +3264,10 @@ mod test {
                 "-",
                 "--stdout",
                 "--output",
-                "result.bin"
+                "result.bin",
+                "--stderr",
+                "--stderr-output",
+                "errors.bin"
             ]))
             .is_ok()
         );

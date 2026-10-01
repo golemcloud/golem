@@ -116,6 +116,16 @@ type byteReader struct {
 	// consumed records that reading began, after which the stream can no
 	// longer be handed on whole.
 	consumed bool
+	// release drops the underlying stream, when it is a host resource.
+	release func()
+}
+
+// close releases the stream unread.
+func (r *byteReader) close() {
+	if r.release != nil {
+		r.release()
+	}
+	r.done = true
 }
 
 // present reports whether the host supplied the stream.

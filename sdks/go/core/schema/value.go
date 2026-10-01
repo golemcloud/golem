@@ -14,6 +14,8 @@
 
 package schema
 
+import "github.com/golemcloud/golem/sdks/go/core/values"
+
 // Schema values.
 //
 // A value is recursive in the same way its type is: a record holds its fields,
@@ -132,6 +134,9 @@ type DatetimeValue struct {
 // DurationValue is a signed span in nanoseconds.
 type DurationValue struct{ Nanoseconds int64 }
 
+// UUIDValue is a UUID.
+type UUIDValue struct{ Value values.UUID }
+
 // QuantityValueNode is a measurement carrying its unit.
 type QuantityValueNode struct{ Value QuantityValue }
 
@@ -184,6 +189,7 @@ func (PathValue) isSchemaValue()           {}
 func (UrlValue) isSchemaValue()            {}
 func (DatetimeValue) isSchemaValue()       {}
 func (DurationValue) isSchemaValue()       {}
+func (UUIDValue) isSchemaValue()           {}
 func (QuantityValueNode) isSchemaValue()   {}
 func (UnionValue) isSchemaValue()          {}
 func (SecretValue) isSchemaValue()         {}

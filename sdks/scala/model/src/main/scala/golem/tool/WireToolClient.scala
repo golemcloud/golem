@@ -39,12 +39,14 @@ trait WireToolRpcTransport {
     commandPath: List[String],
     input: WitTypedSchemaValue,
     stdin: Option[ToolInputStream],
-    stdout: Boolean
+    stdout: Boolean,
+    stderr: Boolean
   ): Either[WireToolRpcFailure, WireToolRpcStarted]
 }
 
 final case class WireToolRpcStarted(
   stdout: Option[ToolInputStream],
+  stderr: Option[ToolInputStream],
   result: Future[Either[WireToolRpcFailure, WireToolInvokeResult]],
   cancel: () => Unit
 )
@@ -81,7 +83,7 @@ object WireToolClientRuntime {
       case Left(error)  => Future.successful(Left(error))
       case Right(value) =>
         rpc
-          .start(commandPath, value, stdin, stdout = false)
+          .start(commandPath, value, stdin, stdout = false, stderr = false)
           .fold(
             f => Future.successful(Left(mapFailure(f, decodeError))),
             _.result.map(_.left.map(mapFailure(_, decodeError)))
@@ -93,20 +95,31 @@ object WireToolClientRuntime {
     commandPath: List[String],
     input: Either[ToolError[Nothing], WitTypedSchemaValue],
     stdin: Option[ToolInputStream],
+    stdout: Boolean,
+    stderr: Boolean,
     decodeError: WireCustomToolError => Either[String, E]
   )(decode: WireToolInvokeResult => Either[ToolError[E], T]): Either[ToolError[E], ToolInvocation[E, T]] =
     input.left.map(identity[ToolError[E]]).flatMap { value =>
-      rpc.start(commandPath, value, stdin, stdout = true).left.map(mapFailure(_, decodeError)).flatMap { started =>
-        started.stdout.toRight {
-          started.cancel()
-          protocol("tool invocation did not create declared stdout stream")
-        }.map(stream =>
-          ToolInvocation(
-            stream,
-            started.result.map(_.left.map(mapFailure(_, decodeError)).flatMap(decode)),
-            started.cancel
+      rpc.start(commandPath, value, stdin, stdout, stderr).left.map(mapFailure(_, decodeError)).flatMap { started =>
+        val checkedStdout =
+          if (stdout && started.stdout.isEmpty) Left(protocol("tool invocation did not create declared stdout stream"))
+          else Right(started.stdout)
+        val checkedStderr =
+          if (stderr && started.stderr.isEmpty) Left(protocol("tool invocation did not create declared stderr stream"))
+          else Right(started.stderr)
+        checkedStdout
+          .flatMap(out =>
+            checkedStderr.map(err =>
+              ToolInvocation(
+                out,
+                err,
+                started.result.map(_.left.map(mapFailure(_, decodeError)).flatMap(decode)),
+                started.cancel
+              )
+            )
           )
-        )
+          .left
+          .map { error => started.cancel(); error }
       }
     }
 

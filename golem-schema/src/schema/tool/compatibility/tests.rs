@@ -28,6 +28,7 @@ fn tool(result: SchemaType) -> Tool {
                     constraints: vec![],
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: Some(super::super::ResultSpec {
                         type_: result,
                         doc: Default::default(),
@@ -667,10 +668,12 @@ fn stream_documentation_is_ignored_in_all_compatibility_modes() {
         required: true,
     };
     body(&mut expected, 0).stdin = Some(stream.clone());
-    body(&mut expected, 0).stdout = Some(stream);
+    body(&mut expected, 0).stdout = Some(stream.clone());
+    body(&mut expected, 0).stderr = Some(stream);
     let mut inner = expected.clone();
     body(&mut inner, 0).stdin.as_mut().unwrap().doc.summary = "different input docs".into();
     body(&mut inner, 0).stdout.as_mut().unwrap().doc.summary = "different output docs".into();
+    body(&mut inner, 0).stderr.as_mut().unwrap().doc.summary = "different error docs".into();
 
     for mode in [
         ToolCompatibilityMode::StrictEquality,
@@ -684,16 +687,19 @@ fn stream_documentation_is_ignored_in_all_compatibility_modes() {
 #[test]
 fn stream_mime_and_requiredness_remain_semantic() {
     let mut expected = tool(SchemaType::string());
-    body(&mut expected, 0).stdin = Some(StreamSpec {
+    let stream = StreamSpec {
         doc: Doc::default(),
         mime: vec!["application/json".into()],
         required: true,
-    });
+    };
+    body(&mut expected, 0).stdin = Some(stream.clone());
+    body(&mut expected, 0).stdout = Some(stream.clone());
+    body(&mut expected, 0).stderr = Some(stream);
     let mut different_mime = expected.clone();
-    body(&mut different_mime, 0).stdin.as_mut().unwrap().mime = vec!["text/plain".into()];
+    body(&mut different_mime, 0).stderr.as_mut().unwrap().mime = vec!["text/plain".into()];
     let mut different_requiredness = expected.clone();
     body(&mut different_requiredness, 0)
-        .stdin
+        .stderr
         .as_mut()
         .unwrap()
         .required = false;
@@ -705,6 +711,38 @@ fn stream_mime_and_requiredness_remain_semantic() {
     ] {
         assert!(compile_tool_compatibility(&expected, &different_mime, mode).is_err());
         assert!(compile_tool_compatibility(&expected, &different_requiredness, mode).is_err());
+    }
+}
+
+#[test]
+fn stdout_and_stderr_presence_are_matched_independently() {
+    let stream = StreamSpec {
+        doc: Doc::default(),
+        mime: vec!["application/octet-stream".into()],
+        required: false,
+    };
+    for (stdout, stderr) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut expected = tool(SchemaType::string());
+        body(&mut expected, 0).stdout = stdout.then(|| stream.clone());
+        body(&mut expected, 0).stderr = stderr.then(|| stream.clone());
+        assert!(
+            compile_tool_compatibility(&expected, &expected, ToolCompatibilityMode::StrictEquality)
+                .is_ok()
+        );
+
+        let mut swapped = expected.clone();
+        body(&mut swapped, 0).stdout = stderr.then(|| stream.clone());
+        body(&mut swapped, 0).stderr = stdout.then(|| stream.clone());
+        if stdout != stderr {
+            assert!(
+                compile_tool_compatibility(
+                    &expected,
+                    &swapped,
+                    ToolCompatibilityMode::StrictEquality
+                )
+                .is_err()
+            );
+        }
     }
 }
 

@@ -21,7 +21,7 @@ use super::InputStream;
 use crate::golem_agentic::exports::golem::tool::tool_middleware_guest as middleware;
 use crate::golem_agentic::exports::golem::{agent::guest as agent, tool::guest as tool};
 use crate::golem_agentic::golem::agent::common::Principal;
-use crate::golem_agentic::golem::tool::streams::ToolStdoutWriter;
+use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 use crate::load_snapshot::exports::golem::api::load_snapshot as load;
 use crate::save_snapshot::exports::golem::api::save_snapshot as save;
 use crate::schema::wit::wire::{SchemaValueTree, TypedSchemaValue};
@@ -56,7 +56,8 @@ pub(crate) struct ToolHooks {
         Vec<String>,
         TypedSchemaValue,
         Option<InputStream>,
-        Option<ToolStdoutWriter>,
+        Option<ToolOutputWriter>,
+        Option<ToolOutputWriter>,
         Principal,
     ) -> ExportFuture<Result<tool::InvocationResult, tool::ToolError>>,
 }
@@ -73,7 +74,8 @@ pub(crate) struct MiddlewareHooks {
         Vec<String>,
         TypedSchemaValue,
         Option<InputStream>,
-        Option<ToolStdoutWriter>,
+        Option<ToolOutputWriter>,
+        Option<ToolOutputWriter>,
         Principal,
         UnderlyingTool,
     ) -> ExportFuture<Result<tool::InvocationResult, tool::ToolError>>,
@@ -167,11 +169,14 @@ impl tool::Guest for Component {
         path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
-        stdout: Option<ToolStdoutWriter>,
+        stdout: Option<ToolOutputWriter>,
+        stderr: Option<ToolOutputWriter>,
         principal: Principal,
     ) -> Result<tool::InvocationResult, tool::ToolError> {
         match TOOL.get() {
-            Some(hooks) => (hooks.invoke)(name, path, input, stdin, stdout, principal).await,
+            Some(hooks) => {
+                (hooks.invoke)(name, path, input, stdin, stdout, stderr, principal).await
+            }
             None => Err(tool::ToolError::InvalidToolName(name)),
         }
     }
@@ -200,15 +205,16 @@ impl middleware::Guest for Component {
         path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
-        stdout: Option<ToolStdoutWriter>,
+        stdout: Option<ToolOutputWriter>,
+        stderr: Option<ToolOutputWriter>,
         principal: Principal,
         wrapped: UnderlyingTool,
     ) -> Result<tool::InvocationResult, tool::ToolError> {
         match MIDDLEWARE.get() {
             Some(hooks) => {
                 (hooks.invoke)(
-                    name, tool_name, metadata, parameters, path, input, stdin, stdout, principal,
-                    wrapped,
+                    name, tool_name, metadata, parameters, path, input, stdin, stdout, stderr,
+                    principal, wrapped,
                 )
                 .await
             }

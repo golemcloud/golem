@@ -19,14 +19,17 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	"github.com/golemcloud/golem/sdks/go/golem/uuid"
 )
 
-// UUID is a 128-bit identifier, used here for the phantom id of an ephemeral
-// agent instance. It is an alias of [uuid.UUID].
-type UUID = uuid.UUID
+// UUID is a 128-bit identifier, lowering to the WIT uuid type; it is also the
+// phantom id of an ephemeral agent instance. See [values.UUID].
+type UUID = values.UUID
+
+// ParseUUID reads the 8-4-4-4-12 hexadecimal form of a UUID.
+func ParseUUID(s string) (UUID, error) { return values.ParseUUID(s) }
 
 func uuidFromWit(w types.Uuid) UUID {
 	var u UUID

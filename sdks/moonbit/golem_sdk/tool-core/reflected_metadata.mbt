@@ -114,6 +114,7 @@ pub fn ToolDef::from_wire(
           }),
           stdin: body.stdin,
           stdout: body.stdout,
+          stderr: body.stderr,
           result: body.result.map(r => ResultSpecDef::{
             type_: graph(r.type_),
             doc: r.doc,

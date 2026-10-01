@@ -169,6 +169,10 @@ fn main {
         println("Error: \{message}")
         @sys.exit(1)
       }
+      @lib.ToolEmitError(message) => {
+        println("Error: \{message}")
+        @sys.exit(1)
+      }
       e => {
         println("Error: \{e}")
         @sys.exit(1)

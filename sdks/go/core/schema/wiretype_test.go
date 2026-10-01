@@ -103,6 +103,7 @@ func everyTypeKind() []struct {
 		},
 		{`{"kind":"datetime","value":{}}`, DatetimeType{}},
 		{`{"kind":"duration","value":{}}`, DurationType{}},
+		{`{"kind":"uuid","value":{}}`, UUIDType{}},
 		{
 			`{"kind":"quantity","value":{"spec":{"baseUnit":"kg","allowedSuffixes":["g"]}}}`,
 			QuantityType{Spec: QuantitySpec{BaseUnit: "kg", AllowedSuffixes: []string{"g"}}},

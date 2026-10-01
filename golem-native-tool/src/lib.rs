@@ -98,7 +98,7 @@ pub trait NativeToolStdinHandle: Send {
 pub type NativeToolReadFuture<'a> =
     Pin<Box<dyn Future<Output = Option<Result<Vec<u8>, String>>> + Send + 'a>>;
 
-pub trait NativeToolStdoutHandle: Send {
+pub trait NativeToolOutputHandle: Send {
     fn write<'a>(
         &'a mut self,
         bytes: Vec<u8>,
@@ -107,7 +107,7 @@ pub trait NativeToolStdoutHandle: Send {
 }
 
 pub type NativeToolStdin = Box<dyn NativeToolStdinHandle>;
-pub type NativeToolStdout = Box<dyn NativeToolStdoutHandle>;
+pub type NativeToolOutput = Box<dyn NativeToolOutputHandle>;
 
 /// Observation-only view of cancellation requested by the caller of a native tool.
 ///
@@ -158,7 +158,8 @@ pub struct NativeToolInvocation {
     pub principal: Principal,
     pub cancellation: NativeToolCancellation,
     pub stdin: Option<NativeToolStdin>,
-    pub stdout: Option<NativeToolStdout>,
+    pub stdout: Option<NativeToolOutput>,
+    pub stderr: Option<NativeToolOutput>,
 }
 
 #[derive(Debug, PartialEq)]

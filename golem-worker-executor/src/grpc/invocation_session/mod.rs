@@ -54,7 +54,7 @@ use golem_common::model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, PersistedInvocationTarget,
     PersistedStreamInvocationDescriptor, SessionStreamRole, StartAttemptDescriptor,
     StreamInvocationId, StreamRegistrationCoordinate, StreamRootKind, StreamSessionMapping,
-    StreamSourceKind, StreamValuePathStep,
+    StreamSourceKind, StreamValuePathStep, ToolByteStreamRole,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolInvocationInput, ToolInvocationOutput};
@@ -991,16 +991,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             } => (acceptance, early_output, early_inbound),
             AcceptanceRace::InvocationFinished(result) => {
                 let (reason, error, worker_error) = match result {
-                    Ok(_) => (
-                        InvocationRejectionReason::Internal,
-                        "invocation completed before acceptance".to_string(),
-                        None,
-                    ),
-                    Err(error) => (
-                        pre_acceptance_rejection_reason(&error),
-                        error.to_string(),
-                        Some(error.into()),
-                    ),
+                    Ok(_) => {
+                        tracing::warn!(
+                            agent_id = ?start.agent_id,
+                            attempt_id = ?start.attempt_id,
+                            error = "invocation completed before acceptance",
+                            "Invocation session start was rejected"
+                        );
+                        (
+                            InvocationRejectionReason::Internal,
+                            "invocation completed before acceptance".to_string(),
+                            None,
+                        )
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            agent_id = ?start.agent_id,
+                            attempt_id = ?start.attempt_id,
+                            error = %error,
+                            "Invocation session start was rejected"
+                        );
+                        (
+                            pre_acceptance_rejection_reason(&error),
+                            error.to_string(),
+                            Some(error.into()),
+                        )
+                    }
                 };
                 send_rejection_with_worker_error(&responses, reason, error, worker_error, &start)
                     .await;
@@ -1046,6 +1062,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             match durable_streams.input_high_waters().await {
                 Ok(high_waters) => high_waters,
                 Err(error) => {
+                    tracing::warn!(
+                        agent_id = ?start.agent_id,
+                        attempt_id = ?start.attempt_id,
+                        error = %error,
+                        "Invocation session input high-water lookup failed"
+                    );
                     // A refused write is rejected as the worker error it is, which the worker
                     // service reads as a routing miss.
                     let worker_error = match &error {
@@ -1261,7 +1283,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             let mut completed_output = early_output;
             let early_output_ids = accepted.prepared.as_ref().map(|prepared| prepared.stream_mappings.iter()
-                .filter(|mapping| mapping.role == SessionStreamRole::Output)
+                .filter(|mapping| mapping.role.direction() == SessionStreamRole::Output)
                 .map(|mapping| mapping.transport_stream_id).collect::<Vec<_>>()).unwrap_or_default();
             let mut output_pump = durable_streams.producer.tasks().children();
             let pumped_outputs = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
@@ -1760,6 +1782,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let mut acceptance = match result {
             Ok(acceptance) => acceptance,
             Err(error) => {
+                tracing::warn!(
+                    agent_id = ?resume.agent_id,
+                    attempt_id = ?resume.attempt_id,
+                    error = %error,
+                    "Durable invocation session resume was rejected"
+                );
                 let rejection = InvocationResponse {
                     response: Some(invocation_response::Response::Rejected(
                         InvocationRejected {
@@ -1828,6 +1856,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (acceptance, cursor_map, terminal_cursor_stream_ids) = match result {
             Ok(result) => result,
             Err(error) => {
+                tracing::warn!(
+                    agent_id = ?resume.agent_id,
+                    attempt_id = ?resume.attempt_id,
+                    error = %error,
+                    "Durable invocation session resume preparation was rejected"
+                );
                 let rejection = InvocationResponse {
                     response: Some(invocation_response::Response::Rejected(
                         InvocationRejected {
@@ -1872,7 +1906,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let known_output_mapping_ids = acceptance
             .mappings
             .iter()
-            .filter(|mapping| mapping.role == SessionStreamRole::Output)
+            .filter(|mapping| mapping.role.direction() == SessionStreamRole::Output)
             .map(|mapping| mapping.transport_stream_id)
             .collect::<Vec<_>>();
         let high_waters = match streams.input_high_waters().await {
@@ -1972,7 +2006,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             PersistedInvocationTarget::ExternalTool { .. }
         );
         let early_output_ids = acceptance.prepared.stream_mappings.iter()
-            .filter(|mapping| mapping.role == SessionStreamRole::Output)
+            .filter(|mapping| mapping.role.direction() == SessionStreamRole::Output)
             .map(|mapping| mapping.transport_stream_id).collect::<Vec<_>>();
         let mut output_pump = streams.producer.tasks().children();
         let pumped_outputs = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
@@ -2265,7 +2299,7 @@ pub(crate) fn build_durable_streaming_request(
         ),
         _ => None,
     };
-    let (graph, input_root, invocation_input, target, has_stdout) = match &invocation {
+    let (graph, input_root, invocation_input, target, has_stdout, has_stderr) = match &invocation {
         AgentInvocation::AgentMethod {
             method_name, input, ..
         } => {
@@ -2300,12 +2334,14 @@ pub(crate) fn build_durable_streaming_request(
                     method_name: method_name.clone(),
                 },
                 false,
+                false,
             )
         }
         AgentInvocation::ExternalTool {
             tool_name,
             command_path,
             stdout,
+            stderr,
             ..
         } => {
             let input = tool_input
@@ -2320,6 +2356,7 @@ pub(crate) fn build_durable_streaming_request(
                     command_path: command_path.clone(),
                 },
                 *stdout,
+                *stderr,
             )
         }
         _ => {
@@ -2339,7 +2376,14 @@ pub(crate) fn build_durable_streaming_request(
     let session_mapping = StreamSessionMapping {
         session_key: session_key.clone(),
         attachment_id,
-        role: SessionStreamRole::Input,
+        role: if matches!(
+            invocation,
+            AgentInvocation::ExternalTool { stdin: true, .. }
+        ) {
+            SessionStreamRole::ToolStdin
+        } else {
+            SessionStreamRole::Input
+        },
     };
     if input_encoded_len > MAX_DURABLE_STREAM_ITEM_SIZE {
         return Err(WorkerExecutorError::invalid_request(
@@ -2356,7 +2400,7 @@ pub(crate) fn build_durable_streaming_request(
         .map_err(WorkerExecutorError::invalid_request)?;
     if foreign_mappings
         .iter()
-        .any(|mapping| mapping.role != SessionStreamRole::Input)
+        .any(|mapping| mapping.role.direction() != SessionStreamRole::Input)
     {
         return Err(WorkerExecutorError::invalid_request(
             "durable invocation input mapping has a non-input role",
@@ -2498,16 +2542,25 @@ pub(crate) fn build_durable_streaming_request(
         }
     }
     // Outputs declared before execution use their normal result-leaf coordinates.
-    if has_stdout {
+    let mut next_transport_id = input_element_types.iter().map(|(id, _)| *id).max();
+    for byte_stream_role in [
+        has_stdout.then_some(ToolByteStreamRole::Stdout),
+        has_stderr.then_some(ToolByteStreamRole::Stderr),
+    ]
+    .into_iter()
+    .flatten()
+    {
         let early_output = ToolInvocationOutput {
             outcome: Ok(
                 golem_common::model::tool::SerializableToolInvocationResult { result: None },
             ),
-            stdout: Some(SchemaValueStream::from_host_endpoint(())),
+            stdout: (byte_stream_role == ToolByteStreamRole::Stdout)
+                .then(|| SchemaValueStream::from_host_endpoint(())),
+            stderr: (byte_stream_role == ToolByteStreamRole::Stderr)
+                .then(|| SchemaValueStream::from_host_endpoint(())),
         }
         .into_typed_schema_value()
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-        let mut next_transport_id = input_element_types.iter().map(|(id, _)| *id).max();
         encode_recursive_stream_value_with_schema(
             early_output.value(),
             early_output.graph(),
@@ -2544,7 +2597,11 @@ pub(crate) fn build_durable_streaming_request(
                         )
                         .map_err(|error| error.to_string())?,
                         session_mapping: Some(StreamSessionMapping {
-                            role: SessionStreamRole::Output,
+                            role: match byte_stream_role {
+                                ToolByteStreamRole::Stdout => SessionStreamRole::ToolStdout,
+                                ToolByteStreamRole::Stderr => SessionStreamRole::ToolStderr,
+                                ToolByteStreamRole::Stdin => unreachable!(),
+                            },
                             ..session_mapping.clone()
                         }),
                     },
@@ -2597,6 +2654,7 @@ pub(crate) fn build_durable_streaming_request(
         execution.encode_to_vec(),
         environment,
         has_stdout,
+        has_stderr,
     ))
     .map_err(WorkerExecutorError::runtime)?;
     let effective_identity = effective_session_identity(&request.auth_ctx, &request.principal)?;
@@ -2654,7 +2712,7 @@ fn resumed_input_schema(
     let input_mappings = prepared
         .stream_mappings
         .iter()
-        .filter(|mapping| mapping.role == SessionStreamRole::Input)
+        .filter(|mapping| mapping.role.direction() == SessionStreamRole::Input)
         .collect::<Vec<_>>();
     let mut input_element_types = Vec::with_capacity(input_mappings.len());
     decode_recursive_stream_value_with_schema(
@@ -2961,6 +3019,7 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
             input,
             stdin,
             stdout,
+            stderr,
             activation,
             invocation_context,
             principal,
@@ -2977,6 +3036,7 @@ fn replace_streams_for_persistence(invocation: AgentInvocation) -> AgentInvocati
                 )),
                 stdin,
                 stdout,
+                stderr,
                 activation,
                 invocation_context,
                 principal,

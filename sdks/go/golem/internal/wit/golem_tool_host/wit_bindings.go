@@ -370,49 +370,49 @@ func ToolStdinClosedFromBorrowHandle(handleValue int32) *ToolStdinClosed {
 	return &ToolStdinClosed{handle}
 }
 
-//go:wasmimport golem:tool/host@0.1.0 [resource-drop]tool-stdout
-func resourceDropToolStdout(handle int32)
+//go:wasmimport golem:tool/host@0.1.0 [resource-drop]tool-output
+func resourceDropToolOutput(handle int32)
 
 // Single-use output target consumed by one result-bearing invocation.
 // Dropping it unused fails the paired reader as abandoned.
-type ToolStdout struct {
+type ToolOutput struct {
 	handle *witRuntime.Handle
 }
 
-func (self *ToolStdout) TakeHandle() int32 {
+func (self *ToolOutput) TakeHandle() int32 {
 	return self.handle.Take()
 }
 
-func (self *ToolStdout) SetHandle(handle int32) {
+func (self *ToolOutput) SetHandle(handle int32) {
 	self.handle.Set(handle)
 }
 
-func (self *ToolStdout) Handle() int32 {
+func (self *ToolOutput) Handle() int32 {
 	return self.handle.Use()
 }
 
-func (self *ToolStdout) Drop() {
+func (self *ToolOutput) Drop() {
 	handle := self.handle.TakeOrNil()
 	if handle != 0 {
-		resourceDropToolStdout(handle)
+		resourceDropToolOutput(handle)
 	}
 }
 
-func ToolStdoutFromOwnHandle(handleValue int32) *ToolStdout {
+func ToolOutputFromOwnHandle(handleValue int32) *ToolOutput {
 	handle := witRuntime.MakeHandle(handleValue)
-	value := &ToolStdout{handle}
+	value := &ToolOutput{handle}
 	runtime.AddCleanup(value, func(_ int) {
 		handleValue := handle.TakeOrNil()
 		if handleValue != 0 {
-			resourceDropToolStdout(handleValue)
+			resourceDropToolOutput(handleValue)
 		}
 	}, 0)
 	return value
 }
 
-func ToolStdoutFromBorrowHandle(handleValue int32) *ToolStdout {
+func ToolOutputFromBorrowHandle(handleValue int32) *ToolOutput {
 	handle := witRuntime.MakeHandle(handleValue)
-	return &ToolStdout{handle}
+	return &ToolOutput{handle}
 }
 
 //go:wasmimport golem:tool/host@0.1.0 [resource-drop]tool-rpc
@@ -510,14 +510,14 @@ func GetAllTools() []RegisteredTool {
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (2 * 4), 4))
 	wasm_import_get_all_tools(returnArea)
-	result613 := make([]RegisteredTool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
+	result621 := make([]RegisteredTool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
 		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(16+12*4))
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-		result432 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))
+		result440 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))), index*(24+75*4))
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))), index*(24+85*4))
 			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))); index++ {
@@ -882,35 +882,39 @@ func GetAllTools() []RegisteredTool {
 
 						case 27:
 
-							variant42 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+							variant42 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 						case 28:
 
-							variant42 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+							variant42 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 						case 29:
+
+							variant42 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+						case 30:
 							value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 							variant42 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value40})
 
-						case 30:
+						case 31:
 							value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 							variant42 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value41, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-						case 31:
+						case 32:
 
 							variant42 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-						case 32:
+						case 33:
 
 							variant42 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-						case 33:
+						case 34:
 
 							variant42 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-						case 34:
+						case 35:
 
 							variant42 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -1022,11 +1026,11 @@ func GetAllTools() []RegisteredTool {
 				result62 = append(result62, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 			}
 
-			var option431 witTypes.Option[golem_tool_common.CommandBody]
+			var option439 witTypes.Option[golem_tool_common.CommandBody]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
 			case 0:
 
-				option431 = witTypes.None[golem_tool_common.CommandBody]()
+				option439 = witTypes.None[golem_tool_common.CommandBody]()
 			case 1:
 				result96 := make([]golem_tool_common.Positional, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4)))); index++ {
@@ -1298,35 +1302,39 @@ func GetAllTools() []RegisteredTool {
 
 							case 27:
 
-								variant93 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+								variant93 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 28:
 
-								variant93 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+								variant93 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 29:
+
+								variant93 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+							case 30:
 								value91 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 								variant93 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value91})
 
-							case 30:
+							case 31:
 								value92 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 								variant93 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value92, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-							case 31:
+							case 32:
 
 								variant93 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 32:
+							case 33:
 
 								variant93 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 33:
+							case 34:
 
 								variant93 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 34:
+							case 35:
 
 								variant93 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -1747,35 +1755,39 @@ func GetAllTools() []RegisteredTool {
 
 							case 27:
 
-								variant145 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+								variant145 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 28:
 
-								variant145 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+								variant145 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 29:
+
+								variant145 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+							case 30:
 								value143 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 								variant145 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value143})
 
-							case 30:
+							case 31:
 								value144 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 								variant145 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value144, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-							case 31:
+							case 32:
 
 								variant145 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 32:
+							case 33:
 
 								variant145 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 33:
+							case 34:
 
 								variant145 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 34:
+							case 35:
 
 								variant145 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -2135,35 +2147,39 @@ func GetAllTools() []RegisteredTool {
 
 									case 27:
 
-										variant189 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant189 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant189 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant189 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant189 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value187 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant189 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value187})
 
-									case 30:
+									case 31:
 										value188 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant189 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value188, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant189 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant189 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant189 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant189 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -2435,35 +2451,39 @@ func GetAllTools() []RegisteredTool {
 
 									case 27:
 
-										variant217 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant217 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant217 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant217 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant217 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value215 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant217 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value215})
 
-									case 30:
+									case 31:
 										value216 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant217 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value216, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant217 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant217 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant217 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant217 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -2735,35 +2755,39 @@ func GetAllTools() []RegisteredTool {
 
 									case 27:
 
-										variant245 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant245 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant245 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant245 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant245 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value243 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant245 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value243})
 
-									case 30:
+									case 31:
 										value244 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant245 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value244, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant245 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant245 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant245 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant245 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -3038,35 +3062,39 @@ func GetAllTools() []RegisteredTool {
 
 										case 27:
 
-											variant273 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+											variant273 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 										case 28:
 
-											variant273 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+											variant273 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 										case 29:
+
+											variant273 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+										case 30:
 											value271 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 											variant273 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value271})
 
-										case 30:
+										case 31:
 											value272 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 											variant273 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value272, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-										case 31:
+										case 32:
 
 											variant273 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-										case 32:
+										case 33:
 
 											variant273 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-										case 33:
+										case 34:
 
 											variant273 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-										case 34:
+										case 35:
 
 											variant273 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -3341,35 +3369,39 @@ func GetAllTools() []RegisteredTool {
 
 									case 27:
 
-										variant302 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant302 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant302 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant302 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant302 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value300 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant302 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value300})
 
-									case 30:
+									case 31:
 										value301 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant302 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value301, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant302 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant302 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant302 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant302 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -3638,35 +3670,39 @@ func GetAllTools() []RegisteredTool {
 
 									case 27:
 
-										variant330 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant330 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant330 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant330 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant330 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value328 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant330 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value328})
 
-									case 30:
+									case 31:
 										value329 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant330 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value329, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant330 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant330 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant330 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant330 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -3938,35 +3974,39 @@ func GetAllTools() []RegisteredTool {
 
 									case 27:
 
-										variant358 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant358 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant358 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant358 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant358 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value356 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant358 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value356})
 
-									case 30:
+									case 31:
 										value357 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant358 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value357, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant358 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant358 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant358 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant358 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -4235,35 +4275,39 @@ func GetAllTools() []RegisteredTool {
 
 									case 27:
 
-										variant386 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant386 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant386 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant386 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant386 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value384 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant386 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value384})
 
-									case 30:
+									case 31:
 										value385 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant386 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value385, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant386 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant386 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant386 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant386 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -4350,1329 +4394,1296 @@ func GetAllTools() []RegisteredTool {
 				default:
 					panic("unreachable")
 				}
-				var option421 witTypes.Option[golem_tool_common.ResultSpec]
+				var option415 witTypes.Option[golem_tool_common.StreamSpec]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 61*4)))) {
 				case 0:
 
-					option421 = witTypes.None[golem_tool_common.ResultSpec]()
+					option415 = witTypes.None[golem_tool_common.StreamSpec]()
 				case 1:
-					value408 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 63*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 64*4))))
-					value409 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 65*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 66*4))))
-					result412 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 68*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 68*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 67*4))))), index*(4*4))
+					value408 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 62*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 63*4))))
+					value409 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 64*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 65*4))))
+					result412 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 67*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 67*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 66*4))))), index*(4*4))
 						value410 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 						value411 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
 						result412 = append(result412, golem_tool_common.Example{Title: value410, Body: value411})
 					}
 
-					result419 := make([]golem_tool_common.Formatter, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 70*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 70*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 69*4))))), index*(8*4))
+					result414 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 69*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 69*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 68*4))))), index*(2*4))
 						value413 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-						value414 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-						value415 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-						result418 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
-						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
-							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
-							value416 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							value417 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-							result418 = append(result418, golem_tool_common.Example{Title: value416, Body: value417})
-						}
-
-						result419 = append(result419, golem_tool_common.Formatter{Name: value413, Doc: golem_tool_common.Doc{Summary: value414, Description: value415, Examples: result418}})
+						result414 = append(result414, value413)
 					}
 
-					value420 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 71*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 72*4))))
-
-					option421 = witTypes.Some[golem_tool_common.ResultSpec](golem_tool_common.ResultSpec{Type: *(*int32)(unsafe.Add(unsafe.Pointer(base), (16 + 62*4))), Doc: golem_tool_common.Doc{Summary: value408, Description: value409, Examples: result412}, Formatters: result419, DefaultFormatter: value420})
+					option415 = witTypes.Some[golem_tool_common.StreamSpec](golem_tool_common.StreamSpec{Doc: golem_tool_common.Doc{Summary: value408, Description: value409, Examples: result412}, Mime: result414, Required: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 70*4)))) != 0)})
 				default:
 					panic("unreachable")
 				}
-				result429 := make([]golem_tool_common.ErrorCase, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 74*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 74*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 73*4))))), index*(8+9*4))
-					value422 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					value423 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-					value424 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-					result427 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
-						value425 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-						value426 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+				var option429 witTypes.Option[golem_tool_common.ResultSpec]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 71*4)))) {
+				case 0:
 
-						result427 = append(result427, golem_tool_common.Example{Title: value425, Body: value426})
+					option429 = witTypes.None[golem_tool_common.ResultSpec]()
+				case 1:
+					value416 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 73*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 74*4))))
+					value417 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 75*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 76*4))))
+					result420 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 78*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 78*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 77*4))))), index*(4*4))
+						value418 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value419 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+						result420 = append(result420, golem_tool_common.Example{Title: value418, Body: value419})
 					}
 
-					var option428 witTypes.Option[int32]
+					result427 := make([]golem_tool_common.Formatter, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 80*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 80*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 79*4))))), index*(8*4))
+						value421 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value422 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+						value423 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+						result426 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
+							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
+							value424 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value425 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+							result426 = append(result426, golem_tool_common.Example{Title: value424, Body: value425})
+						}
+
+						result427 = append(result427, golem_tool_common.Formatter{Name: value421, Doc: golem_tool_common.Doc{Summary: value422, Description: value423, Examples: result426}})
+					}
+
+					value428 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 81*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 82*4))))
+
+					option429 = witTypes.Some[golem_tool_common.ResultSpec](golem_tool_common.ResultSpec{Type: *(*int32)(unsafe.Add(unsafe.Pointer(base), (16 + 72*4))), Doc: golem_tool_common.Doc{Summary: value416, Description: value417, Examples: result420}, Formatters: result427, DefaultFormatter: value428})
+				default:
+					panic("unreachable")
+				}
+				result437 := make([]golem_tool_common.ErrorCase, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 84*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 84*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 83*4))))), index*(8+9*4))
+					value430 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value431 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+					value432 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+					result435 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
+						value433 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value434 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+						result435 = append(result435, golem_tool_common.Example{Title: value433, Body: value434})
+					}
+
+					var option436 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 + 8*4)))) {
 					case 0:
 
-						option428 = witTypes.None[int32]()
+						option436 = witTypes.None[int32]()
 					case 1:
 
-						option428 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
+						option436 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
 					default:
 						panic("unreachable")
 					}
 
-					result429 = append(result429, golem_tool_common.ErrorCase{Name: value422, Doc: golem_tool_common.Doc{Summary: value423, Description: value424, Examples: result427}, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), ExitCode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 8*4))))), Payload: option428})
+					result437 = append(result437, golem_tool_common.ErrorCase{Name: value430, Doc: golem_tool_common.Doc{Summary: value431, Description: value432, Examples: result435}, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), ExitCode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 8*4))))), Payload: option436})
 				}
 
-				var option430 witTypes.Option[golem_tool_common.CommandAnnotations]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 75*4)))) {
+				var option438 witTypes.Option[golem_tool_common.CommandAnnotations]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 85*4)))) {
 				case 0:
 
-					option430 = witTypes.None[golem_tool_common.CommandAnnotations]()
+					option438 = witTypes.None[golem_tool_common.CommandAnnotations]()
 				case 1:
 
-					option430 = witTypes.Some[golem_tool_common.CommandAnnotations](golem_tool_common.CommandAnnotations{ReadOnly: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 + 75*4)))) != 0), Destructive: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 + 75*4)))) != 0), Idempotent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 + 75*4)))) != 0), OpenWorld: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 + 75*4)))) != 0)})
+					option438 = witTypes.Some[golem_tool_common.CommandAnnotations](golem_tool_common.CommandAnnotations{ReadOnly: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 + 85*4)))) != 0), Destructive: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 + 85*4)))) != 0), Idempotent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 + 85*4)))) != 0), OpenWorld: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 + 85*4)))) != 0)})
 				default:
 					panic("unreachable")
 				}
 
-				option431 = witTypes.Some[golem_tool_common.CommandBody](golem_tool_common.CommandBody{Positionals: golem_tool_common.Positionals{Fixed: result96, Tail: option108}, Options: result150, Flags: result164, Constraints: result391, Stdin: option399, Stdout: option407, Result: option421, Errors: result429, Annotations: option430})
+				option439 = witTypes.Some[golem_tool_common.CommandBody](golem_tool_common.CommandBody{Positionals: golem_tool_common.Positionals{Fixed: result96, Tail: option108}, Options: result150, Flags: result164, Constraints: result391, Stdin: option399, Stdout: option407, Stderr: option415, Result: option429, Errors: result437, Annotations: option438})
 			default:
 				panic("unreachable")
 			}
 
-			result432 = append(result432, golem_tool_common.CommandNode{Name: value1, Aliases: result, Doc: golem_tool_common.Doc{Summary: value3, Description: value4, Examples: result7}, Globals: golem_tool_common.Globals{Options: result47, Flags: result61}, Subcommands: result62, Body: option431})
+			result440 = append(result440, golem_tool_common.CommandNode{Name: value1, Aliases: result, Doc: golem_tool_common.Doc{Summary: value3, Description: value4, Examples: result7}, Globals: golem_tool_common.Globals{Options: result47, Flags: result61}, Subcommands: result62, Body: option439})
 		}
 
-		result608 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+		result616 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))), index*(56+22*4))
-			var variant596 golem_core_types.SchemaTypeBody
+			var variant604 golem_core_types.SchemaTypeBody
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 			case 0:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+				variant604 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 			case 1:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyBoolType()
+				variant604 = golem_core_types.MakeSchemaTypeBodyBoolType()
 
 			case 2:
-				var option439 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option447 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option439 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option447 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option434 witTypes.Option[golem_core_types.NumericBound]
+					var option442 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option434 = witTypes.None[golem_core_types.NumericBound]()
+						option442 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant433 golem_core_types.NumericBound
+						var variant441 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant433 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant441 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant433 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant441 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant433 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant441 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option434 = witTypes.Some[golem_core_types.NumericBound](variant433)
+						option442 = witTypes.Some[golem_core_types.NumericBound](variant441)
 					default:
 						panic("unreachable")
 					}
-					var option436 witTypes.Option[golem_core_types.NumericBound]
+					var option444 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option436 = witTypes.None[golem_core_types.NumericBound]()
+						option444 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant435 golem_core_types.NumericBound
+						var variant443 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant435 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant443 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant435 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant443 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant435 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant443 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option436 = witTypes.Some[golem_core_types.NumericBound](variant435)
+						option444 = witTypes.Some[golem_core_types.NumericBound](variant443)
 					default:
 						panic("unreachable")
 					}
-					var option438 witTypes.Option[string]
+					var option446 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option438 = witTypes.None[string]()
+						option446 = witTypes.None[string]()
 					case 1:
-						value437 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value445 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option438 = witTypes.Some[string](value437)
+						option446 = witTypes.Some[string](value445)
 					default:
 						panic("unreachable")
 					}
 
-					option439 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option434, Max: option436, Unit: option438})
+					option447 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option442, Max: option444, Unit: option446})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS8Type(option439)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS8Type(option447)
 
 			case 3:
-				var option446 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option454 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option446 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option454 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option441 witTypes.Option[golem_core_types.NumericBound]
+					var option449 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option441 = witTypes.None[golem_core_types.NumericBound]()
+						option449 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant440 golem_core_types.NumericBound
+						var variant448 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant440 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant448 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant440 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant448 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant440 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant448 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option441 = witTypes.Some[golem_core_types.NumericBound](variant440)
+						option449 = witTypes.Some[golem_core_types.NumericBound](variant448)
 					default:
 						panic("unreachable")
 					}
-					var option443 witTypes.Option[golem_core_types.NumericBound]
+					var option451 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option443 = witTypes.None[golem_core_types.NumericBound]()
+						option451 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant442 golem_core_types.NumericBound
+						var variant450 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant442 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant450 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant442 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant450 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant442 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant450 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option443 = witTypes.Some[golem_core_types.NumericBound](variant442)
+						option451 = witTypes.Some[golem_core_types.NumericBound](variant450)
 					default:
 						panic("unreachable")
 					}
-					var option445 witTypes.Option[string]
+					var option453 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option445 = witTypes.None[string]()
+						option453 = witTypes.None[string]()
 					case 1:
-						value444 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value452 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option445 = witTypes.Some[string](value444)
+						option453 = witTypes.Some[string](value452)
 					default:
 						panic("unreachable")
 					}
 
-					option446 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option441, Max: option443, Unit: option445})
+					option454 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option449, Max: option451, Unit: option453})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS16Type(option446)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS16Type(option454)
 
 			case 4:
-				var option453 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option461 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option453 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option461 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option448 witTypes.Option[golem_core_types.NumericBound]
+					var option456 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option448 = witTypes.None[golem_core_types.NumericBound]()
+						option456 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant447 golem_core_types.NumericBound
+						var variant455 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant447 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant455 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant447 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant455 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant447 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant455 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option448 = witTypes.Some[golem_core_types.NumericBound](variant447)
+						option456 = witTypes.Some[golem_core_types.NumericBound](variant455)
 					default:
 						panic("unreachable")
 					}
-					var option450 witTypes.Option[golem_core_types.NumericBound]
+					var option458 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option450 = witTypes.None[golem_core_types.NumericBound]()
+						option458 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant449 golem_core_types.NumericBound
+						var variant457 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant449 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant457 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant449 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant457 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant449 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant457 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option450 = witTypes.Some[golem_core_types.NumericBound](variant449)
+						option458 = witTypes.Some[golem_core_types.NumericBound](variant457)
 					default:
 						panic("unreachable")
 					}
-					var option452 witTypes.Option[string]
+					var option460 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option452 = witTypes.None[string]()
+						option460 = witTypes.None[string]()
 					case 1:
-						value451 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value459 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option452 = witTypes.Some[string](value451)
+						option460 = witTypes.Some[string](value459)
 					default:
 						panic("unreachable")
 					}
 
-					option453 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option448, Max: option450, Unit: option452})
+					option461 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option456, Max: option458, Unit: option460})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS32Type(option453)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS32Type(option461)
 
 			case 5:
-				var option460 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option468 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option460 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option468 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option455 witTypes.Option[golem_core_types.NumericBound]
+					var option463 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option455 = witTypes.None[golem_core_types.NumericBound]()
+						option463 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant454 golem_core_types.NumericBound
+						var variant462 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant454 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant462 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant454 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant462 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant454 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant462 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option455 = witTypes.Some[golem_core_types.NumericBound](variant454)
+						option463 = witTypes.Some[golem_core_types.NumericBound](variant462)
 					default:
 						panic("unreachable")
 					}
-					var option457 witTypes.Option[golem_core_types.NumericBound]
+					var option465 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option457 = witTypes.None[golem_core_types.NumericBound]()
+						option465 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant456 golem_core_types.NumericBound
+						var variant464 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant456 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant464 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant456 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant464 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant456 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant464 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option457 = witTypes.Some[golem_core_types.NumericBound](variant456)
+						option465 = witTypes.Some[golem_core_types.NumericBound](variant464)
 					default:
 						panic("unreachable")
 					}
-					var option459 witTypes.Option[string]
+					var option467 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option459 = witTypes.None[string]()
+						option467 = witTypes.None[string]()
 					case 1:
-						value458 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value466 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option459 = witTypes.Some[string](value458)
+						option467 = witTypes.Some[string](value466)
 					default:
 						panic("unreachable")
 					}
 
-					option460 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option455, Max: option457, Unit: option459})
+					option468 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option463, Max: option465, Unit: option467})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS64Type(option460)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS64Type(option468)
 
 			case 6:
-				var option467 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option475 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option467 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option475 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option462 witTypes.Option[golem_core_types.NumericBound]
+					var option470 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option462 = witTypes.None[golem_core_types.NumericBound]()
+						option470 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant461 golem_core_types.NumericBound
+						var variant469 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant461 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant469 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant461 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant469 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant461 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant469 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option462 = witTypes.Some[golem_core_types.NumericBound](variant461)
+						option470 = witTypes.Some[golem_core_types.NumericBound](variant469)
 					default:
 						panic("unreachable")
 					}
-					var option464 witTypes.Option[golem_core_types.NumericBound]
+					var option472 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option464 = witTypes.None[golem_core_types.NumericBound]()
+						option472 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant463 golem_core_types.NumericBound
+						var variant471 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant463 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant471 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant463 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant471 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant463 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant471 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option464 = witTypes.Some[golem_core_types.NumericBound](variant463)
+						option472 = witTypes.Some[golem_core_types.NumericBound](variant471)
 					default:
 						panic("unreachable")
 					}
-					var option466 witTypes.Option[string]
+					var option474 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option466 = witTypes.None[string]()
+						option474 = witTypes.None[string]()
 					case 1:
-						value465 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value473 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option466 = witTypes.Some[string](value465)
+						option474 = witTypes.Some[string](value473)
 					default:
 						panic("unreachable")
 					}
 
-					option467 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option462, Max: option464, Unit: option466})
+					option475 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option470, Max: option472, Unit: option474})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU8Type(option467)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU8Type(option475)
 
 			case 7:
-				var option474 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option482 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option474 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option482 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option469 witTypes.Option[golem_core_types.NumericBound]
+					var option477 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option469 = witTypes.None[golem_core_types.NumericBound]()
+						option477 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant468 golem_core_types.NumericBound
+						var variant476 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant468 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant476 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant468 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant476 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant468 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant476 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option469 = witTypes.Some[golem_core_types.NumericBound](variant468)
+						option477 = witTypes.Some[golem_core_types.NumericBound](variant476)
 					default:
 						panic("unreachable")
 					}
-					var option471 witTypes.Option[golem_core_types.NumericBound]
+					var option479 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option471 = witTypes.None[golem_core_types.NumericBound]()
+						option479 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant470 golem_core_types.NumericBound
+						var variant478 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant470 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant478 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant470 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant478 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant470 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant478 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option471 = witTypes.Some[golem_core_types.NumericBound](variant470)
+						option479 = witTypes.Some[golem_core_types.NumericBound](variant478)
 					default:
 						panic("unreachable")
 					}
-					var option473 witTypes.Option[string]
+					var option481 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option473 = witTypes.None[string]()
+						option481 = witTypes.None[string]()
 					case 1:
-						value472 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value480 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option473 = witTypes.Some[string](value472)
+						option481 = witTypes.Some[string](value480)
 					default:
 						panic("unreachable")
 					}
 
-					option474 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option469, Max: option471, Unit: option473})
+					option482 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option477, Max: option479, Unit: option481})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU16Type(option474)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU16Type(option482)
 
 			case 8:
-				var option481 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option489 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option481 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option489 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option476 witTypes.Option[golem_core_types.NumericBound]
+					var option484 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option476 = witTypes.None[golem_core_types.NumericBound]()
+						option484 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant475 golem_core_types.NumericBound
+						var variant483 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant475 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant483 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant475 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant483 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant475 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant483 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option476 = witTypes.Some[golem_core_types.NumericBound](variant475)
+						option484 = witTypes.Some[golem_core_types.NumericBound](variant483)
 					default:
 						panic("unreachable")
 					}
-					var option478 witTypes.Option[golem_core_types.NumericBound]
+					var option486 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option478 = witTypes.None[golem_core_types.NumericBound]()
+						option486 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant477 golem_core_types.NumericBound
+						var variant485 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant477 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant485 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant477 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant485 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant477 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant485 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option478 = witTypes.Some[golem_core_types.NumericBound](variant477)
+						option486 = witTypes.Some[golem_core_types.NumericBound](variant485)
 					default:
 						panic("unreachable")
 					}
-					var option480 witTypes.Option[string]
+					var option488 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option480 = witTypes.None[string]()
+						option488 = witTypes.None[string]()
 					case 1:
-						value479 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value487 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option480 = witTypes.Some[string](value479)
+						option488 = witTypes.Some[string](value487)
 					default:
 						panic("unreachable")
 					}
 
-					option481 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option476, Max: option478, Unit: option480})
+					option489 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option484, Max: option486, Unit: option488})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU32Type(option481)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU32Type(option489)
 
 			case 9:
-				var option488 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option496 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option488 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option496 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option483 witTypes.Option[golem_core_types.NumericBound]
+					var option491 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option483 = witTypes.None[golem_core_types.NumericBound]()
+						option491 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant482 golem_core_types.NumericBound
+						var variant490 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant482 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant490 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant482 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant490 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant482 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant490 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option483 = witTypes.Some[golem_core_types.NumericBound](variant482)
+						option491 = witTypes.Some[golem_core_types.NumericBound](variant490)
 					default:
 						panic("unreachable")
 					}
-					var option485 witTypes.Option[golem_core_types.NumericBound]
+					var option493 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option485 = witTypes.None[golem_core_types.NumericBound]()
+						option493 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant484 golem_core_types.NumericBound
+						var variant492 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant484 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant492 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant484 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant492 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant484 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant492 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option485 = witTypes.Some[golem_core_types.NumericBound](variant484)
+						option493 = witTypes.Some[golem_core_types.NumericBound](variant492)
 					default:
 						panic("unreachable")
 					}
-					var option487 witTypes.Option[string]
+					var option495 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option487 = witTypes.None[string]()
+						option495 = witTypes.None[string]()
 					case 1:
-						value486 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value494 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option487 = witTypes.Some[string](value486)
+						option495 = witTypes.Some[string](value494)
 					default:
 						panic("unreachable")
 					}
 
-					option488 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option483, Max: option485, Unit: option487})
+					option496 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option491, Max: option493, Unit: option495})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU64Type(option488)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU64Type(option496)
 
 			case 10:
-				var option495 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option503 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option495 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option503 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option490 witTypes.Option[golem_core_types.NumericBound]
+					var option498 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option490 = witTypes.None[golem_core_types.NumericBound]()
+						option498 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant489 golem_core_types.NumericBound
+						var variant497 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant489 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant497 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant489 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant497 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant489 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant497 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option490 = witTypes.Some[golem_core_types.NumericBound](variant489)
+						option498 = witTypes.Some[golem_core_types.NumericBound](variant497)
 					default:
 						panic("unreachable")
 					}
-					var option492 witTypes.Option[golem_core_types.NumericBound]
+					var option500 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option492 = witTypes.None[golem_core_types.NumericBound]()
+						option500 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant491 golem_core_types.NumericBound
+						var variant499 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant491 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant499 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant491 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant499 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant491 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant499 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option492 = witTypes.Some[golem_core_types.NumericBound](variant491)
+						option500 = witTypes.Some[golem_core_types.NumericBound](variant499)
 					default:
 						panic("unreachable")
 					}
-					var option494 witTypes.Option[string]
+					var option502 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option494 = witTypes.None[string]()
+						option502 = witTypes.None[string]()
 					case 1:
-						value493 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value501 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option494 = witTypes.Some[string](value493)
+						option502 = witTypes.Some[string](value501)
 					default:
 						panic("unreachable")
 					}
 
-					option495 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option490, Max: option492, Unit: option494})
+					option503 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option498, Max: option500, Unit: option502})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyF32Type(option495)
+				variant604 = golem_core_types.MakeSchemaTypeBodyF32Type(option503)
 
 			case 11:
-				var option502 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option510 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option502 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option510 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option497 witTypes.Option[golem_core_types.NumericBound]
+					var option505 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option497 = witTypes.None[golem_core_types.NumericBound]()
+						option505 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant496 golem_core_types.NumericBound
+						var variant504 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant496 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant504 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant496 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant504 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant496 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant504 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option497 = witTypes.Some[golem_core_types.NumericBound](variant496)
+						option505 = witTypes.Some[golem_core_types.NumericBound](variant504)
 					default:
 						panic("unreachable")
 					}
-					var option499 witTypes.Option[golem_core_types.NumericBound]
+					var option507 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option499 = witTypes.None[golem_core_types.NumericBound]()
+						option507 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant498 golem_core_types.NumericBound
+						var variant506 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant498 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant506 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant498 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant506 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant498 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant506 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option499 = witTypes.Some[golem_core_types.NumericBound](variant498)
+						option507 = witTypes.Some[golem_core_types.NumericBound](variant506)
 					default:
 						panic("unreachable")
 					}
-					var option501 witTypes.Option[string]
+					var option509 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option501 = witTypes.None[string]()
+						option509 = witTypes.None[string]()
 					case 1:
-						value500 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value508 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option501 = witTypes.Some[string](value500)
+						option509 = witTypes.Some[string](value508)
 					default:
 						panic("unreachable")
 					}
 
-					option502 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option497, Max: option499, Unit: option501})
+					option510 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option505, Max: option507, Unit: option509})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyF64Type(option502)
+				variant604 = golem_core_types.MakeSchemaTypeBodyF64Type(option510)
 
 			case 12:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyCharType()
+				variant604 = golem_core_types.MakeSchemaTypeBodyCharType()
 
 			case 13:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyStringType()
+				variant604 = golem_core_types.MakeSchemaTypeBodyStringType()
 
 			case 14:
-				result515 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result523 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(17*4))
-					value503 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var option505 witTypes.Option[string]
+					value511 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var option513 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 					case 0:
 
-						option505 = witTypes.None[string]()
+						option513 = witTypes.None[string]()
 					case 1:
-						value504 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+						value512 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-						option505 = witTypes.Some[string](value504)
+						option513 = witTypes.Some[string](value512)
 					default:
 						panic("unreachable")
 					}
-					result507 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+					result515 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(2*4))
-						value506 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value514 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result507 = append(result507, value506)
+						result515 = append(result515, value514)
 					}
 
-					result509 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
+					result517 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), index*(2*4))
-						value508 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value516 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result509 = append(result509, value508)
+						result517 = append(result517, value516)
 					}
 
-					var option511 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))) {
-					case 0:
-
-						option511 = witTypes.None[string]()
-					case 1:
-						value510 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
-
-						option511 = witTypes.Some[string](value510)
-					default:
-						panic("unreachable")
-					}
-					var option514 witTypes.Option[golem_core_types.Role]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))) {
-					case 0:
-
-						option514 = witTypes.None[golem_core_types.Role]()
-					case 1:
-						var variant513 golem_core_types.Role
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4)))) {
-						case 0:
-
-							variant513 = golem_core_types.MakeRoleMultimodal()
-
-						case 1:
-
-							variant513 = golem_core_types.MakeRoleUnstructuredText()
-
-						case 2:
-
-							variant513 = golem_core_types.MakeRoleUnstructuredBinary()
-
-						case 3:
-							value512 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
-
-							variant513 = golem_core_types.MakeRoleOther(value512)
-
-						default:
-							panic("unreachable")
-						}
-
-						option514 = witTypes.Some[golem_core_types.Role](variant513)
-					default:
-						panic("unreachable")
-					}
-
-					result515 = append(result515, golem_core_types.NamedFieldType{Name: value503, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option505, Aliases: result507, Examples: result509, Deprecated: option511, Role: option514}})
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyRecordType(result515)
-
-			case 15:
-				result529 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(8+16*4))
-					value516 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var option517 witTypes.Option[int32]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
-					case 0:
-
-						option517 = witTypes.None[int32]()
-					case 1:
-
-						option517 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
-					default:
-						panic("unreachable")
-					}
 					var option519 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))) {
 					case 0:
 
 						option519 = witTypes.None[string]()
 					case 1:
-						value518 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+						value518 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
 
 						option519 = witTypes.Some[string](value518)
 					default:
 						panic("unreachable")
 					}
-					result521 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-						value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result521 = append(result521, value520)
-					}
-
-					result523 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))))), index*(2*4))
-						value522 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result523 = append(result523, value522)
-					}
-
-					var option525 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4)))) {
+					var option522 witTypes.Option[golem_core_types.Role]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))) {
 					case 0:
 
-						option525 = witTypes.None[string]()
+						option522 = witTypes.None[golem_core_types.Role]()
 					case 1:
-						value524 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
-
-						option525 = witTypes.Some[string](value524)
-					default:
-						panic("unreachable")
-					}
-					var option528 witTypes.Option[golem_core_types.Role]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4)))) {
-					case 0:
-
-						option528 = witTypes.None[golem_core_types.Role]()
-					case 1:
-						var variant527 golem_core_types.Role
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4)))) {
+						var variant521 golem_core_types.Role
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4)))) {
 						case 0:
 
-							variant527 = golem_core_types.MakeRoleMultimodal()
+							variant521 = golem_core_types.MakeRoleMultimodal()
 
 						case 1:
 
-							variant527 = golem_core_types.MakeRoleUnstructuredText()
+							variant521 = golem_core_types.MakeRoleUnstructuredText()
 
 						case 2:
 
-							variant527 = golem_core_types.MakeRoleUnstructuredBinary()
+							variant521 = golem_core_types.MakeRoleUnstructuredBinary()
 
 						case 3:
-							value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
+							value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
 
-							variant527 = golem_core_types.MakeRoleOther(value526)
+							variant521 = golem_core_types.MakeRoleOther(value520)
 
 						default:
 							panic("unreachable")
 						}
 
-						option528 = witTypes.Some[golem_core_types.Role](variant527)
+						option522 = witTypes.Some[golem_core_types.Role](variant521)
 					default:
 						panic("unreachable")
 					}
 
-					result529 = append(result529, golem_core_types.VariantCaseType{Name: value516, Payload: option517, Metadata: golem_core_types.MetadataEnvelope{Doc: option519, Aliases: result521, Examples: result523, Deprecated: option525, Role: option528}})
+					result523 = append(result523, golem_core_types.NamedFieldType{Name: value511, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option513, Aliases: result515, Examples: result517, Deprecated: option519, Role: option522}})
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyVariantType(result529)
+				variant604 = golem_core_types.MakeSchemaTypeBodyRecordType(result523)
+
+			case 15:
+				result537 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(8+16*4))
+					value524 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var option525 witTypes.Option[int32]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
+					case 0:
+
+						option525 = witTypes.None[int32]()
+					case 1:
+
+						option525 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
+					default:
+						panic("unreachable")
+					}
+					var option527 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+					case 0:
+
+						option527 = witTypes.None[string]()
+					case 1:
+						value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+
+						option527 = witTypes.Some[string](value526)
+					default:
+						panic("unreachable")
+					}
+					result529 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
+						value528 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result529 = append(result529, value528)
+					}
+
+					result531 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))))), index*(2*4))
+						value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result531 = append(result531, value530)
+					}
+
+					var option533 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4)))) {
+					case 0:
+
+						option533 = witTypes.None[string]()
+					case 1:
+						value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
+
+						option533 = witTypes.Some[string](value532)
+					default:
+						panic("unreachable")
+					}
+					var option536 witTypes.Option[golem_core_types.Role]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4)))) {
+					case 0:
+
+						option536 = witTypes.None[golem_core_types.Role]()
+					case 1:
+						var variant535 golem_core_types.Role
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4)))) {
+						case 0:
+
+							variant535 = golem_core_types.MakeRoleMultimodal()
+
+						case 1:
+
+							variant535 = golem_core_types.MakeRoleUnstructuredText()
+
+						case 2:
+
+							variant535 = golem_core_types.MakeRoleUnstructuredBinary()
+
+						case 3:
+							value534 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
+
+							variant535 = golem_core_types.MakeRoleOther(value534)
+
+						default:
+							panic("unreachable")
+						}
+
+						option536 = witTypes.Some[golem_core_types.Role](variant535)
+					default:
+						panic("unreachable")
+					}
+
+					result537 = append(result537, golem_core_types.VariantCaseType{Name: value524, Payload: option525, Metadata: golem_core_types.MetadataEnvelope{Doc: option527, Aliases: result529, Examples: result531, Deprecated: option533, Role: option536}})
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyVariantType(result537)
 
 			case 16:
-				result531 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result539 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-					value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value538 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					result531 = append(result531, value530)
+					result539 = append(result539, value538)
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyEnumType(result531)
+				variant604 = golem_core_types.MakeSchemaTypeBodyEnumType(result539)
 
 			case 17:
-				result533 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result541 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-					value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value540 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					result533 = append(result533, value532)
+					result541 = append(result541, value540)
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyFlagsType(result533)
+				variant604 = golem_core_types.MakeSchemaTypeBodyFlagsType(result541)
 
 			case 18:
-				result534 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result542 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-					result534 = append(result534, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+					result542 = append(result542, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyTupleType(result534)
+				variant604 = golem_core_types.MakeSchemaTypeBodyTupleType(result542)
 
 			case 19:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+				variant604 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 			case 20:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
+				variant604 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
 
 			case 21:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+				variant604 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
 			case 22:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+				variant604 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 			case 23:
-				var option535 witTypes.Option[int32]
+				var option543 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option535 = witTypes.None[int32]()
+					option543 = witTypes.None[int32]()
 				case 1:
 
-					option535 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+					option543 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
 				default:
 					panic("unreachable")
 				}
-				var option536 witTypes.Option[int32]
+				var option544 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 				case 0:
 
-					option536 = witTypes.None[int32]()
+					option544 = witTypes.None[int32]()
 				case 1:
 
-					option536 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
+					option544 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option535, Err: option536})
+				variant604 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option543, Err: option544})
 
 			case 24:
-				var option539 witTypes.Option[[]string]
+				var option547 witTypes.Option[[]string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option539 = witTypes.None[[]string]()
+					option547 = witTypes.None[[]string]()
 				case 1:
-					result538 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					result546 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-						value537 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value545 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result538 = append(result538, value537)
+						result546 = append(result546, value545)
 					}
 
-					option539 = witTypes.Some[[]string](result538)
-				default:
-					panic("unreachable")
-				}
-				var option540 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-				case 0:
-
-					option540 = witTypes.None[uint32]()
-				case 1:
-
-					option540 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
-				default:
-					panic("unreachable")
-				}
-				var option541 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
-				case 0:
-
-					option541 = witTypes.None[uint32]()
-				case 1:
-
-					option541 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
-				default:
-					panic("unreachable")
-				}
-				var option543 witTypes.Option[string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))) {
-				case 0:
-
-					option543 = witTypes.None[string]()
-				case 1:
-					value542 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
-
-					option543 = witTypes.Some[string](value542)
-				default:
-					panic("unreachable")
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option539, MinLength: option540, MaxLength: option541, Regex: option543})
-
-			case 25:
-				var option546 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-				case 0:
-
-					option546 = witTypes.None[[]string]()
-				case 1:
-					result545 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-						value544 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result545 = append(result545, value544)
-					}
-
-					option546 = witTypes.Some[[]string](result545)
-				default:
-					panic("unreachable")
-				}
-				var option547 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-				case 0:
-
-					option547 = witTypes.None[uint32]()
-				case 1:
-
-					option547 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+					option547 = witTypes.Some[[]string](result546)
 				default:
 					panic("unreachable")
 				}
 				var option548 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 				case 0:
 
 					option548 = witTypes.None[uint32]()
 				case 1:
 
-					option548 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+					option548 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option546, MinBytes: option547, MaxBytes: option548})
-
-			case 26:
-				var option551 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
+				var option549 witTypes.Option[uint32]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
 				case 0:
 
-					option551 = witTypes.None[[]string]()
+					option549 = witTypes.None[uint32]()
 				case 1:
-					result550 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-						value549 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result550 = append(result550, value549)
-					}
-
-					option551 = witTypes.Some[[]string](result550)
+					option549 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
+				var option551 witTypes.Option[string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))) {
+				case 0:
+
+					option551 = witTypes.None[string]()
+				case 1:
+					value550 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
+
+					option551 = witTypes.Some[string](value550)
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option547, MinLength: option548, MaxLength: option549, Regex: option551})
+
+			case 25:
 				var option554 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
 					option554 = witTypes.None[[]string]()
 				case 1:
-					result553 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
+					result553 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
 						value552 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
 						result553 = append(result553, value552)
@@ -5682,396 +5693,462 @@ func GetAllTools() []RegisteredTool {
 				default:
 					panic("unreachable")
 				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option551, AllowedExtensions: option554})
-
-			case 27:
-				var option557 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-				case 0:
-
-					option557 = witTypes.None[[]string]()
-				case 1:
-					result556 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-						value555 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result556 = append(result556, value555)
-					}
-
-					option557 = witTypes.Some[[]string](result556)
-				default:
-					panic("unreachable")
-				}
-				var option560 witTypes.Option[[]string]
+				var option555 witTypes.Option[uint32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 				case 0:
 
-					option560 = witTypes.None[[]string]()
+					option555 = witTypes.None[uint32]()
 				case 1:
-					result559 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))), index*(2*4))
-						value558 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result559 = append(result559, value558)
-					}
-
-					option560 = witTypes.Some[[]string](result559)
+					option555 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option557, AllowedHosts: option560})
-
-			case 28:
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
-
-			case 29:
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyDurationType()
-
-			case 30:
-				value561 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-				result563 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-					value562 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-					result563 = append(result563, value562)
-				}
-
-				var option565 witTypes.Option[golem_core_types.QuantityValue]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				var option556 witTypes.Option[uint32]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
 				case 0:
 
-					option565 = witTypes.None[golem_core_types.QuantityValue]()
+					option556 = witTypes.None[uint32]()
 				case 1:
-					value564 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
 
-					option565 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value564})
-				default:
-					panic("unreachable")
-				}
-				var option567 witTypes.Option[golem_core_types.QuantityValue]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4)))) {
-				case 0:
-
-					option567 = witTypes.None[golem_core_types.QuantityValue]()
-				case 1:
-					value566 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
-
-					option567 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value566})
+					option556 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value561, AllowedSuffixes: result563, Min: option565, Max: option567})
+				variant604 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option554, MinBytes: option555, MaxBytes: option556})
 
-			case 31:
-				result589 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
-					value568 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var variant577 golem_core_types.DiscriminatorRule
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
-					case 0:
-						value569 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRulePrefix(value569)
-
-					case 1:
-						value570 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleSuffix(value570)
-
-					case 2:
-						value571 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleContains(value571)
-
-					case 3:
-						value572 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleRegex(value572)
-
-					case 4:
-						value573 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-						var option575 witTypes.Option[string]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))) {
-						case 0:
-
-							option575 = witTypes.None[string]()
-						case 1:
-							value574 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
-
-							option575 = witTypes.Some[string](value574)
-						default:
-							panic("unreachable")
-						}
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value573, Literal: option575})
-
-					case 5:
-						value576 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value576)
-
-					default:
-						panic("unreachable")
-					}
-					var option579 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))) {
-					case 0:
-
-						option579 = witTypes.None[string]()
-					case 1:
-						value578 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
-
-						option579 = witTypes.Some[string](value578)
-					default:
-						panic("unreachable")
-					}
-					result581 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))), index*(2*4))
-						value580 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result581 = append(result581, value580)
-					}
-
-					result583 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))))), index*(2*4))
-						value582 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result583 = append(result583, value582)
-					}
-
-					var option585 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
-					case 0:
-
-						option585 = witTypes.None[string]()
-					case 1:
-						value584 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
-
-						option585 = witTypes.Some[string](value584)
-					default:
-						panic("unreachable")
-					}
-					var option588 witTypes.Option[golem_core_types.Role]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4)))) {
-					case 0:
-
-						option588 = witTypes.None[golem_core_types.Role]()
-					case 1:
-						var variant587 golem_core_types.Role
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4)))) {
-						case 0:
-
-							variant587 = golem_core_types.MakeRoleMultimodal()
-
-						case 1:
-
-							variant587 = golem_core_types.MakeRoleUnstructuredText()
-
-						case 2:
-
-							variant587 = golem_core_types.MakeRoleUnstructuredBinary()
-
-						case 3:
-							value586 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
-
-							variant587 = golem_core_types.MakeRoleOther(value586)
-
-						default:
-							panic("unreachable")
-						}
-
-						option588 = witTypes.Some[golem_core_types.Role](variant587)
-					default:
-						panic("unreachable")
-					}
-
-					result589 = append(result589, golem_core_types.UnionBranch{Tag: value568, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant577, Metadata: golem_core_types.MetadataEnvelope{Doc: option579, Aliases: result581, Examples: result583, Deprecated: option585, Role: option588}})
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result589})
-
-			case 32:
-				var option591 witTypes.Option[string]
+			case 26:
+				var option559 witTypes.Option[[]string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
 
-					option591 = witTypes.None[string]()
+					option559 = witTypes.None[[]string]()
 				case 1:
-					value590 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+					result558 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
+						value557 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					option591 = witTypes.Some[string](value590)
+						result558 = append(result558, value557)
+					}
+
+					option559 = witTypes.Some[[]string](result558)
+				default:
+					panic("unreachable")
+				}
+				var option562 witTypes.Option[[]string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				case 0:
+
+					option562 = witTypes.None[[]string]()
+				case 1:
+					result561 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
+						value560 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result561 = append(result561, value560)
+					}
+
+					option562 = witTypes.Some[[]string](result561)
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option591})
+				variant604 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option559, AllowedExtensions: option562})
+
+			case 27:
+				var option565 witTypes.Option[[]string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				case 0:
+
+					option565 = witTypes.None[[]string]()
+				case 1:
+					result564 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
+						value563 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result564 = append(result564, value563)
+					}
+
+					option565 = witTypes.Some[[]string](result564)
+				default:
+					panic("unreachable")
+				}
+				var option568 witTypes.Option[[]string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
+				case 0:
+
+					option568 = witTypes.None[[]string]()
+				case 1:
+					result567 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))), index*(2*4))
+						value566 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result567 = append(result567, value566)
+					}
+
+					option568 = witTypes.Some[[]string](result567)
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option565, AllowedHosts: option568})
+
+			case 28:
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyUuidType()
+
+			case 29:
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+
+			case 30:
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+			case 31:
+				value569 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result571 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
+					value570 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+					result571 = append(result571, value570)
+				}
+
+				var option573 witTypes.Option[golem_core_types.QuantityValue]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				case 0:
+
+					option573 = witTypes.None[golem_core_types.QuantityValue]()
+				case 1:
+					value572 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
+
+					option573 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value572})
+				default:
+					panic("unreachable")
+				}
+				var option575 witTypes.Option[golem_core_types.QuantityValue]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4)))) {
+				case 0:
+
+					option575 = witTypes.None[golem_core_types.QuantityValue]()
+				case 1:
+					value574 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
+
+					option575 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value574})
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value569, AllowedSuffixes: result571, Min: option573, Max: option575})
+
+			case 32:
+				result597 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
+					value576 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var variant585 golem_core_types.DiscriminatorRule
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
+					case 0:
+						value577 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRulePrefix(value577)
+
+					case 1:
+						value578 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleSuffix(value578)
+
+					case 2:
+						value579 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleContains(value579)
+
+					case 3:
+						value580 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleRegex(value580)
+
+					case 4:
+						value581 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+						var option583 witTypes.Option[string]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))) {
+						case 0:
+
+							option583 = witTypes.None[string]()
+						case 1:
+							value582 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+
+							option583 = witTypes.Some[string](value582)
+						default:
+							panic("unreachable")
+						}
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value581, Literal: option583})
+
+					case 5:
+						value584 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value584)
+
+					default:
+						panic("unreachable")
+					}
+					var option587 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))) {
+					case 0:
+
+						option587 = witTypes.None[string]()
+					case 1:
+						value586 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
+
+						option587 = witTypes.Some[string](value586)
+					default:
+						panic("unreachable")
+					}
+					result589 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))), index*(2*4))
+						value588 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result589 = append(result589, value588)
+					}
+
+					result591 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))))), index*(2*4))
+						value590 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result591 = append(result591, value590)
+					}
+
+					var option593 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
+					case 0:
+
+						option593 = witTypes.None[string]()
+					case 1:
+						value592 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
+
+						option593 = witTypes.Some[string](value592)
+					default:
+						panic("unreachable")
+					}
+					var option596 witTypes.Option[golem_core_types.Role]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4)))) {
+					case 0:
+
+						option596 = witTypes.None[golem_core_types.Role]()
+					case 1:
+						var variant595 golem_core_types.Role
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4)))) {
+						case 0:
+
+							variant595 = golem_core_types.MakeRoleMultimodal()
+
+						case 1:
+
+							variant595 = golem_core_types.MakeRoleUnstructuredText()
+
+						case 2:
+
+							variant595 = golem_core_types.MakeRoleUnstructuredBinary()
+
+						case 3:
+							value594 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
+
+							variant595 = golem_core_types.MakeRoleOther(value594)
+
+						default:
+							panic("unreachable")
+						}
+
+						option596 = witTypes.Some[golem_core_types.Role](variant595)
+					default:
+						panic("unreachable")
+					}
+
+					result597 = append(result597, golem_core_types.UnionBranch{Tag: value576, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant585, Metadata: golem_core_types.MetadataEnvelope{Doc: option587, Aliases: result589, Examples: result591, Deprecated: option593, Role: option596}})
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result597})
 
 			case 33:
-				var option593 witTypes.Option[string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				var option599 witTypes.Option[string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
 
-					option593 = witTypes.None[string]()
+					option599 = witTypes.None[string]()
 				case 1:
-					value592 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					value598 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 
-					option593 = witTypes.Some[string](value592)
+					option599 = witTypes.Some[string](value598)
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option593})
+				variant604 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option599})
 
 			case 34:
+				var option601 witTypes.Option[string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				case 0:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
+					option601 = witTypes.None[string]()
+				case 1:
+					value600 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+
+					option601 = witTypes.Some[string](value600)
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option601})
 
 			case 35:
-				var option594 witTypes.Option[int32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-				case 0:
 
-					option594 = witTypes.None[int32]()
-				case 1:
-
-					option594 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
-				default:
-					panic("unreachable")
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyFutureType(option594)
+				variant604 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
 			case 36:
-				var option595 witTypes.Option[int32]
+				var option602 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option595 = witTypes.None[int32]()
+					option602 = witTypes.None[int32]()
 				case 1:
 
-					option595 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+					option602 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyStreamType(option595)
+				variant604 = golem_core_types.MakeSchemaTypeBodyFutureType(option602)
+
+			case 37:
+				var option603 witTypes.Option[int32]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				case 0:
+
+					option603 = witTypes.None[int32]()
+				case 1:
+
+					option603 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyStreamType(option603)
 
 			default:
 				panic("unreachable")
 			}
-			var option598 witTypes.Option[string]
+			var option606 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4)))) {
 			case 0:
 
-				option598 = witTypes.None[string]()
+				option606 = witTypes.None[string]()
 			case 1:
-				value597 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
+				value605 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
 
-				option598 = witTypes.Some[string](value597)
+				option606 = witTypes.Some[string](value605)
 			default:
 				panic("unreachable")
 			}
-			result600 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
+			result608 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))))), index*(2*4))
-				value599 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value607 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-				result600 = append(result600, value599)
+				result608 = append(result608, value607)
 			}
 
-			result602 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
+			result610 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))))), index*(2*4))
-				value601 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value609 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-				result602 = append(result602, value601)
+				result610 = append(result610, value609)
 			}
 
-			var option604 witTypes.Option[string]
+			var option612 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4)))) {
 			case 0:
 
-				option604 = witTypes.None[string]()
+				option612 = witTypes.None[string]()
 			case 1:
-				value603 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
+				value611 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
 
-				option604 = witTypes.Some[string](value603)
+				option612 = witTypes.Some[string](value611)
 			default:
 				panic("unreachable")
 			}
-			var option607 witTypes.Option[golem_core_types.Role]
+			var option615 witTypes.Option[golem_core_types.Role]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 18*4)))) {
 			case 0:
 
-				option607 = witTypes.None[golem_core_types.Role]()
+				option615 = witTypes.None[golem_core_types.Role]()
 			case 1:
-				var variant606 golem_core_types.Role
+				var variant614 golem_core_types.Role
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4)))) {
 				case 0:
 
-					variant606 = golem_core_types.MakeRoleMultimodal()
+					variant614 = golem_core_types.MakeRoleMultimodal()
 
 				case 1:
 
-					variant606 = golem_core_types.MakeRoleUnstructuredText()
+					variant614 = golem_core_types.MakeRoleUnstructuredText()
 
 				case 2:
 
-					variant606 = golem_core_types.MakeRoleUnstructuredBinary()
+					variant614 = golem_core_types.MakeRoleUnstructuredBinary()
 
 				case 3:
-					value605 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
+					value613 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
 
-					variant606 = golem_core_types.MakeRoleOther(value605)
+					variant614 = golem_core_types.MakeRoleOther(value613)
 
 				default:
 					panic("unreachable")
 				}
 
-				option607 = witTypes.Some[golem_core_types.Role](variant606)
+				option615 = witTypes.Some[golem_core_types.Role](variant614)
 			default:
 				panic("unreachable")
 			}
 
-			result608 = append(result608, golem_core_types.SchemaTypeNode{Body: variant596, Metadata: golem_core_types.MetadataEnvelope{Doc: option598, Aliases: result600, Examples: result602, Deprecated: option604, Role: option607}})
+			result616 = append(result616, golem_core_types.SchemaTypeNode{Body: variant604, Metadata: golem_core_types.MetadataEnvelope{Doc: option606, Aliases: result608, Examples: result610, Deprecated: option612, Role: option615}})
 		}
 
-		result612 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))))
+		result620 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))), index*(6*4))
-			value609 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			var option611 witTypes.Option[string]
+			value617 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+			var option619 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 			case 0:
 
-				option611 = witTypes.None[string]()
+				option619 = witTypes.None[string]()
 			case 1:
-				value610 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+				value618 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-				option611 = witTypes.Some[string](value610)
+				option619 = witTypes.Some[string](value618)
 			default:
 				panic("unreachable")
 			}
 
-			result612 = append(result612, golem_core_types.SchemaTypeDef{Id: value609, Name: option611, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
+			result620 = append(result620, golem_core_types.SchemaTypeDef{Id: value617, Name: option619, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
 		}
 
-		result613 = append(result613, RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, RequiresFilesystem: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))) != 0), Commands: golem_tool_common.CommandTree{Nodes: result432}, Schema: golem_core_types.SchemaGraph{TypeNodes: result608, Defs: result612, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (12 * 4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4))))}}})
+		result621 = append(result621, RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, RequiresFilesystem: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))) != 0), Commands: golem_tool_common.CommandTree{Nodes: result440}, Schema: golem_core_types.SchemaGraph{TypeNodes: result616, Defs: result620, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (12 * 4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4))))}}})
 	}
 
-	result614 := result613
-	return result614
+	result622 := result621
+	return result622
 
 }
 
@@ -6086,17 +6163,17 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 	utf8 := unsafe.Pointer(unsafe.StringData(name))
 	pinner.Pin(utf8)
 	wasm_import_get_tool(uintptr(utf8), uint32(len(name)), returnArea)
-	var option613 witTypes.Option[RegisteredTool]
+	var option621 witTypes.Option[RegisteredTool]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 
-		option613 = witTypes.None[RegisteredTool]()
+		option621 = witTypes.None[RegisteredTool]()
 	case 1:
 		value := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 1*4))))
 		value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 3*4))))
-		result432 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4))))
+		result440 := make([]golem_tool_common.CommandNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 6*4)))); index++ {
-			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 5*4))))), index*(24+75*4))
+			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 5*4))))), index*(24+85*4))
 			value1 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 			result := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))); index++ {
@@ -6461,35 +6538,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 						case 27:
 
-							variant42 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+							variant42 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 						case 28:
 
-							variant42 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+							variant42 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 						case 29:
+
+							variant42 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+						case 30:
 							value40 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 							variant42 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value40})
 
-						case 30:
+						case 31:
 							value41 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 							variant42 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value41, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-						case 31:
+						case 32:
 
 							variant42 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-						case 32:
+						case 33:
 
 							variant42 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-						case 33:
+						case 34:
 
 							variant42 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-						case 34:
+						case 35:
 
 							variant42 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -6601,11 +6682,11 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 				result62 = append(result62, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 			}
 
-			var option431 witTypes.Option[golem_tool_common.CommandBody]
+			var option439 witTypes.Option[golem_tool_common.CommandBody]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
 			case 0:
 
-				option431 = witTypes.None[golem_tool_common.CommandBody]()
+				option439 = witTypes.None[golem_tool_common.CommandBody]()
 			case 1:
 				result96 := make([]golem_tool_common.Positional, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4)))); index++ {
@@ -6877,35 +6958,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 							case 27:
 
-								variant93 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+								variant93 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 28:
 
-								variant93 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+								variant93 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 29:
+
+								variant93 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+							case 30:
 								value91 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 								variant93 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value91})
 
-							case 30:
+							case 31:
 								value92 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 								variant93 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value92, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-							case 31:
+							case 32:
 
 								variant93 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 32:
+							case 33:
 
 								variant93 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 33:
+							case 34:
 
 								variant93 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 34:
+							case 35:
 
 								variant93 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -7326,35 +7411,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 							case 27:
 
-								variant145 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+								variant145 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 28:
 
-								variant145 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+								variant145 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 							case 29:
+
+								variant145 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+							case 30:
 								value143 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 								variant145 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value143})
 
-							case 30:
+							case 31:
 								value144 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 								variant145 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value144, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-							case 31:
+							case 32:
 
 								variant145 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 32:
+							case 33:
 
 								variant145 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 33:
+							case 34:
 
 								variant145 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-							case 34:
+							case 35:
 
 								variant145 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -7714,35 +7803,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 									case 27:
 
-										variant189 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant189 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant189 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant189 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant189 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value187 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant189 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value187})
 
-									case 30:
+									case 31:
 										value188 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant189 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value188, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant189 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant189 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant189 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant189 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -8014,35 +8107,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 									case 27:
 
-										variant217 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant217 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant217 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant217 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant217 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value215 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant217 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value215})
 
-									case 30:
+									case 31:
 										value216 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant217 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value216, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant217 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant217 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant217 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant217 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -8314,35 +8411,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 									case 27:
 
-										variant245 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant245 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant245 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant245 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant245 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value243 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant245 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value243})
 
-									case 30:
+									case 31:
 										value244 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant245 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value244, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant245 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant245 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant245 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant245 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -8617,35 +8718,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 										case 27:
 
-											variant273 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+											variant273 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 										case 28:
 
-											variant273 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+											variant273 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 										case 29:
+
+											variant273 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+										case 30:
 											value271 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 											variant273 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value271})
 
-										case 30:
+										case 31:
 											value272 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 											variant273 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value272, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-										case 31:
+										case 32:
 
 											variant273 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-										case 32:
+										case 33:
 
 											variant273 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-										case 33:
+										case 34:
 
 											variant273 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-										case 34:
+										case 35:
 
 											variant273 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -8920,35 +9025,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 									case 27:
 
-										variant302 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant302 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant302 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant302 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant302 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value300 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant302 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value300})
 
-									case 30:
+									case 31:
 										value301 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant302 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value301, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant302 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant302 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant302 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant302 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -9217,35 +9326,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 									case 27:
 
-										variant330 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant330 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant330 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant330 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant330 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value328 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant330 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value328})
 
-									case 30:
+									case 31:
 										value329 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant330 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value329, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant330 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant330 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant330 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant330 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -9517,35 +9630,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 									case 27:
 
-										variant358 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant358 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant358 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant358 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant358 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value356 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant358 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value356})
 
-									case 30:
+									case 31:
 										value357 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant358 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value357, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant358 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant358 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant358 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant358 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -9814,35 +9931,39 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 
 									case 27:
 
-										variant386 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+										variant386 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 28:
 
-										variant386 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+										variant386 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 									case 29:
+
+										variant386 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+									case 30:
 										value384 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 										variant386 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value384})
 
-									case 30:
+									case 31:
 										value385 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 										variant386 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value385, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-									case 31:
+									case 32:
 
 										variant386 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 32:
+									case 33:
 
 										variant386 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 33:
+									case 34:
 
 										variant386 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-									case 34:
+									case 35:
 
 										variant386 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -9929,1329 +10050,1296 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 				default:
 					panic("unreachable")
 				}
-				var option421 witTypes.Option[golem_tool_common.ResultSpec]
+				var option415 witTypes.Option[golem_tool_common.StreamSpec]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 61*4)))) {
 				case 0:
 
-					option421 = witTypes.None[golem_tool_common.ResultSpec]()
+					option415 = witTypes.None[golem_tool_common.StreamSpec]()
 				case 1:
-					value408 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 63*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 64*4))))
-					value409 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 65*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 66*4))))
-					result412 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 68*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 68*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 67*4))))), index*(4*4))
+					value408 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 62*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 63*4))))
+					value409 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 64*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 65*4))))
+					result412 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 67*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 67*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 66*4))))), index*(4*4))
 						value410 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 						value411 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
 						result412 = append(result412, golem_tool_common.Example{Title: value410, Body: value411})
 					}
 
-					result419 := make([]golem_tool_common.Formatter, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 70*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 70*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 69*4))))), index*(8*4))
+					result414 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 69*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 69*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 68*4))))), index*(2*4))
 						value413 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-						value414 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-						value415 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-						result418 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
-						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
-							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
-							value416 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							value417 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-							result418 = append(result418, golem_tool_common.Example{Title: value416, Body: value417})
-						}
-
-						result419 = append(result419, golem_tool_common.Formatter{Name: value413, Doc: golem_tool_common.Doc{Summary: value414, Description: value415, Examples: result418}})
+						result414 = append(result414, value413)
 					}
 
-					value420 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 71*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 72*4))))
-
-					option421 = witTypes.Some[golem_tool_common.ResultSpec](golem_tool_common.ResultSpec{Type: *(*int32)(unsafe.Add(unsafe.Pointer(base), (16 + 62*4))), Doc: golem_tool_common.Doc{Summary: value408, Description: value409, Examples: result412}, Formatters: result419, DefaultFormatter: value420})
+					option415 = witTypes.Some[golem_tool_common.StreamSpec](golem_tool_common.StreamSpec{Doc: golem_tool_common.Doc{Summary: value408, Description: value409, Examples: result412}, Mime: result414, Required: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 70*4)))) != 0)})
 				default:
 					panic("unreachable")
 				}
-				result429 := make([]golem_tool_common.ErrorCase, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 74*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 74*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 73*4))))), index*(8+9*4))
-					value422 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					value423 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-					value424 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-					result427 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
-						value425 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-						value426 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+				var option429 witTypes.Option[golem_tool_common.ResultSpec]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 71*4)))) {
+				case 0:
 
-						result427 = append(result427, golem_tool_common.Example{Title: value425, Body: value426})
+					option429 = witTypes.None[golem_tool_common.ResultSpec]()
+				case 1:
+					value416 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 73*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 74*4))))
+					value417 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 75*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 76*4))))
+					result420 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 78*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 78*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 77*4))))), index*(4*4))
+						value418 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value419 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+						result420 = append(result420, golem_tool_common.Example{Title: value418, Body: value419})
 					}
 
-					var option428 witTypes.Option[int32]
+					result427 := make([]golem_tool_common.Formatter, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 80*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 80*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 79*4))))), index*(8*4))
+						value421 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value422 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+						value423 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+						result426 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
+							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
+							value424 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value425 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+							result426 = append(result426, golem_tool_common.Example{Title: value424, Body: value425})
+						}
+
+						result427 = append(result427, golem_tool_common.Formatter{Name: value421, Doc: golem_tool_common.Doc{Summary: value422, Description: value423, Examples: result426}})
+					}
+
+					value428 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 81*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 82*4))))
+
+					option429 = witTypes.Some[golem_tool_common.ResultSpec](golem_tool_common.ResultSpec{Type: *(*int32)(unsafe.Add(unsafe.Pointer(base), (16 + 72*4))), Doc: golem_tool_common.Doc{Summary: value416, Description: value417, Examples: result420}, Formatters: result427, DefaultFormatter: value428})
+				default:
+					panic("unreachable")
+				}
+				result437 := make([]golem_tool_common.ErrorCase, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 84*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 84*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 83*4))))), index*(8+9*4))
+					value430 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value431 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+					value432 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+					result435 := make([]golem_tool_common.Example, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(4*4))
+						value433 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value434 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+						result435 = append(result435, golem_tool_common.Example{Title: value433, Body: value434})
+					}
+
+					var option436 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 + 8*4)))) {
 					case 0:
 
-						option428 = witTypes.None[int32]()
+						option436 = witTypes.None[int32]()
 					case 1:
 
-						option428 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
+						option436 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
 					default:
 						panic("unreachable")
 					}
 
-					result429 = append(result429, golem_tool_common.ErrorCase{Name: value422, Doc: golem_tool_common.Doc{Summary: value423, Description: value424, Examples: result427}, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), ExitCode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 8*4))))), Payload: option428})
+					result437 = append(result437, golem_tool_common.ErrorCase{Name: value430, Doc: golem_tool_common.Doc{Summary: value431, Description: value432, Examples: result435}, Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), ExitCode: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (1 + 8*4))))), Payload: option436})
 				}
 
-				var option430 witTypes.Option[golem_tool_common.CommandAnnotations]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 75*4)))) {
+				var option438 witTypes.Option[golem_tool_common.CommandAnnotations]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 85*4)))) {
 				case 0:
 
-					option430 = witTypes.None[golem_tool_common.CommandAnnotations]()
+					option438 = witTypes.None[golem_tool_common.CommandAnnotations]()
 				case 1:
 
-					option430 = witTypes.Some[golem_tool_common.CommandAnnotations](golem_tool_common.CommandAnnotations{ReadOnly: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 + 75*4)))) != 0), Destructive: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 + 75*4)))) != 0), Idempotent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 + 75*4)))) != 0), OpenWorld: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 + 75*4)))) != 0)})
+					option438 = witTypes.Some[golem_tool_common.CommandAnnotations](golem_tool_common.CommandAnnotations{ReadOnly: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 + 85*4)))) != 0), Destructive: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 + 85*4)))) != 0), Idempotent: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 + 85*4)))) != 0), OpenWorld: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 + 85*4)))) != 0)})
 				default:
 					panic("unreachable")
 				}
 
-				option431 = witTypes.Some[golem_tool_common.CommandBody](golem_tool_common.CommandBody{Positionals: golem_tool_common.Positionals{Fixed: result96, Tail: option108}, Options: result150, Flags: result164, Constraints: result391, Stdin: option399, Stdout: option407, Result: option421, Errors: result429, Annotations: option430})
+				option439 = witTypes.Some[golem_tool_common.CommandBody](golem_tool_common.CommandBody{Positionals: golem_tool_common.Positionals{Fixed: result96, Tail: option108}, Options: result150, Flags: result164, Constraints: result391, Stdin: option399, Stdout: option407, Stderr: option415, Result: option429, Errors: result437, Annotations: option438})
 			default:
 				panic("unreachable")
 			}
 
-			result432 = append(result432, golem_tool_common.CommandNode{Name: value1, Aliases: result, Doc: golem_tool_common.Doc{Summary: value3, Description: value4, Examples: result7}, Globals: golem_tool_common.Globals{Options: result47, Flags: result61}, Subcommands: result62, Body: option431})
+			result440 = append(result440, golem_tool_common.CommandNode{Name: value1, Aliases: result, Doc: golem_tool_common.Doc{Summary: value3, Description: value4, Examples: result7}, Globals: golem_tool_common.Globals{Options: result47, Flags: result61}, Subcommands: result62, Body: option439})
 		}
 
-		result608 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4))))
+		result616 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 8*4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 7*4))))), index*(56+22*4))
-			var variant596 golem_core_types.SchemaTypeBody
+			var variant604 golem_core_types.SchemaTypeBody
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 			case 0:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+				variant604 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 			case 1:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyBoolType()
+				variant604 = golem_core_types.MakeSchemaTypeBodyBoolType()
 
 			case 2:
-				var option439 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option447 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option439 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option447 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option434 witTypes.Option[golem_core_types.NumericBound]
+					var option442 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option434 = witTypes.None[golem_core_types.NumericBound]()
+						option442 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant433 golem_core_types.NumericBound
+						var variant441 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant433 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant441 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant433 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant441 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant433 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant441 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option434 = witTypes.Some[golem_core_types.NumericBound](variant433)
+						option442 = witTypes.Some[golem_core_types.NumericBound](variant441)
 					default:
 						panic("unreachable")
 					}
-					var option436 witTypes.Option[golem_core_types.NumericBound]
+					var option444 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option436 = witTypes.None[golem_core_types.NumericBound]()
+						option444 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant435 golem_core_types.NumericBound
+						var variant443 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant435 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant443 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant435 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant443 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant435 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant443 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option436 = witTypes.Some[golem_core_types.NumericBound](variant435)
+						option444 = witTypes.Some[golem_core_types.NumericBound](variant443)
 					default:
 						panic("unreachable")
 					}
-					var option438 witTypes.Option[string]
+					var option446 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option438 = witTypes.None[string]()
+						option446 = witTypes.None[string]()
 					case 1:
-						value437 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value445 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option438 = witTypes.Some[string](value437)
+						option446 = witTypes.Some[string](value445)
 					default:
 						panic("unreachable")
 					}
 
-					option439 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option434, Max: option436, Unit: option438})
+					option447 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option442, Max: option444, Unit: option446})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS8Type(option439)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS8Type(option447)
 
 			case 3:
-				var option446 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option454 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option446 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option454 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option441 witTypes.Option[golem_core_types.NumericBound]
+					var option449 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option441 = witTypes.None[golem_core_types.NumericBound]()
+						option449 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant440 golem_core_types.NumericBound
+						var variant448 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant440 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant448 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant440 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant448 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant440 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant448 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option441 = witTypes.Some[golem_core_types.NumericBound](variant440)
+						option449 = witTypes.Some[golem_core_types.NumericBound](variant448)
 					default:
 						panic("unreachable")
 					}
-					var option443 witTypes.Option[golem_core_types.NumericBound]
+					var option451 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option443 = witTypes.None[golem_core_types.NumericBound]()
+						option451 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant442 golem_core_types.NumericBound
+						var variant450 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant442 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant450 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant442 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant450 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant442 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant450 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option443 = witTypes.Some[golem_core_types.NumericBound](variant442)
+						option451 = witTypes.Some[golem_core_types.NumericBound](variant450)
 					default:
 						panic("unreachable")
 					}
-					var option445 witTypes.Option[string]
+					var option453 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option445 = witTypes.None[string]()
+						option453 = witTypes.None[string]()
 					case 1:
-						value444 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value452 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option445 = witTypes.Some[string](value444)
+						option453 = witTypes.Some[string](value452)
 					default:
 						panic("unreachable")
 					}
 
-					option446 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option441, Max: option443, Unit: option445})
+					option454 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option449, Max: option451, Unit: option453})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS16Type(option446)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS16Type(option454)
 
 			case 4:
-				var option453 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option461 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option453 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option461 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option448 witTypes.Option[golem_core_types.NumericBound]
+					var option456 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option448 = witTypes.None[golem_core_types.NumericBound]()
+						option456 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant447 golem_core_types.NumericBound
+						var variant455 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant447 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant455 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant447 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant455 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant447 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant455 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option448 = witTypes.Some[golem_core_types.NumericBound](variant447)
+						option456 = witTypes.Some[golem_core_types.NumericBound](variant455)
 					default:
 						panic("unreachable")
 					}
-					var option450 witTypes.Option[golem_core_types.NumericBound]
+					var option458 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option450 = witTypes.None[golem_core_types.NumericBound]()
+						option458 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant449 golem_core_types.NumericBound
+						var variant457 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant449 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant457 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant449 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant457 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant449 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant457 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option450 = witTypes.Some[golem_core_types.NumericBound](variant449)
+						option458 = witTypes.Some[golem_core_types.NumericBound](variant457)
 					default:
 						panic("unreachable")
 					}
-					var option452 witTypes.Option[string]
+					var option460 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option452 = witTypes.None[string]()
+						option460 = witTypes.None[string]()
 					case 1:
-						value451 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value459 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option452 = witTypes.Some[string](value451)
+						option460 = witTypes.Some[string](value459)
 					default:
 						panic("unreachable")
 					}
 
-					option453 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option448, Max: option450, Unit: option452})
+					option461 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option456, Max: option458, Unit: option460})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS32Type(option453)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS32Type(option461)
 
 			case 5:
-				var option460 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option468 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option460 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option468 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option455 witTypes.Option[golem_core_types.NumericBound]
+					var option463 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option455 = witTypes.None[golem_core_types.NumericBound]()
+						option463 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant454 golem_core_types.NumericBound
+						var variant462 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant454 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant462 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant454 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant462 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant454 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant462 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option455 = witTypes.Some[golem_core_types.NumericBound](variant454)
+						option463 = witTypes.Some[golem_core_types.NumericBound](variant462)
 					default:
 						panic("unreachable")
 					}
-					var option457 witTypes.Option[golem_core_types.NumericBound]
+					var option465 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option457 = witTypes.None[golem_core_types.NumericBound]()
+						option465 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant456 golem_core_types.NumericBound
+						var variant464 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant456 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant464 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant456 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant464 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant456 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant464 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option457 = witTypes.Some[golem_core_types.NumericBound](variant456)
+						option465 = witTypes.Some[golem_core_types.NumericBound](variant464)
 					default:
 						panic("unreachable")
 					}
-					var option459 witTypes.Option[string]
+					var option467 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option459 = witTypes.None[string]()
+						option467 = witTypes.None[string]()
 					case 1:
-						value458 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value466 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option459 = witTypes.Some[string](value458)
+						option467 = witTypes.Some[string](value466)
 					default:
 						panic("unreachable")
 					}
 
-					option460 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option455, Max: option457, Unit: option459})
+					option468 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option463, Max: option465, Unit: option467})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyS64Type(option460)
+				variant604 = golem_core_types.MakeSchemaTypeBodyS64Type(option468)
 
 			case 6:
-				var option467 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option475 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option467 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option475 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option462 witTypes.Option[golem_core_types.NumericBound]
+					var option470 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option462 = witTypes.None[golem_core_types.NumericBound]()
+						option470 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant461 golem_core_types.NumericBound
+						var variant469 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant461 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant469 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant461 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant469 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant461 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant469 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option462 = witTypes.Some[golem_core_types.NumericBound](variant461)
+						option470 = witTypes.Some[golem_core_types.NumericBound](variant469)
 					default:
 						panic("unreachable")
 					}
-					var option464 witTypes.Option[golem_core_types.NumericBound]
+					var option472 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option464 = witTypes.None[golem_core_types.NumericBound]()
+						option472 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant463 golem_core_types.NumericBound
+						var variant471 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant463 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant471 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant463 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant471 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant463 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant471 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option464 = witTypes.Some[golem_core_types.NumericBound](variant463)
+						option472 = witTypes.Some[golem_core_types.NumericBound](variant471)
 					default:
 						panic("unreachable")
 					}
-					var option466 witTypes.Option[string]
+					var option474 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option466 = witTypes.None[string]()
+						option474 = witTypes.None[string]()
 					case 1:
-						value465 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value473 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option466 = witTypes.Some[string](value465)
+						option474 = witTypes.Some[string](value473)
 					default:
 						panic("unreachable")
 					}
 
-					option467 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option462, Max: option464, Unit: option466})
+					option475 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option470, Max: option472, Unit: option474})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU8Type(option467)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU8Type(option475)
 
 			case 7:
-				var option474 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option482 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option474 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option482 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option469 witTypes.Option[golem_core_types.NumericBound]
+					var option477 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option469 = witTypes.None[golem_core_types.NumericBound]()
+						option477 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant468 golem_core_types.NumericBound
+						var variant476 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant468 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant476 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant468 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant476 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant468 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant476 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option469 = witTypes.Some[golem_core_types.NumericBound](variant468)
+						option477 = witTypes.Some[golem_core_types.NumericBound](variant476)
 					default:
 						panic("unreachable")
 					}
-					var option471 witTypes.Option[golem_core_types.NumericBound]
+					var option479 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option471 = witTypes.None[golem_core_types.NumericBound]()
+						option479 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant470 golem_core_types.NumericBound
+						var variant478 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant470 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant478 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant470 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant478 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant470 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant478 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option471 = witTypes.Some[golem_core_types.NumericBound](variant470)
+						option479 = witTypes.Some[golem_core_types.NumericBound](variant478)
 					default:
 						panic("unreachable")
 					}
-					var option473 witTypes.Option[string]
+					var option481 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option473 = witTypes.None[string]()
+						option481 = witTypes.None[string]()
 					case 1:
-						value472 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value480 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option473 = witTypes.Some[string](value472)
+						option481 = witTypes.Some[string](value480)
 					default:
 						panic("unreachable")
 					}
 
-					option474 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option469, Max: option471, Unit: option473})
+					option482 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option477, Max: option479, Unit: option481})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU16Type(option474)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU16Type(option482)
 
 			case 8:
-				var option481 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option489 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option481 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option489 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option476 witTypes.Option[golem_core_types.NumericBound]
+					var option484 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option476 = witTypes.None[golem_core_types.NumericBound]()
+						option484 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant475 golem_core_types.NumericBound
+						var variant483 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant475 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant483 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant475 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant483 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant475 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant483 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option476 = witTypes.Some[golem_core_types.NumericBound](variant475)
+						option484 = witTypes.Some[golem_core_types.NumericBound](variant483)
 					default:
 						panic("unreachable")
 					}
-					var option478 witTypes.Option[golem_core_types.NumericBound]
+					var option486 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option478 = witTypes.None[golem_core_types.NumericBound]()
+						option486 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant477 golem_core_types.NumericBound
+						var variant485 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant477 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant485 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant477 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant485 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant477 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant485 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option478 = witTypes.Some[golem_core_types.NumericBound](variant477)
+						option486 = witTypes.Some[golem_core_types.NumericBound](variant485)
 					default:
 						panic("unreachable")
 					}
-					var option480 witTypes.Option[string]
+					var option488 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option480 = witTypes.None[string]()
+						option488 = witTypes.None[string]()
 					case 1:
-						value479 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value487 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option480 = witTypes.Some[string](value479)
+						option488 = witTypes.Some[string](value487)
 					default:
 						panic("unreachable")
 					}
 
-					option481 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option476, Max: option478, Unit: option480})
+					option489 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option484, Max: option486, Unit: option488})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU32Type(option481)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU32Type(option489)
 
 			case 9:
-				var option488 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option496 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option488 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option496 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option483 witTypes.Option[golem_core_types.NumericBound]
+					var option491 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option483 = witTypes.None[golem_core_types.NumericBound]()
+						option491 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant482 golem_core_types.NumericBound
+						var variant490 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant482 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant490 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant482 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant490 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant482 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant490 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option483 = witTypes.Some[golem_core_types.NumericBound](variant482)
+						option491 = witTypes.Some[golem_core_types.NumericBound](variant490)
 					default:
 						panic("unreachable")
 					}
-					var option485 witTypes.Option[golem_core_types.NumericBound]
+					var option493 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option485 = witTypes.None[golem_core_types.NumericBound]()
+						option493 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant484 golem_core_types.NumericBound
+						var variant492 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant484 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant492 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant484 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant492 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant484 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant492 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option485 = witTypes.Some[golem_core_types.NumericBound](variant484)
+						option493 = witTypes.Some[golem_core_types.NumericBound](variant492)
 					default:
 						panic("unreachable")
 					}
-					var option487 witTypes.Option[string]
+					var option495 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option487 = witTypes.None[string]()
+						option495 = witTypes.None[string]()
 					case 1:
-						value486 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value494 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option487 = witTypes.Some[string](value486)
+						option495 = witTypes.Some[string](value494)
 					default:
 						panic("unreachable")
 					}
 
-					option488 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option483, Max: option485, Unit: option487})
+					option496 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option491, Max: option493, Unit: option495})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyU64Type(option488)
+				variant604 = golem_core_types.MakeSchemaTypeBodyU64Type(option496)
 
 			case 10:
-				var option495 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option503 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option495 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option503 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option490 witTypes.Option[golem_core_types.NumericBound]
+					var option498 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option490 = witTypes.None[golem_core_types.NumericBound]()
+						option498 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant489 golem_core_types.NumericBound
+						var variant497 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant489 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant497 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant489 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant497 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant489 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant497 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option490 = witTypes.Some[golem_core_types.NumericBound](variant489)
+						option498 = witTypes.Some[golem_core_types.NumericBound](variant497)
 					default:
 						panic("unreachable")
 					}
-					var option492 witTypes.Option[golem_core_types.NumericBound]
+					var option500 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option492 = witTypes.None[golem_core_types.NumericBound]()
+						option500 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant491 golem_core_types.NumericBound
+						var variant499 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant491 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant499 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant491 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant499 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant491 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant499 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option492 = witTypes.Some[golem_core_types.NumericBound](variant491)
+						option500 = witTypes.Some[golem_core_types.NumericBound](variant499)
 					default:
 						panic("unreachable")
 					}
-					var option494 witTypes.Option[string]
+					var option502 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option494 = witTypes.None[string]()
+						option502 = witTypes.None[string]()
 					case 1:
-						value493 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value501 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option494 = witTypes.Some[string](value493)
+						option502 = witTypes.Some[string](value501)
 					default:
 						panic("unreachable")
 					}
 
-					option495 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option490, Max: option492, Unit: option494})
+					option503 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option498, Max: option500, Unit: option502})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyF32Type(option495)
+				variant604 = golem_core_types.MakeSchemaTypeBodyF32Type(option503)
 
 			case 11:
-				var option502 witTypes.Option[golem_core_types.NumericRestrictions]
+				var option510 witTypes.Option[golem_core_types.NumericRestrictions]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option502 = witTypes.None[golem_core_types.NumericRestrictions]()
+					option510 = witTypes.None[golem_core_types.NumericRestrictions]()
 				case 1:
-					var option497 witTypes.Option[golem_core_types.NumericBound]
+					var option505 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 					case 0:
 
-						option497 = witTypes.None[golem_core_types.NumericBound]()
+						option505 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant496 golem_core_types.NumericBound
+						var variant504 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 						case 0:
 
-							variant496 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+							variant504 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 						case 1:
 
-							variant496 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant504 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						case 2:
 
-							variant496 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+							variant504 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option497 = witTypes.Some[golem_core_types.NumericBound](variant496)
+						option505 = witTypes.Some[golem_core_types.NumericBound](variant504)
 					default:
 						panic("unreachable")
 					}
-					var option499 witTypes.Option[golem_core_types.NumericBound]
+					var option507 witTypes.Option[golem_core_types.NumericBound]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 					case 0:
 
-						option499 = witTypes.None[golem_core_types.NumericBound]()
+						option507 = witTypes.None[golem_core_types.NumericBound]()
 					case 1:
-						var variant498 golem_core_types.NumericBound
+						var variant506 golem_core_types.NumericBound
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 						case 0:
 
-							variant498 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+							variant506 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 						case 1:
 
-							variant498 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant506 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						case 2:
 
-							variant498 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+							variant506 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 						default:
 							panic("unreachable")
 						}
 
-						option499 = witTypes.Some[golem_core_types.NumericBound](variant498)
+						option507 = witTypes.Some[golem_core_types.NumericBound](variant506)
 					default:
 						panic("unreachable")
 					}
-					var option501 witTypes.Option[string]
+					var option509 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 					case 0:
 
-						option501 = witTypes.None[string]()
+						option509 = witTypes.None[string]()
 					case 1:
-						value500 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+						value508 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-						option501 = witTypes.Some[string](value500)
+						option509 = witTypes.Some[string](value508)
 					default:
 						panic("unreachable")
 					}
 
-					option502 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option497, Max: option499, Unit: option501})
+					option510 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option505, Max: option507, Unit: option509})
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyF64Type(option502)
+				variant604 = golem_core_types.MakeSchemaTypeBodyF64Type(option510)
 
 			case 12:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyCharType()
+				variant604 = golem_core_types.MakeSchemaTypeBodyCharType()
 
 			case 13:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyStringType()
+				variant604 = golem_core_types.MakeSchemaTypeBodyStringType()
 
 			case 14:
-				result515 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result523 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(17*4))
-					value503 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var option505 witTypes.Option[string]
+					value511 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var option513 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 					case 0:
 
-						option505 = witTypes.None[string]()
+						option513 = witTypes.None[string]()
 					case 1:
-						value504 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+						value512 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-						option505 = witTypes.Some[string](value504)
+						option513 = witTypes.Some[string](value512)
 					default:
 						panic("unreachable")
 					}
-					result507 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+					result515 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(2*4))
-						value506 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value514 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result507 = append(result507, value506)
+						result515 = append(result515, value514)
 					}
 
-					result509 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
+					result517 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), index*(2*4))
-						value508 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value516 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result509 = append(result509, value508)
+						result517 = append(result517, value516)
 					}
 
-					var option511 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))) {
-					case 0:
-
-						option511 = witTypes.None[string]()
-					case 1:
-						value510 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
-
-						option511 = witTypes.Some[string](value510)
-					default:
-						panic("unreachable")
-					}
-					var option514 witTypes.Option[golem_core_types.Role]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))) {
-					case 0:
-
-						option514 = witTypes.None[golem_core_types.Role]()
-					case 1:
-						var variant513 golem_core_types.Role
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4)))) {
-						case 0:
-
-							variant513 = golem_core_types.MakeRoleMultimodal()
-
-						case 1:
-
-							variant513 = golem_core_types.MakeRoleUnstructuredText()
-
-						case 2:
-
-							variant513 = golem_core_types.MakeRoleUnstructuredBinary()
-
-						case 3:
-							value512 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
-
-							variant513 = golem_core_types.MakeRoleOther(value512)
-
-						default:
-							panic("unreachable")
-						}
-
-						option514 = witTypes.Some[golem_core_types.Role](variant513)
-					default:
-						panic("unreachable")
-					}
-
-					result515 = append(result515, golem_core_types.NamedFieldType{Name: value503, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option505, Aliases: result507, Examples: result509, Deprecated: option511, Role: option514}})
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyRecordType(result515)
-
-			case 15:
-				result529 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(8+16*4))
-					value516 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var option517 witTypes.Option[int32]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
-					case 0:
-
-						option517 = witTypes.None[int32]()
-					case 1:
-
-						option517 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
-					default:
-						panic("unreachable")
-					}
 					var option519 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))) {
 					case 0:
 
 						option519 = witTypes.None[string]()
 					case 1:
-						value518 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+						value518 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
 
 						option519 = witTypes.Some[string](value518)
 					default:
 						panic("unreachable")
 					}
-					result521 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-						value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result521 = append(result521, value520)
-					}
-
-					result523 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))))), index*(2*4))
-						value522 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result523 = append(result523, value522)
-					}
-
-					var option525 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4)))) {
+					var option522 witTypes.Option[golem_core_types.Role]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))) {
 					case 0:
 
-						option525 = witTypes.None[string]()
+						option522 = witTypes.None[golem_core_types.Role]()
 					case 1:
-						value524 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
-
-						option525 = witTypes.Some[string](value524)
-					default:
-						panic("unreachable")
-					}
-					var option528 witTypes.Option[golem_core_types.Role]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4)))) {
-					case 0:
-
-						option528 = witTypes.None[golem_core_types.Role]()
-					case 1:
-						var variant527 golem_core_types.Role
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4)))) {
+						var variant521 golem_core_types.Role
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4)))) {
 						case 0:
 
-							variant527 = golem_core_types.MakeRoleMultimodal()
+							variant521 = golem_core_types.MakeRoleMultimodal()
 
 						case 1:
 
-							variant527 = golem_core_types.MakeRoleUnstructuredText()
+							variant521 = golem_core_types.MakeRoleUnstructuredText()
 
 						case 2:
 
-							variant527 = golem_core_types.MakeRoleUnstructuredBinary()
+							variant521 = golem_core_types.MakeRoleUnstructuredBinary()
 
 						case 3:
-							value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
+							value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
 
-							variant527 = golem_core_types.MakeRoleOther(value526)
+							variant521 = golem_core_types.MakeRoleOther(value520)
 
 						default:
 							panic("unreachable")
 						}
 
-						option528 = witTypes.Some[golem_core_types.Role](variant527)
+						option522 = witTypes.Some[golem_core_types.Role](variant521)
 					default:
 						panic("unreachable")
 					}
 
-					result529 = append(result529, golem_core_types.VariantCaseType{Name: value516, Payload: option517, Metadata: golem_core_types.MetadataEnvelope{Doc: option519, Aliases: result521, Examples: result523, Deprecated: option525, Role: option528}})
+					result523 = append(result523, golem_core_types.NamedFieldType{Name: value511, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option513, Aliases: result515, Examples: result517, Deprecated: option519, Role: option522}})
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyVariantType(result529)
+				variant604 = golem_core_types.MakeSchemaTypeBodyRecordType(result523)
+
+			case 15:
+				result537 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(8+16*4))
+					value524 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var option525 witTypes.Option[int32]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
+					case 0:
+
+						option525 = witTypes.None[int32]()
+					case 1:
+
+						option525 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
+					default:
+						panic("unreachable")
+					}
+					var option527 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
+					case 0:
+
+						option527 = witTypes.None[string]()
+					case 1:
+						value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+
+						option527 = witTypes.Some[string](value526)
+					default:
+						panic("unreachable")
+					}
+					result529 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
+						value528 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result529 = append(result529, value528)
+					}
+
+					result531 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))))), index*(2*4))
+						value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result531 = append(result531, value530)
+					}
+
+					var option533 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4)))) {
+					case 0:
+
+						option533 = witTypes.None[string]()
+					case 1:
+						value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
+
+						option533 = witTypes.Some[string](value532)
+					default:
+						panic("unreachable")
+					}
+					var option536 witTypes.Option[golem_core_types.Role]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4)))) {
+					case 0:
+
+						option536 = witTypes.None[golem_core_types.Role]()
+					case 1:
+						var variant535 golem_core_types.Role
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4)))) {
+						case 0:
+
+							variant535 = golem_core_types.MakeRoleMultimodal()
+
+						case 1:
+
+							variant535 = golem_core_types.MakeRoleUnstructuredText()
+
+						case 2:
+
+							variant535 = golem_core_types.MakeRoleUnstructuredBinary()
+
+						case 3:
+							value534 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
+
+							variant535 = golem_core_types.MakeRoleOther(value534)
+
+						default:
+							panic("unreachable")
+						}
+
+						option536 = witTypes.Some[golem_core_types.Role](variant535)
+					default:
+						panic("unreachable")
+					}
+
+					result537 = append(result537, golem_core_types.VariantCaseType{Name: value524, Payload: option525, Metadata: golem_core_types.MetadataEnvelope{Doc: option527, Aliases: result529, Examples: result531, Deprecated: option533, Role: option536}})
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyVariantType(result537)
 
 			case 16:
-				result531 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result539 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-					value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value538 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					result531 = append(result531, value530)
+					result539 = append(result539, value538)
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyEnumType(result531)
+				variant604 = golem_core_types.MakeSchemaTypeBodyEnumType(result539)
 
 			case 17:
-				result533 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result541 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-					value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value540 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					result533 = append(result533, value532)
+					result541 = append(result541, value540)
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyFlagsType(result533)
+				variant604 = golem_core_types.MakeSchemaTypeBodyFlagsType(result541)
 
 			case 18:
-				result534 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result542 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-					result534 = append(result534, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+					result542 = append(result542, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyTupleType(result534)
+				variant604 = golem_core_types.MakeSchemaTypeBodyTupleType(result542)
 
 			case 19:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+				variant604 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 			case 20:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
+				variant604 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
 
 			case 21:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+				variant604 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
 			case 22:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+				variant604 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 			case 23:
-				var option535 witTypes.Option[int32]
+				var option543 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option535 = witTypes.None[int32]()
+					option543 = witTypes.None[int32]()
 				case 1:
 
-					option535 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+					option543 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
 				default:
 					panic("unreachable")
 				}
-				var option536 witTypes.Option[int32]
+				var option544 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 				case 0:
 
-					option536 = witTypes.None[int32]()
+					option544 = witTypes.None[int32]()
 				case 1:
 
-					option536 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
+					option544 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option535, Err: option536})
+				variant604 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option543, Err: option544})
 
 			case 24:
-				var option539 witTypes.Option[[]string]
+				var option547 witTypes.Option[[]string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option539 = witTypes.None[[]string]()
+					option547 = witTypes.None[[]string]()
 				case 1:
-					result538 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					result546 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-						value537 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value545 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result538 = append(result538, value537)
+						result546 = append(result546, value545)
 					}
 
-					option539 = witTypes.Some[[]string](result538)
-				default:
-					panic("unreachable")
-				}
-				var option540 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-				case 0:
-
-					option540 = witTypes.None[uint32]()
-				case 1:
-
-					option540 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
-				default:
-					panic("unreachable")
-				}
-				var option541 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
-				case 0:
-
-					option541 = witTypes.None[uint32]()
-				case 1:
-
-					option541 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
-				default:
-					panic("unreachable")
-				}
-				var option543 witTypes.Option[string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))) {
-				case 0:
-
-					option543 = witTypes.None[string]()
-				case 1:
-					value542 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
-
-					option543 = witTypes.Some[string](value542)
-				default:
-					panic("unreachable")
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option539, MinLength: option540, MaxLength: option541, Regex: option543})
-
-			case 25:
-				var option546 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-				case 0:
-
-					option546 = witTypes.None[[]string]()
-				case 1:
-					result545 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-						value544 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result545 = append(result545, value544)
-					}
-
-					option546 = witTypes.Some[[]string](result545)
-				default:
-					panic("unreachable")
-				}
-				var option547 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-				case 0:
-
-					option547 = witTypes.None[uint32]()
-				case 1:
-
-					option547 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+					option547 = witTypes.Some[[]string](result546)
 				default:
 					panic("unreachable")
 				}
 				var option548 witTypes.Option[uint32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 				case 0:
 
 					option548 = witTypes.None[uint32]()
 				case 1:
 
-					option548 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+					option548 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option546, MinBytes: option547, MaxBytes: option548})
-
-			case 26:
-				var option551 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
+				var option549 witTypes.Option[uint32]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
 				case 0:
 
-					option551 = witTypes.None[[]string]()
+					option549 = witTypes.None[uint32]()
 				case 1:
-					result550 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-						value549 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result550 = append(result550, value549)
-					}
-
-					option551 = witTypes.Some[[]string](result550)
+					option549 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
+				var option551 witTypes.Option[string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))) {
+				case 0:
+
+					option551 = witTypes.None[string]()
+				case 1:
+					value550 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
+
+					option551 = witTypes.Some[string](value550)
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option547, MinLength: option548, MaxLength: option549, Regex: option551})
+
+			case 25:
 				var option554 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
 					option554 = witTypes.None[[]string]()
 				case 1:
-					result553 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
+					result553 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
 						value552 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
 						result553 = append(result553, value552)
@@ -11261,397 +11349,463 @@ func GetTool(name string) witTypes.Option[RegisteredTool] {
 				default:
 					panic("unreachable")
 				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option551, AllowedExtensions: option554})
-
-			case 27:
-				var option557 witTypes.Option[[]string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-				case 0:
-
-					option557 = witTypes.None[[]string]()
-				case 1:
-					result556 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-						value555 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result556 = append(result556, value555)
-					}
-
-					option557 = witTypes.Some[[]string](result556)
-				default:
-					panic("unreachable")
-				}
-				var option560 witTypes.Option[[]string]
+				var option555 witTypes.Option[uint32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 				case 0:
 
-					option560 = witTypes.None[[]string]()
+					option555 = witTypes.None[uint32]()
 				case 1:
-					result559 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))), index*(2*4))
-						value558 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result559 = append(result559, value558)
-					}
-
-					option560 = witTypes.Some[[]string](result559)
+					option555 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option557, AllowedHosts: option560})
-
-			case 28:
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
-
-			case 29:
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyDurationType()
-
-			case 30:
-				value561 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-				result563 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-					value562 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-					result563 = append(result563, value562)
-				}
-
-				var option565 witTypes.Option[golem_core_types.QuantityValue]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				var option556 witTypes.Option[uint32]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
 				case 0:
 
-					option565 = witTypes.None[golem_core_types.QuantityValue]()
+					option556 = witTypes.None[uint32]()
 				case 1:
-					value564 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
 
-					option565 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value564})
-				default:
-					panic("unreachable")
-				}
-				var option567 witTypes.Option[golem_core_types.QuantityValue]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4)))) {
-				case 0:
-
-					option567 = witTypes.None[golem_core_types.QuantityValue]()
-				case 1:
-					value566 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
-
-					option567 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value566})
+					option556 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value561, AllowedSuffixes: result563, Min: option565, Max: option567})
+				variant604 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option554, MinBytes: option555, MaxBytes: option556})
 
-			case 31:
-				result589 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
-					value568 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var variant577 golem_core_types.DiscriminatorRule
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
-					case 0:
-						value569 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRulePrefix(value569)
-
-					case 1:
-						value570 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleSuffix(value570)
-
-					case 2:
-						value571 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleContains(value571)
-
-					case 3:
-						value572 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleRegex(value572)
-
-					case 4:
-						value573 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-						var option575 witTypes.Option[string]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))) {
-						case 0:
-
-							option575 = witTypes.None[string]()
-						case 1:
-							value574 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
-
-							option575 = witTypes.Some[string](value574)
-						default:
-							panic("unreachable")
-						}
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value573, Literal: option575})
-
-					case 5:
-						value576 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-						variant577 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value576)
-
-					default:
-						panic("unreachable")
-					}
-					var option579 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))) {
-					case 0:
-
-						option579 = witTypes.None[string]()
-					case 1:
-						value578 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
-
-						option579 = witTypes.Some[string](value578)
-					default:
-						panic("unreachable")
-					}
-					result581 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))), index*(2*4))
-						value580 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result581 = append(result581, value580)
-					}
-
-					result583 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
-					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))); index++ {
-						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))))), index*(2*4))
-						value582 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-
-						result583 = append(result583, value582)
-					}
-
-					var option585 witTypes.Option[string]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
-					case 0:
-
-						option585 = witTypes.None[string]()
-					case 1:
-						value584 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
-
-						option585 = witTypes.Some[string](value584)
-					default:
-						panic("unreachable")
-					}
-					var option588 witTypes.Option[golem_core_types.Role]
-					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4)))) {
-					case 0:
-
-						option588 = witTypes.None[golem_core_types.Role]()
-					case 1:
-						var variant587 golem_core_types.Role
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4)))) {
-						case 0:
-
-							variant587 = golem_core_types.MakeRoleMultimodal()
-
-						case 1:
-
-							variant587 = golem_core_types.MakeRoleUnstructuredText()
-
-						case 2:
-
-							variant587 = golem_core_types.MakeRoleUnstructuredBinary()
-
-						case 3:
-							value586 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
-
-							variant587 = golem_core_types.MakeRoleOther(value586)
-
-						default:
-							panic("unreachable")
-						}
-
-						option588 = witTypes.Some[golem_core_types.Role](variant587)
-					default:
-						panic("unreachable")
-					}
-
-					result589 = append(result589, golem_core_types.UnionBranch{Tag: value568, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant577, Metadata: golem_core_types.MetadataEnvelope{Doc: option579, Aliases: result581, Examples: result583, Deprecated: option585, Role: option588}})
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result589})
-
-			case 32:
-				var option591 witTypes.Option[string]
+			case 26:
+				var option559 witTypes.Option[[]string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
 
-					option591 = witTypes.None[string]()
+					option559 = witTypes.None[[]string]()
 				case 1:
-					value590 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+					result558 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
+						value557 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					option591 = witTypes.Some[string](value590)
+						result558 = append(result558, value557)
+					}
+
+					option559 = witTypes.Some[[]string](result558)
+				default:
+					panic("unreachable")
+				}
+				var option562 witTypes.Option[[]string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				case 0:
+
+					option562 = witTypes.None[[]string]()
+				case 1:
+					result561 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
+						value560 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result561 = append(result561, value560)
+					}
+
+					option562 = witTypes.Some[[]string](result561)
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option591})
+				variant604 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option559, AllowedExtensions: option562})
+
+			case 27:
+				var option565 witTypes.Option[[]string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				case 0:
+
+					option565 = witTypes.None[[]string]()
+				case 1:
+					result564 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
+						value563 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result564 = append(result564, value563)
+					}
+
+					option565 = witTypes.Some[[]string](result564)
+				default:
+					panic("unreachable")
+				}
+				var option568 witTypes.Option[[]string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
+				case 0:
+
+					option568 = witTypes.None[[]string]()
+				case 1:
+					result567 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))), index*(2*4))
+						value566 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result567 = append(result567, value566)
+					}
+
+					option568 = witTypes.Some[[]string](result567)
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option565, AllowedHosts: option568})
+
+			case 28:
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyUuidType()
+
+			case 29:
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+
+			case 30:
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+			case 31:
+				value569 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				result571 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
+					value570 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+					result571 = append(result571, value570)
+				}
+
+				var option573 witTypes.Option[golem_core_types.QuantityValue]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
+				case 0:
+
+					option573 = witTypes.None[golem_core_types.QuantityValue]()
+				case 1:
+					value572 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
+
+					option573 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value572})
+				default:
+					panic("unreachable")
+				}
+				var option575 witTypes.Option[golem_core_types.QuantityValue]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4)))) {
+				case 0:
+
+					option575 = witTypes.None[golem_core_types.QuantityValue]()
+				case 1:
+					value574 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
+
+					option575 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value574})
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value569, AllowedSuffixes: result571, Min: option573, Max: option575})
+
+			case 32:
+				result597 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
+					value576 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var variant585 golem_core_types.DiscriminatorRule
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
+					case 0:
+						value577 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRulePrefix(value577)
+
+					case 1:
+						value578 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleSuffix(value578)
+
+					case 2:
+						value579 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleContains(value579)
+
+					case 3:
+						value580 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleRegex(value580)
+
+					case 4:
+						value581 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+						var option583 witTypes.Option[string]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))) {
+						case 0:
+
+							option583 = witTypes.None[string]()
+						case 1:
+							value582 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+
+							option583 = witTypes.Some[string](value582)
+						default:
+							panic("unreachable")
+						}
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value581, Literal: option583})
+
+					case 5:
+						value584 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+						variant585 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value584)
+
+					default:
+						panic("unreachable")
+					}
+					var option587 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))) {
+					case 0:
+
+						option587 = witTypes.None[string]()
+					case 1:
+						value586 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
+
+						option587 = witTypes.Some[string](value586)
+					default:
+						panic("unreachable")
+					}
+					result589 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))), index*(2*4))
+						value588 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result589 = append(result589, value588)
+					}
+
+					result591 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
+					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))); index++ {
+						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))))), index*(2*4))
+						value590 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+
+						result591 = append(result591, value590)
+					}
+
+					var option593 witTypes.Option[string]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
+					case 0:
+
+						option593 = witTypes.None[string]()
+					case 1:
+						value592 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
+
+						option593 = witTypes.Some[string](value592)
+					default:
+						panic("unreachable")
+					}
+					var option596 witTypes.Option[golem_core_types.Role]
+					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4)))) {
+					case 0:
+
+						option596 = witTypes.None[golem_core_types.Role]()
+					case 1:
+						var variant595 golem_core_types.Role
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4)))) {
+						case 0:
+
+							variant595 = golem_core_types.MakeRoleMultimodal()
+
+						case 1:
+
+							variant595 = golem_core_types.MakeRoleUnstructuredText()
+
+						case 2:
+
+							variant595 = golem_core_types.MakeRoleUnstructuredBinary()
+
+						case 3:
+							value594 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
+
+							variant595 = golem_core_types.MakeRoleOther(value594)
+
+						default:
+							panic("unreachable")
+						}
+
+						option596 = witTypes.Some[golem_core_types.Role](variant595)
+					default:
+						panic("unreachable")
+					}
+
+					result597 = append(result597, golem_core_types.UnionBranch{Tag: value576, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant585, Metadata: golem_core_types.MetadataEnvelope{Doc: option587, Aliases: result589, Examples: result591, Deprecated: option593, Role: option596}})
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result597})
 
 			case 33:
-				var option593 witTypes.Option[string]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				var option599 witTypes.Option[string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
 
-					option593 = witTypes.None[string]()
+					option599 = witTypes.None[string]()
 				case 1:
-					value592 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+					value598 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 
-					option593 = witTypes.Some[string](value592)
+					option599 = witTypes.Some[string](value598)
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option593})
+				variant604 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option599})
 
 			case 34:
+				var option601 witTypes.Option[string]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				case 0:
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
+					option601 = witTypes.None[string]()
+				case 1:
+					value600 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+
+					option601 = witTypes.Some[string](value600)
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option601})
 
 			case 35:
-				var option594 witTypes.Option[int32]
-				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-				case 0:
 
-					option594 = witTypes.None[int32]()
-				case 1:
-
-					option594 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
-				default:
-					panic("unreachable")
-				}
-
-				variant596 = golem_core_types.MakeSchemaTypeBodyFutureType(option594)
+				variant604 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
 			case 36:
-				var option595 witTypes.Option[int32]
+				var option602 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
 
-					option595 = witTypes.None[int32]()
+					option602 = witTypes.None[int32]()
 				case 1:
 
-					option595 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+					option602 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
 				default:
 					panic("unreachable")
 				}
 
-				variant596 = golem_core_types.MakeSchemaTypeBodyStreamType(option595)
+				variant604 = golem_core_types.MakeSchemaTypeBodyFutureType(option602)
+
+			case 37:
+				var option603 witTypes.Option[int32]
+				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+				case 0:
+
+					option603 = witTypes.None[int32]()
+				case 1:
+
+					option603 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+				default:
+					panic("unreachable")
+				}
+
+				variant604 = golem_core_types.MakeSchemaTypeBodyStreamType(option603)
 
 			default:
 				panic("unreachable")
 			}
-			var option598 witTypes.Option[string]
+			var option606 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4)))) {
 			case 0:
 
-				option598 = witTypes.None[string]()
+				option606 = witTypes.None[string]()
 			case 1:
-				value597 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
+				value605 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
 
-				option598 = witTypes.Some[string](value597)
+				option606 = witTypes.Some[string](value605)
 			default:
 				panic("unreachable")
 			}
-			result600 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
+			result608 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))))), index*(2*4))
-				value599 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value607 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-				result600 = append(result600, value599)
+				result608 = append(result608, value607)
 			}
 
-			result602 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
+			result610 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
 			for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4)))); index++ {
 				base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))))), index*(2*4))
-				value601 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+				value609 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-				result602 = append(result602, value601)
+				result610 = append(result610, value609)
 			}
 
-			var option604 witTypes.Option[string]
+			var option612 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4)))) {
 			case 0:
 
-				option604 = witTypes.None[string]()
+				option612 = witTypes.None[string]()
 			case 1:
-				value603 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
+				value611 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
 
-				option604 = witTypes.Some[string](value603)
+				option612 = witTypes.Some[string](value611)
 			default:
 				panic("unreachable")
 			}
-			var option607 witTypes.Option[golem_core_types.Role]
+			var option615 witTypes.Option[golem_core_types.Role]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 18*4)))) {
 			case 0:
 
-				option607 = witTypes.None[golem_core_types.Role]()
+				option615 = witTypes.None[golem_core_types.Role]()
 			case 1:
-				var variant606 golem_core_types.Role
+				var variant614 golem_core_types.Role
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4)))) {
 				case 0:
 
-					variant606 = golem_core_types.MakeRoleMultimodal()
+					variant614 = golem_core_types.MakeRoleMultimodal()
 
 				case 1:
 
-					variant606 = golem_core_types.MakeRoleUnstructuredText()
+					variant614 = golem_core_types.MakeRoleUnstructuredText()
 
 				case 2:
 
-					variant606 = golem_core_types.MakeRoleUnstructuredBinary()
+					variant614 = golem_core_types.MakeRoleUnstructuredBinary()
 
 				case 3:
-					value605 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
+					value613 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
 
-					variant606 = golem_core_types.MakeRoleOther(value605)
+					variant614 = golem_core_types.MakeRoleOther(value613)
 
 				default:
 					panic("unreachable")
 				}
 
-				option607 = witTypes.Some[golem_core_types.Role](variant606)
+				option615 = witTypes.Some[golem_core_types.Role](variant614)
 			default:
 				panic("unreachable")
 			}
 
-			result608 = append(result608, golem_core_types.SchemaTypeNode{Body: variant596, Metadata: golem_core_types.MetadataEnvelope{Doc: option598, Aliases: result600, Examples: result602, Deprecated: option604, Role: option607}})
+			result616 = append(result616, golem_core_types.SchemaTypeNode{Body: variant604, Metadata: golem_core_types.MetadataEnvelope{Doc: option606, Aliases: result608, Examples: result610, Deprecated: option612, Role: option615}})
 		}
 
-		result612 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4))))
+		result620 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4))))
 		for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4)))); index++ {
 			base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 9*4))))), index*(6*4))
-			value609 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-			var option611 witTypes.Option[string]
+			value617 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+			var option619 witTypes.Option[string]
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 			case 0:
 
-				option611 = witTypes.None[string]()
+				option619 = witTypes.None[string]()
 			case 1:
-				value610 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+				value618 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-				option611 = witTypes.Some[string](value610)
+				option619 = witTypes.Some[string](value618)
 			default:
 				panic("unreachable")
 			}
 
-			result612 = append(result612, golem_core_types.SchemaTypeDef{Id: value609, Name: option611, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
+			result620 = append(result620, golem_core_types.SchemaTypeDef{Id: value617, Name: option619, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
 		}
 
-		option613 = witTypes.Some[RegisteredTool](RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, RequiresFilesystem: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4)))) != 0), Commands: golem_tool_common.CommandTree{Nodes: result432}, Schema: golem_core_types.SchemaGraph{TypeNodes: result608, Defs: result612, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 12*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 12*4))))}}})
+		option621 = witTypes.Some[RegisteredTool](RegisteredTool{LookupName: value, Definition: golem_tool_common.Tool{Version: value0, RequiresFilesystem: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 4*4)))) != 0), Commands: golem_tool_common.CommandTree{Nodes: result440}, Schema: golem_core_types.SchemaGraph{TypeNodes: result616, Defs: result620, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4)))}}, ImplementedBy: golem_core_types.ComponentId{Uuid: golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 12*4)))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 12*4))))}}})
 	default:
 		panic("unreachable")
 	}
-	result614 := option613
-	return result614
+	result622 := option621
+	return result622
 
 }
 
@@ -12004,16 +12158,16 @@ func CreateStdinFromStream(source *witTypes.StreamReader[witTypes.Result[[]uint8
 
 }
 
-//go:wasmimport golem:tool/host@0.1.0 create-stdout
-func wasm_import_create_stdout(arg0 uintptr)
+//go:wasmimport golem:tool/host@0.1.0 create-output
+func wasm_import_create_output(arg0 uintptr)
 
-func CreateStdout() (*ToolStdout, *witTypes.StreamReader[witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]]) {
+func CreateOutput() (*ToolOutput, *witTypes.StreamReader[witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]]) {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, 8, 4))
-	wasm_import_create_stdout(returnArea)
-	result := witTypes.Tuple2[*ToolStdout, *witTypes.StreamReader[witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]]]{F0: ToolStdoutFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 0))))), F1: LiftStreamResultListU8GolemToolStreamsByteStreamFailure(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))}
+	wasm_import_create_output(returnArea)
+	result := witTypes.Tuple2[*ToolOutput, *witTypes.StreamReader[witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]]]{F0: ToolOutputFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 0))))), F1: LiftStreamResultListU8GolemToolStreamsByteStreamFailure(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))}
 	tuple := result
 	return tuple.F0, tuple.F1
 
@@ -13394,13 +13548,17 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 
 					case 28:
 
-						variant170 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant170 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant170 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant170 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant170 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value135 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result137 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -13437,7 +13595,7 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 
 						variant170 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value135, AllowedSuffixes: result137, Min: option139, Max: option141})
 
-					case 31:
+					case 32:
 						result163 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -13568,7 +13726,7 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 
 						variant170 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result163})
 
-					case 32:
+					case 33:
 						var option165 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -13584,7 +13742,7 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 
 						variant170 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option165})
 
-					case 33:
+					case 34:
 						var option167 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -13600,11 +13758,11 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 
 						variant170 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option167})
 
-					case 34:
+					case 35:
 
 						variant170 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option168 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -13619,7 +13777,7 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 
 						variant170 = golem_core_types.MakeSchemaTypeBodyFutureType(option168)
 
-					case 36:
+					case 37:
 						var option169 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -13971,35 +14129,39 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 
 					case 27:
 
-						variant209 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant209 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant209 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant209 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant209 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value207 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant209 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value207})
 
-					case 30:
+					case 31:
 						value208 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant209 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value208, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant209 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant209 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant209 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant209 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -14043,12 +14205,12 @@ func ToolRpcCreate(toolName string) witTypes.Result[*ToolRpc, golem_core_types.T
 //go:wasmimport golem:tool/host@0.1.0 [async-lower][method]tool-rpc.invoke-and-await
 func wasm_import_method_tool_rpc_invoke_and_await(arg0 uintptr, arg1 uintptr) int32
 
-func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types.TypedSchemaValue, stdin witTypes.Option[*ToolStdin], stdout witTypes.Option[*ToolStdout]) witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError] {
+func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types.TypedSchemaValue, stdin witTypes.Option[*ToolStdin], stdout witTypes.Option[*ToolOutput], stderr witTypes.Option[*ToolOutput]) witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (13 * 4), 4))
-	params := witRuntime.Allocate(pinner, (16 + 11*4), 4)
+	returnArea := uintptr(witRuntime.Allocate(pinner, (8 + 12*4), 4))
+	params := witRuntime.Allocate(pinner, (24 + 11*4), 4)
 	*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), 0)), 0)) = (self).Handle()
 	slice := commandPath
 	length := uint32(len(slice))
@@ -15637,17 +15799,21 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 				panic("unreachable")
 			}
 
-		case golem_core_types.SchemaTypeBodyDatetimeType:
+		case golem_core_types.SchemaTypeBodyUuidType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-		case golem_core_types.SchemaTypeBodyDurationType:
+		case golem_core_types.SchemaTypeBodyDatetimeType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+		case golem_core_types.SchemaTypeBodyDurationType:
+
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 		case golem_core_types.SchemaTypeBodyQuantityType:
 			payload := (element).Body.QuantityType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf876 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 			pinner.Pin(utf876)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -15705,7 +15871,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaTypeBodyUnionType:
 			payload := (element).Body.UnionType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			slice102 := (payload).Branches
 			length104 := uint32(len(slice102))
 			result103 := witRuntime.Allocate(pinner, uintptr(length104*(23*4)), 4)
@@ -15890,7 +16056,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaTypeBodySecretType:
 			payload := (element).Body.SecretType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 			switch (payload).Category.Tag() {
@@ -15911,7 +16077,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaTypeBodyQuotaTokenType:
 			payload := (element).Body.QuotaTokenType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 			switch (payload).ResourceName.Tag() {
 			case witTypes.OptionNone:
@@ -15931,7 +16097,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaTypeBodyPermissionCardType:
 			payload := (element).Body.PermissionCardType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			var result107 int32
 			if (payload).Polymorphic {
 				result107 = 1
@@ -15942,7 +16108,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaTypeBodyFutureType:
 			payload := (element).Body.FutureType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -15959,7 +16125,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaTypeBodyStreamType:
 			payload := (element).Body.StreamType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -16436,20 +16602,26 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8152)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf8153 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -16459,7 +16631,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf8154 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf8154)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -16468,22 +16640,22 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -16522,8 +16694,21 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 		panic("unreachable")
 	}
 
+	switch stderr.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (16+11*4))), 0)) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := stderr.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (16+11*4))), 0)) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (16+11*4))), 4)) = (payload).TakeHandle()
+
+	default:
+		panic("unreachable")
+	}
+
 	witAsync.SubtaskWait(uint32(wasm_import_method_tool_rpc_invoke_and_await(uintptr(params), returnArea)))
-	var result579 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
+	var result580 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		var option359 witTypes.Option[golem_core_types.TypedSchemaValue]
@@ -17818,13 +18003,17 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 				case 28:
 
-					variant318 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+					variant318 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 				case 29:
 
-					variant318 = golem_core_types.MakeSchemaTypeBodyDurationType()
+					variant318 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 				case 30:
+
+					variant318 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+				case 31:
 					value283 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					result285 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -17861,7 +18050,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 					variant318 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value283, AllowedSuffixes: result285, Min: option287, Max: option289})
 
-				case 31:
+				case 32:
 					result311 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -17992,7 +18181,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 					variant318 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result311})
 
-				case 32:
+				case 33:
 					var option313 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 					case 0:
@@ -18008,7 +18197,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 					variant318 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option313})
 
-				case 33:
+				case 34:
 					var option315 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -18024,11 +18213,11 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 					variant318 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option315})
 
-				case 34:
+				case 35:
 
 					variant318 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-				case 35:
+				case 36:
 					var option316 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -18043,7 +18232,7 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 					variant318 = golem_core_types.MakeSchemaTypeBodyFutureType(option316)
 
-				case 36:
+				case 37:
 					var option317 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -18395,35 +18584,39 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 
 				case 27:
 
-					variant357 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+					variant357 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 28:
 
-					variant357 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+					variant357 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 29:
+
+					variant357 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+				case 30:
 					value355 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 					variant357 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value355})
 
-				case 30:
+				case 31:
 					value356 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 					variant357 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value356, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-				case 31:
+				case 32:
 
 					variant357 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 32:
+				case 33:
 
 					variant357 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 33:
+				case 34:
 
 					variant357 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 34:
+				case 35:
 
 					variant357 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -18449,1577 +18642,1577 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 		default:
 			panic("unreachable")
 		}
+		var option361 witTypes.Option[*witTypes.StreamReader[uint8]]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4)))) {
+		case 0:
 
-		result579 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](golem_tool_common.InvocationResult{Result: option359, Stdout: option360})
+			option361 = witTypes.None[*witTypes.StreamReader[uint8]]()
+		case 1:
+
+			option361 = witTypes.Some[*witTypes.StreamReader[uint8]](LiftStreamU8(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (12 + 10*4)))))
+		default:
+			panic("unreachable")
+		}
+
+		result580 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](golem_tool_common.InvocationResult{Result: option359, Stdout: option360, Stderr: option361})
 	case 1:
-		var variant578 golem_core_types.ToolRpcError
+		var variant579 golem_core_types.ToolRpcError
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
-			value361 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant578 = golem_core_types.MakeToolRpcErrorProtocolError(value361)
-
-		case 1:
 			value362 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant578 = golem_core_types.MakeToolRpcErrorDenied(value362)
+			variant579 = golem_core_types.MakeToolRpcErrorProtocolError(value362)
 
-		case 2:
+		case 1:
 			value363 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant578 = golem_core_types.MakeToolRpcErrorNotFound(value363)
+			variant579 = golem_core_types.MakeToolRpcErrorDenied(value363)
 
-		case 3:
+		case 2:
 			value364 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant578 = golem_core_types.MakeToolRpcErrorRemoteInternalError(value364)
+			variant579 = golem_core_types.MakeToolRpcErrorNotFound(value364)
+
+		case 3:
+			value365 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant579 = golem_core_types.MakeToolRpcErrorRemoteInternalError(value365)
 
 		case 4:
-			var variant576 golem_core_types.ToolError
+			var variant577 golem_core_types.ToolError
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
 			case 0:
-				value365 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+				value366 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 
-				variant576 = golem_core_types.MakeToolErrorInvalidToolName(value365)
+				variant577 = golem_core_types.MakeToolErrorInvalidToolName(value366)
 
 			case 1:
-				result367 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+				result368 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), index*(2*4))
-					value366 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value367 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					result367 = append(result367, value366)
+					result368 = append(result368, value367)
 				}
 
-				variant576 = golem_core_types.MakeToolErrorInvalidCommandPath(result367)
+				variant577 = golem_core_types.MakeToolErrorInvalidCommandPath(result368)
 
 			case 2:
-				value368 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				variant576 = golem_core_types.MakeToolErrorInvalidInput(value368)
-
-			case 3:
 				value369 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 
-				variant576 = golem_core_types.MakeToolErrorConstraintViolation(value369)
+				variant577 = golem_core_types.MakeToolErrorInvalidInput(value369)
 
-			case 4:
+			case 3:
 				value370 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 
-				variant576 = golem_core_types.MakeToolErrorInvalidResult(value370)
+				variant577 = golem_core_types.MakeToolErrorConstraintViolation(value370)
+
+			case 4:
+				value371 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+
+				variant577 = golem_core_types.MakeToolErrorInvalidResult(value371)
 
 			case 5:
-				value371 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-				result547 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4))))
+				value372 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+				result548 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))), index*(56+22*4))
-					var variant535 golem_core_types.SchemaTypeBody
+					var variant536 golem_core_types.SchemaTypeBody
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 					case 0:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant536 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 1:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyBoolType()
+						variant536 = golem_core_types.MakeSchemaTypeBodyBoolType()
 
 					case 2:
-						var option378 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option379 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option378 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option379 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option373 witTypes.Option[golem_core_types.NumericBound]
+							var option374 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option373 = witTypes.None[golem_core_types.NumericBound]()
+								option374 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant372 golem_core_types.NumericBound
+								var variant373 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant372 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant373 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant372 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant373 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant372 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant373 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option373 = witTypes.Some[golem_core_types.NumericBound](variant372)
+								option374 = witTypes.Some[golem_core_types.NumericBound](variant373)
 							default:
 								panic("unreachable")
 							}
-							var option375 witTypes.Option[golem_core_types.NumericBound]
+							var option376 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option375 = witTypes.None[golem_core_types.NumericBound]()
+								option376 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant374 golem_core_types.NumericBound
+								var variant375 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant374 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant375 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant374 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant375 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant374 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant375 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option375 = witTypes.Some[golem_core_types.NumericBound](variant374)
+								option376 = witTypes.Some[golem_core_types.NumericBound](variant375)
 							default:
 								panic("unreachable")
 							}
-							var option377 witTypes.Option[string]
+							var option378 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option377 = witTypes.None[string]()
+								option378 = witTypes.None[string]()
 							case 1:
-								value376 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value377 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option377 = witTypes.Some[string](value376)
+								option378 = witTypes.Some[string](value377)
 							default:
 								panic("unreachable")
 							}
 
-							option378 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option373, Max: option375, Unit: option377})
+							option379 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option374, Max: option376, Unit: option378})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyS8Type(option378)
+						variant536 = golem_core_types.MakeSchemaTypeBodyS8Type(option379)
 
 					case 3:
-						var option385 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option386 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option385 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option386 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option380 witTypes.Option[golem_core_types.NumericBound]
+							var option381 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option380 = witTypes.None[golem_core_types.NumericBound]()
+								option381 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant379 golem_core_types.NumericBound
+								var variant380 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant379 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant380 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant379 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant380 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant379 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant380 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option380 = witTypes.Some[golem_core_types.NumericBound](variant379)
+								option381 = witTypes.Some[golem_core_types.NumericBound](variant380)
 							default:
 								panic("unreachable")
 							}
-							var option382 witTypes.Option[golem_core_types.NumericBound]
+							var option383 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option382 = witTypes.None[golem_core_types.NumericBound]()
+								option383 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant381 golem_core_types.NumericBound
+								var variant382 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant381 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant382 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant381 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant382 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant381 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant382 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option382 = witTypes.Some[golem_core_types.NumericBound](variant381)
+								option383 = witTypes.Some[golem_core_types.NumericBound](variant382)
 							default:
 								panic("unreachable")
 							}
-							var option384 witTypes.Option[string]
+							var option385 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option384 = witTypes.None[string]()
+								option385 = witTypes.None[string]()
 							case 1:
-								value383 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value384 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option384 = witTypes.Some[string](value383)
+								option385 = witTypes.Some[string](value384)
 							default:
 								panic("unreachable")
 							}
 
-							option385 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option380, Max: option382, Unit: option384})
+							option386 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option381, Max: option383, Unit: option385})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyS16Type(option385)
+						variant536 = golem_core_types.MakeSchemaTypeBodyS16Type(option386)
 
 					case 4:
-						var option392 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option393 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option392 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option393 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option387 witTypes.Option[golem_core_types.NumericBound]
+							var option388 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option387 = witTypes.None[golem_core_types.NumericBound]()
+								option388 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant386 golem_core_types.NumericBound
+								var variant387 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant386 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant387 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant386 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant387 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant386 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant387 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option387 = witTypes.Some[golem_core_types.NumericBound](variant386)
+								option388 = witTypes.Some[golem_core_types.NumericBound](variant387)
 							default:
 								panic("unreachable")
 							}
-							var option389 witTypes.Option[golem_core_types.NumericBound]
+							var option390 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option389 = witTypes.None[golem_core_types.NumericBound]()
+								option390 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant388 golem_core_types.NumericBound
+								var variant389 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant388 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant389 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant388 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant389 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant388 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant389 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option389 = witTypes.Some[golem_core_types.NumericBound](variant388)
+								option390 = witTypes.Some[golem_core_types.NumericBound](variant389)
 							default:
 								panic("unreachable")
 							}
-							var option391 witTypes.Option[string]
+							var option392 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option391 = witTypes.None[string]()
+								option392 = witTypes.None[string]()
 							case 1:
-								value390 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value391 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option391 = witTypes.Some[string](value390)
+								option392 = witTypes.Some[string](value391)
 							default:
 								panic("unreachable")
 							}
 
-							option392 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option387, Max: option389, Unit: option391})
+							option393 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option388, Max: option390, Unit: option392})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyS32Type(option392)
+						variant536 = golem_core_types.MakeSchemaTypeBodyS32Type(option393)
 
 					case 5:
-						var option399 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option400 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option399 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option400 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option394 witTypes.Option[golem_core_types.NumericBound]
+							var option395 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option394 = witTypes.None[golem_core_types.NumericBound]()
+								option395 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant393 golem_core_types.NumericBound
+								var variant394 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant393 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant394 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant393 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant394 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant393 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant394 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option394 = witTypes.Some[golem_core_types.NumericBound](variant393)
+								option395 = witTypes.Some[golem_core_types.NumericBound](variant394)
 							default:
 								panic("unreachable")
 							}
-							var option396 witTypes.Option[golem_core_types.NumericBound]
+							var option397 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option396 = witTypes.None[golem_core_types.NumericBound]()
+								option397 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant395 golem_core_types.NumericBound
+								var variant396 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant395 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant396 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant395 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant396 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant395 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant396 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option396 = witTypes.Some[golem_core_types.NumericBound](variant395)
+								option397 = witTypes.Some[golem_core_types.NumericBound](variant396)
 							default:
 								panic("unreachable")
 							}
-							var option398 witTypes.Option[string]
+							var option399 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option398 = witTypes.None[string]()
+								option399 = witTypes.None[string]()
 							case 1:
-								value397 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value398 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option398 = witTypes.Some[string](value397)
+								option399 = witTypes.Some[string](value398)
 							default:
 								panic("unreachable")
 							}
 
-							option399 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option394, Max: option396, Unit: option398})
+							option400 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option395, Max: option397, Unit: option399})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyS64Type(option399)
+						variant536 = golem_core_types.MakeSchemaTypeBodyS64Type(option400)
 
 					case 6:
-						var option406 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option407 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option406 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option407 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option401 witTypes.Option[golem_core_types.NumericBound]
+							var option402 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option401 = witTypes.None[golem_core_types.NumericBound]()
+								option402 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant400 golem_core_types.NumericBound
+								var variant401 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant400 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant401 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant400 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant401 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant400 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant401 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option401 = witTypes.Some[golem_core_types.NumericBound](variant400)
+								option402 = witTypes.Some[golem_core_types.NumericBound](variant401)
 							default:
 								panic("unreachable")
 							}
-							var option403 witTypes.Option[golem_core_types.NumericBound]
+							var option404 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option403 = witTypes.None[golem_core_types.NumericBound]()
+								option404 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant402 golem_core_types.NumericBound
+								var variant403 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant402 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant403 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant402 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant403 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant402 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant403 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option403 = witTypes.Some[golem_core_types.NumericBound](variant402)
+								option404 = witTypes.Some[golem_core_types.NumericBound](variant403)
 							default:
 								panic("unreachable")
 							}
-							var option405 witTypes.Option[string]
+							var option406 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option405 = witTypes.None[string]()
+								option406 = witTypes.None[string]()
 							case 1:
-								value404 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value405 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option405 = witTypes.Some[string](value404)
+								option406 = witTypes.Some[string](value405)
 							default:
 								panic("unreachable")
 							}
 
-							option406 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option401, Max: option403, Unit: option405})
+							option407 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option402, Max: option404, Unit: option406})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyU8Type(option406)
+						variant536 = golem_core_types.MakeSchemaTypeBodyU8Type(option407)
 
 					case 7:
-						var option413 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option414 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option413 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option414 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option408 witTypes.Option[golem_core_types.NumericBound]
+							var option409 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option408 = witTypes.None[golem_core_types.NumericBound]()
+								option409 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant407 golem_core_types.NumericBound
+								var variant408 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant407 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant408 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant407 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant408 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant407 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant408 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option408 = witTypes.Some[golem_core_types.NumericBound](variant407)
+								option409 = witTypes.Some[golem_core_types.NumericBound](variant408)
 							default:
 								panic("unreachable")
 							}
-							var option410 witTypes.Option[golem_core_types.NumericBound]
+							var option411 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option410 = witTypes.None[golem_core_types.NumericBound]()
+								option411 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant409 golem_core_types.NumericBound
+								var variant410 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant409 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant410 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant409 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant410 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant409 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant410 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option410 = witTypes.Some[golem_core_types.NumericBound](variant409)
+								option411 = witTypes.Some[golem_core_types.NumericBound](variant410)
 							default:
 								panic("unreachable")
 							}
-							var option412 witTypes.Option[string]
+							var option413 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option412 = witTypes.None[string]()
+								option413 = witTypes.None[string]()
 							case 1:
-								value411 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value412 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option412 = witTypes.Some[string](value411)
+								option413 = witTypes.Some[string](value412)
 							default:
 								panic("unreachable")
 							}
 
-							option413 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option408, Max: option410, Unit: option412})
+							option414 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option409, Max: option411, Unit: option413})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyU16Type(option413)
+						variant536 = golem_core_types.MakeSchemaTypeBodyU16Type(option414)
 
 					case 8:
-						var option420 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option421 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option420 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option421 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option415 witTypes.Option[golem_core_types.NumericBound]
+							var option416 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option415 = witTypes.None[golem_core_types.NumericBound]()
+								option416 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant414 golem_core_types.NumericBound
+								var variant415 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant414 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant415 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant414 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant415 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant414 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant415 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option415 = witTypes.Some[golem_core_types.NumericBound](variant414)
+								option416 = witTypes.Some[golem_core_types.NumericBound](variant415)
 							default:
 								panic("unreachable")
 							}
-							var option417 witTypes.Option[golem_core_types.NumericBound]
+							var option418 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option417 = witTypes.None[golem_core_types.NumericBound]()
+								option418 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant416 golem_core_types.NumericBound
+								var variant417 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant416 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant417 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant416 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant417 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant416 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant417 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option417 = witTypes.Some[golem_core_types.NumericBound](variant416)
+								option418 = witTypes.Some[golem_core_types.NumericBound](variant417)
 							default:
 								panic("unreachable")
 							}
-							var option419 witTypes.Option[string]
+							var option420 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option419 = witTypes.None[string]()
+								option420 = witTypes.None[string]()
 							case 1:
-								value418 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value419 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option419 = witTypes.Some[string](value418)
+								option420 = witTypes.Some[string](value419)
 							default:
 								panic("unreachable")
 							}
 
-							option420 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option415, Max: option417, Unit: option419})
+							option421 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option416, Max: option418, Unit: option420})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyU32Type(option420)
+						variant536 = golem_core_types.MakeSchemaTypeBodyU32Type(option421)
 
 					case 9:
-						var option427 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option428 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option427 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option428 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option422 witTypes.Option[golem_core_types.NumericBound]
+							var option423 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option422 = witTypes.None[golem_core_types.NumericBound]()
+								option423 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant421 golem_core_types.NumericBound
+								var variant422 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant421 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant422 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant421 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant422 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant421 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant422 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option422 = witTypes.Some[golem_core_types.NumericBound](variant421)
+								option423 = witTypes.Some[golem_core_types.NumericBound](variant422)
 							default:
 								panic("unreachable")
 							}
-							var option424 witTypes.Option[golem_core_types.NumericBound]
+							var option425 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option424 = witTypes.None[golem_core_types.NumericBound]()
+								option425 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant423 golem_core_types.NumericBound
+								var variant424 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant423 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant424 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant423 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant424 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant423 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant424 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option424 = witTypes.Some[golem_core_types.NumericBound](variant423)
+								option425 = witTypes.Some[golem_core_types.NumericBound](variant424)
 							default:
 								panic("unreachable")
 							}
-							var option426 witTypes.Option[string]
+							var option427 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option426 = witTypes.None[string]()
+								option427 = witTypes.None[string]()
 							case 1:
-								value425 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value426 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option426 = witTypes.Some[string](value425)
+								option427 = witTypes.Some[string](value426)
 							default:
 								panic("unreachable")
 							}
 
-							option427 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option422, Max: option424, Unit: option426})
+							option428 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option423, Max: option425, Unit: option427})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyU64Type(option427)
+						variant536 = golem_core_types.MakeSchemaTypeBodyU64Type(option428)
 
 					case 10:
-						var option434 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option435 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option434 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option435 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option429 witTypes.Option[golem_core_types.NumericBound]
+							var option430 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option429 = witTypes.None[golem_core_types.NumericBound]()
+								option430 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant428 golem_core_types.NumericBound
+								var variant429 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant428 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant429 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant428 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant429 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant428 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant429 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option429 = witTypes.Some[golem_core_types.NumericBound](variant428)
+								option430 = witTypes.Some[golem_core_types.NumericBound](variant429)
 							default:
 								panic("unreachable")
 							}
-							var option431 witTypes.Option[golem_core_types.NumericBound]
+							var option432 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option431 = witTypes.None[golem_core_types.NumericBound]()
+								option432 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant430 golem_core_types.NumericBound
+								var variant431 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant430 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant431 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant430 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant431 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant430 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant431 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option431 = witTypes.Some[golem_core_types.NumericBound](variant430)
+								option432 = witTypes.Some[golem_core_types.NumericBound](variant431)
 							default:
 								panic("unreachable")
 							}
-							var option433 witTypes.Option[string]
+							var option434 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option433 = witTypes.None[string]()
+								option434 = witTypes.None[string]()
 							case 1:
-								value432 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value433 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option433 = witTypes.Some[string](value432)
+								option434 = witTypes.Some[string](value433)
 							default:
 								panic("unreachable")
 							}
 
-							option434 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option429, Max: option431, Unit: option433})
+							option435 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option430, Max: option432, Unit: option434})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyF32Type(option434)
+						variant536 = golem_core_types.MakeSchemaTypeBodyF32Type(option435)
 
 					case 11:
-						var option441 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option442 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option441 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option442 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option436 witTypes.Option[golem_core_types.NumericBound]
+							var option437 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option436 = witTypes.None[golem_core_types.NumericBound]()
+								option437 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant435 golem_core_types.NumericBound
+								var variant436 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant435 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant436 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant435 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant436 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant435 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant436 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option436 = witTypes.Some[golem_core_types.NumericBound](variant435)
+								option437 = witTypes.Some[golem_core_types.NumericBound](variant436)
 							default:
 								panic("unreachable")
 							}
-							var option438 witTypes.Option[golem_core_types.NumericBound]
+							var option439 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option438 = witTypes.None[golem_core_types.NumericBound]()
+								option439 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant437 golem_core_types.NumericBound
+								var variant438 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant437 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant438 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant437 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant438 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant437 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant438 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option438 = witTypes.Some[golem_core_types.NumericBound](variant437)
+								option439 = witTypes.Some[golem_core_types.NumericBound](variant438)
 							default:
 								panic("unreachable")
 							}
-							var option440 witTypes.Option[string]
+							var option441 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option440 = witTypes.None[string]()
+								option441 = witTypes.None[string]()
 							case 1:
-								value439 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value440 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option440 = witTypes.Some[string](value439)
+								option441 = witTypes.Some[string](value440)
 							default:
 								panic("unreachable")
 							}
 
-							option441 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option436, Max: option438, Unit: option440})
+							option442 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option437, Max: option439, Unit: option441})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyF64Type(option441)
+						variant536 = golem_core_types.MakeSchemaTypeBodyF64Type(option442)
 
 					case 12:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyCharType()
+						variant536 = golem_core_types.MakeSchemaTypeBodyCharType()
 
 					case 13:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyStringType()
+						variant536 = golem_core_types.MakeSchemaTypeBodyStringType()
 
 					case 14:
-						result454 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result455 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(17*4))
-							value442 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							var option444 witTypes.Option[string]
+							value443 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							var option445 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 							case 0:
 
-								option444 = witTypes.None[string]()
+								option445 = witTypes.None[string]()
 							case 1:
-								value443 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+								value444 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								option444 = witTypes.Some[string](value443)
+								option445 = witTypes.Some[string](value444)
 							default:
 								panic("unreachable")
 							}
-							result446 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+							result447 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(2*4))
-								value445 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value446 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result446 = append(result446, value445)
+								result447 = append(result447, value446)
 							}
 
-							result448 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
+							result449 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), index*(2*4))
-								value447 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value448 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result448 = append(result448, value447)
+								result449 = append(result449, value448)
 							}
 
-							var option450 witTypes.Option[string]
+							var option451 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))) {
 							case 0:
 
-								option450 = witTypes.None[string]()
+								option451 = witTypes.None[string]()
 							case 1:
-								value449 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
+								value450 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
 
-								option450 = witTypes.Some[string](value449)
+								option451 = witTypes.Some[string](value450)
 							default:
 								panic("unreachable")
 							}
-							var option453 witTypes.Option[golem_core_types.Role]
+							var option454 witTypes.Option[golem_core_types.Role]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))) {
 							case 0:
 
-								option453 = witTypes.None[golem_core_types.Role]()
+								option454 = witTypes.None[golem_core_types.Role]()
 							case 1:
-								var variant452 golem_core_types.Role
+								var variant453 golem_core_types.Role
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4)))) {
 								case 0:
 
-									variant452 = golem_core_types.MakeRoleMultimodal()
+									variant453 = golem_core_types.MakeRoleMultimodal()
 
 								case 1:
 
-									variant452 = golem_core_types.MakeRoleUnstructuredText()
+									variant453 = golem_core_types.MakeRoleUnstructuredText()
 
 								case 2:
 
-									variant452 = golem_core_types.MakeRoleUnstructuredBinary()
+									variant453 = golem_core_types.MakeRoleUnstructuredBinary()
 
 								case 3:
-									value451 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
+									value452 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
 
-									variant452 = golem_core_types.MakeRoleOther(value451)
+									variant453 = golem_core_types.MakeRoleOther(value452)
 
 								default:
 									panic("unreachable")
 								}
 
-								option453 = witTypes.Some[golem_core_types.Role](variant452)
+								option454 = witTypes.Some[golem_core_types.Role](variant453)
 							default:
 								panic("unreachable")
 							}
 
-							result454 = append(result454, golem_core_types.NamedFieldType{Name: value442, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option444, Aliases: result446, Examples: result448, Deprecated: option450, Role: option453}})
+							result455 = append(result455, golem_core_types.NamedFieldType{Name: value443, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option445, Aliases: result447, Examples: result449, Deprecated: option451, Role: option454}})
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyRecordType(result454)
+						variant536 = golem_core_types.MakeSchemaTypeBodyRecordType(result455)
 
 					case 15:
-						result468 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result469 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(8+16*4))
-							value455 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							var option456 witTypes.Option[int32]
+							value456 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							var option457 witTypes.Option[int32]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 							case 0:
 
-								option456 = witTypes.None[int32]()
+								option457 = witTypes.None[int32]()
 							case 1:
 
-								option456 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
+								option457 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
 							default:
 								panic("unreachable")
 							}
-							var option458 witTypes.Option[string]
+							var option459 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 							case 0:
 
-								option458 = witTypes.None[string]()
+								option459 = witTypes.None[string]()
 							case 1:
-								value457 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+								value458 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-								option458 = witTypes.Some[string](value457)
+								option459 = witTypes.Some[string](value458)
 							default:
 								panic("unreachable")
 							}
-							result460 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+							result461 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-								value459 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value460 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result460 = append(result460, value459)
+								result461 = append(result461, value460)
 							}
 
-							result462 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
+							result463 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))))), index*(2*4))
-								value461 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value462 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result462 = append(result462, value461)
+								result463 = append(result463, value462)
 							}
 
-							var option464 witTypes.Option[string]
+							var option465 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4)))) {
 							case 0:
 
-								option464 = witTypes.None[string]()
+								option465 = witTypes.None[string]()
 							case 1:
-								value463 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
+								value464 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
 
-								option464 = witTypes.Some[string](value463)
+								option465 = witTypes.Some[string](value464)
 							default:
 								panic("unreachable")
 							}
-							var option467 witTypes.Option[golem_core_types.Role]
+							var option468 witTypes.Option[golem_core_types.Role]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4)))) {
 							case 0:
 
-								option467 = witTypes.None[golem_core_types.Role]()
+								option468 = witTypes.None[golem_core_types.Role]()
 							case 1:
-								var variant466 golem_core_types.Role
+								var variant467 golem_core_types.Role
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4)))) {
 								case 0:
 
-									variant466 = golem_core_types.MakeRoleMultimodal()
+									variant467 = golem_core_types.MakeRoleMultimodal()
 
 								case 1:
 
-									variant466 = golem_core_types.MakeRoleUnstructuredText()
+									variant467 = golem_core_types.MakeRoleUnstructuredText()
 
 								case 2:
 
-									variant466 = golem_core_types.MakeRoleUnstructuredBinary()
+									variant467 = golem_core_types.MakeRoleUnstructuredBinary()
 
 								case 3:
-									value465 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
+									value466 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
 
-									variant466 = golem_core_types.MakeRoleOther(value465)
+									variant467 = golem_core_types.MakeRoleOther(value466)
 
 								default:
 									panic("unreachable")
 								}
 
-								option467 = witTypes.Some[golem_core_types.Role](variant466)
+								option468 = witTypes.Some[golem_core_types.Role](variant467)
 							default:
 								panic("unreachable")
 							}
 
-							result468 = append(result468, golem_core_types.VariantCaseType{Name: value455, Payload: option456, Metadata: golem_core_types.MetadataEnvelope{Doc: option458, Aliases: result460, Examples: result462, Deprecated: option464, Role: option467}})
+							result469 = append(result469, golem_core_types.VariantCaseType{Name: value456, Payload: option457, Metadata: golem_core_types.MetadataEnvelope{Doc: option459, Aliases: result461, Examples: result463, Deprecated: option465, Role: option468}})
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyVariantType(result468)
+						variant536 = golem_core_types.MakeSchemaTypeBodyVariantType(result469)
 
 					case 16:
-						result470 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result471 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-							value469 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value470 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result470 = append(result470, value469)
+							result471 = append(result471, value470)
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyEnumType(result470)
+						variant536 = golem_core_types.MakeSchemaTypeBodyEnumType(result471)
 
 					case 17:
-						result472 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result473 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-							value471 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value472 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result472 = append(result472, value471)
+							result473 = append(result473, value472)
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyFlagsType(result472)
+						variant536 = golem_core_types.MakeSchemaTypeBodyFlagsType(result473)
 
 					case 18:
-						result473 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result474 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-							result473 = append(result473, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+							result474 = append(result474, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyTupleType(result473)
+						variant536 = golem_core_types.MakeSchemaTypeBodyTupleType(result474)
 
 					case 19:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant536 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 20:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
+						variant536 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
 
 					case 21:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+						variant536 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
 					case 22:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant536 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 23:
-						var option474 witTypes.Option[int32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-						case 0:
-
-							option474 = witTypes.None[int32]()
-						case 1:
-
-							option474 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
-						default:
-							panic("unreachable")
-						}
 						var option475 witTypes.Option[int32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
 							option475 = witTypes.None[int32]()
 						case 1:
 
-							option475 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
+							option475 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+						default:
+							panic("unreachable")
+						}
+						var option476 witTypes.Option[int32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
+						case 0:
+
+							option476 = witTypes.None[int32]()
+						case 1:
+
+							option476 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option474, Err: option475})
+						variant536 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option475, Err: option476})
 
 					case 24:
-						var option478 witTypes.Option[[]string]
+						var option479 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option478 = witTypes.None[[]string]()
+							option479 = witTypes.None[[]string]()
 						case 1:
-							result477 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+							result478 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-								value476 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value477 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result477 = append(result477, value476)
+								result478 = append(result478, value477)
 							}
 
-							option478 = witTypes.Some[[]string](result477)
-						default:
-							panic("unreachable")
-						}
-						var option479 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-						case 0:
-
-							option479 = witTypes.None[uint32]()
-						case 1:
-
-							option479 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+							option479 = witTypes.Some[[]string](result478)
 						default:
 							panic("unreachable")
 						}
 						var option480 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 						case 0:
 
 							option480 = witTypes.None[uint32]()
 						case 1:
 
-							option480 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+							option480 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
 						default:
 							panic("unreachable")
 						}
-						var option482 witTypes.Option[string]
+						var option481 witTypes.Option[uint32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						case 0:
+
+							option481 = witTypes.None[uint32]()
+						case 1:
+
+							option481 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+						default:
+							panic("unreachable")
+						}
+						var option483 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))) {
 						case 0:
 
-							option482 = witTypes.None[string]()
+							option483 = witTypes.None[string]()
 						case 1:
-							value481 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
+							value482 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
 
-							option482 = witTypes.Some[string](value481)
+							option483 = witTypes.Some[string](value482)
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option478, MinLength: option479, MaxLength: option480, Regex: option482})
+						variant536 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option479, MinLength: option480, MaxLength: option481, Regex: option483})
 
 					case 25:
-						var option485 witTypes.Option[[]string]
+						var option486 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option485 = witTypes.None[[]string]()
+							option486 = witTypes.None[[]string]()
 						case 1:
-							result484 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+							result485 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-								value483 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value484 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result484 = append(result484, value483)
+								result485 = append(result485, value484)
 							}
 
-							option485 = witTypes.Some[[]string](result484)
-						default:
-							panic("unreachable")
-						}
-						var option486 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-						case 0:
-
-							option486 = witTypes.None[uint32]()
-						case 1:
-
-							option486 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+							option486 = witTypes.Some[[]string](result485)
 						default:
 							panic("unreachable")
 						}
 						var option487 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 						case 0:
 
 							option487 = witTypes.None[uint32]()
 						case 1:
 
-							option487 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+							option487 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+						default:
+							panic("unreachable")
+						}
+						var option488 witTypes.Option[uint32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						case 0:
+
+							option488 = witTypes.None[uint32]()
+						case 1:
+
+							option488 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option485, MinBytes: option486, MaxBytes: option487})
+						variant536 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option486, MinBytes: option487, MaxBytes: option488})
 
 					case 26:
-						var option490 witTypes.Option[[]string]
+						var option491 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
 
-							option490 = witTypes.None[[]string]()
+							option491 = witTypes.None[[]string]()
 						case 1:
-							result489 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+							result490 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-								value488 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value489 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result489 = append(result489, value488)
+								result490 = append(result490, value489)
 							}
 
-							option490 = witTypes.Some[[]string](result489)
+							option491 = witTypes.Some[[]string](result490)
 						default:
 							panic("unreachable")
 						}
-						var option493 witTypes.Option[[]string]
+						var option494 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
 						case 0:
 
-							option493 = witTypes.None[[]string]()
+							option494 = witTypes.None[[]string]()
 						case 1:
-							result492 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+							result493 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-								value491 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value492 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result492 = append(result492, value491)
+								result493 = append(result493, value492)
 							}
 
-							option493 = witTypes.Some[[]string](result492)
+							option494 = witTypes.Some[[]string](result493)
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option490, AllowedExtensions: option493})
+						variant536 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option491, AllowedExtensions: option494})
 
 					case 27:
-						var option496 witTypes.Option[[]string]
+						var option497 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option496 = witTypes.None[[]string]()
+							option497 = witTypes.None[[]string]()
 						case 1:
-							result495 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+							result496 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-								value494 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value495 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result495 = append(result495, value494)
+								result496 = append(result496, value495)
 							}
 
-							option496 = witTypes.Some[[]string](result495)
+							option497 = witTypes.Some[[]string](result496)
 						default:
 							panic("unreachable")
 						}
-						var option499 witTypes.Option[[]string]
+						var option500 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 						case 0:
 
-							option499 = witTypes.None[[]string]()
+							option500 = witTypes.None[[]string]()
 						case 1:
-							result498 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
+							result499 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))), index*(2*4))
-								value497 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value498 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result498 = append(result498, value497)
+								result499 = append(result499, value498)
 							}
 
-							option499 = witTypes.Some[[]string](result498)
+							option500 = witTypes.Some[[]string](result499)
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option496, AllowedHosts: option499})
+						variant536 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option497, AllowedHosts: option500})
 
 					case 28:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant536 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant536 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
-						value500 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						result502 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+
+						variant536 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
+						value501 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result503 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-							value501 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value502 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result502 = append(result502, value501)
+							result503 = append(result503, value502)
 						}
 
-						var option504 witTypes.Option[golem_core_types.QuantityValue]
+						var option505 witTypes.Option[golem_core_types.QuantityValue]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
 						case 0:
 
-							option504 = witTypes.None[golem_core_types.QuantityValue]()
+							option505 = witTypes.None[golem_core_types.QuantityValue]()
 						case 1:
-							value503 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
+							value504 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
 
-							option504 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value503})
+							option505 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value504})
 						default:
 							panic("unreachable")
 						}
-						var option506 witTypes.Option[golem_core_types.QuantityValue]
+						var option507 witTypes.Option[golem_core_types.QuantityValue]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4)))) {
 						case 0:
 
-							option506 = witTypes.None[golem_core_types.QuantityValue]()
+							option507 = witTypes.None[golem_core_types.QuantityValue]()
 						case 1:
-							value505 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
+							value506 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
 
-							option506 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value505})
+							option507 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value506})
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value500, AllowedSuffixes: result502, Min: option504, Max: option506})
+						variant536 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value501, AllowedSuffixes: result503, Min: option505, Max: option507})
 
-					case 31:
-						result528 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 32:
+						result529 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
-							value507 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							var variant516 golem_core_types.DiscriminatorRule
+							value508 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							var variant517 golem_core_types.DiscriminatorRule
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 							case 0:
-								value508 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-								variant516 = golem_core_types.MakeDiscriminatorRulePrefix(value508)
-
-							case 1:
 								value509 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant516 = golem_core_types.MakeDiscriminatorRuleSuffix(value509)
+								variant517 = golem_core_types.MakeDiscriminatorRulePrefix(value509)
 
-							case 2:
+							case 1:
 								value510 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant516 = golem_core_types.MakeDiscriminatorRuleContains(value510)
+								variant517 = golem_core_types.MakeDiscriminatorRuleSuffix(value510)
 
-							case 3:
+							case 2:
 								value511 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant516 = golem_core_types.MakeDiscriminatorRuleRegex(value511)
+								variant517 = golem_core_types.MakeDiscriminatorRuleContains(value511)
+
+							case 3:
+								value512 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+								variant517 = golem_core_types.MakeDiscriminatorRuleRegex(value512)
 
 							case 4:
-								value512 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-								var option514 witTypes.Option[string]
+								value513 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+								var option515 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))) {
 								case 0:
 
-									option514 = witTypes.None[string]()
+									option515 = witTypes.None[string]()
 								case 1:
-									value513 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+									value514 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
 
-									option514 = witTypes.Some[string](value513)
+									option515 = witTypes.Some[string](value514)
 								default:
 									panic("unreachable")
 								}
 
-								variant516 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value512, Literal: option514})
+								variant517 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value513, Literal: option515})
 
 							case 5:
-								value515 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+								value516 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant516 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value515)
+								variant517 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value516)
 
 							default:
 								panic("unreachable")
 							}
-							var option518 witTypes.Option[string]
+							var option519 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))) {
 							case 0:
 
-								option518 = witTypes.None[string]()
+								option519 = witTypes.None[string]()
 							case 1:
-								value517 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
+								value518 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
 
-								option518 = witTypes.Some[string](value517)
+								option519 = witTypes.Some[string](value518)
 							default:
 								panic("unreachable")
 							}
-							result520 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
+							result521 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))), index*(2*4))
-								value519 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value520 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result520 = append(result520, value519)
+								result521 = append(result521, value520)
 							}
 
-							result522 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
+							result523 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))))), index*(2*4))
-								value521 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value522 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result522 = append(result522, value521)
+								result523 = append(result523, value522)
 							}
 
-							var option524 witTypes.Option[string]
+							var option525 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
 							case 0:
 
-								option524 = witTypes.None[string]()
+								option525 = witTypes.None[string]()
 							case 1:
-								value523 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
+								value524 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
 
-								option524 = witTypes.Some[string](value523)
+								option525 = witTypes.Some[string](value524)
 							default:
 								panic("unreachable")
 							}
-							var option527 witTypes.Option[golem_core_types.Role]
+							var option528 witTypes.Option[golem_core_types.Role]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4)))) {
 							case 0:
 
-								option527 = witTypes.None[golem_core_types.Role]()
+								option528 = witTypes.None[golem_core_types.Role]()
 							case 1:
-								var variant526 golem_core_types.Role
+								var variant527 golem_core_types.Role
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4)))) {
 								case 0:
 
-									variant526 = golem_core_types.MakeRoleMultimodal()
+									variant527 = golem_core_types.MakeRoleMultimodal()
 
 								case 1:
 
-									variant526 = golem_core_types.MakeRoleUnstructuredText()
+									variant527 = golem_core_types.MakeRoleUnstructuredText()
 
 								case 2:
 
-									variant526 = golem_core_types.MakeRoleUnstructuredBinary()
+									variant527 = golem_core_types.MakeRoleUnstructuredBinary()
 
 								case 3:
-									value525 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
+									value526 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
 
-									variant526 = golem_core_types.MakeRoleOther(value525)
+									variant527 = golem_core_types.MakeRoleOther(value526)
 
 								default:
 									panic("unreachable")
 								}
 
-								option527 = witTypes.Some[golem_core_types.Role](variant526)
+								option528 = witTypes.Some[golem_core_types.Role](variant527)
 							default:
 								panic("unreachable")
 							}
 
-							result528 = append(result528, golem_core_types.UnionBranch{Tag: value507, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant516, Metadata: golem_core_types.MetadataEnvelope{Doc: option518, Aliases: result520, Examples: result522, Deprecated: option524, Role: option527}})
+							result529 = append(result529, golem_core_types.UnionBranch{Tag: value508, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant517, Metadata: golem_core_types.MetadataEnvelope{Doc: option519, Aliases: result521, Examples: result523, Deprecated: option525, Role: option528}})
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result528})
+						variant536 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result529})
 
-					case 32:
-						var option530 witTypes.Option[string]
+					case 33:
+						var option531 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
 
-							option530 = witTypes.None[string]()
+							option531 = witTypes.None[string]()
 						case 1:
-							value529 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+							value530 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 
-							option530 = witTypes.Some[string](value529)
+							option531 = witTypes.Some[string](value530)
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option530})
-
-					case 33:
-						var option532 witTypes.Option[string]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-						case 0:
-
-							option532 = witTypes.None[string]()
-						case 1:
-							value531 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
-
-							option532 = witTypes.Some[string](value531)
-						default:
-							panic("unreachable")
-						}
-
-						variant535 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option532})
+						variant536 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option531})
 
 					case 34:
-
-						variant535 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
-
-					case 35:
-						var option533 witTypes.Option[int32]
+						var option533 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option533 = witTypes.None[int32]()
+							option533 = witTypes.None[string]()
 						case 1:
+							value532 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 
-							option533 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+							option533 = witTypes.Some[string](value532)
 						default:
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyFutureType(option533)
+						variant536 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option533})
+
+					case 35:
+
+						variant536 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
 					case 36:
 						var option534 witTypes.Option[int32]
@@ -20034,216 +20227,221 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 							panic("unreachable")
 						}
 
-						variant535 = golem_core_types.MakeSchemaTypeBodyStreamType(option534)
+						variant536 = golem_core_types.MakeSchemaTypeBodyFutureType(option534)
+
+					case 37:
+						var option535 witTypes.Option[int32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+						case 0:
+
+							option535 = witTypes.None[int32]()
+						case 1:
+
+							option535 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+						default:
+							panic("unreachable")
+						}
+
+						variant536 = golem_core_types.MakeSchemaTypeBodyStreamType(option535)
 
 					default:
 						panic("unreachable")
 					}
-					var option537 witTypes.Option[string]
+					var option538 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4)))) {
 					case 0:
 
-						option537 = witTypes.None[string]()
+						option538 = witTypes.None[string]()
 					case 1:
-						value536 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
+						value537 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
 
-						option537 = witTypes.Some[string](value536)
+						option538 = witTypes.Some[string](value537)
 					default:
 						panic("unreachable")
 					}
-					result539 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
+					result540 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))))), index*(2*4))
-						value538 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value539 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result539 = append(result539, value538)
+						result540 = append(result540, value539)
 					}
 
-					result541 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
+					result542 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))))), index*(2*4))
-						value540 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value541 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result541 = append(result541, value540)
+						result542 = append(result542, value541)
 					}
 
-					var option543 witTypes.Option[string]
+					var option544 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4)))) {
 					case 0:
 
-						option543 = witTypes.None[string]()
+						option544 = witTypes.None[string]()
 					case 1:
-						value542 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
+						value543 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
 
-						option543 = witTypes.Some[string](value542)
+						option544 = witTypes.Some[string](value543)
 					default:
 						panic("unreachable")
 					}
-					var option546 witTypes.Option[golem_core_types.Role]
+					var option547 witTypes.Option[golem_core_types.Role]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 18*4)))) {
 					case 0:
 
-						option546 = witTypes.None[golem_core_types.Role]()
+						option547 = witTypes.None[golem_core_types.Role]()
 					case 1:
-						var variant545 golem_core_types.Role
+						var variant546 golem_core_types.Role
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4)))) {
 						case 0:
 
-							variant545 = golem_core_types.MakeRoleMultimodal()
+							variant546 = golem_core_types.MakeRoleMultimodal()
 
 						case 1:
 
-							variant545 = golem_core_types.MakeRoleUnstructuredText()
+							variant546 = golem_core_types.MakeRoleUnstructuredText()
 
 						case 2:
 
-							variant545 = golem_core_types.MakeRoleUnstructuredBinary()
+							variant546 = golem_core_types.MakeRoleUnstructuredBinary()
 
 						case 3:
-							value544 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
+							value545 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
 
-							variant545 = golem_core_types.MakeRoleOther(value544)
+							variant546 = golem_core_types.MakeRoleOther(value545)
 
 						default:
 							panic("unreachable")
 						}
 
-						option546 = witTypes.Some[golem_core_types.Role](variant545)
+						option547 = witTypes.Some[golem_core_types.Role](variant546)
 					default:
 						panic("unreachable")
 					}
 
-					result547 = append(result547, golem_core_types.SchemaTypeNode{Body: variant535, Metadata: golem_core_types.MetadataEnvelope{Doc: option537, Aliases: result539, Examples: result541, Deprecated: option543, Role: option546}})
+					result548 = append(result548, golem_core_types.SchemaTypeNode{Body: variant536, Metadata: golem_core_types.MetadataEnvelope{Doc: option538, Aliases: result540, Examples: result542, Deprecated: option544, Role: option547}})
 				}
 
-				result551 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 * 4))))
+				result552 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (7 * 4))))), index*(6*4))
-					value548 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var option550 witTypes.Option[string]
+					value549 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var option551 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 					case 0:
 
-						option550 = witTypes.None[string]()
+						option551 = witTypes.None[string]()
 					case 1:
-						value549 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+						value550 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-						option550 = witTypes.Some[string](value549)
+						option551 = witTypes.Some[string](value550)
 					default:
 						panic("unreachable")
 					}
 
-					result551 = append(result551, golem_core_types.SchemaTypeDef{Id: value548, Name: option550, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
+					result552 = append(result552, golem_core_types.SchemaTypeDef{Id: value549, Name: option551, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
 				}
 
-				result575 := make([]golem_core_types.SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4))))
+				result576 := make([]golem_core_types.SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (10 * 4))))), index*(16+4*4))
-					var variant574 golem_core_types.SchemaValueNode
+					var variant575 golem_core_types.SchemaValueNode
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 					case 0:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
+						variant575 = golem_core_types.MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
 
 					case 1:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant575 = golem_core_types.MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 2:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant575 = golem_core_types.MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 3:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant575 = golem_core_types.MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 4:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant575 = golem_core_types.MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 5:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant575 = golem_core_types.MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 6:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant575 = golem_core_types.MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 7:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant575 = golem_core_types.MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 8:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant575 = golem_core_types.MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 9:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant575 = golem_core_types.MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 10:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant575 = golem_core_types.MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 11:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant575 = golem_core_types.MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 12:
-						value552 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						value553 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-						variant574 = golem_core_types.MakeSchemaValueNodeStringValue(value552)
+						variant575 = golem_core_types.MakeSchemaValueNodeStringValue(value553)
 
 					case 13:
-						result553 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result554 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-							result553 = append(result553, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+							result554 = append(result554, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeRecordValue(result553)
+						variant575 = golem_core_types.MakeSchemaValueNodeRecordValue(result554)
 
 					case 14:
-						var option554 witTypes.Option[int32]
+						var option555 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
 						case 0:
 
-							option554 = witTypes.None[int32]()
+							option555 = witTypes.None[int32]()
 						case 1:
 
-							option554 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
+							option555 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
 						default:
 							panic("unreachable")
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeVariantValue(golem_core_types.VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Payload: option554})
+						variant575 = golem_core_types.MakeSchemaValueNodeVariantValue(golem_core_types.VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Payload: option555})
 
 					case 15:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant575 = golem_core_types.MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 16:
-						result555 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result556 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
 
-							result555 = append(result555, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
+							result556 = append(result556, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeFlagsValue(result555)
+						variant575 = golem_core_types.MakeSchemaValueNodeFlagsValue(result556)
 
 					case 17:
-						result556 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
-
-							result556 = append(result556, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
-						}
-
-						variant574 = golem_core_types.MakeSchemaValueNodeTupleValue(result556)
-
-					case 18:
 						result557 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
@@ -20251,9 +20449,9 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 							result557 = append(result557, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeListValue(result557)
+						variant575 = golem_core_types.MakeSchemaValueNodeTupleValue(result557)
 
-					case 19:
+					case 18:
 						result558 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
@@ -20261,52 +20459,47 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 							result558 = append(result558, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeFixedListValue(result558)
+						variant575 = golem_core_types.MakeSchemaValueNodeListValue(result558)
+
+					case 19:
+						result559 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
+
+							result559 = append(result559, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+						}
+
+						variant575 = golem_core_types.MakeSchemaValueNodeFixedListValue(result559)
 
 					case 20:
-						result559 := make([]golem_core_types.MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result560 := make([]golem_core_types.MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*8)
 
-							result559 = append(result559, golem_core_types.MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 4))})
+							result560 = append(result560, golem_core_types.MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 4))})
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeMapValue(result559)
+						variant575 = golem_core_types.MakeSchemaValueNodeMapValue(result560)
 
 					case 21:
-						var option560 witTypes.Option[int32]
+						var option561 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option560 = witTypes.None[int32]()
+							option561 = witTypes.None[int32]()
 						case 1:
 
-							option560 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+							option561 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
 						default:
 							panic("unreachable")
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeOptionValue(option560)
+						variant575 = golem_core_types.MakeSchemaValueNodeOptionValue(option561)
 
 					case 22:
-						var variant563 golem_core_types.ResultValuePayload
+						var variant564 golem_core_types.ResultValuePayload
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
-							var option561 witTypes.Option[int32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
-							case 0:
-
-								option561 = witTypes.None[int32]()
-							case 1:
-
-								option561 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
-							default:
-								panic("unreachable")
-							}
-
-							variant563 = golem_core_types.MakeResultValuePayloadOkValue(option561)
-
-						case 1:
 							var option562 witTypes.Option[int32]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
 							case 0:
@@ -20319,126 +20512,145 @@ func (self *ToolRpc) InvokeAndAwait(commandPath []string, input golem_core_types
 								panic("unreachable")
 							}
 
-							variant563 = golem_core_types.MakeResultValuePayloadErrValue(option562)
+							variant564 = golem_core_types.MakeResultValuePayloadOkValue(option562)
+
+						case 1:
+							var option563 witTypes.Option[int32]
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
+							case 0:
+
+								option563 = witTypes.None[int32]()
+							case 1:
+
+								option563 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
+							default:
+								panic("unreachable")
+							}
+
+							variant564 = golem_core_types.MakeResultValuePayloadErrValue(option563)
 
 						default:
 							panic("unreachable")
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeResultValue(variant563)
+						variant575 = golem_core_types.MakeSchemaValueNodeResultValue(variant564)
 
 					case 23:
-						value564 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var option566 witTypes.Option[string]
+						value565 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						var option567 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 						case 0:
 
-							option566 = witTypes.None[string]()
+							option567 = witTypes.None[string]()
 						case 1:
-							value565 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+							value566 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-							option566 = witTypes.Some[string](value565)
+							option567 = witTypes.Some[string](value566)
 						default:
 							panic("unreachable")
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeTextValue(golem_core_types.TextValuePayload{Text: value564, Language: option566})
+						variant575 = golem_core_types.MakeSchemaValueNodeTextValue(golem_core_types.TextValuePayload{Text: value565, Language: option567})
 
 					case 24:
-						value567 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var option569 witTypes.Option[string]
+						value568 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						var option570 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 						case 0:
 
-							option569 = witTypes.None[string]()
+							option570 = witTypes.None[string]()
 						case 1:
-							value568 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+							value569 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-							option569 = witTypes.Some[string](value568)
+							option570 = witTypes.Some[string](value569)
 						default:
 							panic("unreachable")
 						}
 
-						variant574 = golem_core_types.MakeSchemaValueNodeBinaryValue(golem_core_types.BinaryValuePayload{Bytes: value567, MimeType: option569})
+						variant575 = golem_core_types.MakeSchemaValueNodeBinaryValue(golem_core_types.BinaryValuePayload{Bytes: value568, MimeType: option570})
 
 					case 25:
-						value570 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant574 = golem_core_types.MakeSchemaValueNodePathValue(value570)
-
-					case 26:
 						value571 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-						variant574 = golem_core_types.MakeSchemaValueNodeUrlValue(value571)
+						variant575 = golem_core_types.MakeSchemaValueNodePathValue(value571)
+
+					case 26:
+						value572 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+
+						variant575 = golem_core_types.MakeSchemaValueNodeUrlValue(value572)
 
 					case 27:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant575 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant575 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
-						value572 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
-						variant574 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value572})
+						variant575 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
 
 					case 30:
-						value573 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						value573 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
-						variant574 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value573, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
+						variant575 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value573})
 
 					case 31:
+						value574 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-						variant574 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant575 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value574, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
 					case 32:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant575 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 					case 33:
 
-						variant574 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant575 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 					case 34:
 
-						variant574 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant575 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
+					case 35:
+
+						variant575 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 					default:
 						panic("unreachable")
 					}
 
-					result575 = append(result575, variant574)
+					result576 = append(result576, variant575)
 				}
 
-				variant576 = golem_core_types.MakeToolErrorCustomError(golem_core_types.CustomToolError{Name: value371, Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result547, Defs: result551, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (9 * 4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result575, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (12 * 4)))}}})
+				variant577 = golem_core_types.MakeToolErrorCustomError(golem_core_types.CustomToolError{Name: value372, Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result548, Defs: result552, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (9 * 4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result576, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (12 * 4)))}}})
 
 			default:
 				panic("unreachable")
 			}
 
-			variant578 = golem_core_types.MakeToolRpcErrorRemoteToolError(variant576)
+			variant579 = golem_core_types.MakeToolRpcErrorRemoteToolError(variant577)
 
 		case 5:
 
-			variant578 = golem_core_types.MakeToolRpcErrorCancelled()
+			variant579 = golem_core_types.MakeToolRpcErrorCancelled()
 
 		case 6:
-			value577 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+			value578 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant578 = golem_core_types.MakeToolRpcErrorResourceExhausted(value577)
+			variant579 = golem_core_types.MakeToolRpcErrorResourceExhausted(value578)
 
 		default:
 			panic("unreachable")
 		}
 
-		result579 = witTypes.Err[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](variant578)
+		result580 = witTypes.Err[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](variant579)
 	default:
 		panic("unreachable")
 	}
 
-	return result579
+	return result580
 
 }
 
@@ -22035,17 +22247,21 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 				panic("unreachable")
 			}
 
-		case golem_core_types.SchemaTypeBodyDatetimeType:
+		case golem_core_types.SchemaTypeBodyUuidType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-		case golem_core_types.SchemaTypeBodyDurationType:
+		case golem_core_types.SchemaTypeBodyDatetimeType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+		case golem_core_types.SchemaTypeBodyDurationType:
+
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 		case golem_core_types.SchemaTypeBodyQuantityType:
 			payload := (element).Body.QuantityType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf876 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 			pinner.Pin(utf876)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -22103,7 +22319,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaTypeBodyUnionType:
 			payload := (element).Body.UnionType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			slice102 := (payload).Branches
 			length104 := uint32(len(slice102))
 			result103 := witRuntime.Allocate(pinner, uintptr(length104*(23*4)), 4)
@@ -22288,7 +22504,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaTypeBodySecretType:
 			payload := (element).Body.SecretType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 			switch (payload).Category.Tag() {
@@ -22309,7 +22525,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaTypeBodyQuotaTokenType:
 			payload := (element).Body.QuotaTokenType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 			switch (payload).ResourceName.Tag() {
 			case witTypes.OptionNone:
@@ -22329,7 +22545,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaTypeBodyPermissionCardType:
 			payload := (element).Body.PermissionCardType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			var result107 int32
 			if (payload).Polymorphic {
 				result107 = 1
@@ -22340,7 +22556,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaTypeBodyFutureType:
 			payload := (element).Body.FutureType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -22357,7 +22573,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaTypeBodyStreamType:
 			payload := (element).Body.StreamType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -22829,20 +23045,26 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8152)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf8153 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -22852,7 +23074,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf8154 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf8154)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -22861,22 +23083,22 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -24251,13 +24473,17 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 					case 28:
 
-						variant331 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant331 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant331 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant331 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant331 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value296 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result298 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -24294,7 +24520,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 						variant331 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value296, AllowedSuffixes: result298, Min: option300, Max: option302})
 
-					case 31:
+					case 32:
 						result324 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -24425,7 +24651,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 						variant331 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result324})
 
-					case 32:
+					case 33:
 						var option326 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -24441,7 +24667,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 						variant331 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option326})
 
-					case 33:
+					case 34:
 						var option328 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -24457,11 +24683,11 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 						variant331 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option328})
 
-					case 34:
+					case 35:
 
 						variant331 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option329 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -24476,7 +24702,7 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 						variant331 = golem_core_types.MakeSchemaTypeBodyFutureType(option329)
 
-					case 36:
+					case 37:
 						var option330 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -24828,35 +25054,39 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 
 					case 27:
 
-						variant370 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant370 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant370 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant370 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant370 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value368 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant370 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value368})
 
-					case 30:
+					case 31:
 						value369 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant370 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value369, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant370 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant370 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant370 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant370 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -24898,12 +25128,14 @@ func (self *ToolRpc) Invoke(commandPath []string, input golem_core_types.TypedSc
 }
 
 //go:wasmimport golem:tool/host@0.1.0 [method]tool-rpc.async-invoke-and-await
-func wasm_import_method_tool_rpc_async_invoke_and_await(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr, arg4 uint32, arg5 uintptr, arg6 uint32, arg7 int32, arg8 uintptr, arg9 uint32, arg10 int32, arg11 int32, arg12 int32, arg13 int32, arg14 int32) int32
+func wasm_import_method_tool_rpc_async_invoke_and_await(arg0 uintptr) int32
 
-func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_types.TypedSchemaValue, stdin witTypes.Option[*ToolStdin], stdout witTypes.Option[*ToolStdout]) *FutureInvokeResult {
+func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_types.TypedSchemaValue, stdin witTypes.Option[*ToolStdin], stdout witTypes.Option[*ToolOutput], stderr witTypes.Option[*ToolOutput]) *FutureInvokeResult {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
+	returnArea := uintptr(witRuntime.Allocate(pinner, (24 + 11*4), 4))
+	*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), 0)) = (self).Handle()
 	slice := commandPath
 	length := uint32(len(slice))
 	result := witRuntime.Allocate(pinner, uintptr(length*(2*4)), 4)
@@ -24916,6 +25148,8 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 	}
 
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4))) = uint32(length)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)) = uint32(uintptr(uintptr(result)))
 	slice119 := ((input).Graph).TypeNodes
 	length121 := uint32(len(slice119))
 	result120 := witRuntime.Allocate(pinner, uintptr(length121*(56+22*4)), 8)
@@ -26489,17 +26723,21 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 				panic("unreachable")
 			}
 
-		case golem_core_types.SchemaTypeBodyDatetimeType:
+		case golem_core_types.SchemaTypeBodyUuidType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-		case golem_core_types.SchemaTypeBodyDurationType:
+		case golem_core_types.SchemaTypeBodyDatetimeType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+		case golem_core_types.SchemaTypeBodyDurationType:
+
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 		case golem_core_types.SchemaTypeBodyQuantityType:
 			payload := (element).Body.QuantityType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf876 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 			pinner.Pin(utf876)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -26557,7 +26795,7 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaTypeBodyUnionType:
 			payload := (element).Body.UnionType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			slice102 := (payload).Branches
 			length104 := uint32(len(slice102))
 			result103 := witRuntime.Allocate(pinner, uintptr(length104*(23*4)), 4)
@@ -26742,7 +26980,7 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaTypeBodySecretType:
 			payload := (element).Body.SecretType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 			switch (payload).Category.Tag() {
@@ -26763,7 +27001,7 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaTypeBodyQuotaTokenType:
 			payload := (element).Body.QuotaTokenType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 			switch (payload).ResourceName.Tag() {
 			case witTypes.OptionNone:
@@ -26783,7 +27021,7 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaTypeBodyPermissionCardType:
 			payload := (element).Body.PermissionCardType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			var result107 int32
 			if (payload).Polymorphic {
 				result107 = 1
@@ -26794,7 +27032,7 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaTypeBodyFutureType:
 			payload := (element).Body.FutureType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -26811,7 +27049,7 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaTypeBodyStreamType:
 			payload := (element).Body.StreamType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -26929,6 +27167,8 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 	}
 
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))) = uint32(length121)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))) = uint32(uintptr(uintptr(result120)))
 	slice124 := ((input).Graph).Defs
 	length126 := uint32(len(slice124))
 	result125 := witRuntime.Allocate(pinner, uintptr(length126*(6*4)), 4)
@@ -26958,6 +27198,9 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 	}
 
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4))) = uint32(length126)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))) = uint32(uintptr(uintptr(result125)))
+	*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (7 * 4))) = ((input).Graph).Root
 	slice155 := ((input).Value).ValueNodes
 	length157 := uint32(len(slice155))
 	result156 := witRuntime.Allocate(pinner, uintptr(length157*(16+4*4)), 8)
@@ -27283,20 +27526,26 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8152)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf8153 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -27306,7 +27555,7 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf8154 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf8154)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -27315,22 +27564,22 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -27339,38 +27588,50 @@ func (self *ToolRpc) AsyncInvokeAndAwait(commandPath []string, input golem_core_
 
 	}
 
-	var option int32
-	var option158 int32
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (9 * 4))) = uint32(length157)
+	*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 * 4))) = uint32(uintptr(uintptr(result156)))
+	*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (10 * 4))) = ((input).Value).Root
+
 	switch stdin.Tag() {
 	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4))) = int8(int32(0))
 
-		option = int32(0)
-		option158 = 0
 	case witTypes.OptionSome:
 		payload := stdin.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (4 + 11*4))) = (payload).TakeHandle()
 
-		option = int32(1)
-		option158 = (payload).TakeHandle()
 	default:
 		panic("unreachable")
 	}
-	var option159 int32
-	var option160 int32
+
 	switch stdout.Tag() {
 	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4))) = int8(int32(0))
 
-		option159 = int32(0)
-		option160 = 0
 	case witTypes.OptionSome:
 		payload := stdout.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 11*4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (12 + 11*4))) = (payload).TakeHandle()
 
-		option159 = int32(1)
-		option160 = (payload).TakeHandle()
 	default:
 		panic("unreachable")
 	}
-	result161 := wasm_import_method_tool_rpc_async_invoke_and_await((self).Handle(), uintptr(result), length, uintptr(result120), length121, uintptr(result125), length126, ((input).Graph).Root, uintptr(result156), length157, ((input).Value).Root, option, option158, option159, option160)
-	return FutureInvokeResultFromOwnHandle(int32(uintptr(result161)))
+
+	switch stderr.Tag() {
+	case witTypes.OptionNone:
+		*(*int8)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 11*4))) = int8(int32(0))
+
+	case witTypes.OptionSome:
+		payload := stderr.Some()
+		*(*int8)(unsafe.Add(unsafe.Pointer(returnArea), (16 + 11*4))) = int8(int32(1))
+		*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (20 + 11*4))) = (payload).TakeHandle()
+
+	default:
+		panic("unreachable")
+	}
+	result158 := wasm_import_method_tool_rpc_async_invoke_and_await(returnArea)
+	return FutureInvokeResultFromOwnHandle(int32(uintptr(result158)))
 
 }
 
@@ -27381,10 +27642,10 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
-	returnArea := uintptr(witRuntime.Allocate(pinner, (13 * 4), 4))
+	returnArea := uintptr(witRuntime.Allocate(pinner, (8 + 12*4), 4))
 
 	witAsync.SubtaskWait(uint32(wasm_import_method_future_invoke_result_get((self).Handle(), returnArea)))
-	var result420 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
+	var result421 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
 		var option200 witTypes.Option[golem_core_types.TypedSchemaValue]
@@ -28679,13 +28940,17 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 
 				case 28:
 
-					variant159 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+					variant159 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 				case 29:
 
-					variant159 = golem_core_types.MakeSchemaTypeBodyDurationType()
+					variant159 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 				case 30:
+
+					variant159 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+				case 31:
 					value124 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					result126 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -28722,7 +28987,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 
 					variant159 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value124, AllowedSuffixes: result126, Min: option128, Max: option130})
 
-				case 31:
+				case 32:
 					result152 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -28853,7 +29118,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 
 					variant159 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result152})
 
-				case 32:
+				case 33:
 					var option154 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 					case 0:
@@ -28869,7 +29134,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 
 					variant159 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option154})
 
-				case 33:
+				case 34:
 					var option156 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -28885,11 +29150,11 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 
 					variant159 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option156})
 
-				case 34:
+				case 35:
 
 					variant159 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-				case 35:
+				case 36:
 					var option157 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -28904,7 +29169,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 
 					variant159 = golem_core_types.MakeSchemaTypeBodyFutureType(option157)
 
-				case 36:
+				case 37:
 					var option158 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -29256,35 +29521,39 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 
 				case 27:
 
-					variant198 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+					variant198 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 28:
 
-					variant198 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+					variant198 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 29:
+
+					variant198 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+				case 30:
 					value196 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 					variant198 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value196})
 
-				case 30:
+				case 31:
 					value197 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 					variant198 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value197, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-				case 31:
+				case 32:
 
 					variant198 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 32:
+				case 33:
 
 					variant198 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 33:
+				case 34:
 
 					variant198 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 34:
+				case 35:
 
 					variant198 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -29310,1577 +29579,1577 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 		default:
 			panic("unreachable")
 		}
+		var option202 witTypes.Option[*witTypes.StreamReader[uint8]]
+		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 + 10*4)))) {
+		case 0:
 
-		result420 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](golem_tool_common.InvocationResult{Result: option200, Stdout: option201})
+			option202 = witTypes.None[*witTypes.StreamReader[uint8]]()
+		case 1:
+
+			option202 = witTypes.Some[*witTypes.StreamReader[uint8]](LiftStreamU8(*(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (12 + 10*4)))))
+		default:
+			panic("unreachable")
+		}
+
+		result421 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](golem_tool_common.InvocationResult{Result: option200, Stdout: option201, Stderr: option202})
 	case 1:
-		var variant419 golem_core_types.ToolRpcError
+		var variant420 golem_core_types.ToolRpcError
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))) {
 		case 0:
-			value202 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
-
-			variant419 = golem_core_types.MakeToolRpcErrorProtocolError(value202)
-
-		case 1:
 			value203 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant419 = golem_core_types.MakeToolRpcErrorDenied(value203)
+			variant420 = golem_core_types.MakeToolRpcErrorProtocolError(value203)
 
-		case 2:
+		case 1:
 			value204 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant419 = golem_core_types.MakeToolRpcErrorNotFound(value204)
+			variant420 = golem_core_types.MakeToolRpcErrorDenied(value204)
 
-		case 3:
+		case 2:
 			value205 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant419 = golem_core_types.MakeToolRpcErrorRemoteInternalError(value205)
+			variant420 = golem_core_types.MakeToolRpcErrorNotFound(value205)
+
+		case 3:
+			value206 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+
+			variant420 = golem_core_types.MakeToolRpcErrorRemoteInternalError(value206)
 
 		case 4:
-			var variant417 golem_core_types.ToolError
+			var variant418 golem_core_types.ToolError
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))) {
 			case 0:
-				value206 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+				value207 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 
-				variant417 = golem_core_types.MakeToolErrorInvalidToolName(value206)
+				variant418 = golem_core_types.MakeToolErrorInvalidToolName(value207)
 
 			case 1:
-				result208 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+				result209 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))), index*(2*4))
-					value207 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					value208 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-					result208 = append(result208, value207)
+					result209 = append(result209, value208)
 				}
 
-				variant417 = golem_core_types.MakeToolErrorInvalidCommandPath(result208)
+				variant418 = golem_core_types.MakeToolErrorInvalidCommandPath(result209)
 
 			case 2:
-				value209 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-
-				variant417 = golem_core_types.MakeToolErrorInvalidInput(value209)
-
-			case 3:
 				value210 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 
-				variant417 = golem_core_types.MakeToolErrorConstraintViolation(value210)
+				variant418 = golem_core_types.MakeToolErrorInvalidInput(value210)
 
-			case 4:
+			case 3:
 				value211 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
 
-				variant417 = golem_core_types.MakeToolErrorInvalidResult(value211)
+				variant418 = golem_core_types.MakeToolErrorConstraintViolation(value211)
+
+			case 4:
+				value212 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+
+				variant418 = golem_core_types.MakeToolErrorInvalidResult(value212)
 
 			case 5:
-				value212 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
-				result388 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4))))
+				value213 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (4 * 4))))
+				result389 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (6 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (5 * 4))))), index*(56+22*4))
-					var variant376 golem_core_types.SchemaTypeBody
+					var variant377 golem_core_types.SchemaTypeBody
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 					case 0:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant377 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 1:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyBoolType()
+						variant377 = golem_core_types.MakeSchemaTypeBodyBoolType()
 
 					case 2:
-						var option219 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option220 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option219 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option220 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option214 witTypes.Option[golem_core_types.NumericBound]
+							var option215 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option214 = witTypes.None[golem_core_types.NumericBound]()
+								option215 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant213 golem_core_types.NumericBound
+								var variant214 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant213 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant214 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant213 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant214 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant213 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant214 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option214 = witTypes.Some[golem_core_types.NumericBound](variant213)
+								option215 = witTypes.Some[golem_core_types.NumericBound](variant214)
 							default:
 								panic("unreachable")
 							}
-							var option216 witTypes.Option[golem_core_types.NumericBound]
+							var option217 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option216 = witTypes.None[golem_core_types.NumericBound]()
+								option217 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant215 golem_core_types.NumericBound
+								var variant216 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant215 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant216 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant215 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant216 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant215 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant216 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option216 = witTypes.Some[golem_core_types.NumericBound](variant215)
+								option217 = witTypes.Some[golem_core_types.NumericBound](variant216)
 							default:
 								panic("unreachable")
 							}
-							var option218 witTypes.Option[string]
+							var option219 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option218 = witTypes.None[string]()
+								option219 = witTypes.None[string]()
 							case 1:
-								value217 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value218 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option218 = witTypes.Some[string](value217)
+								option219 = witTypes.Some[string](value218)
 							default:
 								panic("unreachable")
 							}
 
-							option219 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option214, Max: option216, Unit: option218})
+							option220 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option215, Max: option217, Unit: option219})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyS8Type(option219)
+						variant377 = golem_core_types.MakeSchemaTypeBodyS8Type(option220)
 
 					case 3:
-						var option226 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option227 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option226 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option227 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option221 witTypes.Option[golem_core_types.NumericBound]
+							var option222 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option221 = witTypes.None[golem_core_types.NumericBound]()
+								option222 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant220 golem_core_types.NumericBound
+								var variant221 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant220 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant221 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant220 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant221 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant220 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant221 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option221 = witTypes.Some[golem_core_types.NumericBound](variant220)
+								option222 = witTypes.Some[golem_core_types.NumericBound](variant221)
 							default:
 								panic("unreachable")
 							}
-							var option223 witTypes.Option[golem_core_types.NumericBound]
+							var option224 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option223 = witTypes.None[golem_core_types.NumericBound]()
+								option224 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant222 golem_core_types.NumericBound
+								var variant223 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant222 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant223 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant222 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant223 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant222 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant223 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option223 = witTypes.Some[golem_core_types.NumericBound](variant222)
+								option224 = witTypes.Some[golem_core_types.NumericBound](variant223)
 							default:
 								panic("unreachable")
 							}
-							var option225 witTypes.Option[string]
+							var option226 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option225 = witTypes.None[string]()
+								option226 = witTypes.None[string]()
 							case 1:
-								value224 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value225 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option225 = witTypes.Some[string](value224)
+								option226 = witTypes.Some[string](value225)
 							default:
 								panic("unreachable")
 							}
 
-							option226 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option221, Max: option223, Unit: option225})
+							option227 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option222, Max: option224, Unit: option226})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyS16Type(option226)
+						variant377 = golem_core_types.MakeSchemaTypeBodyS16Type(option227)
 
 					case 4:
-						var option233 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option234 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option233 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option234 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option228 witTypes.Option[golem_core_types.NumericBound]
+							var option229 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option228 = witTypes.None[golem_core_types.NumericBound]()
+								option229 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant227 golem_core_types.NumericBound
+								var variant228 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant227 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant228 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant227 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant228 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant227 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant228 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option228 = witTypes.Some[golem_core_types.NumericBound](variant227)
+								option229 = witTypes.Some[golem_core_types.NumericBound](variant228)
 							default:
 								panic("unreachable")
 							}
-							var option230 witTypes.Option[golem_core_types.NumericBound]
+							var option231 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option230 = witTypes.None[golem_core_types.NumericBound]()
+								option231 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant229 golem_core_types.NumericBound
+								var variant230 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant229 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant230 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant229 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant230 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant229 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant230 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option230 = witTypes.Some[golem_core_types.NumericBound](variant229)
+								option231 = witTypes.Some[golem_core_types.NumericBound](variant230)
 							default:
 								panic("unreachable")
 							}
-							var option232 witTypes.Option[string]
+							var option233 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option232 = witTypes.None[string]()
+								option233 = witTypes.None[string]()
 							case 1:
-								value231 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value232 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option232 = witTypes.Some[string](value231)
+								option233 = witTypes.Some[string](value232)
 							default:
 								panic("unreachable")
 							}
 
-							option233 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option228, Max: option230, Unit: option232})
+							option234 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option229, Max: option231, Unit: option233})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyS32Type(option233)
+						variant377 = golem_core_types.MakeSchemaTypeBodyS32Type(option234)
 
 					case 5:
-						var option240 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option241 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option240 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option241 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option235 witTypes.Option[golem_core_types.NumericBound]
+							var option236 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option235 = witTypes.None[golem_core_types.NumericBound]()
+								option236 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant234 golem_core_types.NumericBound
+								var variant235 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant234 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant235 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant234 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant235 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant234 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant235 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option235 = witTypes.Some[golem_core_types.NumericBound](variant234)
+								option236 = witTypes.Some[golem_core_types.NumericBound](variant235)
 							default:
 								panic("unreachable")
 							}
-							var option237 witTypes.Option[golem_core_types.NumericBound]
+							var option238 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option237 = witTypes.None[golem_core_types.NumericBound]()
+								option238 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant236 golem_core_types.NumericBound
+								var variant237 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant236 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant237 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant236 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant237 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant236 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant237 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option237 = witTypes.Some[golem_core_types.NumericBound](variant236)
+								option238 = witTypes.Some[golem_core_types.NumericBound](variant237)
 							default:
 								panic("unreachable")
 							}
-							var option239 witTypes.Option[string]
+							var option240 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option239 = witTypes.None[string]()
+								option240 = witTypes.None[string]()
 							case 1:
-								value238 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value239 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option239 = witTypes.Some[string](value238)
+								option240 = witTypes.Some[string](value239)
 							default:
 								panic("unreachable")
 							}
 
-							option240 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option235, Max: option237, Unit: option239})
+							option241 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option236, Max: option238, Unit: option240})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyS64Type(option240)
+						variant377 = golem_core_types.MakeSchemaTypeBodyS64Type(option241)
 
 					case 6:
-						var option247 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option248 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option247 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option248 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option242 witTypes.Option[golem_core_types.NumericBound]
+							var option243 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option242 = witTypes.None[golem_core_types.NumericBound]()
+								option243 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant241 golem_core_types.NumericBound
+								var variant242 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant241 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant242 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant241 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant242 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant241 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant242 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option242 = witTypes.Some[golem_core_types.NumericBound](variant241)
+								option243 = witTypes.Some[golem_core_types.NumericBound](variant242)
 							default:
 								panic("unreachable")
 							}
-							var option244 witTypes.Option[golem_core_types.NumericBound]
+							var option245 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option244 = witTypes.None[golem_core_types.NumericBound]()
+								option245 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant243 golem_core_types.NumericBound
+								var variant244 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant243 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant244 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant243 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant244 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant243 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant244 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option244 = witTypes.Some[golem_core_types.NumericBound](variant243)
+								option245 = witTypes.Some[golem_core_types.NumericBound](variant244)
 							default:
 								panic("unreachable")
 							}
-							var option246 witTypes.Option[string]
+							var option247 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option246 = witTypes.None[string]()
+								option247 = witTypes.None[string]()
 							case 1:
-								value245 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value246 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option246 = witTypes.Some[string](value245)
+								option247 = witTypes.Some[string](value246)
 							default:
 								panic("unreachable")
 							}
 
-							option247 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option242, Max: option244, Unit: option246})
+							option248 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option243, Max: option245, Unit: option247})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyU8Type(option247)
+						variant377 = golem_core_types.MakeSchemaTypeBodyU8Type(option248)
 
 					case 7:
-						var option254 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option255 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option254 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option255 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option249 witTypes.Option[golem_core_types.NumericBound]
+							var option250 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option249 = witTypes.None[golem_core_types.NumericBound]()
+								option250 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant248 golem_core_types.NumericBound
+								var variant249 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant248 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant249 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant248 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant249 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant248 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant249 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option249 = witTypes.Some[golem_core_types.NumericBound](variant248)
+								option250 = witTypes.Some[golem_core_types.NumericBound](variant249)
 							default:
 								panic("unreachable")
 							}
-							var option251 witTypes.Option[golem_core_types.NumericBound]
+							var option252 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option251 = witTypes.None[golem_core_types.NumericBound]()
+								option252 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant250 golem_core_types.NumericBound
+								var variant251 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant250 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant251 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant250 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant251 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant250 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant251 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option251 = witTypes.Some[golem_core_types.NumericBound](variant250)
+								option252 = witTypes.Some[golem_core_types.NumericBound](variant251)
 							default:
 								panic("unreachable")
 							}
-							var option253 witTypes.Option[string]
+							var option254 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option253 = witTypes.None[string]()
+								option254 = witTypes.None[string]()
 							case 1:
-								value252 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value253 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option253 = witTypes.Some[string](value252)
+								option254 = witTypes.Some[string](value253)
 							default:
 								panic("unreachable")
 							}
 
-							option254 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option249, Max: option251, Unit: option253})
+							option255 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option250, Max: option252, Unit: option254})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyU16Type(option254)
+						variant377 = golem_core_types.MakeSchemaTypeBodyU16Type(option255)
 
 					case 8:
-						var option261 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option262 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option261 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option262 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option256 witTypes.Option[golem_core_types.NumericBound]
+							var option257 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option256 = witTypes.None[golem_core_types.NumericBound]()
+								option257 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant255 golem_core_types.NumericBound
+								var variant256 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant255 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant256 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant255 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant256 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant255 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant256 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option256 = witTypes.Some[golem_core_types.NumericBound](variant255)
+								option257 = witTypes.Some[golem_core_types.NumericBound](variant256)
 							default:
 								panic("unreachable")
 							}
-							var option258 witTypes.Option[golem_core_types.NumericBound]
+							var option259 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option258 = witTypes.None[golem_core_types.NumericBound]()
+								option259 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant257 golem_core_types.NumericBound
+								var variant258 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant257 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant258 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant257 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant258 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant257 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant258 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option258 = witTypes.Some[golem_core_types.NumericBound](variant257)
+								option259 = witTypes.Some[golem_core_types.NumericBound](variant258)
 							default:
 								panic("unreachable")
 							}
-							var option260 witTypes.Option[string]
+							var option261 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option260 = witTypes.None[string]()
+								option261 = witTypes.None[string]()
 							case 1:
-								value259 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value260 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option260 = witTypes.Some[string](value259)
+								option261 = witTypes.Some[string](value260)
 							default:
 								panic("unreachable")
 							}
 
-							option261 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option256, Max: option258, Unit: option260})
+							option262 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option257, Max: option259, Unit: option261})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyU32Type(option261)
+						variant377 = golem_core_types.MakeSchemaTypeBodyU32Type(option262)
 
 					case 9:
-						var option268 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option269 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option268 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option269 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option263 witTypes.Option[golem_core_types.NumericBound]
+							var option264 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option263 = witTypes.None[golem_core_types.NumericBound]()
+								option264 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant262 golem_core_types.NumericBound
+								var variant263 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant262 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant263 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant262 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant263 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant262 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant263 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option263 = witTypes.Some[golem_core_types.NumericBound](variant262)
+								option264 = witTypes.Some[golem_core_types.NumericBound](variant263)
 							default:
 								panic("unreachable")
 							}
-							var option265 witTypes.Option[golem_core_types.NumericBound]
+							var option266 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option265 = witTypes.None[golem_core_types.NumericBound]()
+								option266 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant264 golem_core_types.NumericBound
+								var variant265 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant264 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant265 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant264 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant265 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant264 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant265 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option265 = witTypes.Some[golem_core_types.NumericBound](variant264)
+								option266 = witTypes.Some[golem_core_types.NumericBound](variant265)
 							default:
 								panic("unreachable")
 							}
-							var option267 witTypes.Option[string]
+							var option268 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option267 = witTypes.None[string]()
+								option268 = witTypes.None[string]()
 							case 1:
-								value266 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value267 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option267 = witTypes.Some[string](value266)
+								option268 = witTypes.Some[string](value267)
 							default:
 								panic("unreachable")
 							}
 
-							option268 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option263, Max: option265, Unit: option267})
+							option269 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option264, Max: option266, Unit: option268})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyU64Type(option268)
+						variant377 = golem_core_types.MakeSchemaTypeBodyU64Type(option269)
 
 					case 10:
-						var option275 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option276 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option275 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option276 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option270 witTypes.Option[golem_core_types.NumericBound]
+							var option271 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option270 = witTypes.None[golem_core_types.NumericBound]()
+								option271 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant269 golem_core_types.NumericBound
+								var variant270 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant269 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant270 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant269 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant270 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant269 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant270 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option270 = witTypes.Some[golem_core_types.NumericBound](variant269)
+								option271 = witTypes.Some[golem_core_types.NumericBound](variant270)
 							default:
 								panic("unreachable")
 							}
-							var option272 witTypes.Option[golem_core_types.NumericBound]
+							var option273 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option272 = witTypes.None[golem_core_types.NumericBound]()
+								option273 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant271 golem_core_types.NumericBound
+								var variant272 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant271 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant272 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant271 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant272 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant271 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant272 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option272 = witTypes.Some[golem_core_types.NumericBound](variant271)
+								option273 = witTypes.Some[golem_core_types.NumericBound](variant272)
 							default:
 								panic("unreachable")
 							}
-							var option274 witTypes.Option[string]
+							var option275 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option274 = witTypes.None[string]()
+								option275 = witTypes.None[string]()
 							case 1:
-								value273 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value274 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option274 = witTypes.Some[string](value273)
+								option275 = witTypes.Some[string](value274)
 							default:
 								panic("unreachable")
 							}
 
-							option275 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option270, Max: option272, Unit: option274})
+							option276 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option271, Max: option273, Unit: option275})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyF32Type(option275)
+						variant377 = golem_core_types.MakeSchemaTypeBodyF32Type(option276)
 
 					case 11:
-						var option282 witTypes.Option[golem_core_types.NumericRestrictions]
+						var option283 witTypes.Option[golem_core_types.NumericRestrictions]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option282 = witTypes.None[golem_core_types.NumericRestrictions]()
+							option283 = witTypes.None[golem_core_types.NumericRestrictions]()
 						case 1:
-							var option277 witTypes.Option[golem_core_types.NumericBound]
+							var option278 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 							case 0:
 
-								option277 = witTypes.None[golem_core_types.NumericBound]()
+								option278 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant276 golem_core_types.NumericBound
+								var variant277 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 								case 0:
 
-									variant276 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+									variant277 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 								case 1:
 
-									variant276 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant277 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								case 2:
 
-									variant276 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+									variant277 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option277 = witTypes.Some[golem_core_types.NumericBound](variant276)
+								option278 = witTypes.Some[golem_core_types.NumericBound](variant277)
 							default:
 								panic("unreachable")
 							}
-							var option279 witTypes.Option[golem_core_types.NumericBound]
+							var option280 witTypes.Option[golem_core_types.NumericBound]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 							case 0:
 
-								option279 = witTypes.None[golem_core_types.NumericBound]()
+								option280 = witTypes.None[golem_core_types.NumericBound]()
 							case 1:
-								var variant278 golem_core_types.NumericBound
+								var variant279 golem_core_types.NumericBound
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 								case 0:
 
-									variant278 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+									variant279 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 								case 1:
 
-									variant278 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant279 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								case 2:
 
-									variant278 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+									variant279 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 								default:
 									panic("unreachable")
 								}
 
-								option279 = witTypes.Some[golem_core_types.NumericBound](variant278)
+								option280 = witTypes.Some[golem_core_types.NumericBound](variant279)
 							default:
 								panic("unreachable")
 							}
-							var option281 witTypes.Option[string]
+							var option282 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 							case 0:
 
-								option281 = witTypes.None[string]()
+								option282 = witTypes.None[string]()
 							case 1:
-								value280 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+								value281 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-								option281 = witTypes.Some[string](value280)
+								option282 = witTypes.Some[string](value281)
 							default:
 								panic("unreachable")
 							}
 
-							option282 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option277, Max: option279, Unit: option281})
+							option283 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option278, Max: option280, Unit: option282})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyF64Type(option282)
+						variant377 = golem_core_types.MakeSchemaTypeBodyF64Type(option283)
 
 					case 12:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyCharType()
+						variant377 = golem_core_types.MakeSchemaTypeBodyCharType()
 
 					case 13:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyStringType()
+						variant377 = golem_core_types.MakeSchemaTypeBodyStringType()
 
 					case 14:
-						result295 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result296 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(17*4))
-							value283 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							var option285 witTypes.Option[string]
+							value284 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							var option286 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 							case 0:
 
-								option285 = witTypes.None[string]()
+								option286 = witTypes.None[string]()
 							case 1:
-								value284 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+								value285 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								option285 = witTypes.Some[string](value284)
+								option286 = witTypes.Some[string](value285)
 							default:
 								panic("unreachable")
 							}
-							result287 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+							result288 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(2*4))
-								value286 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value287 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result287 = append(result287, value286)
+								result288 = append(result288, value287)
 							}
 
-							result289 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
+							result290 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), index*(2*4))
-								value288 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value289 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result289 = append(result289, value288)
+								result290 = append(result290, value289)
 							}
 
-							var option291 witTypes.Option[string]
+							var option292 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))) {
 							case 0:
 
-								option291 = witTypes.None[string]()
+								option292 = witTypes.None[string]()
 							case 1:
-								value290 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
+								value291 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
 
-								option291 = witTypes.Some[string](value290)
+								option292 = witTypes.Some[string](value291)
 							default:
 								panic("unreachable")
 							}
-							var option294 witTypes.Option[golem_core_types.Role]
+							var option295 witTypes.Option[golem_core_types.Role]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))) {
 							case 0:
 
-								option294 = witTypes.None[golem_core_types.Role]()
+								option295 = witTypes.None[golem_core_types.Role]()
 							case 1:
-								var variant293 golem_core_types.Role
+								var variant294 golem_core_types.Role
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4)))) {
 								case 0:
 
-									variant293 = golem_core_types.MakeRoleMultimodal()
+									variant294 = golem_core_types.MakeRoleMultimodal()
 
 								case 1:
 
-									variant293 = golem_core_types.MakeRoleUnstructuredText()
+									variant294 = golem_core_types.MakeRoleUnstructuredText()
 
 								case 2:
 
-									variant293 = golem_core_types.MakeRoleUnstructuredBinary()
+									variant294 = golem_core_types.MakeRoleUnstructuredBinary()
 
 								case 3:
-									value292 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
+									value293 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
 
-									variant293 = golem_core_types.MakeRoleOther(value292)
+									variant294 = golem_core_types.MakeRoleOther(value293)
 
 								default:
 									panic("unreachable")
 								}
 
-								option294 = witTypes.Some[golem_core_types.Role](variant293)
+								option295 = witTypes.Some[golem_core_types.Role](variant294)
 							default:
 								panic("unreachable")
 							}
 
-							result295 = append(result295, golem_core_types.NamedFieldType{Name: value283, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option285, Aliases: result287, Examples: result289, Deprecated: option291, Role: option294}})
+							result296 = append(result296, golem_core_types.NamedFieldType{Name: value284, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option286, Aliases: result288, Examples: result290, Deprecated: option292, Role: option295}})
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyRecordType(result295)
+						variant377 = golem_core_types.MakeSchemaTypeBodyRecordType(result296)
 
 					case 15:
-						result309 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result310 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(8+16*4))
-							value296 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							var option297 witTypes.Option[int32]
+							value297 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							var option298 witTypes.Option[int32]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 							case 0:
 
-								option297 = witTypes.None[int32]()
+								option298 = witTypes.None[int32]()
 							case 1:
 
-								option297 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
+								option298 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
 							default:
 								panic("unreachable")
 							}
-							var option299 witTypes.Option[string]
+							var option300 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 							case 0:
 
-								option299 = witTypes.None[string]()
+								option300 = witTypes.None[string]()
 							case 1:
-								value298 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+								value299 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-								option299 = witTypes.Some[string](value298)
+								option300 = witTypes.Some[string](value299)
 							default:
 								panic("unreachable")
 							}
-							result301 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+							result302 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-								value300 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value301 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result301 = append(result301, value300)
+								result302 = append(result302, value301)
 							}
 
-							result303 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
+							result304 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))))), index*(2*4))
-								value302 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value303 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result303 = append(result303, value302)
+								result304 = append(result304, value303)
 							}
 
-							var option305 witTypes.Option[string]
+							var option306 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4)))) {
 							case 0:
 
-								option305 = witTypes.None[string]()
+								option306 = witTypes.None[string]()
 							case 1:
-								value304 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
+								value305 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
 
-								option305 = witTypes.Some[string](value304)
+								option306 = witTypes.Some[string](value305)
 							default:
 								panic("unreachable")
 							}
-							var option308 witTypes.Option[golem_core_types.Role]
+							var option309 witTypes.Option[golem_core_types.Role]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4)))) {
 							case 0:
 
-								option308 = witTypes.None[golem_core_types.Role]()
+								option309 = witTypes.None[golem_core_types.Role]()
 							case 1:
-								var variant307 golem_core_types.Role
+								var variant308 golem_core_types.Role
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4)))) {
 								case 0:
 
-									variant307 = golem_core_types.MakeRoleMultimodal()
+									variant308 = golem_core_types.MakeRoleMultimodal()
 
 								case 1:
 
-									variant307 = golem_core_types.MakeRoleUnstructuredText()
+									variant308 = golem_core_types.MakeRoleUnstructuredText()
 
 								case 2:
 
-									variant307 = golem_core_types.MakeRoleUnstructuredBinary()
+									variant308 = golem_core_types.MakeRoleUnstructuredBinary()
 
 								case 3:
-									value306 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
+									value307 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
 
-									variant307 = golem_core_types.MakeRoleOther(value306)
+									variant308 = golem_core_types.MakeRoleOther(value307)
 
 								default:
 									panic("unreachable")
 								}
 
-								option308 = witTypes.Some[golem_core_types.Role](variant307)
+								option309 = witTypes.Some[golem_core_types.Role](variant308)
 							default:
 								panic("unreachable")
 							}
 
-							result309 = append(result309, golem_core_types.VariantCaseType{Name: value296, Payload: option297, Metadata: golem_core_types.MetadataEnvelope{Doc: option299, Aliases: result301, Examples: result303, Deprecated: option305, Role: option308}})
+							result310 = append(result310, golem_core_types.VariantCaseType{Name: value297, Payload: option298, Metadata: golem_core_types.MetadataEnvelope{Doc: option300, Aliases: result302, Examples: result304, Deprecated: option306, Role: option309}})
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyVariantType(result309)
+						variant377 = golem_core_types.MakeSchemaTypeBodyVariantType(result310)
 
 					case 16:
-						result311 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result312 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-							value310 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value311 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result311 = append(result311, value310)
+							result312 = append(result312, value311)
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyEnumType(result311)
+						variant377 = golem_core_types.MakeSchemaTypeBodyEnumType(result312)
 
 					case 17:
-						result313 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result314 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-							value312 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value313 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result313 = append(result313, value312)
+							result314 = append(result314, value313)
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyFlagsType(result313)
+						variant377 = golem_core_types.MakeSchemaTypeBodyFlagsType(result314)
 
 					case 18:
-						result314 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result315 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-							result314 = append(result314, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+							result315 = append(result315, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyTupleType(result314)
+						variant377 = golem_core_types.MakeSchemaTypeBodyTupleType(result315)
 
 					case 19:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant377 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 20:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
+						variant377 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
 
 					case 21:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+						variant377 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
 					case 22:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant377 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 23:
-						var option315 witTypes.Option[int32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-						case 0:
-
-							option315 = witTypes.None[int32]()
-						case 1:
-
-							option315 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
-						default:
-							panic("unreachable")
-						}
 						var option316 witTypes.Option[int32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
 							option316 = witTypes.None[int32]()
 						case 1:
 
-							option316 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
+							option316 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+						default:
+							panic("unreachable")
+						}
+						var option317 witTypes.Option[int32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
+						case 0:
+
+							option317 = witTypes.None[int32]()
+						case 1:
+
+							option317 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option315, Err: option316})
+						variant377 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option316, Err: option317})
 
 					case 24:
-						var option319 witTypes.Option[[]string]
+						var option320 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option319 = witTypes.None[[]string]()
+							option320 = witTypes.None[[]string]()
 						case 1:
-							result318 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+							result319 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-								value317 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value318 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result318 = append(result318, value317)
+								result319 = append(result319, value318)
 							}
 
-							option319 = witTypes.Some[[]string](result318)
-						default:
-							panic("unreachable")
-						}
-						var option320 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-						case 0:
-
-							option320 = witTypes.None[uint32]()
-						case 1:
-
-							option320 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+							option320 = witTypes.Some[[]string](result319)
 						default:
 							panic("unreachable")
 						}
 						var option321 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 						case 0:
 
 							option321 = witTypes.None[uint32]()
 						case 1:
 
-							option321 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+							option321 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
 						default:
 							panic("unreachable")
 						}
-						var option323 witTypes.Option[string]
+						var option322 witTypes.Option[uint32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						case 0:
+
+							option322 = witTypes.None[uint32]()
+						case 1:
+
+							option322 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+						default:
+							panic("unreachable")
+						}
+						var option324 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))) {
 						case 0:
 
-							option323 = witTypes.None[string]()
+							option324 = witTypes.None[string]()
 						case 1:
-							value322 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
+							value323 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
 
-							option323 = witTypes.Some[string](value322)
+							option324 = witTypes.Some[string](value323)
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option319, MinLength: option320, MaxLength: option321, Regex: option323})
+						variant377 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option320, MinLength: option321, MaxLength: option322, Regex: option324})
 
 					case 25:
-						var option326 witTypes.Option[[]string]
+						var option327 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option326 = witTypes.None[[]string]()
+							option327 = witTypes.None[[]string]()
 						case 1:
-							result325 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+							result326 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-								value324 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value325 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result325 = append(result325, value324)
+								result326 = append(result326, value325)
 							}
 
-							option326 = witTypes.Some[[]string](result325)
-						default:
-							panic("unreachable")
-						}
-						var option327 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-						case 0:
-
-							option327 = witTypes.None[uint32]()
-						case 1:
-
-							option327 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+							option327 = witTypes.Some[[]string](result326)
 						default:
 							panic("unreachable")
 						}
 						var option328 witTypes.Option[uint32]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 						case 0:
 
 							option328 = witTypes.None[uint32]()
 						case 1:
 
-							option328 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+							option328 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+						default:
+							panic("unreachable")
+						}
+						var option329 witTypes.Option[uint32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+						case 0:
+
+							option329 = witTypes.None[uint32]()
+						case 1:
+
+							option329 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option326, MinBytes: option327, MaxBytes: option328})
+						variant377 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option327, MinBytes: option328, MaxBytes: option329})
 
 					case 26:
-						var option331 witTypes.Option[[]string]
+						var option332 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
 
-							option331 = witTypes.None[[]string]()
+							option332 = witTypes.None[[]string]()
 						case 1:
-							result330 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+							result331 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-								value329 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value330 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result330 = append(result330, value329)
+								result331 = append(result331, value330)
 							}
 
-							option331 = witTypes.Some[[]string](result330)
+							option332 = witTypes.Some[[]string](result331)
 						default:
 							panic("unreachable")
 						}
-						var option334 witTypes.Option[[]string]
+						var option335 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
 						case 0:
 
-							option334 = witTypes.None[[]string]()
+							option335 = witTypes.None[[]string]()
 						case 1:
-							result333 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+							result334 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-								value332 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value333 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result333 = append(result333, value332)
+								result334 = append(result334, value333)
 							}
 
-							option334 = witTypes.Some[[]string](result333)
+							option335 = witTypes.Some[[]string](result334)
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option331, AllowedExtensions: option334})
+						variant377 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option332, AllowedExtensions: option335})
 
 					case 27:
-						var option337 witTypes.Option[[]string]
+						var option338 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option337 = witTypes.None[[]string]()
+							option338 = witTypes.None[[]string]()
 						case 1:
-							result336 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+							result337 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-								value335 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value336 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result336 = append(result336, value335)
+								result337 = append(result337, value336)
 							}
 
-							option337 = witTypes.Some[[]string](result336)
+							option338 = witTypes.Some[[]string](result337)
 						default:
 							panic("unreachable")
 						}
-						var option340 witTypes.Option[[]string]
+						var option341 witTypes.Option[[]string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 						case 0:
 
-							option340 = witTypes.None[[]string]()
+							option341 = witTypes.None[[]string]()
 						case 1:
-							result339 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
+							result340 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))), index*(2*4))
-								value338 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value339 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result339 = append(result339, value338)
+								result340 = append(result340, value339)
 							}
 
-							option340 = witTypes.Some[[]string](result339)
+							option341 = witTypes.Some[[]string](result340)
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option337, AllowedHosts: option340})
+						variant377 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option338, AllowedHosts: option341})
 
 					case 28:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant377 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant377 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
-						value341 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						result343 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+
+						variant377 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
+						value342 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result344 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-							value342 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value343 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result343 = append(result343, value342)
+							result344 = append(result344, value343)
 						}
 
-						var option345 witTypes.Option[golem_core_types.QuantityValue]
+						var option346 witTypes.Option[golem_core_types.QuantityValue]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
 						case 0:
 
-							option345 = witTypes.None[golem_core_types.QuantityValue]()
+							option346 = witTypes.None[golem_core_types.QuantityValue]()
 						case 1:
-							value344 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
+							value345 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
 
-							option345 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value344})
+							option346 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value345})
 						default:
 							panic("unreachable")
 						}
-						var option347 witTypes.Option[golem_core_types.QuantityValue]
+						var option348 witTypes.Option[golem_core_types.QuantityValue]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4)))) {
 						case 0:
 
-							option347 = witTypes.None[golem_core_types.QuantityValue]()
+							option348 = witTypes.None[golem_core_types.QuantityValue]()
 						case 1:
-							value346 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
+							value347 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
 
-							option347 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value346})
+							option348 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value347})
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value341, AllowedSuffixes: result343, Min: option345, Max: option347})
+						variant377 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value342, AllowedSuffixes: result344, Min: option346, Max: option348})
 
-					case 31:
-						result369 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+					case 32:
+						result370 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
-							value348 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-							var variant357 golem_core_types.DiscriminatorRule
+							value349 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							var variant358 golem_core_types.DiscriminatorRule
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 							case 0:
-								value349 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-								variant357 = golem_core_types.MakeDiscriminatorRulePrefix(value349)
-
-							case 1:
 								value350 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant357 = golem_core_types.MakeDiscriminatorRuleSuffix(value350)
+								variant358 = golem_core_types.MakeDiscriminatorRulePrefix(value350)
 
-							case 2:
+							case 1:
 								value351 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant357 = golem_core_types.MakeDiscriminatorRuleContains(value351)
+								variant358 = golem_core_types.MakeDiscriminatorRuleSuffix(value351)
 
-							case 3:
+							case 2:
 								value352 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant357 = golem_core_types.MakeDiscriminatorRuleRegex(value352)
+								variant358 = golem_core_types.MakeDiscriminatorRuleContains(value352)
+
+							case 3:
+								value353 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+								variant358 = golem_core_types.MakeDiscriminatorRuleRegex(value353)
 
 							case 4:
-								value353 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-								var option355 witTypes.Option[string]
+								value354 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+								var option356 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))) {
 								case 0:
 
-									option355 = witTypes.None[string]()
+									option356 = witTypes.None[string]()
 								case 1:
-									value354 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+									value355 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
 
-									option355 = witTypes.Some[string](value354)
+									option356 = witTypes.Some[string](value355)
 								default:
 									panic("unreachable")
 								}
 
-								variant357 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value353, Literal: option355})
+								variant358 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value354, Literal: option356})
 
 							case 5:
-								value356 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+								value357 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-								variant357 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value356)
+								variant358 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value357)
 
 							default:
 								panic("unreachable")
 							}
-							var option359 witTypes.Option[string]
+							var option360 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))) {
 							case 0:
 
-								option359 = witTypes.None[string]()
+								option360 = witTypes.None[string]()
 							case 1:
-								value358 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
+								value359 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
 
-								option359 = witTypes.Some[string](value358)
+								option360 = witTypes.Some[string](value359)
 							default:
 								panic("unreachable")
 							}
-							result361 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
+							result362 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))), index*(2*4))
-								value360 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value361 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result361 = append(result361, value360)
+								result362 = append(result362, value361)
 							}
 
-							result363 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
+							result364 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))))), index*(2*4))
-								value362 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value363 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result363 = append(result363, value362)
+								result364 = append(result364, value363)
 							}
 
-							var option365 witTypes.Option[string]
+							var option366 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
 							case 0:
 
-								option365 = witTypes.None[string]()
+								option366 = witTypes.None[string]()
 							case 1:
-								value364 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
+								value365 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
 
-								option365 = witTypes.Some[string](value364)
+								option366 = witTypes.Some[string](value365)
 							default:
 								panic("unreachable")
 							}
-							var option368 witTypes.Option[golem_core_types.Role]
+							var option369 witTypes.Option[golem_core_types.Role]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4)))) {
 							case 0:
 
-								option368 = witTypes.None[golem_core_types.Role]()
+								option369 = witTypes.None[golem_core_types.Role]()
 							case 1:
-								var variant367 golem_core_types.Role
+								var variant368 golem_core_types.Role
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4)))) {
 								case 0:
 
-									variant367 = golem_core_types.MakeRoleMultimodal()
+									variant368 = golem_core_types.MakeRoleMultimodal()
 
 								case 1:
 
-									variant367 = golem_core_types.MakeRoleUnstructuredText()
+									variant368 = golem_core_types.MakeRoleUnstructuredText()
 
 								case 2:
 
-									variant367 = golem_core_types.MakeRoleUnstructuredBinary()
+									variant368 = golem_core_types.MakeRoleUnstructuredBinary()
 
 								case 3:
-									value366 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
+									value367 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
 
-									variant367 = golem_core_types.MakeRoleOther(value366)
+									variant368 = golem_core_types.MakeRoleOther(value367)
 
 								default:
 									panic("unreachable")
 								}
 
-								option368 = witTypes.Some[golem_core_types.Role](variant367)
+								option369 = witTypes.Some[golem_core_types.Role](variant368)
 							default:
 								panic("unreachable")
 							}
 
-							result369 = append(result369, golem_core_types.UnionBranch{Tag: value348, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant357, Metadata: golem_core_types.MetadataEnvelope{Doc: option359, Aliases: result361, Examples: result363, Deprecated: option365, Role: option368}})
+							result370 = append(result370, golem_core_types.UnionBranch{Tag: value349, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant358, Metadata: golem_core_types.MetadataEnvelope{Doc: option360, Aliases: result362, Examples: result364, Deprecated: option366, Role: option369}})
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result369})
+						variant377 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result370})
 
-					case 32:
-						var option371 witTypes.Option[string]
+					case 33:
+						var option372 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
 
-							option371 = witTypes.None[string]()
+							option372 = witTypes.None[string]()
 						case 1:
-							value370 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+							value371 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 
-							option371 = witTypes.Some[string](value370)
+							option372 = witTypes.Some[string](value371)
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option371})
-
-					case 33:
-						var option373 witTypes.Option[string]
-						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-						case 0:
-
-							option373 = witTypes.None[string]()
-						case 1:
-							value372 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
-
-							option373 = witTypes.Some[string](value372)
-						default:
-							panic("unreachable")
-						}
-
-						variant376 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option373})
+						variant377 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option372})
 
 					case 34:
-
-						variant376 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
-
-					case 35:
-						var option374 witTypes.Option[int32]
+						var option374 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option374 = witTypes.None[int32]()
+							option374 = witTypes.None[string]()
 						case 1:
+							value373 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 
-							option374 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+							option374 = witTypes.Some[string](value373)
 						default:
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyFutureType(option374)
+						variant377 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option374})
+
+					case 35:
+
+						variant377 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
 					case 36:
 						var option375 witTypes.Option[int32]
@@ -30895,216 +31164,221 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 							panic("unreachable")
 						}
 
-						variant376 = golem_core_types.MakeSchemaTypeBodyStreamType(option375)
+						variant377 = golem_core_types.MakeSchemaTypeBodyFutureType(option375)
+
+					case 37:
+						var option376 witTypes.Option[int32]
+						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+						case 0:
+
+							option376 = witTypes.None[int32]()
+						case 1:
+
+							option376 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+						default:
+							panic("unreachable")
+						}
+
+						variant377 = golem_core_types.MakeSchemaTypeBodyStreamType(option376)
 
 					default:
 						panic("unreachable")
 					}
-					var option378 witTypes.Option[string]
+					var option379 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4)))) {
 					case 0:
 
-						option378 = witTypes.None[string]()
+						option379 = witTypes.None[string]()
 					case 1:
-						value377 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
+						value378 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
 
-						option378 = witTypes.Some[string](value377)
+						option379 = witTypes.Some[string](value378)
 					default:
 						panic("unreachable")
 					}
-					result380 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
+					result381 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))))), index*(2*4))
-						value379 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value380 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result380 = append(result380, value379)
+						result381 = append(result381, value380)
 					}
 
-					result382 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
+					result383 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))))), index*(2*4))
-						value381 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value382 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result382 = append(result382, value381)
+						result383 = append(result383, value382)
 					}
 
-					var option384 witTypes.Option[string]
+					var option385 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4)))) {
 					case 0:
 
-						option384 = witTypes.None[string]()
+						option385 = witTypes.None[string]()
 					case 1:
-						value383 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
+						value384 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
 
-						option384 = witTypes.Some[string](value383)
+						option385 = witTypes.Some[string](value384)
 					default:
 						panic("unreachable")
 					}
-					var option387 witTypes.Option[golem_core_types.Role]
+					var option388 witTypes.Option[golem_core_types.Role]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 18*4)))) {
 					case 0:
 
-						option387 = witTypes.None[golem_core_types.Role]()
+						option388 = witTypes.None[golem_core_types.Role]()
 					case 1:
-						var variant386 golem_core_types.Role
+						var variant387 golem_core_types.Role
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4)))) {
 						case 0:
 
-							variant386 = golem_core_types.MakeRoleMultimodal()
+							variant387 = golem_core_types.MakeRoleMultimodal()
 
 						case 1:
 
-							variant386 = golem_core_types.MakeRoleUnstructuredText()
+							variant387 = golem_core_types.MakeRoleUnstructuredText()
 
 						case 2:
 
-							variant386 = golem_core_types.MakeRoleUnstructuredBinary()
+							variant387 = golem_core_types.MakeRoleUnstructuredBinary()
 
 						case 3:
-							value385 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
+							value386 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
 
-							variant386 = golem_core_types.MakeRoleOther(value385)
+							variant387 = golem_core_types.MakeRoleOther(value386)
 
 						default:
 							panic("unreachable")
 						}
 
-						option387 = witTypes.Some[golem_core_types.Role](variant386)
+						option388 = witTypes.Some[golem_core_types.Role](variant387)
 					default:
 						panic("unreachable")
 					}
 
-					result388 = append(result388, golem_core_types.SchemaTypeNode{Body: variant376, Metadata: golem_core_types.MetadataEnvelope{Doc: option378, Aliases: result380, Examples: result382, Deprecated: option384, Role: option387}})
+					result389 = append(result389, golem_core_types.SchemaTypeNode{Body: variant377, Metadata: golem_core_types.MetadataEnvelope{Doc: option379, Aliases: result381, Examples: result383, Deprecated: option385, Role: option388}})
 				}
 
-				result392 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 * 4))))
+				result393 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (8 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (7 * 4))))), index*(6*4))
-					value389 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-					var option391 witTypes.Option[string]
+					value390 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+					var option392 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 					case 0:
 
-						option391 = witTypes.None[string]()
+						option392 = witTypes.None[string]()
 					case 1:
-						value390 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+						value391 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-						option391 = witTypes.Some[string](value390)
+						option392 = witTypes.Some[string](value391)
 					default:
 						panic("unreachable")
 					}
 
-					result392 = append(result392, golem_core_types.SchemaTypeDef{Id: value389, Name: option391, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
+					result393 = append(result393, golem_core_types.SchemaTypeDef{Id: value390, Name: option392, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
 				}
 
-				result416 := make([]golem_core_types.SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4))))
+				result417 := make([]golem_core_types.SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (11 * 4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (10 * 4))))), index*(16+4*4))
-					var variant415 golem_core_types.SchemaValueNode
+					var variant416 golem_core_types.SchemaValueNode
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 					case 0:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
+						variant416 = golem_core_types.MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
 
 					case 1:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant416 = golem_core_types.MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 2:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant416 = golem_core_types.MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 3:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant416 = golem_core_types.MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 4:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant416 = golem_core_types.MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 5:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant416 = golem_core_types.MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 6:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+						variant416 = golem_core_types.MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 					case 7:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant416 = golem_core_types.MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 8:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant416 = golem_core_types.MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 9:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant416 = golem_core_types.MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 10:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
+						variant416 = golem_core_types.MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 					case 11:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant416 = golem_core_types.MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 12:
-						value393 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						value394 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-						variant415 = golem_core_types.MakeSchemaValueNodeStringValue(value393)
+						variant416 = golem_core_types.MakeSchemaValueNodeStringValue(value394)
 
 					case 13:
-						result394 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result395 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-							result394 = append(result394, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+							result395 = append(result395, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeRecordValue(result394)
+						variant416 = golem_core_types.MakeSchemaValueNodeRecordValue(result395)
 
 					case 14:
-						var option395 witTypes.Option[int32]
+						var option396 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
 						case 0:
 
-							option395 = witTypes.None[int32]()
+							option396 = witTypes.None[int32]()
 						case 1:
 
-							option395 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
+							option396 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
 						default:
 							panic("unreachable")
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeVariantValue(golem_core_types.VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Payload: option395})
+						variant416 = golem_core_types.MakeSchemaValueNodeVariantValue(golem_core_types.VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Payload: option396})
 
 					case 15:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+						variant416 = golem_core_types.MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 					case 16:
-						result396 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result397 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
 
-							result396 = append(result396, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
+							result397 = append(result397, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeFlagsValue(result396)
+						variant416 = golem_core_types.MakeSchemaValueNodeFlagsValue(result397)
 
 					case 17:
-						result397 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
-
-							result397 = append(result397, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
-						}
-
-						variant415 = golem_core_types.MakeSchemaValueNodeTupleValue(result397)
-
-					case 18:
 						result398 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
@@ -31112,9 +31386,9 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 							result398 = append(result398, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeListValue(result398)
+						variant416 = golem_core_types.MakeSchemaValueNodeTupleValue(result398)
 
-					case 19:
+					case 18:
 						result399 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
@@ -31122,52 +31396,47 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 							result399 = append(result399, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeFixedListValue(result399)
+						variant416 = golem_core_types.MakeSchemaValueNodeListValue(result399)
+
+					case 19:
+						result400 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
+
+							result400 = append(result400, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+						}
+
+						variant416 = golem_core_types.MakeSchemaValueNodeFixedListValue(result400)
 
 					case 20:
-						result400 := make([]golem_core_types.MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						result401 := make([]golem_core_types.MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*8)
 
-							result400 = append(result400, golem_core_types.MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 4))})
+							result401 = append(result401, golem_core_types.MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 4))})
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeMapValue(result400)
+						variant416 = golem_core_types.MakeSchemaValueNodeMapValue(result401)
 
 					case 21:
-						var option401 witTypes.Option[int32]
+						var option402 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
 
-							option401 = witTypes.None[int32]()
+							option402 = witTypes.None[int32]()
 						case 1:
 
-							option401 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+							option402 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
 						default:
 							panic("unreachable")
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeOptionValue(option401)
+						variant416 = golem_core_types.MakeSchemaValueNodeOptionValue(option402)
 
 					case 22:
-						var variant404 golem_core_types.ResultValuePayload
+						var variant405 golem_core_types.ResultValuePayload
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
-							var option402 witTypes.Option[int32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
-							case 0:
-
-								option402 = witTypes.None[int32]()
-							case 1:
-
-								option402 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
-							default:
-								panic("unreachable")
-							}
-
-							variant404 = golem_core_types.MakeResultValuePayloadOkValue(option402)
-
-						case 1:
 							var option403 witTypes.Option[int32]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
 							case 0:
@@ -31180,126 +31449,145 @@ func (self *FutureInvokeResult) Get() witTypes.Result[golem_tool_common.Invocati
 								panic("unreachable")
 							}
 
-							variant404 = golem_core_types.MakeResultValuePayloadErrValue(option403)
+							variant405 = golem_core_types.MakeResultValuePayloadOkValue(option403)
+
+						case 1:
+							var option404 witTypes.Option[int32]
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
+							case 0:
+
+								option404 = witTypes.None[int32]()
+							case 1:
+
+								option404 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
+							default:
+								panic("unreachable")
+							}
+
+							variant405 = golem_core_types.MakeResultValuePayloadErrValue(option404)
 
 						default:
 							panic("unreachable")
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeResultValue(variant404)
+						variant416 = golem_core_types.MakeSchemaValueNodeResultValue(variant405)
 
 					case 23:
-						value405 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var option407 witTypes.Option[string]
+						value406 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						var option408 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 						case 0:
 
-							option407 = witTypes.None[string]()
+							option408 = witTypes.None[string]()
 						case 1:
-							value406 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+							value407 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-							option407 = witTypes.Some[string](value406)
+							option408 = witTypes.Some[string](value407)
 						default:
 							panic("unreachable")
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeTextValue(golem_core_types.TextValuePayload{Text: value405, Language: option407})
+						variant416 = golem_core_types.MakeSchemaValueNodeTextValue(golem_core_types.TextValuePayload{Text: value406, Language: option408})
 
 					case 24:
-						value408 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-						var option410 witTypes.Option[string]
+						value409 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						var option411 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 						case 0:
 
-							option410 = witTypes.None[string]()
+							option411 = witTypes.None[string]()
 						case 1:
-							value409 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+							value410 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-							option410 = witTypes.Some[string](value409)
+							option411 = witTypes.Some[string](value410)
 						default:
 							panic("unreachable")
 						}
 
-						variant415 = golem_core_types.MakeSchemaValueNodeBinaryValue(golem_core_types.BinaryValuePayload{Bytes: value408, MimeType: option410})
+						variant416 = golem_core_types.MakeSchemaValueNodeBinaryValue(golem_core_types.BinaryValuePayload{Bytes: value409, MimeType: option411})
 
 					case 25:
-						value411 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-						variant415 = golem_core_types.MakeSchemaValueNodePathValue(value411)
-
-					case 26:
 						value412 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-						variant415 = golem_core_types.MakeSchemaValueNodeUrlValue(value412)
+						variant416 = golem_core_types.MakeSchemaValueNodePathValue(value412)
+
+					case 26:
+						value413 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+
+						variant416 = golem_core_types.MakeSchemaValueNodeUrlValue(value413)
 
 					case 27:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant416 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant416 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
-						value413 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
-						variant415 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value413})
+						variant416 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
 
 					case 30:
-						value414 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						value414 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
-						variant415 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value414, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
+						variant416 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value414})
 
 					case 31:
+						value415 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-						variant415 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant416 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value415, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
 					case 32:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant416 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 					case 33:
 
-						variant415 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant416 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 					case 34:
 
-						variant415 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+						variant416 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
+					case 35:
+
+						variant416 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 					default:
 						panic("unreachable")
 					}
 
-					result416 = append(result416, variant415)
+					result417 = append(result417, variant416)
 				}
 
-				variant417 = golem_core_types.MakeToolErrorCustomError(golem_core_types.CustomToolError{Name: value212, Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result388, Defs: result392, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (9 * 4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result416, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (12 * 4)))}}})
+				variant418 = golem_core_types.MakeToolErrorCustomError(golem_core_types.CustomToolError{Name: value213, Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result389, Defs: result393, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (9 * 4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result417, Root: *(*int32)(unsafe.Add(unsafe.Pointer(returnArea), (12 * 4)))}}})
 
 			default:
 				panic("unreachable")
 			}
 
-			variant419 = golem_core_types.MakeToolRpcErrorRemoteToolError(variant417)
+			variant420 = golem_core_types.MakeToolRpcErrorRemoteToolError(variant418)
 
 		case 5:
 
-			variant419 = golem_core_types.MakeToolRpcErrorCancelled()
+			variant420 = golem_core_types.MakeToolRpcErrorCancelled()
 
 		case 6:
-			value418 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
+			value419 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), (3 * 4))))
 
-			variant419 = golem_core_types.MakeToolRpcErrorResourceExhausted(value418)
+			variant420 = golem_core_types.MakeToolRpcErrorResourceExhausted(value419)
 
 		default:
 			panic("unreachable")
 		}
 
-		result420 = witTypes.Err[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](variant419)
+		result421 = witTypes.Err[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](variant420)
 	default:
 		panic("unreachable")
 	}
 
-	return result420
+	return result421
 
 }
 
@@ -31330,10 +31618,10 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 	}
 
 	witAsync.SubtaskWait(uint32(wasm_import_get_invoke_results(uintptr(result), length, returnArea)))
-	result422 := make([]witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
+	result423 := make([]witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError], 0, *(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4)))
 	for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 4))); index++ {
-		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(13*4))
-		var result421 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
+		base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0)))), index*(8+12*4))
+		var result422 witTypes.Result[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError]
 		switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 		case 0:
 			var option201 witTypes.Option[golem_core_types.TypedSchemaValue]
@@ -32628,13 +32916,17 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 
 					case 28:
 
-						variant160 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant160 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant160 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant160 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant160 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value125 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result127 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -32671,7 +32963,7 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 
 						variant160 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value125, AllowedSuffixes: result127, Min: option129, Max: option131})
 
-					case 31:
+					case 32:
 						result153 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -32802,7 +33094,7 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 
 						variant160 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result153})
 
-					case 32:
+					case 33:
 						var option155 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -32818,7 +33110,7 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 
 						variant160 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option155})
 
-					case 33:
+					case 34:
 						var option157 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -32834,11 +33126,11 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 
 						variant160 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option157})
 
-					case 34:
+					case 35:
 
 						variant160 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option158 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -32853,7 +33145,7 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 
 						variant160 = golem_core_types.MakeSchemaTypeBodyFutureType(option158)
 
-					case 36:
+					case 37:
 						var option159 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -33205,35 +33497,39 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 
 					case 27:
 
-						variant199 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant199 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant199 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant199 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant199 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value197 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant199 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value197})
 
-					case 30:
+					case 31:
 						value198 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant199 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value198, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant199 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant199 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant199 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant199 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -33259,1577 +33555,1577 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 			default:
 				panic("unreachable")
 			}
+			var option203 witTypes.Option[*witTypes.StreamReader[uint8]]
+			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))) {
+			case 0:
 
-			result421 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](golem_tool_common.InvocationResult{Result: option201, Stdout: option202})
+				option203 = witTypes.None[*witTypes.StreamReader[uint8]]()
+			case 1:
+
+				option203 = witTypes.Some[*witTypes.StreamReader[uint8]](LiftStreamU8(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 10*4)))))
+			default:
+				panic("unreachable")
+			}
+
+			result422 = witTypes.Ok[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](golem_tool_common.InvocationResult{Result: option201, Stdout: option202, Stderr: option203})
 		case 1:
-			var variant420 golem_core_types.ToolRpcError
+			var variant421 golem_core_types.ToolRpcError
 			switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 4))) {
 			case 0:
-				value203 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
-
-				variant420 = golem_core_types.MakeToolRpcErrorProtocolError(value203)
-
-			case 1:
 				value204 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-				variant420 = golem_core_types.MakeToolRpcErrorDenied(value204)
+				variant421 = golem_core_types.MakeToolRpcErrorProtocolError(value204)
 
-			case 2:
+			case 1:
 				value205 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-				variant420 = golem_core_types.MakeToolRpcErrorNotFound(value205)
+				variant421 = golem_core_types.MakeToolRpcErrorDenied(value205)
 
-			case 3:
+			case 2:
 				value206 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-				variant420 = golem_core_types.MakeToolRpcErrorRemoteInternalError(value206)
+				variant421 = golem_core_types.MakeToolRpcErrorNotFound(value206)
+
+			case 3:
+				value207 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+
+				variant421 = golem_core_types.MakeToolRpcErrorRemoteInternalError(value207)
 
 			case 4:
-				var variant418 golem_core_types.ToolError
+				var variant419 golem_core_types.ToolError
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 				case 0:
-					value207 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+					value208 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-					variant418 = golem_core_types.MakeToolErrorInvalidToolName(value207)
+					variant419 = golem_core_types.MakeToolErrorInvalidToolName(value208)
 
 				case 1:
-					result209 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+					result210 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))), index*(2*4))
-						value208 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						value209 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-						result209 = append(result209, value208)
+						result210 = append(result210, value209)
 					}
 
-					variant418 = golem_core_types.MakeToolErrorInvalidCommandPath(result209)
+					variant419 = golem_core_types.MakeToolErrorInvalidCommandPath(result210)
 
 				case 2:
-					value210 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-
-					variant418 = golem_core_types.MakeToolErrorInvalidInput(value210)
-
-				case 3:
 					value211 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-					variant418 = golem_core_types.MakeToolErrorConstraintViolation(value211)
+					variant419 = golem_core_types.MakeToolErrorInvalidInput(value211)
 
-				case 4:
+				case 3:
 					value212 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-					variant418 = golem_core_types.MakeToolErrorInvalidResult(value212)
+					variant419 = golem_core_types.MakeToolErrorConstraintViolation(value212)
+
+				case 4:
+					value213 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+
+					variant419 = golem_core_types.MakeToolErrorInvalidResult(value213)
 
 				case 5:
-					value213 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
-					result389 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))
+					value214 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+					result390 := make([]golem_core_types.SchemaTypeNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))), index*(56+22*4))
-						var variant377 golem_core_types.SchemaTypeBody
+						var variant378 golem_core_types.SchemaTypeBody
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 						case 0:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+							variant378 = golem_core_types.MakeSchemaTypeBodyRefType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 						case 1:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyBoolType()
+							variant378 = golem_core_types.MakeSchemaTypeBodyBoolType()
 
 						case 2:
-							var option220 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option221 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option220 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option221 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option215 witTypes.Option[golem_core_types.NumericBound]
+								var option216 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option215 = witTypes.None[golem_core_types.NumericBound]()
+									option216 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant214 golem_core_types.NumericBound
+									var variant215 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant214 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant215 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant214 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant215 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant214 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant215 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option215 = witTypes.Some[golem_core_types.NumericBound](variant214)
+									option216 = witTypes.Some[golem_core_types.NumericBound](variant215)
 								default:
 									panic("unreachable")
 								}
-								var option217 witTypes.Option[golem_core_types.NumericBound]
+								var option218 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option217 = witTypes.None[golem_core_types.NumericBound]()
+									option218 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant216 golem_core_types.NumericBound
+									var variant217 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant216 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant217 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant216 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant217 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant216 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant217 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option217 = witTypes.Some[golem_core_types.NumericBound](variant216)
+									option218 = witTypes.Some[golem_core_types.NumericBound](variant217)
 								default:
 									panic("unreachable")
 								}
-								var option219 witTypes.Option[string]
+								var option220 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option219 = witTypes.None[string]()
+									option220 = witTypes.None[string]()
 								case 1:
-									value218 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value219 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option219 = witTypes.Some[string](value218)
+									option220 = witTypes.Some[string](value219)
 								default:
 									panic("unreachable")
 								}
 
-								option220 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option215, Max: option217, Unit: option219})
+								option221 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option216, Max: option218, Unit: option220})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyS8Type(option220)
+							variant378 = golem_core_types.MakeSchemaTypeBodyS8Type(option221)
 
 						case 3:
-							var option227 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option228 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option227 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option228 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option222 witTypes.Option[golem_core_types.NumericBound]
+								var option223 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option222 = witTypes.None[golem_core_types.NumericBound]()
+									option223 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant221 golem_core_types.NumericBound
+									var variant222 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant221 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant222 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant221 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant222 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant221 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant222 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option222 = witTypes.Some[golem_core_types.NumericBound](variant221)
+									option223 = witTypes.Some[golem_core_types.NumericBound](variant222)
 								default:
 									panic("unreachable")
 								}
-								var option224 witTypes.Option[golem_core_types.NumericBound]
+								var option225 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option224 = witTypes.None[golem_core_types.NumericBound]()
+									option225 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant223 golem_core_types.NumericBound
+									var variant224 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant223 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant224 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant223 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant224 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant223 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant224 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option224 = witTypes.Some[golem_core_types.NumericBound](variant223)
+									option225 = witTypes.Some[golem_core_types.NumericBound](variant224)
 								default:
 									panic("unreachable")
 								}
-								var option226 witTypes.Option[string]
+								var option227 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option226 = witTypes.None[string]()
+									option227 = witTypes.None[string]()
 								case 1:
-									value225 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value226 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option226 = witTypes.Some[string](value225)
+									option227 = witTypes.Some[string](value226)
 								default:
 									panic("unreachable")
 								}
 
-								option227 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option222, Max: option224, Unit: option226})
+								option228 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option223, Max: option225, Unit: option227})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyS16Type(option227)
+							variant378 = golem_core_types.MakeSchemaTypeBodyS16Type(option228)
 
 						case 4:
-							var option234 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option235 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option234 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option235 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option229 witTypes.Option[golem_core_types.NumericBound]
+								var option230 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option229 = witTypes.None[golem_core_types.NumericBound]()
+									option230 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant228 golem_core_types.NumericBound
+									var variant229 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant228 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant229 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant228 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant229 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant228 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant229 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option229 = witTypes.Some[golem_core_types.NumericBound](variant228)
+									option230 = witTypes.Some[golem_core_types.NumericBound](variant229)
 								default:
 									panic("unreachable")
 								}
-								var option231 witTypes.Option[golem_core_types.NumericBound]
+								var option232 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option231 = witTypes.None[golem_core_types.NumericBound]()
+									option232 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant230 golem_core_types.NumericBound
+									var variant231 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant230 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant231 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant230 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant231 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant230 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant231 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option231 = witTypes.Some[golem_core_types.NumericBound](variant230)
+									option232 = witTypes.Some[golem_core_types.NumericBound](variant231)
 								default:
 									panic("unreachable")
 								}
-								var option233 witTypes.Option[string]
+								var option234 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option233 = witTypes.None[string]()
+									option234 = witTypes.None[string]()
 								case 1:
-									value232 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value233 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option233 = witTypes.Some[string](value232)
+									option234 = witTypes.Some[string](value233)
 								default:
 									panic("unreachable")
 								}
 
-								option234 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option229, Max: option231, Unit: option233})
+								option235 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option230, Max: option232, Unit: option234})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyS32Type(option234)
+							variant378 = golem_core_types.MakeSchemaTypeBodyS32Type(option235)
 
 						case 5:
-							var option241 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option242 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option241 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option242 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option236 witTypes.Option[golem_core_types.NumericBound]
+								var option237 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option236 = witTypes.None[golem_core_types.NumericBound]()
+									option237 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant235 golem_core_types.NumericBound
+									var variant236 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant235 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant236 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant235 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant236 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant235 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant236 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option236 = witTypes.Some[golem_core_types.NumericBound](variant235)
+									option237 = witTypes.Some[golem_core_types.NumericBound](variant236)
 								default:
 									panic("unreachable")
 								}
-								var option238 witTypes.Option[golem_core_types.NumericBound]
+								var option239 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option238 = witTypes.None[golem_core_types.NumericBound]()
+									option239 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant237 golem_core_types.NumericBound
+									var variant238 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant237 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant238 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant237 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant238 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant237 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant238 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option238 = witTypes.Some[golem_core_types.NumericBound](variant237)
+									option239 = witTypes.Some[golem_core_types.NumericBound](variant238)
 								default:
 									panic("unreachable")
 								}
-								var option240 witTypes.Option[string]
+								var option241 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option240 = witTypes.None[string]()
+									option241 = witTypes.None[string]()
 								case 1:
-									value239 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value240 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option240 = witTypes.Some[string](value239)
+									option241 = witTypes.Some[string](value240)
 								default:
 									panic("unreachable")
 								}
 
-								option241 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option236, Max: option238, Unit: option240})
+								option242 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option237, Max: option239, Unit: option241})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyS64Type(option241)
+							variant378 = golem_core_types.MakeSchemaTypeBodyS64Type(option242)
 
 						case 6:
-							var option248 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option249 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option248 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option249 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option243 witTypes.Option[golem_core_types.NumericBound]
+								var option244 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option243 = witTypes.None[golem_core_types.NumericBound]()
+									option244 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant242 golem_core_types.NumericBound
+									var variant243 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant242 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant243 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant242 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant243 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant242 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant243 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option243 = witTypes.Some[golem_core_types.NumericBound](variant242)
+									option244 = witTypes.Some[golem_core_types.NumericBound](variant243)
 								default:
 									panic("unreachable")
 								}
-								var option245 witTypes.Option[golem_core_types.NumericBound]
+								var option246 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option245 = witTypes.None[golem_core_types.NumericBound]()
+									option246 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant244 golem_core_types.NumericBound
+									var variant245 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant244 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant245 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant244 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant245 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant244 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant245 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option245 = witTypes.Some[golem_core_types.NumericBound](variant244)
+									option246 = witTypes.Some[golem_core_types.NumericBound](variant245)
 								default:
 									panic("unreachable")
 								}
-								var option247 witTypes.Option[string]
+								var option248 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option247 = witTypes.None[string]()
+									option248 = witTypes.None[string]()
 								case 1:
-									value246 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value247 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option247 = witTypes.Some[string](value246)
+									option248 = witTypes.Some[string](value247)
 								default:
 									panic("unreachable")
 								}
 
-								option248 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option243, Max: option245, Unit: option247})
+								option249 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option244, Max: option246, Unit: option248})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyU8Type(option248)
+							variant378 = golem_core_types.MakeSchemaTypeBodyU8Type(option249)
 
 						case 7:
-							var option255 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option256 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option255 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option256 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option250 witTypes.Option[golem_core_types.NumericBound]
+								var option251 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option250 = witTypes.None[golem_core_types.NumericBound]()
+									option251 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant249 golem_core_types.NumericBound
+									var variant250 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant249 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant250 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant249 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant250 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant249 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant250 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option250 = witTypes.Some[golem_core_types.NumericBound](variant249)
+									option251 = witTypes.Some[golem_core_types.NumericBound](variant250)
 								default:
 									panic("unreachable")
 								}
-								var option252 witTypes.Option[golem_core_types.NumericBound]
+								var option253 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option252 = witTypes.None[golem_core_types.NumericBound]()
+									option253 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant251 golem_core_types.NumericBound
+									var variant252 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant251 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant252 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant251 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant252 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant251 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant252 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option252 = witTypes.Some[golem_core_types.NumericBound](variant251)
+									option253 = witTypes.Some[golem_core_types.NumericBound](variant252)
 								default:
 									panic("unreachable")
 								}
-								var option254 witTypes.Option[string]
+								var option255 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option254 = witTypes.None[string]()
+									option255 = witTypes.None[string]()
 								case 1:
-									value253 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value254 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option254 = witTypes.Some[string](value253)
+									option255 = witTypes.Some[string](value254)
 								default:
 									panic("unreachable")
 								}
 
-								option255 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option250, Max: option252, Unit: option254})
+								option256 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option251, Max: option253, Unit: option255})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyU16Type(option255)
+							variant378 = golem_core_types.MakeSchemaTypeBodyU16Type(option256)
 
 						case 8:
-							var option262 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option263 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option262 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option263 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option257 witTypes.Option[golem_core_types.NumericBound]
+								var option258 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option257 = witTypes.None[golem_core_types.NumericBound]()
+									option258 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant256 golem_core_types.NumericBound
+									var variant257 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant256 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant257 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant256 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant257 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant256 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant257 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option257 = witTypes.Some[golem_core_types.NumericBound](variant256)
+									option258 = witTypes.Some[golem_core_types.NumericBound](variant257)
 								default:
 									panic("unreachable")
 								}
-								var option259 witTypes.Option[golem_core_types.NumericBound]
+								var option260 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option259 = witTypes.None[golem_core_types.NumericBound]()
+									option260 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant258 golem_core_types.NumericBound
+									var variant259 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant258 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant259 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant258 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant259 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant258 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant259 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option259 = witTypes.Some[golem_core_types.NumericBound](variant258)
+									option260 = witTypes.Some[golem_core_types.NumericBound](variant259)
 								default:
 									panic("unreachable")
 								}
-								var option261 witTypes.Option[string]
+								var option262 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option261 = witTypes.None[string]()
+									option262 = witTypes.None[string]()
 								case 1:
-									value260 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value261 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option261 = witTypes.Some[string](value260)
+									option262 = witTypes.Some[string](value261)
 								default:
 									panic("unreachable")
 								}
 
-								option262 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option257, Max: option259, Unit: option261})
+								option263 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option258, Max: option260, Unit: option262})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyU32Type(option262)
+							variant378 = golem_core_types.MakeSchemaTypeBodyU32Type(option263)
 
 						case 9:
-							var option269 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option270 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option269 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option270 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option264 witTypes.Option[golem_core_types.NumericBound]
+								var option265 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option264 = witTypes.None[golem_core_types.NumericBound]()
+									option265 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant263 golem_core_types.NumericBound
+									var variant264 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant263 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant264 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant263 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant264 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant263 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant264 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option264 = witTypes.Some[golem_core_types.NumericBound](variant263)
+									option265 = witTypes.Some[golem_core_types.NumericBound](variant264)
 								default:
 									panic("unreachable")
 								}
-								var option266 witTypes.Option[golem_core_types.NumericBound]
+								var option267 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option266 = witTypes.None[golem_core_types.NumericBound]()
+									option267 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant265 golem_core_types.NumericBound
+									var variant266 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant265 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant266 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant265 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant266 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant265 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant266 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option266 = witTypes.Some[golem_core_types.NumericBound](variant265)
+									option267 = witTypes.Some[golem_core_types.NumericBound](variant266)
 								default:
 									panic("unreachable")
 								}
-								var option268 witTypes.Option[string]
+								var option269 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option268 = witTypes.None[string]()
+									option269 = witTypes.None[string]()
 								case 1:
-									value267 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value268 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option268 = witTypes.Some[string](value267)
+									option269 = witTypes.Some[string](value268)
 								default:
 									panic("unreachable")
 								}
 
-								option269 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option264, Max: option266, Unit: option268})
+								option270 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option265, Max: option267, Unit: option269})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyU64Type(option269)
+							variant378 = golem_core_types.MakeSchemaTypeBodyU64Type(option270)
 
 						case 10:
-							var option276 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option277 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option276 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option277 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option271 witTypes.Option[golem_core_types.NumericBound]
+								var option272 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option271 = witTypes.None[golem_core_types.NumericBound]()
+									option272 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant270 golem_core_types.NumericBound
+									var variant271 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant270 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant271 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant270 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant271 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant270 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant271 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option271 = witTypes.Some[golem_core_types.NumericBound](variant270)
+									option272 = witTypes.Some[golem_core_types.NumericBound](variant271)
 								default:
 									panic("unreachable")
 								}
-								var option273 witTypes.Option[golem_core_types.NumericBound]
+								var option274 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option273 = witTypes.None[golem_core_types.NumericBound]()
+									option274 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant272 golem_core_types.NumericBound
+									var variant273 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant272 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant273 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant272 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant273 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant272 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant273 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option273 = witTypes.Some[golem_core_types.NumericBound](variant272)
+									option274 = witTypes.Some[golem_core_types.NumericBound](variant273)
 								default:
 									panic("unreachable")
 								}
-								var option275 witTypes.Option[string]
+								var option276 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option275 = witTypes.None[string]()
+									option276 = witTypes.None[string]()
 								case 1:
-									value274 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value275 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option275 = witTypes.Some[string](value274)
+									option276 = witTypes.Some[string](value275)
 								default:
 									panic("unreachable")
 								}
 
-								option276 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option271, Max: option273, Unit: option275})
+								option277 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option272, Max: option274, Unit: option276})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyF32Type(option276)
+							variant378 = golem_core_types.MakeSchemaTypeBodyF32Type(option277)
 
 						case 11:
-							var option283 witTypes.Option[golem_core_types.NumericRestrictions]
+							var option284 witTypes.Option[golem_core_types.NumericRestrictions]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option283 = witTypes.None[golem_core_types.NumericRestrictions]()
+								option284 = witTypes.None[golem_core_types.NumericRestrictions]()
 							case 1:
-								var option278 witTypes.Option[golem_core_types.NumericBound]
+								var option279 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
 								case 0:
 
-									option278 = witTypes.None[golem_core_types.NumericBound]()
+									option279 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant277 golem_core_types.NumericBound
+									var variant278 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 24))) {
 									case 0:
 
-										variant277 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
+										variant278 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32)))
 
 									case 1:
 
-										variant277 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant278 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									case 2:
 
-										variant277 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
+										variant278 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 32))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option278 = witTypes.Some[golem_core_types.NumericBound](variant277)
+									option279 = witTypes.Some[golem_core_types.NumericBound](variant278)
 								default:
 									panic("unreachable")
 								}
-								var option280 witTypes.Option[golem_core_types.NumericBound]
+								var option281 witTypes.Option[golem_core_types.NumericBound]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 40))) {
 								case 0:
 
-									option280 = witTypes.None[golem_core_types.NumericBound]()
+									option281 = witTypes.None[golem_core_types.NumericBound]()
 								case 1:
-									var variant279 golem_core_types.NumericBound
+									var variant280 golem_core_types.NumericBound
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 48))) {
 									case 0:
 
-										variant279 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
+										variant280 = golem_core_types.MakeNumericBoundSigned(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56)))
 
 									case 1:
 
-										variant279 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant280 = golem_core_types.MakeNumericBoundUnsigned(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									case 2:
 
-										variant279 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
+										variant280 = golem_core_types.MakeNumericBoundFloatBits(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 56))))
 
 									default:
 										panic("unreachable")
 									}
 
-									option280 = witTypes.Some[golem_core_types.NumericBound](variant279)
+									option281 = witTypes.Some[golem_core_types.NumericBound](variant280)
 								default:
 									panic("unreachable")
 								}
-								var option282 witTypes.Option[string]
+								var option283 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 64))) {
 								case 0:
 
-									option282 = witTypes.None[string]()
+									option283 = witTypes.None[string]()
 								case 1:
-									value281 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
+									value282 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (64 + 2*4))))
 
-									option282 = witTypes.Some[string](value281)
+									option283 = witTypes.Some[string](value282)
 								default:
 									panic("unreachable")
 								}
 
-								option283 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option278, Max: option280, Unit: option282})
+								option284 = witTypes.Some[golem_core_types.NumericRestrictions](golem_core_types.NumericRestrictions{Min: option279, Max: option281, Unit: option283})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyF64Type(option283)
+							variant378 = golem_core_types.MakeSchemaTypeBodyF64Type(option284)
 
 						case 12:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyCharType()
+							variant378 = golem_core_types.MakeSchemaTypeBodyCharType()
 
 						case 13:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyStringType()
+							variant378 = golem_core_types.MakeSchemaTypeBodyStringType()
 
 						case 14:
-							result296 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result297 := make([]golem_core_types.NamedFieldType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(17*4))
-								value284 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-								var option286 witTypes.Option[string]
+								value285 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								var option287 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 								case 0:
 
-									option286 = witTypes.None[string]()
+									option287 = witTypes.None[string]()
 								case 1:
-									value285 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+									value286 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-									option286 = witTypes.Some[string](value285)
+									option287 = witTypes.Some[string](value286)
 								default:
 									panic("unreachable")
 								}
-								result288 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
+								result289 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4))))), index*(2*4))
-									value287 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value288 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result288 = append(result288, value287)
+									result289 = append(result289, value288)
 								}
 
-								result290 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
+								result291 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))), index*(2*4))
-									value289 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value290 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result290 = append(result290, value289)
+									result291 = append(result291, value290)
 								}
 
-								var option292 witTypes.Option[string]
+								var option293 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))) {
 								case 0:
 
-									option292 = witTypes.None[string]()
+									option293 = witTypes.None[string]()
 								case 1:
-									value291 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
+									value292 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))
 
-									option292 = witTypes.Some[string](value291)
+									option293 = witTypes.Some[string](value292)
 								default:
 									panic("unreachable")
 								}
-								var option295 witTypes.Option[golem_core_types.Role]
+								var option296 witTypes.Option[golem_core_types.Role]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))) {
 								case 0:
 
-									option295 = witTypes.None[golem_core_types.Role]()
+									option296 = witTypes.None[golem_core_types.Role]()
 								case 1:
-									var variant294 golem_core_types.Role
+									var variant295 golem_core_types.Role
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4)))) {
 									case 0:
 
-										variant294 = golem_core_types.MakeRoleMultimodal()
+										variant295 = golem_core_types.MakeRoleMultimodal()
 
 									case 1:
 
-										variant294 = golem_core_types.MakeRoleUnstructuredText()
+										variant295 = golem_core_types.MakeRoleUnstructuredText()
 
 									case 2:
 
-										variant294 = golem_core_types.MakeRoleUnstructuredBinary()
+										variant295 = golem_core_types.MakeRoleUnstructuredBinary()
 
 									case 3:
-										value293 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
+										value294 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4))))
 
-										variant294 = golem_core_types.MakeRoleOther(value293)
+										variant295 = golem_core_types.MakeRoleOther(value294)
 
 									default:
 										panic("unreachable")
 									}
 
-									option295 = witTypes.Some[golem_core_types.Role](variant294)
+									option296 = witTypes.Some[golem_core_types.Role](variant295)
 								default:
 									panic("unreachable")
 								}
 
-								result296 = append(result296, golem_core_types.NamedFieldType{Name: value284, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option286, Aliases: result288, Examples: result290, Deprecated: option292, Role: option295}})
+								result297 = append(result297, golem_core_types.NamedFieldType{Name: value285, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Metadata: golem_core_types.MetadataEnvelope{Doc: option287, Aliases: result289, Examples: result291, Deprecated: option293, Role: option296}})
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyRecordType(result296)
+							variant378 = golem_core_types.MakeSchemaTypeBodyRecordType(result297)
 
 						case 15:
-							result310 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result311 := make([]golem_core_types.VariantCaseType, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(8+16*4))
-								value297 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-								var option298 witTypes.Option[int32]
+								value298 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								var option299 witTypes.Option[int32]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 								case 0:
 
-									option298 = witTypes.None[int32]()
+									option299 = witTypes.None[int32]()
 								case 1:
 
-									option298 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
+									option299 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), (4 + 2*4))))
 								default:
 									panic("unreachable")
 								}
-								var option300 witTypes.Option[string]
+								var option301 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 								case 0:
 
-									option300 = witTypes.None[string]()
+									option301 = witTypes.None[string]()
 								case 1:
-									value299 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+									value300 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-									option300 = witTypes.Some[string](value299)
+									option301 = witTypes.Some[string](value300)
 								default:
 									panic("unreachable")
 								}
-								result302 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+								result303 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-									value301 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value302 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result302 = append(result302, value301)
+									result303 = append(result303, value302)
 								}
 
-								result304 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
+								result305 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 8*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 7*4))))), index*(2*4))
-									value303 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value304 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result304 = append(result304, value303)
+									result305 = append(result305, value304)
 								}
 
-								var option306 witTypes.Option[string]
+								var option307 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 9*4)))) {
 								case 0:
 
-									option306 = witTypes.None[string]()
+									option307 = witTypes.None[string]()
 								case 1:
-									value305 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
+									value306 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 10*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 11*4))))
 
-									option306 = witTypes.Some[string](value305)
+									option307 = witTypes.Some[string](value306)
 								default:
 									panic("unreachable")
 								}
-								var option309 witTypes.Option[golem_core_types.Role]
+								var option310 witTypes.Option[golem_core_types.Role]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 12*4)))) {
 								case 0:
 
-									option309 = witTypes.None[golem_core_types.Role]()
+									option310 = witTypes.None[golem_core_types.Role]()
 								case 1:
-									var variant308 golem_core_types.Role
+									var variant309 golem_core_types.Role
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 13*4)))) {
 									case 0:
 
-										variant308 = golem_core_types.MakeRoleMultimodal()
+										variant309 = golem_core_types.MakeRoleMultimodal()
 
 									case 1:
 
-										variant308 = golem_core_types.MakeRoleUnstructuredText()
+										variant309 = golem_core_types.MakeRoleUnstructuredText()
 
 									case 2:
 
-										variant308 = golem_core_types.MakeRoleUnstructuredBinary()
+										variant309 = golem_core_types.MakeRoleUnstructuredBinary()
 
 									case 3:
-										value307 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
+										value308 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 14*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 15*4))))
 
-										variant308 = golem_core_types.MakeRoleOther(value307)
+										variant309 = golem_core_types.MakeRoleOther(value308)
 
 									default:
 										panic("unreachable")
 									}
 
-									option309 = witTypes.Some[golem_core_types.Role](variant308)
+									option310 = witTypes.Some[golem_core_types.Role](variant309)
 								default:
 									panic("unreachable")
 								}
 
-								result310 = append(result310, golem_core_types.VariantCaseType{Name: value297, Payload: option298, Metadata: golem_core_types.MetadataEnvelope{Doc: option300, Aliases: result302, Examples: result304, Deprecated: option306, Role: option309}})
+								result311 = append(result311, golem_core_types.VariantCaseType{Name: value298, Payload: option299, Metadata: golem_core_types.MetadataEnvelope{Doc: option301, Aliases: result303, Examples: result305, Deprecated: option307, Role: option310}})
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyVariantType(result310)
+							variant378 = golem_core_types.MakeSchemaTypeBodyVariantType(result311)
 
 						case 16:
-							result312 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result313 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-								value311 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value312 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result312 = append(result312, value311)
+								result313 = append(result313, value312)
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyEnumType(result312)
+							variant378 = golem_core_types.MakeSchemaTypeBodyEnumType(result313)
 
 						case 17:
-							result314 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result315 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(2*4))
-								value313 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value314 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result314 = append(result314, value313)
+								result315 = append(result315, value314)
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyFlagsType(result314)
+							variant378 = golem_core_types.MakeSchemaTypeBodyFlagsType(result315)
 
 						case 18:
-							result315 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result316 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-								result315 = append(result315, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+								result316 = append(result316, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyTupleType(result315)
+							variant378 = golem_core_types.MakeSchemaTypeBodyTupleType(result316)
 
 						case 19:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+							variant378 = golem_core_types.MakeSchemaTypeBodyListType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 						case 20:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
+							variant378 = golem_core_types.MakeSchemaTypeBodyFixedListType(golem_core_types.FixedListSpec{Element: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Length: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))})
 
 						case 21:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
+							variant378 = golem_core_types.MakeSchemaTypeBodyMapType(golem_core_types.MapSpec{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 12))})
 
 						case 22:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+							variant378 = golem_core_types.MakeSchemaTypeBodyOptionType(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 						case 23:
-							var option316 witTypes.Option[int32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-							case 0:
-
-								option316 = witTypes.None[int32]()
-							case 1:
-
-								option316 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
-							default:
-								panic("unreachable")
-							}
 							var option317 witTypes.Option[int32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
 								option317 = witTypes.None[int32]()
 							case 1:
 
-								option317 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
+								option317 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+							default:
+								panic("unreachable")
+							}
+							var option318 witTypes.Option[int32]
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 16))) {
+							case 0:
+
+								option318 = witTypes.None[int32]()
+							case 1:
+
+								option318 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 20)))
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option316, Err: option317})
+							variant378 = golem_core_types.MakeSchemaTypeBodyResultType(golem_core_types.ResultSpec{Ok: option317, Err: option318})
 
 						case 24:
-							var option320 witTypes.Option[[]string]
+							var option321 witTypes.Option[[]string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option320 = witTypes.None[[]string]()
+								option321 = witTypes.None[[]string]()
 							case 1:
-								result319 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+								result320 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-									value318 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value319 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result319 = append(result319, value318)
+									result320 = append(result320, value319)
 								}
 
-								option320 = witTypes.Some[[]string](result319)
-							default:
-								panic("unreachable")
-							}
-							var option321 witTypes.Option[uint32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-							case 0:
-
-								option321 = witTypes.None[uint32]()
-							case 1:
-
-								option321 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+								option321 = witTypes.Some[[]string](result320)
 							default:
 								panic("unreachable")
 							}
 							var option322 witTypes.Option[uint32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 							case 0:
 
 								option322 = witTypes.None[uint32]()
 							case 1:
 
-								option322 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+								option322 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
 							default:
 								panic("unreachable")
 							}
-							var option324 witTypes.Option[string]
+							var option323 witTypes.Option[uint32]
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+							case 0:
+
+								option323 = witTypes.None[uint32]()
+							case 1:
+
+								option323 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+							default:
+								panic("unreachable")
+							}
+							var option325 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 3*4)))) {
 							case 0:
 
-								option324 = witTypes.None[string]()
+								option325 = witTypes.None[string]()
 							case 1:
-								value323 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
+								value324 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4))))
 
-								option324 = witTypes.Some[string](value323)
+								option325 = witTypes.Some[string](value324)
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option320, MinLength: option321, MaxLength: option322, Regex: option324})
+							variant378 = golem_core_types.MakeSchemaTypeBodyTextType(golem_core_types.TextRestrictions{Languages: option321, MinLength: option322, MaxLength: option323, Regex: option325})
 
 						case 25:
-							var option327 witTypes.Option[[]string]
+							var option328 witTypes.Option[[]string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option327 = witTypes.None[[]string]()
+								option328 = witTypes.None[[]string]()
 							case 1:
-								result326 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+								result327 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-									value325 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value326 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result326 = append(result326, value325)
+									result327 = append(result327, value326)
 								}
 
-								option327 = witTypes.Some[[]string](result326)
-							default:
-								panic("unreachable")
-							}
-							var option328 witTypes.Option[uint32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
-							case 0:
-
-								option328 = witTypes.None[uint32]()
-							case 1:
-
-								option328 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+								option328 = witTypes.Some[[]string](result327)
 							default:
 								panic("unreachable")
 							}
 							var option329 witTypes.Option[uint32]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 							case 0:
 
 								option329 = witTypes.None[uint32]()
 							case 1:
 
-								option329 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
+								option329 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (12 + 3*4)))))
+							default:
+								panic("unreachable")
+							}
+							var option330 witTypes.Option[uint32]
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 3*4)))) {
+							case 0:
+
+								option330 = witTypes.None[uint32]()
+							case 1:
+
+								option330 = witTypes.Some[uint32](uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), (20 + 3*4)))))
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option327, MinBytes: option328, MaxBytes: option329})
+							variant378 = golem_core_types.MakeSchemaTypeBodyBinaryType(golem_core_types.BinaryRestrictions{MimeTypes: option328, MinBytes: option329, MaxBytes: option330})
 
 						case 26:
-							var option332 witTypes.Option[[]string]
+							var option333 witTypes.Option[[]string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 							case 0:
 
-								option332 = witTypes.None[[]string]()
+								option333 = witTypes.None[[]string]()
 							case 1:
-								result331 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+								result332 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-									value330 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value331 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result331 = append(result331, value330)
+									result332 = append(result332, value331)
 								}
 
-								option332 = witTypes.Some[[]string](result331)
+								option333 = witTypes.Some[[]string](result332)
 							default:
 								panic("unreachable")
 							}
-							var option335 witTypes.Option[[]string]
+							var option336 witTypes.Option[[]string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
 							case 0:
 
-								option335 = witTypes.None[[]string]()
+								option336 = witTypes.None[[]string]()
 							case 1:
-								result334 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
+								result335 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 6*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))), index*(2*4))
-									value333 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value334 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result334 = append(result334, value333)
+									result335 = append(result335, value334)
 								}
 
-								option335 = witTypes.Some[[]string](result334)
+								option336 = witTypes.Some[[]string](result335)
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option332, AllowedExtensions: option335})
+							variant378 = golem_core_types.MakeSchemaTypeBodyPathType(golem_core_types.PathSpec{Direction: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), Kind: uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 9)))), AllowedMimeTypes: option333, AllowedExtensions: option336})
 
 						case 27:
-							var option338 witTypes.Option[[]string]
+							var option339 witTypes.Option[[]string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option338 = witTypes.None[[]string]()
+								option339 = witTypes.None[[]string]()
 							case 1:
-								result337 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
+								result338 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))), index*(2*4))
-									value336 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value337 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result337 = append(result337, value336)
+									result338 = append(result338, value337)
 								}
 
-								option338 = witTypes.Some[[]string](result337)
+								option339 = witTypes.Some[[]string](result338)
 							default:
 								panic("unreachable")
 							}
-							var option341 witTypes.Option[[]string]
+							var option342 witTypes.Option[[]string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))) {
 							case 0:
 
-								option341 = witTypes.None[[]string]()
+								option342 = witTypes.None[[]string]()
 							case 1:
-								result340 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
+								result341 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 5*4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))), index*(2*4))
-									value339 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value340 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result340 = append(result340, value339)
+									result341 = append(result341, value340)
 								}
 
-								option341 = witTypes.Some[[]string](result340)
+								option342 = witTypes.Some[[]string](result341)
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option338, AllowedHosts: option341})
+							variant378 = golem_core_types.MakeSchemaTypeBodyUrlType(golem_core_types.UrlRestrictions{AllowedSchemes: option339, AllowedHosts: option342})
 
 						case 28:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+							variant378 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 						case 29:
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyDurationType()
+							variant378 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 						case 30:
-							value342 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-							result344 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+
+							variant378 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+						case 31:
+							value343 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result345 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))), index*(2*4))
-								value343 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								value344 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-								result344 = append(result344, value343)
+								result345 = append(result345, value344)
 							}
 
-							var option346 witTypes.Option[golem_core_types.QuantityValue]
+							var option347 witTypes.Option[golem_core_types.QuantityValue]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4)))) {
 							case 0:
 
-								option346 = witTypes.None[golem_core_types.QuantityValue]()
+								option347 = witTypes.None[golem_core_types.QuantityValue]()
 							case 1:
-								value345 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
+								value346 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 5*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (24 + 6*4))))
 
-								option346 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value345})
+								option347 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (16 + 4*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (24 + 4*4))), Unit: value346})
 							default:
 								panic("unreachable")
 							}
-							var option348 witTypes.Option[golem_core_types.QuantityValue]
+							var option349 witTypes.Option[golem_core_types.QuantityValue]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (32 + 6*4)))) {
 							case 0:
 
-								option348 = witTypes.None[golem_core_types.QuantityValue]()
+								option349 = witTypes.None[golem_core_types.QuantityValue]()
 							case 1:
-								value347 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
+								value348 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 7*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (48 + 8*4))))
 
-								option348 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value347})
+								option349 = witTypes.Some[golem_core_types.QuantityValue](golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), (40 + 6*4))), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), (48 + 6*4))), Unit: value348})
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value342, AllowedSuffixes: result344, Min: option346, Max: option348})
+							variant378 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value343, AllowedSuffixes: result345, Min: option347, Max: option349})
 
-						case 31:
-							result370 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+						case 32:
+							result371 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
-								value349 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-								var variant358 golem_core_types.DiscriminatorRule
+								value350 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+								var variant359 golem_core_types.DiscriminatorRule
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))) {
 								case 0:
-									value350 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-
-									variant358 = golem_core_types.MakeDiscriminatorRulePrefix(value350)
-
-								case 1:
 									value351 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-									variant358 = golem_core_types.MakeDiscriminatorRuleSuffix(value351)
+									variant359 = golem_core_types.MakeDiscriminatorRulePrefix(value351)
 
-								case 2:
+								case 1:
 									value352 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-									variant358 = golem_core_types.MakeDiscriminatorRuleContains(value352)
+									variant359 = golem_core_types.MakeDiscriminatorRuleSuffix(value352)
 
-								case 3:
+								case 2:
 									value353 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-									variant358 = golem_core_types.MakeDiscriminatorRuleRegex(value353)
+									variant359 = golem_core_types.MakeDiscriminatorRuleContains(value353)
+
+								case 3:
+									value354 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+
+									variant359 = golem_core_types.MakeDiscriminatorRuleRegex(value354)
 
 								case 4:
-									value354 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
-									var option356 witTypes.Option[string]
+									value355 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+									var option357 witTypes.Option[string]
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (6 * 4)))) {
 									case 0:
 
-										option356 = witTypes.None[string]()
+										option357 = witTypes.None[string]()
 									case 1:
-										value355 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+										value356 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
 
-										option356 = witTypes.Some[string](value355)
+										option357 = witTypes.Some[string](value356)
 									default:
 										panic("unreachable")
 									}
 
-									variant358 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value354, Literal: option356})
+									variant359 = golem_core_types.MakeDiscriminatorRuleFieldEquals(golem_core_types.FieldDiscriminator{FieldName: value355, Literal: option357})
 
 								case 5:
-									value357 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
+									value358 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (5 * 4))))
 
-									variant358 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value357)
+									variant359 = golem_core_types.MakeDiscriminatorRuleFieldAbsent(value358)
 
 								default:
 									panic("unreachable")
 								}
-								var option360 witTypes.Option[string]
+								var option361 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))) {
 								case 0:
 
-									option360 = witTypes.None[string]()
+									option361 = witTypes.None[string]()
 								case 1:
-									value359 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
+									value360 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
 
-									option360 = witTypes.Some[string](value359)
+									option361 = witTypes.Some[string](value360)
 								default:
 									panic("unreachable")
 								}
-								result362 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
+								result363 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (13 * 4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (12 * 4))))), index*(2*4))
-									value361 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value362 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result362 = append(result362, value361)
+									result363 = append(result363, value362)
 								}
 
-								result364 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
+								result365 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4))))
 								for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (15 * 4)))); index++ {
 									base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (14 * 4))))), index*(2*4))
-									value363 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+									value364 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-									result364 = append(result364, value363)
+									result365 = append(result365, value364)
 								}
 
-								var option366 witTypes.Option[string]
+								var option367 witTypes.Option[string]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 * 4)))) {
 								case 0:
 
-									option366 = witTypes.None[string]()
+									option367 = witTypes.None[string]()
 								case 1:
-									value365 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
+									value366 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (17 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (18 * 4))))
 
-									option366 = witTypes.Some[string](value365)
+									option367 = witTypes.Some[string](value366)
 								default:
 									panic("unreachable")
 								}
-								var option369 witTypes.Option[golem_core_types.Role]
+								var option370 witTypes.Option[golem_core_types.Role]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (19 * 4)))) {
 								case 0:
 
-									option369 = witTypes.None[golem_core_types.Role]()
+									option370 = witTypes.None[golem_core_types.Role]()
 								case 1:
-									var variant368 golem_core_types.Role
+									var variant369 golem_core_types.Role
 									switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (20 * 4)))) {
 									case 0:
 
-										variant368 = golem_core_types.MakeRoleMultimodal()
+										variant369 = golem_core_types.MakeRoleMultimodal()
 
 									case 1:
 
-										variant368 = golem_core_types.MakeRoleUnstructuredText()
+										variant369 = golem_core_types.MakeRoleUnstructuredText()
 
 									case 2:
 
-										variant368 = golem_core_types.MakeRoleUnstructuredBinary()
+										variant369 = golem_core_types.MakeRoleUnstructuredBinary()
 
 									case 3:
-										value367 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
+										value368 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (21 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (22 * 4))))
 
-										variant368 = golem_core_types.MakeRoleOther(value367)
+										variant369 = golem_core_types.MakeRoleOther(value368)
 
 									default:
 										panic("unreachable")
 									}
 
-									option369 = witTypes.Some[golem_core_types.Role](variant368)
+									option370 = witTypes.Some[golem_core_types.Role](variant369)
 								default:
 									panic("unreachable")
 								}
 
-								result370 = append(result370, golem_core_types.UnionBranch{Tag: value349, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant358, Metadata: golem_core_types.MetadataEnvelope{Doc: option360, Aliases: result362, Examples: result364, Deprecated: option366, Role: option369}})
+								result371 = append(result371, golem_core_types.UnionBranch{Tag: value350, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (2 * 4))), Discriminator: variant359, Metadata: golem_core_types.MetadataEnvelope{Doc: option361, Aliases: result363, Examples: result365, Deprecated: option367, Role: option370}})
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result370})
+							variant378 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result371})
 
-						case 32:
-							var option372 witTypes.Option[string]
+						case 33:
+							var option373 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 							case 0:
 
-								option372 = witTypes.None[string]()
+								option373 = witTypes.None[string]()
 							case 1:
-								value371 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
+								value372 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 
-								option372 = witTypes.Some[string](value371)
+								option373 = witTypes.Some[string](value372)
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option372})
-
-						case 33:
-							var option374 witTypes.Option[string]
-							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
-							case 0:
-
-								option374 = witTypes.None[string]()
-							case 1:
-								value373 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
-
-								option374 = witTypes.Some[string](value373)
-							default:
-								panic("unreachable")
-							}
-
-							variant377 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option374})
+							variant378 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option373})
 
 						case 34:
-
-							variant377 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
-
-						case 35:
-							var option375 witTypes.Option[int32]
+							var option375 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option375 = witTypes.None[int32]()
+								option375 = witTypes.None[string]()
 							case 1:
+								value374 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4))))
 
-								option375 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+								option375 = witTypes.Some[string](value374)
 							default:
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyFutureType(option375)
+							variant378 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option375})
+
+						case 35:
+
+							variant378 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
 						case 36:
 							var option376 witTypes.Option[int32]
@@ -34844,216 +35140,221 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 								panic("unreachable")
 							}
 
-							variant377 = golem_core_types.MakeSchemaTypeBodyStreamType(option376)
+							variant378 = golem_core_types.MakeSchemaTypeBodyFutureType(option376)
+
+						case 37:
+							var option377 witTypes.Option[int32]
+							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
+							case 0:
+
+								option377 = witTypes.None[int32]()
+							case 1:
+
+								option377 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+							default:
+								panic("unreachable")
+							}
+
+							variant378 = golem_core_types.MakeSchemaTypeBodyStreamType(option377)
 
 						default:
 							panic("unreachable")
 						}
-						var option379 witTypes.Option[string]
+						var option380 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 8*4)))) {
 						case 0:
 
-							option379 = witTypes.None[string]()
+							option380 = witTypes.None[string]()
 						case 1:
-							value378 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
+							value379 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 9*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 10*4))))
 
-							option379 = witTypes.Some[string](value378)
+							option380 = witTypes.Some[string](value379)
 						default:
 							panic("unreachable")
 						}
-						result381 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
+						result382 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 12*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 11*4))))), index*(2*4))
-							value380 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value381 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result381 = append(result381, value380)
+							result382 = append(result382, value381)
 						}
 
-						result383 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
+						result384 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 14*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 13*4))))), index*(2*4))
-							value382 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+							value383 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
 
-							result383 = append(result383, value382)
+							result384 = append(result384, value383)
 						}
 
-						var option385 witTypes.Option[string]
+						var option386 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 15*4)))) {
 						case 0:
 
-							option385 = witTypes.None[string]()
+							option386 = witTypes.None[string]()
 						case 1:
-							value384 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
+							value385 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 16*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 17*4))))
 
-							option385 = witTypes.Some[string](value384)
+							option386 = witTypes.Some[string](value385)
 						default:
 							panic("unreachable")
 						}
-						var option388 witTypes.Option[golem_core_types.Role]
+						var option389 witTypes.Option[golem_core_types.Role]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 18*4)))) {
 						case 0:
 
-							option388 = witTypes.None[golem_core_types.Role]()
+							option389 = witTypes.None[golem_core_types.Role]()
 						case 1:
-							var variant387 golem_core_types.Role
+							var variant388 golem_core_types.Role
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 19*4)))) {
 							case 0:
 
-								variant387 = golem_core_types.MakeRoleMultimodal()
+								variant388 = golem_core_types.MakeRoleMultimodal()
 
 							case 1:
 
-								variant387 = golem_core_types.MakeRoleUnstructuredText()
+								variant388 = golem_core_types.MakeRoleUnstructuredText()
 
 							case 2:
 
-								variant387 = golem_core_types.MakeRoleUnstructuredBinary()
+								variant388 = golem_core_types.MakeRoleUnstructuredBinary()
 
 							case 3:
-								value386 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
+								value387 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 20*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (56 + 21*4))))
 
-								variant387 = golem_core_types.MakeRoleOther(value386)
+								variant388 = golem_core_types.MakeRoleOther(value387)
 
 							default:
 								panic("unreachable")
 							}
 
-							option388 = witTypes.Some[golem_core_types.Role](variant387)
+							option389 = witTypes.Some[golem_core_types.Role](variant388)
 						default:
 							panic("unreachable")
 						}
 
-						result389 = append(result389, golem_core_types.SchemaTypeNode{Body: variant377, Metadata: golem_core_types.MetadataEnvelope{Doc: option379, Aliases: result381, Examples: result383, Deprecated: option385, Role: option388}})
+						result390 = append(result390, golem_core_types.SchemaTypeNode{Body: variant378, Metadata: golem_core_types.MetadataEnvelope{Doc: option380, Aliases: result382, Examples: result384, Deprecated: option386, Role: option389}})
 					}
 
-					result393 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
+					result394 := make([]golem_core_types.SchemaTypeDef, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (7 * 4))))), index*(6*4))
-						value390 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
-						var option392 witTypes.Option[string]
+						value391 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), 4)))
+						var option393 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))) {
 						case 0:
 
-							option392 = witTypes.None[string]()
+							option393 = witTypes.None[string]()
 						case 1:
-							value391 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
+							value392 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (4 * 4))))
 
-							option392 = witTypes.Some[string](value391)
+							option393 = witTypes.Some[string](value392)
 						default:
 							panic("unreachable")
 						}
 
-						result393 = append(result393, golem_core_types.SchemaTypeDef{Id: value390, Name: option392, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
+						result394 = append(result394, golem_core_types.SchemaTypeDef{Id: value391, Name: option393, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (5 * 4)))})
 					}
 
-					result417 := make([]golem_core_types.SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
+					result418 := make([]golem_core_types.SchemaValueNode, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (11 * 4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (10 * 4))))), index*(16+4*4))
-						var variant416 golem_core_types.SchemaValueNode
+						var variant417 golem_core_types.SchemaValueNode
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) {
 						case 0:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
+							variant417 = golem_core_types.MakeSchemaValueNodeBoolValue((uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0))
 
 						case 1:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+							variant417 = golem_core_types.MakeSchemaValueNodeS8Value(int8(int8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 						case 2:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+							variant417 = golem_core_types.MakeSchemaValueNodeS16Value(int16(int16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 						case 3:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
+							variant417 = golem_core_types.MakeSchemaValueNodeS32Value(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 						case 4:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
+							variant417 = golem_core_types.MakeSchemaValueNodeS64Value(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 						case 5:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+							variant417 = golem_core_types.MakeSchemaValueNodeU8Value(uint8(uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 						case 6:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
+							variant417 = golem_core_types.MakeSchemaValueNodeU16Value(uint16(uint16(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))))
 
 						case 7:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+							variant417 = golem_core_types.MakeSchemaValueNodeU32Value(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 						case 8:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
+							variant417 = golem_core_types.MakeSchemaValueNodeU64Value(uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 						case 9:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
+							variant417 = golem_core_types.MakeSchemaValueNodeF32Value(*(*float32)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 						case 10:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
+							variant417 = golem_core_types.MakeSchemaValueNodeF64Value(*(*float64)(unsafe.Add(unsafe.Pointer(base), 8)))
 
 						case 11:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+							variant417 = golem_core_types.MakeSchemaValueNodeCharValue(rune(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 						case 12:
-							value394 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							value395 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-							variant416 = golem_core_types.MakeSchemaValueNodeStringValue(value394)
+							variant417 = golem_core_types.MakeSchemaValueNodeStringValue(value395)
 
 						case 13:
-							result395 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result396 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
 
-								result395 = append(result395, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+								result396 = append(result396, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeRecordValue(result395)
+							variant417 = golem_core_types.MakeSchemaValueNodeRecordValue(result396)
 
 						case 14:
-							var option396 witTypes.Option[int32]
+							var option397 witTypes.Option[int32]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
 							case 0:
 
-								option396 = witTypes.None[int32]()
+								option397 = witTypes.None[int32]()
 							case 1:
 
-								option396 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
+								option397 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
 							default:
 								panic("unreachable")
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeVariantValue(golem_core_types.VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Payload: option396})
+							variant417 = golem_core_types.MakeSchemaValueNodeVariantValue(golem_core_types.VariantValuePayload{Case: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))), Payload: option397})
 
 						case 15:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
+							variant417 = golem_core_types.MakeSchemaValueNodeEnumValue(uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))
 
 						case 16:
-							result397 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result398 := make([]bool, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*1)
 
-								result397 = append(result397, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
+								result398 = append(result398, (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 0))) != 0))
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeFlagsValue(result397)
+							variant417 = golem_core_types.MakeSchemaValueNodeFlagsValue(result398)
 
 						case 17:
-							result398 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
-								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
-
-								result398 = append(result398, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
-							}
-
-							variant416 = golem_core_types.MakeSchemaValueNodeTupleValue(result398)
-
-						case 18:
 							result399 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
@@ -35061,9 +35362,9 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 								result399 = append(result399, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeListValue(result399)
+							variant417 = golem_core_types.MakeSchemaValueNodeTupleValue(result399)
 
-						case 19:
+						case 18:
 							result400 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
@@ -35071,52 +35372,47 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 								result400 = append(result400, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeFixedListValue(result400)
+							variant417 = golem_core_types.MakeSchemaValueNodeListValue(result400)
+
+						case 19:
+							result401 := make([]int32, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
+								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*4)
+
+								result401 = append(result401, *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)))
+							}
+
+							variant417 = golem_core_types.MakeSchemaValueNodeFixedListValue(result401)
 
 						case 20:
-							result401 := make([]golem_core_types.MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							result402 := make([]golem_core_types.MapEntry, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 							for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 								base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*8)
 
-								result401 = append(result401, golem_core_types.MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 4))})
+								result402 = append(result402, golem_core_types.MapEntry{Key: *(*int32)(unsafe.Add(unsafe.Pointer(base), 0)), Value: *(*int32)(unsafe.Add(unsafe.Pointer(base), 4))})
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeMapValue(result401)
+							variant417 = golem_core_types.MakeSchemaValueNodeMapValue(result402)
 
 						case 21:
-							var option402 witTypes.Option[int32]
+							var option403 witTypes.Option[int32]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
 
-								option402 = witTypes.None[int32]()
+								option403 = witTypes.None[int32]()
 							case 1:
 
-								option402 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
+								option403 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 12)))
 							default:
 								panic("unreachable")
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeOptionValue(option402)
+							variant417 = golem_core_types.MakeSchemaValueNodeOptionValue(option403)
 
 						case 22:
-							var variant405 golem_core_types.ResultValuePayload
+							var variant406 golem_core_types.ResultValuePayload
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 							case 0:
-								var option403 witTypes.Option[int32]
-								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
-								case 0:
-
-									option403 = witTypes.None[int32]()
-								case 1:
-
-									option403 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
-								default:
-									panic("unreachable")
-								}
-
-								variant405 = golem_core_types.MakeResultValuePayloadOkValue(option403)
-
-							case 1:
 								var option404 witTypes.Option[int32]
 								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
 								case 0:
@@ -35129,128 +35425,147 @@ func GetInvokeResults(futures []*FutureInvokeResult) []witTypes.Result[golem_too
 									panic("unreachable")
 								}
 
-								variant405 = golem_core_types.MakeResultValuePayloadErrValue(option404)
+								variant406 = golem_core_types.MakeResultValuePayloadOkValue(option404)
+
+							case 1:
+								var option405 witTypes.Option[int32]
+								switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 12))) {
+								case 0:
+
+									option405 = witTypes.None[int32]()
+								case 1:
+
+									option405 = witTypes.Some[int32](*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))
+								default:
+									panic("unreachable")
+								}
+
+								variant406 = golem_core_types.MakeResultValuePayloadErrValue(option405)
 
 							default:
 								panic("unreachable")
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeResultValue(variant405)
+							variant417 = golem_core_types.MakeSchemaValueNodeResultValue(variant406)
 
 						case 23:
-							value406 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-							var option408 witTypes.Option[string]
+							value407 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var option409 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 							case 0:
 
-								option408 = witTypes.None[string]()
+								option409 = witTypes.None[string]()
 							case 1:
-								value407 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+								value408 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-								option408 = witTypes.Some[string](value407)
+								option409 = witTypes.Some[string](value408)
 							default:
 								panic("unreachable")
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeTextValue(golem_core_types.TextValuePayload{Text: value406, Language: option408})
+							variant417 = golem_core_types.MakeSchemaValueNodeTextValue(golem_core_types.TextValuePayload{Text: value407, Language: option409})
 
 						case 24:
-							value409 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-							var option411 witTypes.Option[string]
+							value410 := unsafe.Slice((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							var option412 witTypes.Option[string]
 							switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))) {
 							case 0:
 
-								option411 = witTypes.None[string]()
+								option412 = witTypes.None[string]()
 							case 1:
-								value410 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
+								value411 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 4*4))))
 
-								option411 = witTypes.Some[string](value410)
+								option412 = witTypes.Some[string](value411)
 							default:
 								panic("unreachable")
 							}
 
-							variant416 = golem_core_types.MakeSchemaValueNodeBinaryValue(golem_core_types.BinaryValuePayload{Bytes: value409, MimeType: option411})
+							variant417 = golem_core_types.MakeSchemaValueNodeBinaryValue(golem_core_types.BinaryValuePayload{Bytes: value410, MimeType: option412})
 
 						case 25:
-							value412 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
-
-							variant416 = golem_core_types.MakeSchemaValueNodePathValue(value412)
-
-						case 26:
 							value413 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-							variant416 = golem_core_types.MakeSchemaValueNodeUrlValue(value413)
+							variant417 = golem_core_types.MakeSchemaValueNodePathValue(value413)
+
+						case 26:
+							value414 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+
+							variant417 = golem_core_types.MakeSchemaValueNodeUrlValue(value414)
 
 						case 27:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+							variant417 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 						case 28:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+							variant417 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 						case 29:
-							value414 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
-							variant416 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value414})
+							variant417 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
 
 						case 30:
-							value415 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
+							value415 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
-							variant416 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value415, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
+							variant417 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value415})
 
 						case 31:
+							value416 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
-							variant416 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+							variant417 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value416, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
 						case 32:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+							variant417 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 						case 33:
 
-							variant416 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+							variant417 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 						case 34:
 
-							variant416 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+							variant417 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
+
+						case 35:
+
+							variant417 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
 						default:
 							panic("unreachable")
 						}
 
-						result417 = append(result417, variant416)
+						result418 = append(result418, variant417)
 					}
 
-					variant418 = golem_core_types.MakeToolErrorCustomError(golem_core_types.CustomToolError{Name: value213, Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result389, Defs: result393, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result417, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (12 * 4)))}}})
+					variant419 = golem_core_types.MakeToolErrorCustomError(golem_core_types.CustomToolError{Name: value214, Payload: golem_core_types.TypedSchemaValue{Graph: golem_core_types.SchemaGraph{TypeNodes: result390, Defs: result394, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (9 * 4)))}, Value: golem_core_types.SchemaValueTree{ValueNodes: result418, Root: *(*int32)(unsafe.Add(unsafe.Pointer(base), (12 * 4)))}}})
 
 				default:
 					panic("unreachable")
 				}
 
-				variant420 = golem_core_types.MakeToolRpcErrorRemoteToolError(variant418)
+				variant421 = golem_core_types.MakeToolRpcErrorRemoteToolError(variant419)
 
 			case 5:
 
-				variant420 = golem_core_types.MakeToolRpcErrorCancelled()
+				variant421 = golem_core_types.MakeToolRpcErrorCancelled()
 
 			case 6:
-				value419 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
+				value420 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (2 * 4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (3 * 4))))
 
-				variant420 = golem_core_types.MakeToolRpcErrorResourceExhausted(value419)
+				variant421 = golem_core_types.MakeToolRpcErrorResourceExhausted(value420)
 
 			default:
 				panic("unreachable")
 			}
 
-			result421 = witTypes.Err[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](variant420)
+			result422 = witTypes.Err[golem_tool_common.InvocationResult, golem_core_types.ToolRpcError](variant421)
 		default:
 			panic("unreachable")
 		}
 
-		result422 = append(result422, result421)
+		result423 = append(result423, result422)
 	}
 
-	return result422
+	return result423
 
 }

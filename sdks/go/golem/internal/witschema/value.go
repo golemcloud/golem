@@ -15,6 +15,7 @@
 package witschema
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
@@ -89,6 +90,12 @@ func (c *valueConverter) node(idx int32) (core.SchemaValue, error) {
 		return core.DatetimeValue{Seconds: d.Seconds, Nanoseconds: d.Nanoseconds}, nil
 	case types.SchemaValueNodeDurationValue:
 		return core.DurationValue{Nanoseconds: n.DurationValue().Nanoseconds}, nil
+	case types.SchemaValueNodeUuidValue:
+		u := n.UuidValue()
+		var v core.UUIDValue
+		binary.BigEndian.PutUint64(v.Value[0:8], u.HighBits)
+		binary.BigEndian.PutUint64(v.Value[8:16], u.LowBits)
+		return v, nil
 	case types.SchemaValueNodeQuantityValueNode:
 		q := n.QuantityValueNode()
 		return core.QuantityValueNode{Value: core.QuantityValue{
@@ -261,6 +268,11 @@ func (f *flattener) push(v core.SchemaValue) (int32, error) {
 	case core.DurationValue:
 		return f.add(types.MakeSchemaValueNodeDurationValue(types.DurationValuePayload{
 			Nanoseconds: t.Nanoseconds,
+		})), nil
+	case core.UUIDValue:
+		return f.add(types.MakeSchemaValueNodeUuidValue(types.Uuid{
+			HighBits: binary.BigEndian.Uint64(t.Value[0:8]),
+			LowBits:  binary.BigEndian.Uint64(t.Value[8:16]),
 		})), nil
 	case core.QuantityValueNode:
 		return f.add(types.MakeSchemaValueNodeQuantityValueNode(types.QuantityValue{

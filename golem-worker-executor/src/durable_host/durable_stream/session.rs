@@ -664,7 +664,7 @@ impl DurableStreamStore {
                         .stream_mappings
                         .iter()
                         .zip(handles)
-                        .filter(|(binding, _)| binding.role == SessionStreamRole::Input)
+                        .filter(|(binding, _)| binding.role.direction() == SessionStreamRole::Input)
                         .map(|(_, handle)| handle)
                         .collect();
                     prepared
@@ -835,8 +835,11 @@ impl DurableStreamStore {
             })
             .collect::<Result<HashSet<_>, StreamStoreError>>()?;
         Ok(streams.iter().any(|(stream_id, role)| {
-            *role == SessionStreamRole::Input
-                && streams.contains(&(*stream_id, SessionStreamRole::Output))
+            role.direction() == SessionStreamRole::Input
+                && streams.iter().any(|(candidate_id, candidate_role)| {
+                    candidate_id == stream_id
+                        && candidate_role.direction() == SessionStreamRole::Output
+                })
                 && index
                     .streams
                     .get(stream_id)
@@ -950,7 +953,7 @@ impl DurableStreamStore {
                     |(position, (stream_id, role, sequence, stream_attribution))| {
                         let oplog_index =
                             OplogIndex::from_u64(first_index.as_u64() + position as u64);
-                        match role {
+                        match role.direction() {
                             SessionStreamRole::Input => DurableStreamOplogRecord::Cancel(
                                 stream_attribution,
                                 StreamCancelRecord {
@@ -984,6 +987,9 @@ impl DurableStreamStore {
                                     },
                                 )
                             }
+                            SessionStreamRole::ToolStdin
+                            | SessionStreamRole::ToolStdout
+                            | SessionStreamRole::ToolStderr => unreachable!(),
                         }
                     },
                 );

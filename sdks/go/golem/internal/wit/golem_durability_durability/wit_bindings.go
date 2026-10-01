@@ -1737,17 +1737,21 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 				panic("unreachable")
 			}
 
-		case golem_core_types.SchemaTypeBodyDatetimeType:
+		case golem_core_types.SchemaTypeBodyUuidType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-		case golem_core_types.SchemaTypeBodyDurationType:
+		case golem_core_types.SchemaTypeBodyDatetimeType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+		case golem_core_types.SchemaTypeBodyDurationType:
+
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 		case golem_core_types.SchemaTypeBodyQuantityType:
 			payload := (element).Body.QuantityType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf872 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 			pinner.Pin(utf872)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -1805,7 +1809,7 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaTypeBodyUnionType:
 			payload := (element).Body.UnionType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			slice98 := (payload).Branches
 			length100 := uint32(len(slice98))
 			result99 := witRuntime.Allocate(pinner, uintptr(length100*(23*4)), 4)
@@ -1990,7 +1994,7 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaTypeBodySecretType:
 			payload := (element).Body.SecretType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 			switch (payload).Category.Tag() {
@@ -2011,7 +2015,7 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaTypeBodyQuotaTokenType:
 			payload := (element).Body.QuotaTokenType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 			switch (payload).ResourceName.Tag() {
 			case witTypes.OptionNone:
@@ -2031,7 +2035,7 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaTypeBodyPermissionCardType:
 			payload := (element).Body.PermissionCardType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			var result103 int32
 			if (payload).Polymorphic {
 				result103 = 1
@@ -2042,7 +2046,7 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaTypeBodyFutureType:
 			payload := (element).Body.FutureType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -2059,7 +2063,7 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaTypeBodyStreamType:
 			payload := (element).Body.StreamType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -2531,20 +2535,26 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8148)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf8149 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -2554,7 +2564,7 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf8150 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf8150)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -2563,22 +2573,22 @@ func LiveCustomDurableInvocationFinish(this *LiveCustomDurableInvocation, respon
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -4195,17 +4205,21 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 				panic("unreachable")
 			}
 
-		case golem_core_types.SchemaTypeBodyDatetimeType:
+		case golem_core_types.SchemaTypeBodyUuidType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-		case golem_core_types.SchemaTypeBodyDurationType:
+		case golem_core_types.SchemaTypeBodyDatetimeType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+		case golem_core_types.SchemaTypeBodyDurationType:
+
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 		case golem_core_types.SchemaTypeBodyQuantityType:
 			payload := (element).Body.QuantityType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf873 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 			pinner.Pin(utf873)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -4263,7 +4277,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaTypeBodyUnionType:
 			payload := (element).Body.UnionType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			slice99 := (payload).Branches
 			length101 := uint32(len(slice99))
 			result100 := witRuntime.Allocate(pinner, uintptr(length101*(23*4)), 4)
@@ -4448,7 +4462,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaTypeBodySecretType:
 			payload := (element).Body.SecretType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 			switch (payload).Category.Tag() {
@@ -4469,7 +4483,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaTypeBodyQuotaTokenType:
 			payload := (element).Body.QuotaTokenType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 			switch (payload).ResourceName.Tag() {
 			case witTypes.OptionNone:
@@ -4489,7 +4503,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaTypeBodyPermissionCardType:
 			payload := (element).Body.PermissionCardType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			var result104 int32
 			if (payload).Polymorphic {
 				result104 = 1
@@ -4500,7 +4514,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaTypeBodyFutureType:
 			payload := (element).Body.FutureType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -4517,7 +4531,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaTypeBodyStreamType:
 			payload := (element).Body.StreamType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -4989,20 +5003,26 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8149)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf8150 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -5012,7 +5032,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf8151 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf8151)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -5021,22 +5041,22 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -6415,13 +6435,17 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 			case 28:
 
-				variant323 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+				variant323 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 			case 29:
 
-				variant323 = golem_core_types.MakeSchemaTypeBodyDurationType()
+				variant323 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 			case 30:
+
+				variant323 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+			case 31:
 				value288 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				result290 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -6458,7 +6482,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 				variant323 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value288, AllowedSuffixes: result290, Min: option292, Max: option294})
 
-			case 31:
+			case 32:
 				result316 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -6589,7 +6613,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 				variant323 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result316})
 
-			case 32:
+			case 33:
 				var option318 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
@@ -6605,7 +6629,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 				variant323 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option318})
 
-			case 33:
+			case 34:
 				var option320 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -6621,11 +6645,11 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 				variant323 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option320})
 
-			case 34:
+			case 35:
 
 				variant323 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-			case 35:
+			case 36:
 				var option321 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -6640,7 +6664,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 				variant323 = golem_core_types.MakeSchemaTypeBodyFutureType(option321)
 
-			case 36:
+			case 37:
 				var option322 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -6992,35 +7016,39 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 
 			case 27:
 
-				variant362 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+				variant362 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 			case 28:
 
-				variant362 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+				variant362 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 			case 29:
+
+				variant362 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+			case 30:
 				value360 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 				variant362 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value360})
 
-			case 30:
+			case 31:
 				value361 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 				variant362 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value361, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-			case 31:
+			case 32:
 
 				variant362 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 32:
+			case 33:
 
 				variant362 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 33:
+			case 34:
 
 				variant362 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 34:
+			case 35:
 
 				variant362 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 

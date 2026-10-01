@@ -17,6 +17,7 @@ mod identity_provider;
 mod identity_provider_metadata;
 pub mod model;
 mod open_id_client;
+pub mod pkce;
 pub mod session_store;
 
 use chrono::Duration;

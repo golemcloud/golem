@@ -489,6 +489,15 @@ var namedTypeCodecs = map[reflect.Type]func(*codec){
 				dst.SetInt(n.DurationValue().Nanoseconds)
 			})
 	},
+	reflect.TypeFor[UUID](): func(c *codec) {
+		scalar(c, types.MakeSchemaTypeBodyUuidType(), types.SchemaValueNodeUuidValue,
+			func(b *valBuilder, v reflect.Value) int32 {
+				return b.push(types.MakeSchemaValueNodeUuidValue(uuidToWit(v.Interface().(UUID))))
+			},
+			func(dst reflect.Value, n types.SchemaValueNode) {
+				dst.Set(reflect.ValueOf(uuidFromWit(n.UuidValue())))
+			})
+	},
 }
 
 // compileQuantity lowers Quantity[U] to the WIT quantity type. The unit marker U

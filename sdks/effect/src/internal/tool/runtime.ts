@@ -24,20 +24,53 @@ export async function invokeRegistered(
   path: string[],
   input: Common.TypedSchemaValue,
   stdin: AsyncIterable<Host.ByteStreamItem> | undefined,
-  stdout: Streams.ToolStdoutWriter | undefined,
+  stdout: Streams.ToolOutputWriter | undefined,
+  stderr: Streams.ToolOutputWriter | undefined,
   principal: unknown,
 ): Promise<Common.InvocationResult> {
   const stdinIterator = stdin?.[Symbol.asyncIterator]()
-  let stdoutCompleted = false
-  const completeStdout = () => {
-    if (!stdout || stdoutCompleted) return Promise.resolve()
-    stdoutCompleted = true
-    return stdout.finish()
+  const output = (name: "stdout" | "stderr", writer: Streams.ToolOutputWriter | undefined) => {
+    let completed = false
+    const consume = writer
+      ? <R>(source: Stream.Stream<Uint8Array, ToolInvokeError, R>) =>
+          Stream.runForEach(source, (chunk) =>
+            completed
+              ? Effect.fail(asError({ tag: "invalid-result", val: `${name} is already completed` }))
+              : Effect.tryPromise({
+                  try: () => writer.write(chunk),
+                  catch: (e) => asError({ tag: "invalid-result", val: String(e) }),
+                }),
+          )
+      : undefined
+    return {
+      finish: () => {
+        if (!writer || completed) return Promise.resolve()
+        completed = true
+        return writer.finish()
+      },
+      fail: (error: unknown) => {
+        if (!writer || completed) return Promise.resolve()
+        completed = true
+        return writer.fail({ tag: "failed", val: String(error) })
+      },
+      consume,
+    }
   }
-  const failStdout = (error: unknown) => {
-    if (!stdout || stdoutCompleted) return Promise.resolve()
-    stdoutCompleted = true
-    return stdout.fail({ tag: "failed", val: String(error) })
+  const stdoutOutput = output("stdout", stdout)
+  const stderrOutput = output("stderr", stderr)
+  const settleOutputs = async (operation: "finish" | "fail", error?: unknown) => {
+    const start = (target: typeof stdoutOutput) => {
+      try {
+        return operation === "finish" ? target.finish() : target.fail(error)
+      } catch (cause) {
+        return Promise.reject(cause)
+      }
+    }
+    const settled = await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
+    const failed = settled.find(
+      (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+    )
+    if (failed) throw failed.reason
   }
   try {
     const registered = registeredTools().find((x) => x.definition.name === toolName)
@@ -101,6 +134,20 @@ export async function invokeRegistered(
             val: "tool invocation contained undeclared stdout stream",
           }),
         )
+      if (body.model.stderr?.required && !stderr)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation did not contain declared stderr stream",
+          }),
+        )
+      if (!body.model.stderr && stderr)
+        return yield* Effect.fail(
+          asError({
+            tag: "invalid-input",
+            val: "tool invocation contained undeclared stderr stream",
+          }),
+        )
 
       const decoded = yield* body
         .decodeInput(input)
@@ -108,19 +155,8 @@ export async function invokeRegistered(
       const invocation = handler(decoded, {
         principal,
         stdin: bytes(stdinIterator),
-        stdout:
-          stdout &&
-          ((source) =>
-            Stream.runForEach(source, (chunk) =>
-              stdoutCompleted
-                ? Effect.fail(
-                    asError({ tag: "invalid-result", val: "stdout is already completed" }),
-                  )
-                : Effect.tryPromise({
-                    try: () => stdout.write(chunk),
-                    catch: (e) => asError({ tag: "invalid-result", val: String(e) }),
-                  }),
-            )),
+        stdout: stdoutOutput.consume,
+        stderr: stderrOutput.consume,
       }).pipe(Effect.catchIf(isFailure, encodeFailure))
       const result = yield* invocation
       if (isFailure(result)) return yield* encodeFailure(result)
@@ -141,12 +177,12 @@ export async function invokeRegistered(
         never
       >,
     )
-    await completeStdout()
+    await settleOutputs("finish")
     return result
   } catch (error) {
     try {
-      if (error instanceof ToolInvokeError || isToolError(error)) await completeStdout()
-      else await failStdout(error)
+      if (error instanceof ToolInvokeError || isToolError(error)) await settleOutputs("finish")
+      else await settleOutputs("fail", error)
     } catch {
       // The original invocation failure wins terminal arbitration.
     }

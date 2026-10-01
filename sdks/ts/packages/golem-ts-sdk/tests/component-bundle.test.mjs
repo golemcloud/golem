@@ -235,14 +235,12 @@ describe('static component exports', () => {
         val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
       }),
     ).toEqual({
-      root: 5,
+      root: 3,
       valueNodes: [
-        { tag: 'u64-value', val: 17n },
-        { tag: 'u64-value', val: 31n },
-        { tag: 'record-value', val: [0, 1] },
-        { tag: 'record-value', val: [2] },
-        { tag: 'record-value', val: [3] },
-        { tag: 'variant-value', val: { case_: 2, payload: 4 } },
+        { tag: 'uuid-value', val: { highBits: 17n, lowBits: 31n } },
+        { tag: 'record-value', val: [0] },
+        { tag: 'record-value', val: [1] },
+        { tag: 'variant-value', val: { case_: 2, payload: 2 } },
       ],
     });
     expect(configReads).toBe(0);
@@ -381,7 +379,7 @@ describe('static component exports', () => {
     expect(runtime.tool.discoverTools()).toHaveLength(1);
     const graph = { typeNodes: [], defs: [], root: 999 };
     const invoke = (path, value) =>
-      runtime.tool.invoke('compiled', path, { graph, value }, undefined, undefined, {
+      runtime.tool.invoke('compiled', path, { graph, value }, undefined, undefined, undefined, {
         tag: 'anonymous',
       });
     const choice = {
@@ -632,9 +630,17 @@ describe('static component exports', () => {
       }
       const input = wireValue(z.object({ name: z.string() }), { name: 'Ada' });
       if (capabilities.tools) {
-        const result = await exports.tool.invoke('greet', [], input, undefined, undefined, {
-          tag: 'anonymous',
-        });
+        const result = await exports.tool.invoke(
+          'greet',
+          [],
+          input,
+          undefined,
+          undefined,
+          undefined,
+          {
+            tag: 'anonymous',
+          },
+        );
         expect(compileSchema(z.string()).fromValue(schemaValueFromWit(result.result.value))).toBe(
           'Hello, Ada!',
         );
@@ -643,7 +649,7 @@ describe('static component exports', () => {
           value: input.value,
         };
         await expect(
-          exports.tool.invoke('greet', [], poisonGraphInput, undefined, undefined, {
+          exports.tool.invoke('greet', [], poisonGraphInput, undefined, undefined, undefined, {
             tag: 'anonymous',
           }),
         ).resolves.toHaveProperty('result.value');
@@ -654,12 +660,15 @@ describe('static component exports', () => {
             { graph: poisonGraphInput.graph, value: unit },
             undefined,
             undefined,
+            undefined,
             { tag: 'anonymous' },
           ),
         ).rejects.toMatchObject({ tag: 'invalid-input' });
       } else {
         await expect(
-          exports.tool.invoke('greet', [], input, undefined, undefined, { tag: 'anonymous' }),
+          exports.tool.invoke('greet', [], input, undefined, undefined, undefined, {
+            tag: 'anonymous',
+          }),
         ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'greet' });
         let closed = false;
         const stdin = {
@@ -674,7 +683,9 @@ describe('static component exports', () => {
           },
         };
         await expect(
-          exports.tool.invoke('greet', [], input, stdin, undefined, { tag: 'anonymous' }),
+          exports.tool.invoke('greet', [], input, stdin, undefined, undefined, {
+            tag: 'anonymous',
+          }),
         ).rejects.toEqual({ tag: 'invalid-tool-name', val: 'greet' });
         expect(closed).toBe(true);
       }
@@ -687,6 +698,7 @@ describe('static component exports', () => {
           wireValue(z.object({}), {}),
           [],
           input,
+          undefined,
           undefined,
           undefined,
           { tag: 'anonymous' },

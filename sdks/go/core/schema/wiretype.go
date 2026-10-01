@@ -83,6 +83,8 @@ func wireToTypeBody(node wireNode) (SchemaTypeBody, MetadataEnvelope, error) {
 		return readType(node, func(wireBareType) SchemaTypeBody { return DatetimeType{} })
 	case "duration":
 		return readType(node, func(wireBareType) SchemaTypeBody { return DurationType{} })
+	case "uuid":
+		return readType(node, func(wireBareType) SchemaTypeBody { return UUIDType{} })
 
 	case "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64":
 		return readTypeErr(node, func(p wireNumericType) (SchemaTypeBody, error) {

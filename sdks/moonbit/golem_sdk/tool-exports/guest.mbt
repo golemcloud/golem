@@ -19,41 +19,84 @@ pub async fn invoke(
   stdin : @async-core.Stream[
     Result[FixedArray[Byte], @streams.ByteStreamFailure],
   ]?,
-  stdout : @streams.ToolStdoutWriter?,
+  stdout : @streams.ToolOutputWriter?,
+  stderr : @streams.ToolOutputWriter?,
   principal : @common0.Principal,
   _background_group : @async-core.TaskGroup[Unit],
 ) -> Result[@common.InvocationResult, @types.ToolError] {
-  let stdin = stdin.map(@tool.byte_stream)
-  match @tool.validate_tool_stdout(tool_name, command_path, stdout is Some(_)) {
+  let stdin = stdin.map(source => @tool.byte_stream(source))
+  match
+    @tool.validate_tool_outputs(
+      tool_name,
+      command_path,
+      stdout is Some(_),
+      stderr is Some(_),
+    ) {
     Err(error) => {
       if stdout is Some(writer) {
+        writer.drop()
+      }
+      if stderr is Some(writer) {
         writer.drop()
       }
       return @tool.reject_wire_invocation(input, stdin, error)
     }
     Ok(_) => ()
   }
-  match stdout {
-    None =>
+  match (stdout, stderr) {
+    (None, None) =>
       @tool.invoke_registered_tool(
         tool_name,
         command_path,
         input,
         stdin,
         None,
+        None,
         principal,
       )
-    Some(writer) => {
-      let stdout = @tool.provider_stdout(writer)
-      @tool.invoke_with_stdout(stdout, () => {
+    (Some(writer), None) => {
+      let stdout = @tool.provider_output(writer)
+      @tool.invoke_with_output(stdout, () => {
         @tool.invoke_registered_tool(
           tool_name,
           command_path,
           input,
           stdin,
           Some(stdout),
+          None,
           principal,
         )
+      })
+    }
+    (None, Some(writer)) => {
+      let stderr = @tool.provider_output(writer)
+      @tool.invoke_with_output(stderr, () => {
+        @tool.invoke_registered_tool(
+          tool_name,
+          command_path,
+          input,
+          stdin,
+          None,
+          Some(stderr),
+          principal,
+        )
+      })
+    }
+    (Some(stdout_writer), Some(stderr_writer)) => {
+      let stdout = @tool.provider_output(stdout_writer)
+      let stderr = @tool.provider_output(stderr_writer)
+      @tool.invoke_with_output(stdout, () => {
+        @tool.invoke_with_output(stderr, () => {
+          @tool.invoke_registered_tool(
+            tool_name,
+            command_path,
+            input,
+            stdin,
+            Some(stdout),
+            Some(stderr),
+            principal,
+          )
+        })
       })
     }
   }

@@ -291,3 +291,15 @@ func TestPackedValuesAreOrdinaryGoValues(t *testing.T) {
 }
 
 var _ = json.Marshal
+
+func TestUUIDIsAHyphenatedString(t *testing.T) {
+	in := `"dd00721b-3329-4621-a01d-c71f02cd78c6"`
+	if got := roundTrip(t, typ(UUIDType{}), in); got != in {
+		t.Errorf("round trip gave %s", got)
+	}
+	if got := roundTrip(t, typ(UUIDType{}), `"DD00721B-3329-4621-A01D-C71F02CD78C6"`); got != in {
+		t.Errorf("an upper-case UUID round-tripped to %s", got)
+	}
+	mustReject(t, typ(UUIDType{}), `"dd00721b33294621a01dc71f02cd78c6"`, "hyphenated UUID")
+	mustReject(t, typ(UUIDType{}), `42`, "hyphenated UUID string")
+}

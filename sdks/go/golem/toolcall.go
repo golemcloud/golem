@@ -177,6 +177,7 @@ func toolCallErrorFromWit(tool string, path []string, e types.ToolRpcError) *Too
 // output when one was requested, and the pending outcome.
 type toolCall struct {
 	stdout *byteReader
+	stderr *byteReader
 	wait   func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError)
 	cancel func()
 }

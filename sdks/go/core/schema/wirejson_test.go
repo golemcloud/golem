@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/core/values"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -59,6 +61,7 @@ func everyValueCase() []SchemaValue {
 		UrlValue{Value: "https://example.test/a"},
 		DatetimeValue{Seconds: 1700000000, Nanoseconds: 123456789},
 		DurationValue{Nanoseconds: -9007199254740993},
+		UUIDValue{Value: values.UUID{0xdd, 0x00, 0x72, 0x1b, 0x33, 0x29, 0x46, 0x21, 0xa0, 0x1d, 0xc7, 0x1f, 0x02, 0xcd, 0x78, 0xc6}},
 		QuantityValueNode{Value: QuantityValue{Mantissa: 12345, Scale: 3, Unit: "kg"}},
 		UnionValue{Tag: "inline", Body: StringValue{Value: "u"}},
 		SecretValue{},

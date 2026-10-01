@@ -12,16 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::{BearerWriteFailureStores, SessionStorePair};
 use chrono::{TimeDelta, Utc};
-use golem_common::model::security_scheme::SecuritySchemeId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeRevision};
 use golem_worker_service::custom_api::model::OidcSession;
-use golem_worker_service::custom_api::oidc::model::{PendingOidcLogin, SessionId};
+use golem_worker_service::custom_api::oidc::model::{
+    AuthorizationCode, BearerToken, PendingOidcLogin, PendingPkceLogin, PkceAuthorizationCode,
+    PkceBearerCredential, PkceBinding, SessionId,
+};
 use golem_worker_service::custom_api::oidc::session_store::SessionStore;
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
     Audience, EmptyAdditionalClaims, IssuerUrl, Nonce, Scope, StandardClaims, SubjectIdentifier,
 };
 use std::collections::HashSet;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
@@ -33,9 +39,31 @@ inherit_test_dep!(#[tagged_as("sqlite")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("redis_fast_expiry")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("sqlite_fast_expiry")] Arc<dyn SessionStore>);
 inherit_test_dep!(#[tagged_as("redis_tls")] Arc<dyn SessionStore>);
+inherit_test_dep!(
+    #[tagged_as("redis_pair")]
+    SessionStorePair
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite_pair")]
+    SessionStorePair
+);
+inherit_test_dep!(
+    #[tagged_as("redis_tls_pair")]
+    SessionStorePair
+);
+inherit_test_dep!(
+    #[tagged_as("redis_bearer_write_failure")]
+    BearerWriteFailureStores
+);
+inherit_test_dep!(
+    #[tagged_as("sqlite_bearer_write_failure")]
+    BearerWriteFailureStores
+);
 
 define_matrix_dimension!(session_store: Arc<dyn SessionStore> -> "redis", "sqlite", "redis_tls");
 define_matrix_dimension!(session_store_fast_expiry: Arc<dyn SessionStore> -> "redis_fast_expiry", "sqlite_fast_expiry");
+define_matrix_dimension!(session_store_pair: SessionStorePair -> "redis_pair", "sqlite_pair", "redis_tls_pair");
+define_matrix_dimension!(bearer_write_failure_stores: BearerWriteFailureStores -> "redis_bearer_write_failure", "sqlite_bearer_write_failure");
 
 fn sample_pending_login() -> PendingOidcLogin {
     PendingOidcLogin {
@@ -74,6 +102,50 @@ fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
         preferred_username: None,
         claims: sample_claims(expires_at),
         scopes: HashSet::from([Scope::new("openid".into())]),
+        expires_at,
+    }
+}
+
+fn sample_binding() -> PkceBinding {
+    PkceBinding {
+        security_scheme_id: SecuritySchemeId::new(),
+        security_scheme_revision: SecuritySchemeRevision::INITIAL,
+        environment_id: EnvironmentId::new(),
+        api_origin: "https://api.example".into(),
+    }
+}
+
+fn sample_pending_pkce(
+    binding: PkceBinding,
+    expires_at: chrono::DateTime<Utc>,
+) -> PendingPkceLogin {
+    PendingPkceLogin {
+        binding,
+        redirect_uri: "https://frontend.example/callback".into(),
+        frontend_state: "frontend-state".into(),
+        code_challenge: "challenge".into(),
+        upstream_nonce: Nonce::new("upstream-nonce".into()),
+        expires_at,
+    }
+}
+
+fn sample_authorization_code(
+    binding: PkceBinding,
+    expires_at: chrono::DateTime<Utc>,
+) -> PkceAuthorizationCode {
+    PkceAuthorizationCode {
+        binding,
+        principal: sample_session(Utc::now() + TimeDelta::hours(2)),
+        redirect_uri: "https://frontend.example/callback".into(),
+        code_challenge: "challenge".into(),
+        expires_at,
+    }
+}
+
+fn sample_bearer(binding: PkceBinding, expires_at: chrono::DateTime<Utc>) -> PkceBearerCredential {
+    PkceBearerCredential {
+        binding,
+        principal: sample_session(Utc::now() + TimeDelta::hours(2)),
         expires_at,
     }
 }
@@ -266,6 +338,287 @@ async fn pending_login_multiple_take_attempts(
 
     let second_take = store.take_pending_oidc_login(&state).await?;
     assert!(second_take.is_none(), "Second take should return None");
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn pkce_records_roundtrip_delete_and_keep_namespaces_isolated(
+    #[dimension(session_store)] store: &Arc<dyn SessionStore>,
+) -> anyhow::Result<()> {
+    let binding = sample_binding();
+    let expires_at = Utc::now() + TimeDelta::minutes(5);
+    let upstream_state = Uuid::now_v7().to_string();
+    store
+        .store_pending_pkce_login(
+            &upstream_state,
+            sample_pending_pkce(binding.clone(), expires_at),
+        )
+        .await?;
+    let pending = store
+        .take_pending_pkce_login(&upstream_state)
+        .await?
+        .unwrap();
+    assert_eq!(pending.binding, binding);
+    assert_eq!(pending.frontend_state, "frontend-state");
+    assert_eq!(pending.upstream_nonce.secret(), "upstream-nonce");
+    assert!(
+        store
+            .take_pending_pkce_login(&upstream_state)
+            .await?
+            .is_none()
+    );
+
+    let code = AuthorizationCode::generate();
+    let token = BearerToken::from_str(code.secret()).unwrap();
+    store
+        .store_authorization_code(
+            &code,
+            sample_authorization_code(binding.clone(), expires_at),
+        )
+        .await?;
+    store
+        .store_bearer_credential(&token, sample_bearer(binding.clone(), expires_at))
+        .await?;
+
+    let redeemed = store.take_authorization_code(code.secret()).await?.unwrap();
+    assert_eq!(redeemed.binding, binding);
+    assert_eq!(redeemed.principal.subject, "sub");
+    assert!(
+        store
+            .take_authorization_code(code.secret())
+            .await?
+            .is_none()
+    );
+
+    let bearer = store
+        .get_bearer_credential(token.secret(), &binding)
+        .await?
+        .unwrap();
+    assert_eq!(bearer.principal.subject, "sub");
+    assert!(
+        store
+            .get_bearer_credential(AuthorizationCode::generate().secret(), &binding)
+            .await?
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn pkce_records_enforce_expiry_without_cleanup(
+    #[dimension(session_store)] store: &Arc<dyn SessionStore>,
+) -> anyhow::Result<()> {
+    let binding = sample_binding();
+    let expired = Utc::now() - TimeDelta::milliseconds(1);
+    let state = Uuid::now_v7().to_string();
+    store
+        .store_pending_pkce_login(&state, sample_pending_pkce(binding.clone(), expired))
+        .await?;
+    assert!(store.take_pending_pkce_login(&state).await?.is_none());
+
+    let code = AuthorizationCode::generate();
+    store
+        .store_authorization_code(&code, sample_authorization_code(binding.clone(), expired))
+        .await?;
+    assert!(
+        store
+            .take_authorization_code(code.secret())
+            .await?
+            .is_none()
+    );
+
+    let token = BearerToken::generate();
+    store
+        .store_bearer_credential(&token, sample_bearer(binding.clone(), expired))
+        .await?;
+    assert!(
+        store
+            .get_bearer_credential(token.secret(), &binding)
+            .await?
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn pkce_credentials_reject_context_and_revision_mismatch(
+    #[dimension(session_store)] store: &Arc<dyn SessionStore>,
+) -> anyhow::Result<()> {
+    let binding = sample_binding();
+    let expires_at = Utc::now() + TimeDelta::minutes(5);
+    let token = BearerToken::generate();
+    store
+        .store_bearer_credential(&token, sample_bearer(binding.clone(), expires_at))
+        .await?;
+
+    let mismatches = [
+        PkceBinding {
+            security_scheme_id: SecuritySchemeId::new(),
+            ..binding.clone()
+        },
+        PkceBinding {
+            security_scheme_revision: binding.security_scheme_revision.next().unwrap(),
+            ..binding.clone()
+        },
+        PkceBinding {
+            environment_id: EnvironmentId::new(),
+            ..binding.clone()
+        },
+        PkceBinding {
+            api_origin: "https://other-api.example".into(),
+            ..binding.clone()
+        },
+    ];
+    for mismatch in mismatches {
+        assert!(
+            store
+                .get_bearer_credential(token.secret(), &mismatch)
+                .await?
+                .is_none()
+        );
+    }
+    assert!(
+        store
+            .get_bearer_credential(token.secret(), &binding)
+            .await?
+            .is_some()
+    );
+
+    let code = AuthorizationCode::generate();
+    store
+        .store_authorization_code(
+            &code,
+            sample_authorization_code(binding.clone(), expires_at),
+        )
+        .await?;
+    let consumed = store.take_authorization_code(code.secret()).await?.unwrap();
+    assert_ne!(
+        consumed.binding.security_scheme_revision,
+        binding.security_scheme_revision.next().unwrap()
+    );
+    assert!(
+        store
+            .take_authorization_code(code.secret())
+            .await?
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn independent_store_instances_have_one_atomic_consumer(
+    #[dimension(session_store_pair)] stores: &SessionStorePair,
+) -> anyhow::Result<()> {
+    let cookie_state = Uuid::now_v7().to_string();
+    stores
+        .first
+        .store_pending_oidc_login(&cookie_state, sample_pending_login())
+        .await?;
+    let (first, second) = tokio::join!(
+        stores.first.take_pending_oidc_login(&cookie_state),
+        stores.second.take_pending_oidc_login(&cookie_state)
+    );
+    assert_eq!(
+        usize::from(first?.is_some()) + usize::from(second?.is_some()),
+        1
+    );
+
+    let binding = sample_binding();
+    let state = Uuid::now_v7().to_string();
+    stores
+        .first
+        .store_pending_pkce_login(
+            &state,
+            sample_pending_pkce(binding.clone(), Utc::now() + TimeDelta::minutes(5)),
+        )
+        .await?;
+    let (first, second) = tokio::join!(
+        stores.first.take_pending_pkce_login(&state),
+        stores.second.take_pending_pkce_login(&state)
+    );
+    assert_eq!(
+        usize::from(first?.is_some()) + usize::from(second?.is_some()),
+        1
+    );
+
+    let code = AuthorizationCode::generate();
+    stores
+        .first
+        .store_authorization_code(
+            &code,
+            sample_authorization_code(binding, Utc::now() + TimeDelta::minutes(5)),
+        )
+        .await?;
+    let (first, second) = tokio::join!(
+        stores.first.take_authorization_code(code.secret()),
+        stores.second.take_authorization_code(code.secret())
+    );
+    assert_eq!(
+        usize::from(first?.is_some()) + usize::from(second?.is_some()),
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+async fn bearer_storage_failure_after_consumption_requires_reauthorization(
+    #[dimension(bearer_write_failure_stores)] stores: &BearerWriteFailureStores,
+) -> anyhow::Result<()> {
+    let binding = sample_binding();
+    let code = AuthorizationCode::generate();
+    let token = BearerToken::generate();
+    stores
+        .healthy
+        .store_authorization_code(
+            &code,
+            sample_authorization_code(binding.clone(), Utc::now() + TimeDelta::minutes(5)),
+        )
+        .await?;
+
+    let consumed = stores
+        .healthy
+        .take_authorization_code(code.secret())
+        .await?
+        .unwrap();
+    let store_result = stores
+        .failing
+        .store_bearer_credential(
+            &token,
+            PkceBearerCredential {
+                binding: consumed.binding,
+                principal: consumed.principal,
+                expires_at: Utc::now() + TimeDelta::hours(1),
+            },
+        )
+        .await;
+    assert!(
+        store_result.is_err(),
+        "backend must reject the bearer write"
+    );
+    assert!(
+        stores
+            .healthy
+            .take_authorization_code(code.secret())
+            .await?
+            .is_none()
+    );
+    assert!(
+        stores
+            .healthy
+            .get_bearer_credential(token.secret(), &binding)
+            .await?
+            .is_none()
+    );
 
     Ok(())
 }

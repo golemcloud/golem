@@ -60,6 +60,7 @@ func TestLeavesRoundTrip(t *testing.T) {
 	throughTheWire(t, "datetime",
 		time.Date(2026, 9, 24, 12, 30, 0, 123456789, time.UTC), EncodeDatetime, DecodeDatetime)
 	throughTheWire(t, "duration", -1500*time.Millisecond, EncodeDuration, DecodeDuration)
+	throughTheWire(t, "uuid", values.UUID{0xdd, 0x00, 0x72, 0x1b, 0x33, 0x29, 0x46, 0x21, 0xa0, 0x1d, 0xc7, 0x1f, 0x02, 0xcd, 0x78, 0xc6}, EncodeUUID, DecodeUUID)
 }
 
 func TestCompositesRoundTrip(t *testing.T) {

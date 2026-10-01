@@ -94,6 +94,7 @@ pub struct Deps {
     pub tool_release_repo: Box<dyn ToolReleaseRepo>,
     pub tool_middleware_release_repo: Box<dyn ToolMiddlewareReleaseRepo>,
     pub test_db: TestDb,
+    pub routing_test_db: TestDb,
 }
 
 pub enum TestDb {

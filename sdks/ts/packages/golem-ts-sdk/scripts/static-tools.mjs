@@ -395,6 +395,9 @@ export function staticTools(config, runtime) {
     } else if (body.tag === 'duration') {
       write = `if(typeof v!=="bigint")throw new TypeError("invalid duration");return w.add({tag:"duration-value",val:{nanoseconds:v}});`;
       read = `if(!n.val||typeof n.val.nanoseconds!=="bigint")throw new TypeError("invalid duration");return n.val.nanoseconds;`;
+    } else if (body.tag === 'uuid') {
+      write = `return w.add({tag:"uuid-value",val:v});`;
+      read = `return n.val;`;
     } else if (body.tag === 'url' || body.tag === 'path') {
       write = `if(typeof v!=="string")throw new TypeError("invalid ${body.tag}");return w.add({tag:${literal(tag)},val:v});`;
       read = `if(typeof n.val!=="string")throw new TypeError("invalid ${body.tag}");return n.val;`;
@@ -488,7 +491,7 @@ export function staticTools(config, runtime) {
             ? `{codec:${codecSource(codec, declarations)},graph:${literal(metadata().graph(codec.graph))}}`
             : 'undefined';
         commands.push(
-          `{path:${literal(commandPath)},aliases:${literal(aliases)},nested:${node.subcommands.length > 0},input:{codec:${input},graph:${literal(metadata().graph(inputGraph))}},result:${typed(node.body.result?.codec)},errors:{${node.body.errors.map((e) => `${literal(e.name)}:${typed(e.payloadCodec)}`).join(',')}},stdin:${literal(node.body.stdin)},stdout:${literal(node.body.stdout)}}`,
+          `{path:${literal(commandPath)},aliases:${literal(aliases)},nested:${node.subcommands.length > 0},input:{codec:${input},graph:${literal(metadata().graph(inputGraph))}},result:${typed(node.body.result?.codec)},errors:{${node.body.errors.map((e) => `${literal(e.name)}:${typed(e.payloadCodec)}`).join(',')}},stdin:${literal(node.body.stdin)},stdout:${literal(node.body.stdout)},stderr:${literal(node.body.stderr)}}`,
         );
       }
       for (const child of node.subcommands)

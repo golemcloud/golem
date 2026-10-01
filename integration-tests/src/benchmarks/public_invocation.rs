@@ -16,7 +16,7 @@ use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use golem_client::invocation_session::{
     InvocationSession, InvocationSessionRequestProvider, InvocationSessionStateSnapshot,
-    ServerFrame, SessionTransportError,
+    ServerFrame, SessionTransportError, encode_generated_streamless_value,
 };
 use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::ParsedAgentId;
@@ -35,6 +35,21 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 
 pub type StreamId = String;
+
+pub fn public_value<T: golem_common::schema::IntoSchema + ?Sized>(
+    value: &T,
+) -> anyhow::Result<serde_json::Value> {
+    let typed = golem_common::schema::try_into_typed_schema_value(value)?;
+    encode_generated_streamless_value(typed.graph(), typed.value()).map_err(Into::into)
+}
+
+pub fn public_record(fields: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"kind": "record", "value": {"fields": fields.into_iter().collect::<Vec<_>>()}})
+}
+
+pub fn public_u32(value: u32) -> serde_json::Value {
+    serde_json::json!({"kind": "u32", "value": value})
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct OutputObservation {
@@ -288,6 +303,7 @@ impl PublicInvocationSession {
             token,
             InvocationSessionStateSnapshot {
                 delivered_output_cursors: BTreeMap::new(),
+                stable_stream_bindings: BTreeMap::new(),
                 pending_operation: Some(start),
                 session_token: None,
             },
@@ -411,6 +427,22 @@ impl PublicInvocationSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test_r::test]
+    fn public_record_preserves_native_positional_value_encoding() {
+        assert_eq!(
+            public_record([public_u32(1), public_u32(17)]),
+            serde_json::json!({
+                "kind": "record",
+                "value": {
+                    "fields": [
+                        {"kind": "u32", "value": 1},
+                        {"kind": "u32", "value": 17},
+                    ]
+                }
+            })
+        );
+    }
 
     fn mapping(channel: u32, stream_token: &str) -> PublicStreamMapping {
         PublicStreamMapping {

@@ -31,8 +31,8 @@ use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
     OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeOperation, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item,
-    invocation_request, invocation_response, invocation_session_completion,
+    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, ToolByteStreamRole,
+    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
     invocation_session_result,
 };
 use golem_common::SafeDisplay;
@@ -980,7 +980,12 @@ pub async fn serve_public_invocation_session(
             return;
         }
     };
-    if initial_state.initialize(&started).is_err() {
+    if let Err(error) = initial_state.initialize(&started) {
+        tracing::warn!(
+            attempt_id = %attempt_id,
+            error = ?error,
+            "Invocation session adapter initialization failed"
+        );
         let message = safe_rejection_message(PublicErrorCode::InternalError);
         send_rejection(
             &outbound,
@@ -1107,6 +1112,7 @@ where
                         input,
                         stdin,
                         stdout,
+                        stderr,
                         ..
                     } => Ok(Some(InitialMessage::ToolStart {
                         start: PublicToolSessionStart {
@@ -1118,6 +1124,7 @@ where
                             input: *input,
                             stdin,
                             stdout,
+                            stderr,
                             idempotency_key,
                             attempt_id,
                             expected_deployment_revision: None,
@@ -1860,6 +1867,14 @@ async fn translate_private_response(
         }
         invocation_response::Response::Rejected(rejected) => {
             let code = rejection_code(&rejected);
+            tracing::warn!(
+                attempt_id = %attempt_id,
+                reason = rejected.reason,
+                public_code = ?code,
+                error = %rejected.error,
+                worker_error = ?rejected.worker_error,
+                "Private invocation session response was rejected"
+            );
             Ok(vec![frame(text_message(
                 &PublicServerMessage::InvocationRejected {
                     attempt_id: Some(attempt_id),
@@ -2102,10 +2117,14 @@ fn translate_accepted(
         .map_err(|error| AdapterError::new(error.code, error.to_string()))?;
     if accepted.tool_name.is_some() {
         for mapping in &accepted.stream_mappings {
-            let role = match mapping.role() {
-                StreamMappingRole::Input => PublicByteStreamRole::Stdin,
-                StreamMappingRole::Output => PublicByteStreamRole::Stdout,
-                StreamMappingRole::Unspecified => continue,
+            let Some(role) = mapping.tool_byte_stream_role else {
+                continue;
+            };
+            let role = match ToolByteStreamRole::try_from(role) {
+                Ok(ToolByteStreamRole::Stdin) => PublicByteStreamRole::Stdin,
+                Ok(ToolByteStreamRole::Stdout) => PublicByteStreamRole::Stdout,
+                Ok(ToolByteStreamRole::Stderr) => PublicByteStreamRole::Stderr,
+                Err(_) => continue,
             };
             state.byte_roles.insert(mapping.transport_stream_id, role);
         }
@@ -3091,6 +3110,7 @@ mod tests {
             }),
             high_water: None,
             role: role as i32,
+            tool_byte_stream_role: None,
         }
     }
 
@@ -3384,9 +3404,13 @@ mod tests {
             });
             state.application = Some("app".to_string());
             state.environment = Some("env".to_string());
-            let fingerprint = schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::u8()))
-                .unwrap()
-                .0;
+            let schema = SchemaType::u8();
+            let graph = SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::stream(Some(schema.clone())),
+            };
+            state.graph = Some(graph.clone());
+            let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
             let accepted = translate_accepted(
                 &mut state,
                 InvocationAccepted {
@@ -3405,10 +3429,11 @@ mod tests {
                         Vec::new()
                     },
                     stream_mappings: if native {
-                        vec![
-                            private_mapping(7, StreamMappingRole::Input, fingerprint),
-                            private_mapping(8, StreamMappingRole::Output, fingerprint),
-                        ]
+                        let mut stdin = private_mapping(7, StreamMappingRole::Input, fingerprint);
+                        stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+                        let mut stdout = private_mapping(8, StreamMappingRole::Output, fingerprint);
+                        stdout.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+                        vec![stdin, stdout]
                     } else {
                         Vec::new()
                     },

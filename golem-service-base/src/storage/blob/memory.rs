@@ -16,7 +16,7 @@ use super::ErasedReplayableStream;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
     ExistsResult, blob_file_name_to_string, blob_parent_to_string, blob_path_is_root,
-    blob_path_to_string, validate_range, validate_relative_blob_path,
+    blob_path_to_string, join_blob_key, validate_range, validate_relative_blob_path,
 };
 use anyhow::Error;
 use async_trait::async_trait;
@@ -399,7 +399,11 @@ impl BlobStorage for InMemoryBlobStorage {
             .await
             .unwrap_or_default();
 
-        Ok(files.into_iter().map(|f| path.join(f)).collect())
+        let path = blob_path_to_string(path)?;
+        Ok(files
+            .into_iter()
+            .map(|file| PathBuf::from(join_blob_key(&path, &file)))
+            .collect())
     }
 
     async fn delete_dir(
@@ -456,22 +460,15 @@ impl BlobStorage for InMemoryBlobStorage {
         };
         if self.data.contains_async(&dir_key).await {
             Ok(ExistsResult::Directory)
-        } else if let Some(dir) = path.parent() {
-            let dir = blob_path_to_string(dir)?;
+        } else if let Ok(file) = blob_file_name_to_string(path) {
+            let file_key = Key {
+                namespace,
+                dir: blob_parent_to_string(path)?,
+                file: Some(file),
+            };
 
-            if path.file_name().is_some() {
-                let file = blob_file_name_to_string(path)?;
-                let file_key = Key {
-                    namespace,
-                    dir,
-                    file: Some(file),
-                };
-
-                if self.data.contains_async(&file_key).await {
-                    Ok(ExistsResult::File)
-                } else {
-                    Ok(ExistsResult::DoesNotExist)
-                }
+            if self.data.contains_async(&file_key).await {
+                Ok(ExistsResult::File)
             } else {
                 Ok(ExistsResult::DoesNotExist)
             }

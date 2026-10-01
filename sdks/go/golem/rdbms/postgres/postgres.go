@@ -25,7 +25,7 @@
 //	}
 //
 // Parameters are ordinary Go values: nil, bool, the int/float widths, string,
-// []byte, [uuid.UUID] and [time.Time] map to the natural Postgres types.
+// []byte, [values.UUID] and [time.Time] map to the natural Postgres types.
 // Anything else — or a value whose exact Postgres type matters (numeric, jsonb,
 // a specific integer width) — is built with the constructors in this package
 // ([Numeric], [JSONB], [Int4], …), which return a [DbValue] you pass just like
@@ -52,10 +52,10 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	pg "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_postgres"
 	rtypes "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_types"
 	"github.com/golemcloud/golem/sdks/go/golem/rdbms/types"
-	"github.com/golemcloud/golem/sdks/go/golem/uuid"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -522,7 +522,7 @@ func encodeParam(v any) (pg.DbValue, error) {
 		return pg.MakeDbValueText(x), nil
 	case []byte:
 		return pg.MakeDbValueBytea(x), nil
-	case uuid.UUID:
+	case values.UUID:
 		return pg.MakeDbValueUuid(uuidToWit(x)), nil
 	case time.Time:
 		return pg.MakeDbValueTimestamptz(goTimeToTimestamptz(x)), nil
@@ -706,15 +706,15 @@ func decodeFlat(v pg.DbValue) (any, bool) {
 
 // ── UUID / temporal / net conversions ────────────────────────────────────────
 
-func uuidToWit(u uuid.UUID) pg.Uuid {
+func uuidToWit(u values.UUID) pg.Uuid {
 	return pg.Uuid{
 		HighBits: binary.BigEndian.Uint64(u[0:8]),
 		LowBits:  binary.BigEndian.Uint64(u[8:16]),
 	}
 }
 
-func uuidFromWit(w pg.Uuid) uuid.UUID {
-	var u uuid.UUID
+func uuidFromWit(w pg.Uuid) values.UUID {
+	var u values.UUID
 	binary.BigEndian.PutUint64(u[0:8], w.HighBits)
 	binary.BigEndian.PutUint64(u[8:16], w.LowBits)
 	return u
@@ -1026,7 +1026,7 @@ func (r Row) IsNull(i int) bool {
 }
 
 // Get decodes column i to a Go value: the int/float widths, string, bool,
-// []byte, [uuid.UUID], [time.Time] and the [types] structs for the families
+// []byte, [values.UUID], [time.Time] and the [types] structs for the families
 // that map cleanly, nil for NULL, or an opaque [DbValue] for the composite
 // families not yet decoded.
 func (r Row) Get(i int) (any, error) {
@@ -1131,13 +1131,13 @@ func (r Row) Bytes(i int) ([]byte, error) {
 }
 
 // UUID reads a uuid column.
-func (r Row) UUID(i int) (uuid.UUID, error) {
+func (r Row) UUID(i int) (values.UUID, error) {
 	v, err := r.at(i)
 	if err != nil {
-		return uuid.UUID{}, err
+		return values.UUID{}, err
 	}
 	if v.Tag() != pg.DbValueUuid {
-		return uuid.UUID{}, typeErr(i, v, "uuid")
+		return values.UUID{}, typeErr(i, v, "uuid")
 	}
 	return uuidFromWit(v.Uuid()), nil
 }
@@ -1315,7 +1315,7 @@ func (r Row) Range(i int) (RangeValue, error) {
 
 // Scan decodes the row into the given pointers, one per column. Supported
 // destinations are *int64, *int, *float64, *string, *bool, *[]byte,
-// *uuid.UUID, *time.Time and *any (which receives whatever [Row.Get] returns).
+// *values.UUID, *time.Time and *any (which receives whatever [Row.Get] returns).
 func (r Row) Scan(dest ...any) error {
 	if len(dest) != len(r.values) {
 		return fmt.Errorf("golem/rdbms/postgres: Scan: %d destination(s) for %d column(s)", len(dest), len(r.values))
@@ -1372,7 +1372,7 @@ func (r Row) scanOne(i int, d any) error {
 			return err
 		}
 		*p = v
-	case *uuid.UUID:
+	case *values.UUID:
 		v, err := r.UUID(i)
 		if err != nil {
 			return err

@@ -15,7 +15,7 @@ import {
 // Values
 pub fn build_canonical_input(@tool-core.CanonicalInputModel, Array[(String, @schema_model.SchemaValue)]) -> @schema_model.TypedSchemaValue raise @tool-core.ToolBuildError
 
-pub fn byte_stream(@async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]]) -> @async-core.Stream[Byte]
+pub fn byte_stream(@async-core.Stream[Result[FixedArray[Byte], @streams.ByteStreamFailure]], drive_result? : () -> Unit) -> @async-core.Stream[Byte]
 
 pub fn[T : @schema.IntoSchema + @schema.FromSchema] decode_canonical_field(Array[@tool-core.CanonicalInputValue], String, String) -> T raise @types.ToolError
 
@@ -63,9 +63,17 @@ pub fn get_registered_tool(String) -> Result[@golemcloud/golem_sdk/interface/gol
 
 pub fn invocation_result_empty() -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
+pub fn invocation_result_outputs(@async-core.Stream[Byte], @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub fn invocation_result_stderr(@async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
 pub fn invocation_result_stdout(@async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[T : @schema.IntoSchema] invocation_result_value(T) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_outputs(T, @async-core.Stream[Byte], @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
+
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stderr(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
 pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(T, @async-core.Stream[Byte]) -> @golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult
 
@@ -79,15 +87,17 @@ pub async fn[E : @schema.FromSchema] invoke_and_await_payload_error(@host.ToolRp
 
 pub async fn[E : @tool-core.ToolErrorSchema] invoke_and_await_tool_error(@host.ToolRpc, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 
-pub async fn invoke_registered_subtool(String, Array[String], Array[@tool-core.CanonicalInputValue], @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
+pub async fn invoke_registered_subtool(String, Array[String], Array[@tool-core.CanonicalInputValue], @async-core.Stream[Byte]?, ProviderOutput?, ProviderOutput?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
 
-pub async fn invoke_registered_tool(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
+pub async fn invoke_registered_tool(String, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderOutput?, ProviderOutput?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
 
 pub fn literal_to_schema_value(@schema_model.SchemaGraph, @tool-core.ToolLiteral) -> @schema_model.SchemaValue raise @tool-core.ToolBuildError
 
+pub fn new_stderr() -> (@async-core.Stream[Byte], @async-core.Sink[Byte])
+
 pub fn new_stdout() -> (@async-core.Stream[Byte], @async-core.Sink[Byte])
 
-pub fn provider_stdout(@streams.ToolStdoutWriter) -> ProviderStdout
+pub fn provider_output(@streams.ToolOutputWriter) -> ProviderOutput
 
 pub fn refine_numeric(@schema_model.SchemaGraph, String?, String?, String?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 
@@ -97,17 +107,17 @@ pub fn refine_text(@schema_model.SchemaGraph, String?, UInt?, UInt?) -> @schema_
 
 pub fn refine_url(@schema_model.SchemaGraph, Array[String]?) -> @schema_model.SchemaGraph raise @tool-core.ToolBuildError
 
-pub fn register_subtool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
+pub fn register_subtool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderOutput?, ProviderOutput?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
 pub fn register_tool_def(@tool-core.ToolDef) -> Unit raise @tool-core.ToolBuildError
 
-pub fn register_tool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
+pub fn register_tool_def_invoker(@tool-core.ToolDef, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderOutput?, ProviderOutput?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
-pub fn register_wire_subtool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
+pub fn register_wire_subtool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderOutput?, ProviderOutput?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
 pub fn register_wire_tool(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Unit raise @tool-core.ToolBuildError
 
-pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderStdout?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
+pub fn register_wire_tool_invoker(@golemcloud/golem_sdk/interface/golem/tool/common.Tool, async (Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, ProviderOutput?, ProviderOutput?, @golemcloud/golem_sdk/interface/golem/agent/common.Principal) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]) -> Unit raise @tool-core.ToolBuildError
 
 pub fn reject_decoded_invocation(Array[@tool-core.CanonicalInputValue], @async-core.Stream[Byte]?, @types.ToolError) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, @types.ToolError]
 
@@ -125,7 +135,7 @@ pub fn tool_name(@golemcloud/golem_sdk/interface/golem/tool/common.Tool) -> Resu
 
 pub fn[E] tool_protocol_error(String) -> ToolError[E]
 
-pub fn[T, E] typed_invocation(ToolInvocation[E], (@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult) -> Result[T, ToolError[E]]) -> Result[TypedToolInvocation[T, E], ToolError[E]]
+pub fn[T, E] typed_invocation(ToolInvocation[E], Bool, Bool, (@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult) -> Result[T, ToolError[E]]) -> Result[TypedToolInvocation[T, E], ToolError[E]]
 
 pub fn value_is_literal_to_schema_value(@schema_model.SchemaGraph, @tool-core.ToolLiteral) -> @schema_model.SchemaValue raise @tool-core.ToolBuildError
 
@@ -148,17 +158,23 @@ pub fn wire_value_is_literal(@tool-core.WireToolType, @tool-core.ToolLiteral) ->
 // Errors
 
 // Types and methods
-pub struct ProviderStdout {
+pub(all) struct CollectedToolInvocation[T, E] {
+  result : Result[T, ToolError[E]]
+  stdout : Result[Bytes?, @tool-core.ToolStreamError]
+  stderr : Result[Bytes?, @tool-core.ToolStreamError]
+}
+
+pub struct ProviderOutput {
   // private fields
 }
-pub fn ProviderStdout::drop(Self) -> Unit
-pub async fn ProviderStdout::fail(Self, @tool-core.ToolStreamError) -> Unit
-pub async fn ProviderStdout::finish(Self) -> Unit
-pub fn ProviderStdout::is_open(Self) -> Bool
-pub async fn ProviderStdout::write(Self, ArrayView[Byte]) -> Int
-pub async fn ProviderStdout::write_all(Self, ArrayView[Byte]) -> Bool
-pub async fn ProviderStdout::write_all_bytes(Self, BytesView) -> Bool
-pub async fn ProviderStdout::write_bytes(Self, BytesView) -> Int
+pub fn ProviderOutput::drop(Self) -> Unit
+pub async fn ProviderOutput::fail(Self, @tool-core.ToolStreamError) -> Unit
+pub async fn ProviderOutput::finish(Self) -> Unit
+pub fn ProviderOutput::is_open(Self) -> Bool
+pub async fn ProviderOutput::write(Self, ArrayView[Byte]) -> Int
+pub async fn ProviderOutput::write_all(Self, ArrayView[Byte]) -> Bool
+pub async fn ProviderOutput::write_all_bytes(Self, BytesView) -> Bool
+pub async fn ProviderOutput::write_bytes(Self, BytesView) -> Int
 
 pub(all) enum RemoteToolError {
   InvalidToolName(String)
@@ -189,7 +205,7 @@ pub async fn[E : @schema.FromSchema] ToolClient::invoke_and_await_payload_error(
 pub async fn[E : @tool-core.ToolErrorSchema] ToolClient::invoke_and_await_tool_error(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?) -> Result[@tool-core.InvocationResult, ToolError[E]]
 pub async fn[E] ToolClient::invoke_and_await_wire(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, (String, @types.TypedSchemaValue) -> Result[E, String]?) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, ToolError[E]]
 pub fn ToolClient::new(String) -> Self
-pub fn[E] ToolClient::start(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, Bool, (String, @types.TypedSchemaValue) -> Result[E, String]?) -> Result[ToolInvocation[E], ToolError[E]]
+pub fn[E] ToolClient::start(Self, Array[String], @types.TypedSchemaValue, @async-core.Stream[Byte]?, Bool, Bool, (String, @types.TypedSchemaValue) -> Result[E, String]?) -> Result[ToolInvocation[E], ToolError[E]]
 pub fn[E] ToolClient::trigger(Self, Array[String], @schema_model.TypedSchemaValue, @async-core.Stream[Byte]?, (String, @schema_model.TypedSchemaValue) -> Result[E, String]?) -> Result[Unit, ToolError[E]]
 pub fn[E] ToolClient::try_new(String) -> Result[Self, ToolError[E]]
 
@@ -202,20 +218,23 @@ pub(all) enum ToolError[E] {
 
 pub struct ToolInvocation[E] {
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
   // private fields
 }
 pub fn[E] ToolInvocation::cancel(Self[E]) -> Unit
-pub async fn[E] ToolInvocation::collect(Self[E]) -> Result[(@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, Bytes?), ToolError[E]]
+pub async fn[E] ToolInvocation::collect(Self[E]) -> CollectedToolInvocation[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, E]
 pub fn[E] ToolInvocation::drop(Self[E]) -> Unit
 pub async fn[E] ToolInvocation::get(Self[E]) -> Result[@golemcloud/golem_sdk/interface/golem/tool/common.InvocationResult, ToolError[E]]
+pub fn[E] ToolInvocation::stderr_stream(Self[E]) -> @async-core.Stream[Byte]?
 pub fn[E] ToolInvocation::stdout_stream(Self[E]) -> @async-core.Stream[Byte]?
 
 pub struct TypedToolInvocation[T, E] {
-  stdout : @async-core.Stream[Byte]
+  stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
   // private fields
 }
 pub fn[T, E] TypedToolInvocation::cancel(Self[T, E]) -> Unit
-pub async fn[T, E] TypedToolInvocation::collect(Self[T, E]) -> Result[(T, Bytes), ToolError[E]]
+pub async fn[T, E] TypedToolInvocation::collect(Self[T, E]) -> CollectedToolInvocation[T, E]
 pub fn[T, E] TypedToolInvocation::drop(Self[T, E]) -> Unit
 pub async fn[T, E] TypedToolInvocation::get(Self[T, E]) -> Result[T, ToolError[E]]
 

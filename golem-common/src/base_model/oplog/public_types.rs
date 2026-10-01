@@ -299,6 +299,11 @@ declare_structs! {
         pub has_stdout: bool,
         /// Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
         pub declares_stdout: bool,
+        /// Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+        /// oplog.
+        pub has_stderr: bool,
+        /// Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+        pub declares_stderr: bool,
     }
 }
 
@@ -758,12 +763,40 @@ pub struct SnapshotBasedUpdateParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+pub struct SnapshotAssistedAutomaticUpdateParameters {}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
 #[cfg_attr(feature = "full", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "full", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
     Automatic(Empty),
+    SnapshotAssistedAutomatic(SnapshotAssistedAutomaticUpdateParameters),
     SnapshotBased(SnapshotBasedUpdateParameters),
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: OplogIndex,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicFailedSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: Option<OplogIndex>,
+    pub ineligibility_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]

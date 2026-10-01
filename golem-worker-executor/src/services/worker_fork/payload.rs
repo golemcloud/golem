@@ -74,7 +74,9 @@ where
         | OplogEntry::BeginAtomicRegion { .. }
         | OplogEntry::EndAtomicRegion { .. }
         | OplogEntry::PendingUpdate {
-            description: UpdateDescription::Automatic { .. },
+            description:
+                UpdateDescription::Automatic { .. }
+                | UpdateDescription::SnapshotAssistedAutomatic { .. },
             ..
         }
         | OplogEntry::SuccessfulUpdate { .. }
@@ -200,16 +202,26 @@ mod tests {
             }
         }
         let mut entries = vec![
+            OplogEntry::Snapshot {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                data: external(),
+                mime_type: "application/octet-stream".to_string(),
+                active_cards: Vec::new(),
+                wallet_generation: 0,
+            },
             OplogEntry::stream_registered(None, external(), None),
             OplogEntry::stream_items(None, external(), None),
             OplogEntry::stream_end(None, external(), None),
             OplogEntry::stream_cancel(None, external(), None),
             OplogEntry::stream_session(None, external(), None),
-            OplogEntry::pending_update(UpdateDescription::SnapshotBased {
-                target_revision: golem_common::model::component::ComponentRevision::INITIAL,
-                payload: external(),
-                mime_type: "application/octet-stream".to_string(),
-            }),
+            OplogEntry::pending_update(
+                UpdateDescription::SnapshotBased {
+                    target_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                    payload: external(),
+                    mime_type: "application/octet-stream".to_string(),
+                },
+                None,
+            ),
         ];
         for entry in &mut entries {
             let mut copies = 0;

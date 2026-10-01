@@ -139,6 +139,9 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     /// Instance creation was interrupted by a recoverable condition, such as fuel or filesystem
     /// quota exhaustion. The worker metadata remains valid and queued work must be preserved.
     Interrupted(InterruptKind),
+    /// Reconstruction reached a live continuation whose recovery data was temporarily
+    /// unavailable. The incomplete runtime and filesystem have already been discarded.
+    RecoveryRequired(WorkerExecutorError),
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
 }
@@ -444,6 +447,52 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         }
                     }
                 }
+                CreateInstanceResult::RecoveryRequired(_error) => {
+                    self.release_concurrent_agent_permit();
+                    if self.parent.retired_for_lost_shard() {
+                        self.stop_startup_retired().await;
+                        break;
+                    }
+                    if let Some(interrupt) = self.pending_interrupt().await {
+                        if self
+                            .handle_unloaded_interrupt(interrupt, retry_was_live)
+                            .await
+                        {
+                            break;
+                        }
+                        continue;
+                    }
+                    let delay = self.parent.next_infrastructure_recovery_delay();
+                    let sleep = tokio::time::sleep(delay);
+                    tokio::pin!(sleep);
+                    loop {
+                        tokio::select! {
+                            _ = &mut sleep => continue 'outer,
+                            command = self.receiver.recv() => {
+                                let Some(command) = command else {
+                                    self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
+                                    break 'outer;
+                                };
+                                if let Some(interrupt) = self.pending_interrupt().await {
+                                    if self.handle_unloaded_interrupt(interrupt, retry_was_live).await {
+                                        break 'outer;
+                                    }
+                                    Self::defer_wakeup(&mut deferred_wakeups, command);
+                                    continue 'outer;
+                                }
+                                match command {
+                                    WorkerCommand::WorkAvailable | WorkerCommand::ResumeReplay => {
+                                        Self::defer_wakeup(&mut deferred_wakeups, command);
+                                    }
+                                    WorkerCommand::InternalStatusChanged => {}
+                                    WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                                        let _ = sender.send(Ok(()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 CreateInstanceResult::Failed => {
                     // early return, can't retry a failed instance creation
                     self.release_concurrent_agent_permit();
@@ -713,11 +762,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     };
                     UnloadRequest::ordinary(reason)
                 });
-            if let Some(active_agent) = self
-                .parent
-                .active_agents()
-                .try_get_active_agent(&self.owned_agent_id)
-                .await
+            if (recovery_failure.is_none()
+                || final_interrupt.is_some()
+                || self.parent.retired_for_lost_shard())
+                && let Some(active_agent) = self
+                    .parent
+                    .active_agents()
+                    .try_get_active_agent(&self.owned_agent_id)
+                    .await
             {
                 // A lost shard wins: the bodies must not report an API interrupt or a fault for an
                 // agent that simply has a new owner.
@@ -727,11 +779,6 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .then_some(InterruptKind::ShardLost)
                     .or(final_interrupt)
                     .map(OwnerFailureWinner::Lifecycle)
-                    .or_else(|| {
-                        recovery_failure
-                            .clone()
-                            .map(OwnerFailureWinner::Infrastructure)
-                    })
                     .unwrap_or_else(|| {
                         OwnerFailureWinner::Lifecycle(
                             InterruptKind::Interrupt(Timestamp::now_utc()),
@@ -906,14 +953,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                         continue;
                                     }
                                     WorkerCommand::WorkAvailable => {
-                                        debug!(%agent_id, "Invocation queue loop woke up during delayed retry");
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::WorkAvailable);
-                                        continue 'outer;
+                                        if recovery_failure.is_none() {
+                                            debug!(%agent_id, "Invocation queue loop woke up during delayed retry");
+                                            continue 'outer;
+                                        }
+                                        debug!(%agent_id, "Invocation queue loop retained work during infrastructure recovery backoff");
                                     }
                                     WorkerCommand::ResumeReplay => {
-                                        debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
                                         Self::defer_wakeup(&mut deferred_wakeups, WorkerCommand::ResumeReplay);
-                                        continue 'outer;
+                                        if recovery_failure.is_none() {
+                                            debug!(%agent_id, "Invocation queue loop woke up for resume replay during delayed retry");
+                                            continue 'outer;
+                                        }
+                                        debug!(%agent_id, "Invocation queue loop retained replay request during infrastructure recovery backoff");
                                     }
                                     WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
                                         let _ = sender.send(Ok(()));
@@ -1192,7 +1245,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 worker
                     .quiesce_for_owner_retirement(None, forwarding.as_deref())
                     .await?;
-                while EphemeralOplog::try_archive_blocking(&worker.oplog).await == Some(true) {}
+                loop {
+                    match EphemeralOplog::try_archive_blocking(&worker.oplog).await {
+                        Ok(Some(true)) => {}
+                        Ok(_) => break,
+                        Err(error) => {
+                            tracing::warn!(
+                                agent_id = %worker.agent_id(),
+                                error = %error,
+                                "Failed to archive ephemeral oplog during retirement; the source remains available for a later sweep"
+                            );
+                            break;
+                        }
+                    }
+                }
                 worker.remove_from_active_agents().await;
                 *cleanup = super::OwnerCleanupState::Retired;
                 Ok(())
@@ -1264,6 +1330,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }) => {
                     debug!("Worker instantiation interrupted: {kind:?}");
                     CreateInstanceResult::Interrupted(kind)
+                }
+                Err(CreateWorkerInstanceError {
+                    error: err,
+                    filesystem_cleanup_failure: None,
+                }) if self.parent.agent_mode() == AgentMode::Durable
+                    && is_recovery_required_error(&err) =>
+                {
+                    self.parent.record_recovery_failure(&err).await;
+                    CreateInstanceResult::RecoveryRequired(err)
                 }
                 Err(CreateWorkerInstanceError {
                     error: err,
@@ -1745,6 +1820,11 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     final_decision = Some(decision);
                     break;
                 }
+                CommandOutcome::BreakInnerLoopForRecovery { decision, error } => {
+                    final_decision = Some(decision);
+                    recovery_failure = Some(error);
+                    break;
+                }
                 CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision) => {
                     final_decision = Some(decision);
                     cleanup_ephemeral_worker = true;
@@ -2032,7 +2112,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 store: store.deref_mut(),
                 uses_streams: false,
             };
-            invocation.external_invocation(timestamped_invocation).await
+            invocation
+                .external_invocation(timestamped_invocation, pending_invocation.oplog_index)
+                .await
         }
         .instrument(pickup_span)
         .await;
@@ -2516,7 +2598,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process an external queued worker invocation - this is either an exported function invocation
     /// or a manual update request (which involves invoking the exported save-snapshot functions, so
     /// it is a special case of the exported function invocation).
-    async fn external_invocation(&mut self, inner: TimestampedAgentInvocation) -> CommandOutcome {
+    async fn external_invocation(
+        &mut self,
+        inner: TimestampedAgentInvocation,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
         // the store both leave room for the owner to start retiring in between.
         if self.parent.owner_retirement_requested.is_cancelled() {
@@ -2524,7 +2610,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
         match inner.invocation {
             AgentInvocation::ManualUpdate { target_revision } => {
-                self.manual_update(target_revision).await
+                self.manual_update(target_revision, update_attempt_index)
+                    .await
             }
             invocation => {
                 if let Some(idempotency_key) = invocation.idempotency_key() {
@@ -2823,6 +2910,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         );
                     }
                 }
+                self.parent.reset_infrastructure_recovery_backoff();
                 successful_agent_invocation_outcome(
                     self.parent.agent_mode(),
                     self.store.data().component_metadata().metadata.is_agent(),
@@ -2923,6 +3011,20 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             owner_failure = ?owner_failure,
             "Classifying failed invocation after tool owner arbitration"
         );
+        if let Some(error) = selected_infrastructure_recovery_error(
+            owner_failure.as_ref(),
+            self.parent.agent_mode(),
+            &result,
+        ) {
+            self.parent.record_recovery_failure(error).await;
+            if self.parent.retired_for_lost_shard() {
+                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
+            }
+            return CommandOutcome::BreakInnerLoopForRecovery {
+                decision: RetryDecision::Delayed(self.parent.next_infrastructure_recovery_delay()),
+                error: error.clone(),
+            };
+        }
         let trap_type = match owner_failure {
             Some(OwnerFailureWinner::Trap(trap)) => Some(trap),
             Some(OwnerFailureWinner::Lifecycle(kind)) => Some(TrapType::Interrupt(kind)),
@@ -2985,7 +3087,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
-    async fn manual_update(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+    async fn manual_update(
+        &mut self,
+        target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         let span = span!(
             Level::INFO,
             "manual_update",
@@ -2998,13 +3104,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .unwrap_or_else(|| "-".to_string()),
         );
 
-        self.manual_update_inner(target_revision)
+        self.manual_update_inner(target_revision, update_attempt_index)
             .instrument(span)
             .await
     }
 
     /// The inner implementation of the manual update command
-    async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+    async fn manual_update_inner(
+        &mut self,
+        target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
         // update, replay starts from the snapshot and skips everything before it. No durable call
         // or scope may span that cut, so refuse the update while any is still open.
@@ -3012,6 +3122,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return self
                 .fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("cannot take a snapshot for the update: {blocker}"),
                 )
                 .await;
@@ -3038,6 +3149,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 return self
                     .fail_update(
                         target_revision,
+                        update_attempt_index,
                         format!("failed to lower save-snapshot invocation: {err}"),
                     )
                     .await;
@@ -3056,6 +3168,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return self
                 .fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to install invocation context for save-snapshot: {err}"),
                 )
                 .await;
@@ -3087,6 +3200,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     return self
                         .fail_update(
                             target_revision,
+                            update_attempt_index,
                             "failed to get a snapshot for manual update: invalid snapshot result"
                                 .to_string(),
                         )
@@ -3111,7 +3225,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self
                             .parent
                             .owner_retirement_requested
-                            .run_until_cancelled(self.parent.enqueue_update(update_description))
+                            .run_until_cancelled(self.parent.enqueue_update_for_attempt(
+                                update_description,
+                                Some(update_attempt_index),
+                            ))
                             .await
                         {
                             None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
@@ -3124,6 +3241,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Err(error) => {
                         self.fail_update(
                             target_revision,
+                            update_attempt_index,
                             format!("failed to store the snapshot for manual update: {error}"),
                         )
                         .await
@@ -3140,6 +3258,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let error = error.to_string(&stderr);
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to get a snapshot for manual update: {error}"),
                 )
                 .await
@@ -3147,6 +3266,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(InvokeResult::Exited { .. }) => {
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     "failed to get a snapshot for manual update: it called exit".to_string(),
                 )
                 .await
@@ -3164,6 +3284,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
                 )
                 .await
@@ -3171,6 +3292,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(error) => {
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to get a snapshot for manual update: {error:?}"),
                 )
                 .await
@@ -3246,6 +3368,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn fail_update(
         &self,
         target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
         error: String,
     ) -> CommandOutcome {
         // Refused, the shard is lost: it stops rather than carrying on at a revision
@@ -3253,7 +3376,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         match self
             .store
             .data()
-            .on_worker_update_failed(target_revision, Some(error))
+            .on_worker_update_failed(
+                target_revision,
+                Some(error),
+                None,
+                Some(update_attempt_index),
+            )
             .await
         {
             Ok(()) => CommandOutcome::Continue,
@@ -3463,6 +3591,12 @@ enum CommandOutcome {
     BreakOuterLoop(Option<WorkerExecutorError>),
     /// Break from the inner loop, setting the retry decision for the outer loop
     BreakInnerLoop(RetryDecision),
+    /// Discard the current runtime and reconstruct the accepted invocation after an
+    /// infrastructure-owned recovery failure.
+    BreakInnerLoopForRecovery {
+        decision: RetryDecision,
+        error: WorkerExecutorError,
+    },
     /// Break from the inner loop and archive the stopped ephemeral worker's oplog.
     BreakInnerLoopAndArchiveEphemeralOplog(RetryDecision),
     /// Continue processing in the inner loop
@@ -3500,6 +3634,30 @@ fn failed_agent_invocation_outcome(
         CommandOutcome::BreakInnerLoopAndArchiveEphemeralOplog(decision)
     } else {
         CommandOutcome::BreakInnerLoop(decision)
+    }
+}
+
+fn selected_infrastructure_recovery_error<'a>(
+    owner_failure: Option<&OwnerFailureWinner>,
+    agent_mode: AgentMode,
+    result: &'a Result<InvokeResult, WorkerExecutorError>,
+) -> Option<&'a WorkerExecutorError> {
+    if owner_failure.is_some() || agent_mode != AgentMode::Durable {
+        return None;
+    }
+    match result {
+        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
+        _ => None,
+    }
+}
+
+fn is_recovery_required_error(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::RecoveryRequired { .. } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
+            is_recovery_required_error(reason)
+        }
+        _ => false,
     }
 }
 
@@ -3560,14 +3718,14 @@ fn snapshot_action_at(
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, PeriodicSnapshotAction,
-        ResidentAgentOwnership, ResidentWakeup, catch_invocation_loop_panic,
-        close_usage_before_delete, coalesce_filesystem_limit_update,
+        CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, OwnerFailureWinner,
+        PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
+        catch_invocation_loop_panic, close_usage_before_delete, coalesce_filesystem_limit_update,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
-        snapshot_action_at, snapshot_baseline_timestamp, spawn_module_owned_unload,
-        successful_agent_invocation_outcome, unload_resident_agent_ownership,
-        wait_for_resident_wakeup,
+        selected_infrastructure_recovery_error, snapshot_action_at, snapshot_baseline_timestamp,
+        spawn_module_owned_unload, successful_agent_invocation_outcome,
+        unload_resident_agent_ownership, wait_for_resident_wakeup,
     };
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
@@ -3589,7 +3747,7 @@ mod tests {
     use golem_common::model::agent::AgentMode;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{OplogIndex, Timestamp};
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -3621,6 +3779,7 @@ mod tests {
                 status.pending_updates.push_back(PendingUpdateRef {
                     timestamp: Timestamp::now_utc(),
                     oplog_index: OplogIndex::from_u64(5),
+                    admission_index: OplogIndex::from_u64(5),
                     target_revision: ComponentRevision::INITIAL,
                     kind: PendingUpdateKind::Automatic,
                 });
@@ -4487,6 +4646,43 @@ mod tests {
         assert!(held.load(Ordering::Acquire));
         state.release();
         assert_eq!(drops.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn infrastructure_recovery_branch_selects_only_durable_unowned_failure() {
+        let result = Err(WorkerExecutorError::recovery_required(
+            "payload backend unavailable",
+        ));
+        assert!(
+            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_some()
+        );
+        assert!(
+            selected_infrastructure_recovery_error(None, AgentMode::Ephemeral, &result).is_none()
+        );
+
+        let shard_loss = OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost);
+        assert!(
+            selected_infrastructure_recovery_error(Some(&shard_loss), AgentMode::Durable, &result)
+                .is_none()
+        );
+        let quota_throttle =
+            OwnerFailureWinner::Lifecycle(InterruptKind::Suspend(Timestamp::now_utc()));
+        assert!(
+            selected_infrastructure_recovery_error(
+                Some(&quota_throttle),
+                AgentMode::Durable,
+                &result,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn infrastructure_recovery_branch_rejects_ordinary_infrastructure_error() {
+        let result = Err(WorkerExecutorError::runtime("host task failed"));
+        assert!(
+            selected_infrastructure_recovery_error(None, AgentMode::Durable, &result).is_none()
+        );
     }
 
     #[test]

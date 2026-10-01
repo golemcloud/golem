@@ -1997,6 +1997,8 @@ mod tests {
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
+            has_stderr: true,
+            declares_stderr: true,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -2159,6 +2161,8 @@ mod tests {
                 has_stdin: false,
                 has_stdout: false,
                 declares_stdout: false,
+                has_stderr: false,
+                declares_stderr: false,
                 output_contract: ToolOutputContract {
                     result: None,
                     errors: Vec::new(),

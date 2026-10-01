@@ -36,13 +36,17 @@ type Stdin = witTypes.Option[*witTypes.StreamReader[witTypes.Result[[]uint8, str
 
 // Stdout is the writer supplied when the selected command body declared a
 // stdout stream; absent otherwise.
-type Stdout = witTypes.Option[*streams.ToolStdoutWriter]
+type Stdout = witTypes.Option[*streams.ToolOutputWriter]
+
+// Stderr is the writer supplied when the selected command body declared a
+// stderr stream; absent otherwise.
+type Stderr = witTypes.Option[*streams.ToolOutputWriter]
 
 // Exports is the set of slots the SDK must fill before the component is invoked.
 var Exports struct {
 	DiscoverTools func() witTypes.Result[[]toolCommon.Tool, types.ToolError]
 	GetTool       func(name string) witTypes.Result[toolCommon.Tool, types.ToolError]
-	Invoke        func(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, principal common.Principal) witTypes.Result[toolCommon.InvocationResult, types.ToolError]
+	Invoke        func(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, stderr Stderr, principal common.Principal) witTypes.Result[toolCommon.InvocationResult, types.ToolError]
 }
 
 func mustBeSet(name string, set bool) {
@@ -61,7 +65,7 @@ func GetTool(name string) witTypes.Result[toolCommon.Tool, types.ToolError] {
 	return Exports.GetTool(name)
 }
 
-func Invoke(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, principal common.Principal) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+func Invoke(toolName string, commandPath []string, input types.TypedSchemaValue, stdin Stdin, stdout Stdout, stderr Stderr, principal common.Principal) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	mustBeSet("invoke", Exports.Invoke != nil)
-	return Exports.Invoke(toolName, commandPath, input, stdin, stdout, principal)
+	return Exports.Invoke(toolName, commandPath, input, stdin, stdout, stderr, principal)
 }

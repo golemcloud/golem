@@ -374,3 +374,54 @@ func TestMiddlewareDeclarationErrors(t *testing.T) {
 		mustDefErr(t, d, "which it does not present")
 	})
 }
+
+// TestMiddlewareRelaysStderrBeneath — a middleware has no stderr API yet, so
+// the layer beneath's standard error reaches the caller through it unchanged,
+// and is released when the middleware has none of its own.
+func TestMiddlewareRelaysStderrBeneath(t *testing.T) {
+	_, r, d := newVcs(t)
+	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", ToolMiddlewareSpec{})
+	_ = audit.Handle(func(ctx *UniversalToolMiddlewareContext[AuditParams]) (Option[TypedValue], error) {
+		return ctx.Next(ctx.Input())
+	})
+	e, _ := r.getMiddleware("audit")
+	released := false
+	under := underlyingLayer{start: func([]string, types.TypedSchemaValue, io.Reader) (toolCall, error) {
+		return toolCall{
+			stderr: &byteReader{
+				src:     &fakeSource{items: []streamItem{chunk("warn")}},
+				release: func() { released = true },
+			},
+			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+				return witTypes.None[types.TypedSchemaValue](), nil
+			},
+			cancel: func() {},
+		}, nil
+	}}
+	run := func(stderr *ToolStdout) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+		return d.runMiddleware(e, &middlewareInvocation{
+			toolName: "vcs", commandPath: []string{"commit"},
+			parameters: mustTypedValue(t, AuditParams{}),
+			stdin:      &byteReader{absent: absentStdin},
+			stdout:     &ToolStdout{absent: absentStdout},
+			stderr:     stderr,
+			principal:  AnonymousPrincipal{},
+			under:      under,
+		})
+	}
+
+	sink := &fakeSink{}
+	if res := run(&ToolStdout{sink: sink}); res.IsErr() {
+		t.Fatalf("relaying stderr failed: %+v", res.Err())
+	}
+	if string(sink.written) != "warn" || !sink.finished || released {
+		t.Errorf("stderr %q finished=%v released=%v", sink.written, sink.finished, released)
+	}
+
+	if res := run(&ToolStdout{absent: absentStdout}); res.IsErr() {
+		t.Fatalf("without a stderr of its own: %+v", res.Err())
+	}
+	if !released {
+		t.Errorf("the stderr beneath was not released")
+	}
+}

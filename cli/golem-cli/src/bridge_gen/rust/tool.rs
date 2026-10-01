@@ -408,23 +408,25 @@ impl RustToolBridgeGenerator {
             .collect();
         let error_type = self.error_type(command_index, body);
         let has_stdout = body.stdout.is_some();
-        let return_type = if has_stdout {
+        let has_stderr = body.stderr.is_some();
+        let has_output = has_stdout || has_stderr;
+        let return_type = if has_output {
             self.started_return_type(body, &error_type)?
         } else {
             self.return_type(body, &error_type)?
         };
-        let invoke = if has_stdout {
+        let invoke = if has_output {
             self.start_expr(command_index, body, &stdin_expr, &path_tokens)?
         } else {
             self.invoke_expr(command_index, body, &stdin_expr, &path_tokens)?
         };
-        let decode = if has_stdout {
+        let decode = if has_output {
             quote! {}
         } else {
             self.result_decode(body)?
         };
         let asyncness = quote! { async };
-        let completion = if has_stdout {
+        let completion = if has_output {
             quote! { #invoke.await }
         } else {
             quote! {
@@ -458,6 +460,8 @@ impl RustToolBridgeGenerator {
         stdin_expr: &TokenStream,
         path_tokens: &[TokenStream],
     ) -> anyhow::Result<TokenStream> {
+        let has_stdout = body.stdout.is_some();
+        let has_stderr = body.stderr.is_some();
         let decode_result = self.started_result_decode(body)?;
         let (recognizes, decode_error) = self.error_decoder(command_index, body)?;
         Ok(quote! {
@@ -466,6 +470,8 @@ impl RustToolBridgeGenerator {
                 &[#(#path_tokens),*],
                 __input,
                 #stdin_expr,
+                #has_stdout,
+                #has_stderr,
                 #decode_result,
                 #recognizes,
                 #decode_error,
@@ -487,6 +493,7 @@ impl RustToolBridgeGenerator {
                 &[#(#path_tokens),*],
                 __input,
                 (#stdin_expr).map(golem_rust::agentic::pump_tool_stdin),
+                None,
                 None,
                 #recognizes,
                 #decode_error,
@@ -920,6 +927,7 @@ mod tests {
             constraints: vec![],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors: vec![],
             annotations: None,

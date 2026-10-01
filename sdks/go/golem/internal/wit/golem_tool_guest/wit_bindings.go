@@ -46,7 +46,7 @@ type Tool = golem_tool_common.Tool
 type ToolError = golem_core_types.ToolError
 type InvocationResult = golem_tool_common.InvocationResult
 type ByteStreamItem = witTypes.Result[[]uint8, golem_tool_streams.ByteStreamFailure]
-type ToolStdoutWriter = golem_tool_streams.ToolStdoutWriter
+type ToolOutputWriter = golem_tool_streams.ToolOutputWriter
 type TypedSchemaValue = golem_core_types.TypedSchemaValue
 type Principal = golem_agent_common.Principal
 

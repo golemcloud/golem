@@ -32,6 +32,7 @@ export interface CompiledCommand {
   errors: Record<string, TypedCodec | undefined>;
   stdin?: { required: boolean };
   stdout?: { required: boolean };
+  stderr?: { required: boolean };
 }
 
 class WireReader {
@@ -373,6 +374,7 @@ export const ToolRegistry = {
           })),
           stdin: command.stdin,
           stdout: command.stdout,
+          stderr: command.stderr,
         },
       },
       prepareWire(input: TypedSchemaValue) {

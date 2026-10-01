@@ -170,6 +170,8 @@ func (c *converter) body(b types.SchemaTypeBody) (core.SchemaTypeBody, error) {
 		return core.DatetimeType{}, nil
 	case types.SchemaTypeBodyDurationType:
 		return core.DurationType{}, nil
+	case types.SchemaTypeBodyUuidType:
+		return core.UUIDType{}, nil
 
 	case types.SchemaTypeBodyQuantityType:
 		s := b.QuantityType()
@@ -220,4 +222,4 @@ func (c *converter) body(b types.SchemaTypeBody) (core.SchemaTypeBody, error) {
 
 // witBodyTagCount pins how many type cases the bindings declare. Bump it
 // deliberately, with the case added above — see TestEveryWitBodyTagConverts.
-const witBodyTagCount = 37
+const witBodyTagCount = 38

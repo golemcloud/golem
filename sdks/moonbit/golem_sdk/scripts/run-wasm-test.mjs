@@ -289,7 +289,8 @@ for (const imported of WebAssembly.Module.imports(module)) {
     ((imported.module === "wasi:clocks/monotonic-clock@0.3.0" &&
         imported.name === "[async-lower]wait-for") ||
       (imported.module === "golem:core/types@2.0.0" &&
-        imported.name === "uuid-to-string") ||
+        (imported.name === "parse-uuid" ||
+          imported.name === "uuid-to-string")) ||
       (imported.module === "golem:api/host@1.5.0" &&
         imported.name === "generate-idempotency-key"))
   ) {
@@ -343,6 +344,7 @@ for (const imported of WebAssembly.Module.imports(module)) {
             memory.setUint8(resultPtr, 0)
             memory.setUint8(resultPtr + 4, 0)
             memory.setUint8(resultPtr + 40, 0)
+            memory.setUint8(resultPtr + 48, 0)
           }
           return 2
         }

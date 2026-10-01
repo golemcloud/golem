@@ -30,14 +30,22 @@ not restart the budget. The first decision observes zero elapsed; `RetryPolicy::
 canonical inclusive boundary, so `elapsed >= limit` gives up. Policies without a `TimeBox` keep
 their existing state shape.
 
-Startup and replay infrastructure failures are separate from both paths. They append
-`Error { kind: Recovery, retry_policy_state: None, .. }`, so metadata truthfully remains
-`Retrying` but the failure neither reads nor advances the agent's semantic invocation retry
-budget. Recovery retrying is demand-driven: invoke, explicit resume, scheduler activation, or
-shard reassignment starts another reconstruction attempt. The executor does not retain the
-instance or schedule an unbounded timer loop during an infrastructure outage. Permanent recovery
-failures, including replay divergence and invalid manual-update snapshot baselines, append a
-terminal retry state and report `Failed`.
+Infrastructure reconstruction is separate from both application retry paths. For example, a p2
+HTTP response-body resume may need an external oplog payload to count bytes already delivered to
+the guest. A temporary payload-backend failure is typed as `RecoveryRequired`: the durable call is
+deliberately abandoned, so its `Start` remains without `End` or `Cancelled`, and the invocation
+loop appends `Error { kind: Recovery, retry_policy_state: None, .. }`. It then destroys the
+affected `Store` and filesystem window and schedules reconstruction with infrastructure backoff.
+The accepted invocation and its idempotency key remain pending; reconstruction replays the
+recorded prefix and repairs the incomplete call. Repeated Recovery errors neither advance nor
+reset `current_retry_state`, which belongs only to semantic application retries.
+
+Do not infer retryability from “infrastructure-owned”. Missing or malformed recorded payloads,
+impossible resource-table state, replay divergence, and invalid manual-update snapshot baselines
+are permanent and must not enter an endless Recovery loop. Genuine HTTP/content failures remain
+guest-visible HTTP errors and use ordinary Invocation failure policy. Typed lifecycle conditions
+(quota suspension, explicit interruption, shard loss) keep priority over Recovery, and ephemeral
+agents remain fail-stop because they cannot reconstruct accepted execution.
 
 ## When inline retry is allowed
 
@@ -93,7 +101,8 @@ and let the invocation loop's trap path take over" (`durability.rs`, spawned-tas
   http_get_retried_inline_even_when_idempotence_disabled}` (and the p3 mirrors in
   `tests/in_function_retry/p3.rs`).
 - `tests/in_function_retry/{http_servers.rs,http_streams.rs}` — streaming bodies and server
-  failure modes.
+  failure modes, including response-body payload outages that physically retire multiple runtime
+  generations while preserving the same invocation and semantic retry state.
 - `tests/retry_lifecycle.rs::{interrupt_worker_during_delayed_recovery_retry,
   delete_worker_during_delayed_recovery_retry}` — trap-based `Delayed` retries interact with
   interruption and deletion.

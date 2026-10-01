@@ -163,6 +163,11 @@ func DecodeDuration(sv schema.SchemaValue) (time.Duration, error) {
 	})
 }
 
+func EncodeUUID(v values.UUID) schema.SchemaValue { return schema.UUIDValue{Value: v} }
+func DecodeUUID(sv schema.SchemaValue) (values.UUID, error) {
+	return decodeAs("uuid", sv, func(v schema.UUIDValue) values.UUID { return v.Value })
+}
+
 // --- sequences ---------------------------------------------------------------
 
 func EncodeList[T any](xs []T, f Encoder[T]) schema.SchemaValue {

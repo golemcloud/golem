@@ -226,6 +226,10 @@ fn[E] decode_reflected_result(
             Some(stdout) => stdout.drop_sync()
             None => ()
           }
+          match result.stderr {
+            Some(stderr) => stderr.drop_sync()
+            None => ()
+          }
           return Err(
             reflected_protocol_error(
               "failed to decode tool result: \{Repr(error)}",
@@ -237,7 +241,7 @@ fn[E] decode_reflected_result(
     }
     None => None
   }
-  Ok({ result: decoded, stdout: result.stdout, })
+  Ok({ result: decoded, stdout: result.stdout, stderr: result.stderr, })
 }
 
 ///|
@@ -791,6 +795,17 @@ fn ToolCommand::decode_result(
     }
     None => ()
   }
+  match outcome.stderr {
+    Some(stderr) => {
+      stderr.drop_sync()
+      return Err(
+        reflected_protocol_error(
+          "remote tool returned an embedded stderr stream",
+        ),
+      )
+    }
+    None => ()
+  }
   match (self.result, outcome.result) {
     (None, None) => Ok(None)
     (Some(schema), Some(payload)) => {
@@ -904,6 +919,7 @@ pub fn ToolCommand::start_value(
     wire_input,
     stdin,
     body.stdout is Some(_),
+    body.stderr is Some(_),
     fn(name, payload) {
       let decoded = @model_host.typed_schema_value_from_wit(payload) catch {
         error => return Some(Err("failed to decode tool error: \{Repr(error)}"))
@@ -938,15 +954,26 @@ pub async fn ToolCommand::invoke_value(
       reflected_invalid_input("command requires caller-readable stdout"),
     )
   }
+  if body.stderr is Some(spec) && spec.required {
+    return Err(
+      reflected_invalid_input("command requires caller-readable stderr"),
+    )
+  }
   let started = match self.start_value(input, stdin~) {
     Ok(started) => started
     Err(error) => return Err(error)
   }
   defer started.drop()
-  if body.stdout is Some(_) {
-    match started.collect() {
-      Ok((result, _)) => Ok(result)
+  if body.stdout is Some(_) || body.stderr is Some(_) {
+    let collected = started.collect()
+    match collected.result {
       Err(error) => Err(error)
+      Ok(result) =>
+        match (collected.stdout, collected.stderr) {
+          (Err(error), _) => raise error
+          (_, Err(error)) => raise error
+          (Ok(_), Ok(_)) => Ok(result)
+        }
     }
   } else {
     started.get()
@@ -1002,6 +1029,11 @@ pub fn ToolCommand::trigger_value(
       reflected_invalid_input("command requires caller-readable stdout"),
     )
   }
+  if body.stderr is Some(spec) && spec.required {
+    return Err(
+      reflected_invalid_input("command requires caller-readable stderr"),
+    )
+  }
   if body.stdin is Some(spec) && spec.required && stdin is None {
     return Err(reflected_invalid_input("command requires stdin"))
   }
@@ -1050,6 +1082,13 @@ pub fn ReflectedToolInvocation::stdout(
 }
 
 ///|
+pub fn ReflectedToolInvocation::stderr(
+  self : ReflectedToolInvocation,
+) -> @async-core.Stream[Byte]? {
+  self.invocation.stderr_stream()
+}
+
+///|
 pub async fn ReflectedToolInvocation::get(
   self : ReflectedToolInvocation,
 ) -> Result[@model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]] {
@@ -1062,17 +1101,17 @@ pub async fn ReflectedToolInvocation::get(
 ///|
 pub async fn ReflectedToolInvocation::collect(
   self : ReflectedToolInvocation,
-) -> Result[
-  (@model.SchemaValue?, Bytes?),
-  @tool.ToolError[ReflectedToolCustomError],
+) -> @tool.CollectedToolInvocation[
+  @model.SchemaValue?,
+  ReflectedToolCustomError,
 ] {
-  match self.invocation.collect() {
-    Ok((outcome, bytes)) =>
-      match self.command.decode_result(outcome) {
-        Ok(result) => Ok((result, bytes))
-        Err(error) => Err(error)
-      }
-    Err(error) => Err(error)
+  let collected = self.invocation.collect()
+  {
+    result: collected.result.bind(fn(value) {
+      self.command.decode_result(value)
+    }),
+    stdout: collected.stdout,
+    stderr: collected.stderr,
   }
 }
 
@@ -1106,6 +1145,7 @@ pub fn DynamicToolClient::start_value(
   input : @model.TypedSchemaValue,
   stdin? : @async-core.Stream[Byte]? = None,
   stdout? : Bool = false,
+  stderr? : Bool = false,
 ) -> Result[
   @tool.ToolInvocation[ReflectedToolCustomError],
   @tool.ToolError[ReflectedToolCustomError],
@@ -1132,7 +1172,7 @@ pub fn DynamicToolClient::start_value(
       return Err(error)
     }
   }
-  let started = client.start(path, wire_input, stdin, stdout, fn(
+  let started = client.start(path, wire_input, stdin, stdout, stderr, fn(
     name,
     payload,
   ) {

@@ -494,6 +494,7 @@ type CommandBody struct {
 	Constraints []Constraint
 	Stdin       witTypes.Option[StreamSpec]
 	Stdout      witTypes.Option[StreamSpec]
+	Stderr      witTypes.Option[StreamSpec]
 	Result      witTypes.Option[ResultSpec]
 	Errors      []ErrorCase
 	Annotations witTypes.Option[CommandAnnotations]
@@ -573,8 +574,10 @@ type ToolMiddleware struct {
 	ParameterSchema golem_core_types.SchemaGraph
 }
 
-// Invocation contract — shared between guest and host.
+// Invocation contract — shared between guest and host. Both attachment
+// fields must be absent: output bytes use the writers supplied to the guest.
 type InvocationResult struct {
 	Result witTypes.Option[golem_core_types.TypedSchemaValue]
 	Stdout witTypes.Option[*witTypes.StreamReader[uint8]]
+	Stderr witTypes.Option[*witTypes.StreamReader[uint8]]
 }

@@ -118,6 +118,7 @@ impl<'g> Codecs<'g> {
             SchemaType::Url { .. } => leaf("URL"),
             SchemaType::Datetime { .. } => leaf("Datetime"),
             SchemaType::Duration { .. } => leaf("Duration"),
+            SchemaType::Uuid { .. } => leaf("UUID"),
             SchemaType::Tuple { elements, .. } if elements.len() == 1 => {
                 self.func(dir, &elements[0])
             }

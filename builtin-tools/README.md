@@ -49,7 +49,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: read-file
-      version: 0.2.0
+      version: 0.3.0
 
 agents:
   FileReader:

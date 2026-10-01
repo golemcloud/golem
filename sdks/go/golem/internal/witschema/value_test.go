@@ -49,7 +49,8 @@ func TestValueRoundTripsThroughCore(t *testing.T) {
 	amap := b.push(types.MakeSchemaValueNodeMapValue([]types.MapEntry{{Key: name, Value: entry}}))
 	res := b.push(types.MakeSchemaValueNodeResultValue(
 		types.MakeResultValuePayloadErrValue(witTypes.Some(entry))))
-	root := b.push(types.MakeSchemaValueNodeRecordValue([]int32{name, count, inner, items, amap, res}))
+	id := b.push(types.MakeSchemaValueNodeUuidValue(types.Uuid{HighBits: 0xdd00721b33294621, LowBits: 0xa01dc71f02cd78c6}))
+	root := b.push(types.MakeSchemaValueNodeRecordValue([]int32{name, count, inner, items, amap, res, id}))
 
 	original := b.tree(root)
 	asCore, err := ValueToCore(original)
@@ -69,6 +70,9 @@ func TestValueRoundTripsThroughCore(t *testing.T) {
 	}
 	if !reflect.DeepEqual(asCore, again) {
 		t.Errorf("a round trip changed the value:\n got: %#v\nwant: %#v", again, asCore)
+	}
+	if got := asCore.(core.RecordValue).Fields[6].(core.UUIDValue).Value.String(); got != "dd00721b-3329-4621-a01d-c71f02cd78c6" {
+		t.Errorf("the UUID converted to %s", got)
 	}
 }
 

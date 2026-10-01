@@ -23,7 +23,7 @@ use crate::golem_agentic::exports::golem::tool::guest::{
 #[cfg(feature = "export_golem_agentic")]
 use crate::golem_agentic::golem::agent::common::Principal;
 use crate::golem_agentic::golem::tool::streams::{
-    ByteStreamFailure, StreamWriteError, ToolStdoutWriter,
+    ByteStreamFailure, StreamWriteError, ToolOutputWriter,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -31,7 +31,7 @@ use std::rc::Rc;
 /// Writable stdout passed to tool implementations.
 ///
 pub struct OutputStream {
-    writer: Rc<RefCell<Option<ToolStdoutWriter>>>,
+    writer: Rc<RefCell<Option<ToolOutputWriter>>>,
 }
 
 impl Clone for OutputStream {
@@ -44,7 +44,7 @@ impl Clone for OutputStream {
 
 impl OutputStream {
     #[doc(hidden)]
-    pub fn new(writer: ToolStdoutWriter) -> Self {
+    pub fn new(writer: ToolOutputWriter) -> Self {
         Self {
             writer: Rc::new(RefCell::new(Some(writer))),
         }
@@ -92,9 +92,9 @@ pub fn install_tool_exports() {
     let _ = super::exports::TOOL.set(super::exports::ToolHooks {
         discover: ToolRuntime::discover_tools,
         get: ToolRuntime::get_tool,
-        invoke: |name, path, input, stdin, stdout, principal| {
+        invoke: |name, path, input, stdin, stdout, stderr, principal| {
             Box::pin(ToolRuntime::invoke(
-                name, path, input, stdin, stdout, principal,
+                name, path, input, stdin, stdout, stderr, principal,
             ))
         },
     });
@@ -120,11 +120,12 @@ impl Guest for ToolRuntime {
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
-        stdout: Option<ToolStdoutWriter>,
+        stdout: Option<ToolOutputWriter>,
+        stderr: Option<ToolOutputWriter>,
         principal: Principal,
     ) -> Result<InvocationResult, ToolError> {
         let invoker = get_tool_invoker_by_name(&tool_name)
             .ok_or_else(|| ToolError::InvalidToolName(tool_name.clone()))?;
-        invoker(command_path, input, stdin, stdout, principal).await
+        invoker(command_path, input, stdin, stdout, stderr, principal).await
     }
 }

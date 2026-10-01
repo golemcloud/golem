@@ -129,6 +129,7 @@ impl TypeName for GoTypeName {
             | SchemaType::Url { .. }
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
+            | SchemaType::Uuid { .. }
             | SchemaType::Quantity { .. }
             | SchemaType::Secret { .. }
             | SchemaType::QuotaToken { .. }

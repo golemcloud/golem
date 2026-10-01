@@ -32,7 +32,10 @@ import (
 // Stdin and Stdout mirror the tool guest's stream parameters.
 type Stdin = witTypes.Option[*witTypes.StreamReader[witTypes.Result[[]uint8, streams.ByteStreamFailure]]]
 
-type Stdout = witTypes.Option[*streams.ToolStdoutWriter]
+type Stdout = witTypes.Option[*streams.ToolOutputWriter]
+
+// Stderr is the middleware's stderr writer, when the command declares one.
+type Stderr = witTypes.Option[*streams.ToolOutputWriter]
 
 // Exports is the set of slots the SDK must fill before the component is invoked.
 var Exports struct {
@@ -47,6 +50,7 @@ var Exports struct {
 		input types.TypedSchemaValue,
 		stdin Stdin,
 		stdout Stdout,
+		stderr Stderr,
 		principal common.Principal,
 		wrapped *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError]
@@ -77,10 +81,11 @@ func InvokeToolMiddleware(
 	input types.TypedSchemaValue,
 	stdin Stdin,
 	stdout Stdout,
+	stderr Stderr,
 	principal common.Principal,
 	wrapped *underlying.UnderlyingTool,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	mustBeSet("invoke-tool-middleware", Exports.InvokeToolMiddleware != nil)
 	return Exports.InvokeToolMiddleware(middlewareName, toolName, toolMetadata, parameters,
-		commandPath, input, stdin, stdout, principal, wrapped)
+		commandPath, input, stdin, stdout, stderr, principal, wrapped)
 }

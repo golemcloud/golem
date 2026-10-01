@@ -87,11 +87,11 @@ interface host {
 
   /// Single-use output target consumed by one result-bearing invocation.
   /// Dropping it unused fails the paired reader as abandoned.
-  resource tool-stdout;
+  resource tool-output;
 
   /// Creates the output target and caller-readable stream before invocation.
   /// Dropping the reader cancels only this attachment's consumer role.
-  create-stdout: func() -> tuple<own<tool-stdout>, stream<byte-stream-item>>;
+  create-output: func() -> tuple<own<tool-output>, stream<byte-stream-item>>;
 
   resource tool-rpc {
     /// Binds an ordinary tool client to its configured tool name.
@@ -100,15 +100,16 @@ interface host {
     /// Creates a tool RPC resource without trapping on invalid caller input.
     create: static func(tool-name: string) -> result<tool-rpc, tool-rpc-error>;
 
-    /// Waits for the structured terminal. Callers that supplied stdout must
-    /// drive this wait and the already-created reader concurrently. Callers
-    /// that manually created an open stdin must likewise drive its writer
-    /// concurrently; see `create-stdin`.
+    /// Waits for the structured terminal. Callers that supplied stdout or
+    /// stderr must drive this wait and every already-created reader
+    /// concurrently. Callers that manually created an open stdin must likewise
+    /// drive its writer concurrently; see `create-stdin`.
     invoke-and-await: async func(
       command-path: list<string>,
       input:        typed-schema-value,
       stdin:        option<own<tool-stdin>>,
-      stdout:       option<own<tool-stdout>>,
+      stdout:       option<own<tool-output>>,
+      stderr:       option<own<tool-output>>,
     ) -> result<invocation-result, tool-rpc-error>;
 
     /// Durably admits fire-and-forget work. Declared output is discarded by
@@ -120,13 +121,14 @@ interface host {
     ) -> result<_, tool-rpc-error>;
 
     /// Durably admits work and returns an independently owned structured
-    /// result observer. Stdout, when declared, was created by the caller and
-    /// is observed independently from this future.
+    /// result observer. Each requested output was created by the caller and is
+    /// observed independently from this future.
     async-invoke-and-await: func(
       command-path: list<string>,
       input:        typed-schema-value,
       stdin:        option<own<tool-stdin>>,
-      stdout:       option<own<tool-stdout>>,
+      stdout:       option<own<tool-output>>,
+      stderr:       option<own<tool-output>>,
     ) -> future-invoke-result;
   }
 

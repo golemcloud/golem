@@ -26,6 +26,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/golemcloud/golem/sdks/go/core/values"
 )
 
 // Canonical JSON.
@@ -130,6 +132,12 @@ func (u *unpacker) render(t SchemaType, v SchemaValue, path string) (any, error)
 			return nil, err
 		}
 		return map[string]any{"nanoseconds": strconv.FormatInt(n.Nanoseconds, 10)}, nil
+	case UUIDType:
+		n, err := expect[UUIDValue](v, path, "uuid")
+		if err != nil {
+			return nil, err
+		}
+		return n.Value.String(), nil
 	case QuantityType:
 		n, err := expect[QuantityValueNode](v, path, "quantity")
 		if err != nil {
@@ -577,6 +585,17 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		}
 		n, err := checkedIntegerString(raw, pathOrRoot(child(path, "nanoseconds")))
 		return DurationValue{Nanoseconds: n}, err
+
+	case UUIDType:
+		raw, ok := value.(string)
+		if !ok {
+			return nil, typeErr(path, "hyphenated UUID string", value)
+		}
+		u, err := values.ParseUUID(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", pathOrRoot(path), err)
+		}
+		return UUIDValue{Value: u}, nil
 
 	case QuantityType:
 		obj, ok := value.(map[string]any)

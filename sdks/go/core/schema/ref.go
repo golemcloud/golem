@@ -204,6 +204,8 @@ func (r Ref) TypeName() string {
 		return "datetime"
 	case DurationType:
 		return "duration"
+	case UUIDType:
+		return "uuid"
 	case QuantityType:
 		return "quantity<" + t.Spec.BaseUnit + ">"
 	case EnumType:

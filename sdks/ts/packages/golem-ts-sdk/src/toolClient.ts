@@ -132,6 +132,7 @@ export function compiledToolClient(
             input,
             stdin as ReadableStream<Uint8Array> | undefined,
             command.stdout !== undefined,
+            command.stderr !== undefined,
           );
           const settled = mapSettledToolResult(
             invocation.settledResult,
@@ -152,14 +153,23 @@ export function compiledToolClient(
               throw mapCompiledFailure(error, command, callName);
             },
           );
-          if (!command.stdout) return resultFromSettledToolResult(settled);
-          if (!invocation.stdout) throw new TypeError('required stdout stream is missing');
-          return startedToolInvocation(invocation.stdout, settled, () => invocation.cancel());
+          if (!command.stdout && !command.stderr) return resultFromSettledToolResult(settled);
+          if (command.stdout && !invocation.stdout) {
+            invocation.cancel();
+            throw new TypeError('required stdout stream is missing');
+          }
+          if (command.stderr && !invocation.stderr) {
+            invocation.cancel();
+            throw new TypeError('required stderr stream is missing');
+          }
+          return startedToolInvocation(invocation.stdout, invocation.stderr, settled, () =>
+            invocation.cancel(),
+          );
         } catch (error) {
           throw mapCompiledFailure(error, command, callName);
         }
       };
-      return command.stdout ? start() : Promise.resolve().then(start);
+      return command.stdout || command.stderr ? start() : Promise.resolve().then(start);
     };
     Object.defineProperty(target, name, { value: method, enumerable: true });
   }

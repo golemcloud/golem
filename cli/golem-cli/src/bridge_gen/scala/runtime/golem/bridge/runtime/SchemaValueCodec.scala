@@ -105,6 +105,7 @@ object SchemaValueCodec {
       node("binary", Json.obj(withMime))
     case PathValue(v)     => node("path", Json.obj("path" -> Json.string(v)))
     case UrlValue(v)      => node("url", Json.obj("url" -> Json.string(v)))
+    case UuidValue(v)     => node("uuid", Json.string(Uuid.toStandardString(v)))
     case DatetimeValue(v) => node("datetime", Json.obj("value" -> Json.string(v)))
     case DurationValue(v) => node("duration", Json.obj("nanoseconds" -> Json.string(v.toString)))
     case QuantityValue(mantissa, scale, unit) =>
@@ -447,6 +448,8 @@ object SchemaValueCodec {
       } yield BinaryValue(bytes, mimeType)
     case "path"     => exactObject(value, Set("path"), "path").flatMap(member(_, "path")).flatMap(Json.asString).map(PathValue(_))
     case "url"      => exactObject(value, Set("url"), "url").flatMap(member(_, "url")).flatMap(Json.asString).map(UrlValue(_))
+    case "uuid" =>
+      Json.asString(value).flatMap(Uuid.fromStandardString).map(UuidValue(_))
     case "datetime" => exactObject(value, Set("value"), "datetime").flatMap(member(_, "value")).flatMap(Json.asString).map(DatetimeValue(_))
     case "duration" =>
       exactObject(value, Set("nanoseconds"), "duration").flatMap(member(_, "nanoseconds"))

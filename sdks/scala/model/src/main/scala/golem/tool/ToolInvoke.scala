@@ -95,11 +95,12 @@ object ToolInvokeError {
 
 /**
  * A successful tool invocation outcome: the optional structured result and the
- * optional stdout stream handle.
+ * optional output stream handles.
  */
 final case class ToolInvokeResult(
   result: Option[TypedSchemaValue],
-  stdout: Option[ToolOutputStream] = None
+  stdout: Option[ToolOutputStream] = None,
+  stderr: Option[ToolOutputStream] = None
 )
 
 /** A registered tool's platform-neutral invocation entry point. */
@@ -119,6 +120,7 @@ trait ToolInvokeHandler {
  */
 trait ToolInvokeEnv {
   def stdout: Option[ToolOutputStream]
+  def stderr: Option[ToolOutputStream]
   def invokerFor(toolName: String): Option[ToolInvokeHandler]
   def extendedToolFor(toolName: String): Option[ExtendedToolType]
 }
@@ -178,6 +180,9 @@ object ToolParamDecoder {
 
   /** Auto-injected invocation-scoped stdout writer. */
   case object StdoutParam extends ToolParamDecoder
+
+  /** Auto-injected invocation-scoped stderr writer. */
+  case object StderrParam extends ToolParamDecoder
 }
 
 /**
@@ -347,9 +352,13 @@ object ToolInvokerRuntime {
   def decodeArgs(
     ctx: ToolInvocationContext,
     decoders: List[ToolParamDecoder]
-  ): Either[ToolInvokeError[Nothing], (Vector[Any], Option[ToolOutputStream])] = {
+  ): Either[
+    ToolInvokeError[Nothing],
+    (Vector[Any], Option[ToolOutputStream], Option[ToolOutputStream])
+  ] = {
     val args   = Vector.newBuilder[Any]
     var stdout = Option.empty[ToolOutputStream]
+    var stderr = Option.empty[ToolOutputStream]
     val it     = decoders.iterator
     while (it.hasNext) {
       it.next() match {
@@ -383,9 +392,17 @@ object ToolInvokerRuntime {
             case None =>
               return Left(ToolInvokeError.InvalidInput("tool invocation did not contain declared stdout stream"))
           }
+        case ToolParamDecoder.StderrParam =>
+          ctx.env.stderr match {
+            case Some(handle) =>
+              stderr = Some(handle)
+              args += handle
+            case None =>
+              return Left(ToolInvokeError.InvalidInput("tool invocation did not contain declared stderr stream"))
+          }
       }
     }
-    Right((args.result(), stdout))
+    Right((args.result(), stdout, stderr))
   }
 
   /** Field decoder used by [[ToolParamDecoder.Field]] entries. */
@@ -406,15 +423,19 @@ object ToolInvokerRuntime {
   def encodeSuccess[A](
     value: A,
     intoSchema: IntoSchema[A],
-    stdout: Option[ToolOutputStream]
+    stdout: Option[ToolOutputStream],
+    stderr: Option[ToolOutputStream]
   ): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
-    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value)), stdout))
+    try Right(ToolInvokeResult(Some(intoSchema.toTyped(value)), stdout, stderr))
     catch {
       case e: SchemaEncodeError => Left(ToolInvokeError.InvalidResult(e.message))
     }
 
-  def encodeUnit(stdout: Option[ToolOutputStream]): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
-    Right(ToolInvokeResult(None, stdout))
+  def encodeUnit(
+    stdout: Option[ToolOutputStream],
+    stderr: Option[ToolOutputStream]
+  ): Either[ToolInvokeError[Nothing], ToolInvokeResult] =
+    Right(ToolInvokeResult(None, stdout, stderr))
 
   /**
    * Encodes a declared tool error value (the `Left` of an `Either[E, T]`

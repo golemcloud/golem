@@ -20,6 +20,8 @@ import (
 	"math"
 	"strconv"
 	"time"
+
+	"github.com/golemcloud/golem/sdks/go/core/values"
 )
 
 // The schema-native wire form.
@@ -84,8 +86,8 @@ type wireNode struct {
 // are not exhaustive — so the counts are pinned by tests that enumerate every
 // case.
 const (
-	wireValueKinds = 35
-	wireTypeKinds  = 37
+	wireValueKinds = 36
+	wireTypeKinds  = 38
 )
 
 // --- Values, outgoing ----------------------------------------------------
@@ -226,6 +228,8 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 		return wireScalar("datetime", map[string]any{"value": instant.Format(time.RFC3339Nano)})
 	case DurationValue:
 		return wireScalar("duration", map[string]any{"nanoseconds": strconv.FormatInt(n.Nanoseconds, 10)})
+	case UUIDValue:
+		return wireScalar("uuid", n.Value.String())
 	case QuantityValueNode:
 		return wireScalar("quantity", map[string]any{
 			"mantissa": strconv.FormatInt(n.Value.Mantissa, 10),
@@ -413,6 +417,17 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 		return readWireErr(node, func(p wireDurationValue) (SchemaValue, error) {
 			n, err := parseWireInt(p.Nanoseconds, "duration nanoseconds")
 			return DurationValue{Nanoseconds: n}, err
+		})
+	case "uuid":
+		return readWireErr(node, func(p string) (SchemaValue, error) {
+			u, err := values.ParseUUID(p)
+			if err == nil && u.String() != p {
+				err = fmt.Errorf("%q is not a canonical lowercase UUID", p)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("golem: uuid value: %w", err)
+			}
+			return UUIDValue{Value: u}, nil
 		})
 	case "quantity":
 		return readWireErr(node, func(p wireQuantityValue) (SchemaValue, error) {

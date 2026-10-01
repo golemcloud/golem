@@ -61,6 +61,7 @@ fn test_environment() -> Environment {
 fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
     SecuritySchemeDetails {
         id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+        revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
         name,
         provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
         client_id: openidconnect::ClientId::new("test-client".into()),
@@ -70,6 +71,7 @@ fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
         )
         .unwrap(),
         scopes: vec![],
+        login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
     }
 }
 
@@ -681,6 +683,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         let name = SecuritySchemeName("login".into());
         let scheme = SecuritySchemeDetails {
             id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+            revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
             name: name.clone(),
             provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
             client_id: openidconnect::ClientId::new("test-client".into()),
@@ -688,6 +691,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             redirect_url: openidconnect::RedirectUrl::new(format!("https://example.com{callback}"))
                 .unwrap(),
             scopes: vec![],
+            login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
         };
         let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
         let typed = routes
@@ -717,10 +721,160 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         validate_final_http_api_router(
             &Domain("example.com".into()),
             &routes,
-            &HashMap::from([(name, scheme)]),
+            &HashMap::from([(name.clone(), scheme.clone())]),
             &mut errors,
         );
         assert_eq!(errors.is_empty(), accepted, "{callback}: {errors:?}");
+
+        if callback == "/auth/callback" && post {
+            let assert_origin = |callback_url: &str, public_origin: &str, accepted: bool| {
+                let mut candidate = scheme.clone();
+                candidate.redirect_url =
+                    openidconnect::RedirectUrl::new(callback_url.to_string()).unwrap();
+                let mut origin_errors = vec![];
+                validate_final_http_api_router_for_origin(
+                    &Domain("example.com".into()),
+                    public_origin,
+                    &routes,
+                    &HashMap::from([(name.clone(), candidate)]),
+                    &mut origin_errors,
+                );
+                assert_eq!(
+                    origin_errors.is_empty(),
+                    accepted,
+                    "callback={callback_url}, public_origin={public_origin}: {origin_errors:?}"
+                );
+            };
+            assert_origin(
+                "https://example.com/auth/callback",
+                "https://example.com:443",
+                true,
+            );
+            assert_origin(
+                "http://localhost/auth/callback",
+                "http://localhost:80",
+                true,
+            );
+            assert_origin(
+                "https://example.com/auth/callback",
+                "http://example.com",
+                false,
+            );
+            assert_origin(
+                "https://example.com/auth/callback",
+                "https://example.com:8443",
+                false,
+            );
+        }
+
+        let mut wrong_origin = scheme;
+        wrong_origin.redirect_url =
+            openidconnect::RedirectUrl::new("https://other.example/auth/callback".to_string())
+                .unwrap();
+        let mut origin_errors = vec![];
+        validate_final_http_api_router_for_origin(
+            &Domain("example.com".into()),
+            "https://example.com",
+            &routes,
+            &HashMap::from([(name, wrong_origin)]),
+            &mut origin_errors,
+        );
+        assert!(
+            origin_errors
+                .iter()
+                .any(|error| format!("{error:?}").contains("callback origin")),
+            "{origin_errors:?}"
+        );
+    }
+
+    {
+        let first_name = SecuritySchemeName("first-login".into());
+        let second_name = SecuritySchemeName("second-login".into());
+        let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
+        let typed = routes
+            .iter_mut()
+            .find(|route| matches!(route.behaviour, RouteBehaviour::CallAgent(_)))
+            .unwrap();
+        typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
+            crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
+                security_scheme: first_name.clone(),
+            },
+        );
+        let typed_bytes = desert_rust::serialize_to_byte_vec(&*typed).unwrap();
+        let mut second: UnboundCompiledRoute = desert_rust::deserialize(&typed_bytes).unwrap();
+        second.route_id = 100;
+        second.path = vec![PathSegment::Literal {
+            value: "second".into(),
+        }];
+        second.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
+            crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
+                security_scheme: second_name.clone(),
+            },
+        );
+        routes.push(second);
+        let mut errors = vec![];
+        validate_final_http_api_router(
+            &Domain("example.com".into()),
+            &routes,
+            &HashMap::from([
+                (first_name.clone(), test_security_scheme(first_name)),
+                (second_name.clone(), test_security_scheme(second_name)),
+            ]),
+            &mut errors,
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| format!("{error:?}").contains("Security endpoint collides")),
+            "{errors:?}"
+        );
+    }
+
+    {
+        let name = SecuritySchemeName("pkce-login".into());
+        let mut scheme = test_security_scheme(name.clone());
+        scheme.login =
+            golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(
+                golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                    redirect_uris: vec!["https://frontend.example/callback".into()],
+                    origins: vec!["https://frontend.example".into()],
+                },
+            );
+        let endpoint = golem_common::model::agent::http_files::HttpRequestTarget::parse(
+            &golem_service_base::custom_api::pkce_authorization_path(&scheme.id),
+        )
+        .unwrap();
+        let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
+        let typed = routes
+            .iter_mut()
+            .find(|route| matches!(route.behaviour, RouteBehaviour::CallAgent(_)))
+            .unwrap();
+        typed.path = endpoint
+            .segments()
+            .iter()
+            .map(|value| PathSegment::Literal {
+                value: value.clone(),
+            })
+            .collect();
+        typed.route_match = HttpMethod::Get(Empty {}).into();
+        typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
+            crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
+                security_scheme: name.clone(),
+            },
+        );
+        let mut errors = vec![];
+        validate_final_http_api_router(
+            &Domain("example.com".into()),
+            &routes,
+            &HashMap::from([(name, scheme)]),
+            &mut errors,
+        );
+        assert!(
+            errors.iter().any(|error| {
+                format!("{error:?}").contains("Typed endpoint collides with a reserved")
+            }),
+            "{errors:?}"
+        );
     }
 }
 
@@ -908,6 +1062,7 @@ fn executable_test_tool(root: &str, command: &str) -> Tool {
         constraints: Vec::new(),
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: Vec::new(),
         annotations: None,

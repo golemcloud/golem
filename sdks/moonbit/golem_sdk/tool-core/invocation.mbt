@@ -2,6 +2,7 @@
 pub(all) struct InvocationResult {
   result : @model.TypedSchemaValue?
   stdout : @async-core.Stream[Byte]?
+  stderr : @async-core.Stream[Byte]?
 }
 
 ///|
@@ -45,12 +46,16 @@ pub fn decode_invocation_result(
             Some(stdout) => stdout.drop_sync()
             None => ()
           }
+          match result.stderr {
+            Some(stderr) => stderr.drop_sync()
+            None => ()
+          }
           return Err(error)
         }
       }
     None => None
   }
-  Ok({ result: decoded, stdout: result.stdout, })
+  Ok({ result: decoded, stdout: result.stdout, stderr: result.stderr, })
 }
 
 ///|
@@ -65,6 +70,10 @@ pub fn drop_invocation_result(result : InvocationResult) -> Unit {
   }
   match result.stdout {
     Some(stdout) => stdout.drop_sync()
+    None => ()
+  }
+  match result.stderr {
+    Some(stderr) => stderr.drop_sync()
     None => ()
   }
 }
@@ -87,6 +96,10 @@ pub fn[T : @schema.FromSchema] decode_custom_error(
 pub fn[T : @schema.FromSchema] project_result_with_stdout(
   result : InvocationResult,
 ) -> Result[(T, @async-core.Stream[Byte]), String] {
+  if result.stderr is Some(_) {
+    drop_invocation_result(result)
+    return Err("tool result unexpectedly contained stderr stream")
+  }
   let stdout = expect_stdout(result.stdout)
   let value = decode_expected_value(result.result)
   match (stdout, value) {
@@ -106,6 +119,10 @@ pub fn[T : @schema.FromSchema] project_result_with_stdout(
 pub fn[T : @schema.FromSchema] project_result_value(
   result : InvocationResult,
 ) -> Result[T, String] {
+  if result.stderr is Some(_) {
+    drop_invocation_result(result)
+    return Err("tool result unexpectedly contained stderr stream")
+  }
   match expect_no_stdout(result.stdout) {
     Err(error) => {
       drop_invocation_result(result)
@@ -126,6 +143,10 @@ pub fn[T : @schema.FromSchema] project_result_value(
 pub fn project_result_stdout_only(
   result : InvocationResult,
 ) -> Result[@async-core.Stream[Byte], String] {
+  if result.stderr is Some(_) {
+    drop_invocation_result(result)
+    return Err("tool result unexpectedly contained stderr stream")
+  }
   let stdout = expect_stdout(result.stdout)
   match (stdout, expect_no_value(result.result)) {
     (Ok(stdout), Ok(_)) => Ok(stdout)
@@ -142,6 +163,10 @@ pub fn project_result_stdout_only(
 
 ///|
 pub fn project_result_empty(result : InvocationResult) -> Result[Unit, String] {
+  if result.stderr is Some(_) {
+    drop_invocation_result(result)
+    return Err("tool result unexpectedly contained stderr stream")
+  }
   match expect_no_stdout(result.stdout) {
     Err(error) => {
       drop_invocation_result(result)
@@ -155,6 +180,74 @@ pub fn project_result_empty(result : InvocationResult) -> Result[Unit, String] {
           Err(error)
         }
       }
+  }
+}
+
+///|
+pub fn[T : @schema.FromSchema] project_result_with_stderr(
+  result : InvocationResult,
+) -> Result[(T, @async-core.Stream[Byte]), String] {
+  if result.stdout is Some(_) {
+    drop_invocation_result(result)
+    return Err("tool result unexpectedly contained stdout stream")
+  }
+  let stderr = expect_stderr(result.stderr)
+  let value = decode_expected_value(result.result)
+  match (stderr, value) {
+    (Ok(stderr), Ok(value)) => Ok((value, stderr))
+    (Err(error), _) | (_, Err(error)) => {
+      drop_invocation_result(result)
+      Err(error)
+    }
+  }
+}
+
+///|
+pub fn project_result_stderr_only(
+  result : InvocationResult,
+) -> Result[@async-core.Stream[Byte], String] {
+  if result.stdout is Some(_) {
+    drop_invocation_result(result)
+    return Err("tool result unexpectedly contained stdout stream")
+  }
+  let stderr = expect_stderr(result.stderr)
+  match (stderr, expect_no_value(result.result)) {
+    (Ok(stderr), Ok(_)) => Ok(stderr)
+    (Err(error), _) | (_, Err(error)) => {
+      drop_invocation_result(result)
+      Err(error)
+    }
+  }
+}
+
+///|
+pub fn[T : @schema.FromSchema] project_result_with_outputs(
+  result : InvocationResult,
+) -> Result[(T, @async-core.Stream[Byte], @async-core.Stream[Byte]), String] {
+  let stdout = expect_stdout(result.stdout)
+  let stderr = expect_stderr(result.stderr)
+  let value = decode_expected_value(result.result)
+  match (stdout, stderr, value) {
+    (Ok(stdout), Ok(stderr), Ok(value)) => Ok((value, stdout, stderr))
+    (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+      drop_invocation_result(result)
+      Err(error)
+    }
+  }
+}
+
+///|
+pub fn project_result_outputs_only(
+  result : InvocationResult,
+) -> Result[(@async-core.Stream[Byte], @async-core.Stream[Byte]), String] {
+  let stdout = expect_stdout(result.stdout)
+  let stderr = expect_stderr(result.stderr)
+  match (stdout, stderr, expect_no_value(result.result)) {
+    (Ok(stdout), Ok(stderr), Ok(_)) => Ok((stdout, stderr))
+    (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+      drop_invocation_result(result)
+      Err(error)
+    }
   }
 }
 
@@ -173,6 +266,16 @@ fn expect_no_stdout(stdout : @async-core.Stream[Byte]?) -> Result[Unit, String] 
   match stdout {
     Some(_) => Err("tool result unexpectedly contained stdout stream")
     None => Ok(())
+  }
+}
+
+///|
+fn expect_stderr(
+  stderr : @async-core.Stream[Byte]?,
+) -> Result[@async-core.Stream[Byte], String] {
+  match stderr {
+    Some(stderr) => Ok(stderr)
+    None => Err("tool result did not contain declared stderr stream")
   }
 }
 

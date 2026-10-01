@@ -45,7 +45,7 @@ func TestToolExportsAnswerWithNoToolsRegistered(t *testing.T) {
 
 	invoked := toolExports.Invoke(
 		"absent", nil, types.TypedSchemaValue{},
-		toolExports.Stdin{}, toolExports.Stdout{},
+		toolExports.Stdin{}, toolExports.Stdout{}, toolExports.Stderr{},
 		common.MakePrincipalAnonymous(),
 	)
 	if invoked.Tag() != witTypes.ResultErr {

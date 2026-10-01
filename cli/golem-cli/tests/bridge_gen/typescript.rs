@@ -1513,8 +1513,10 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(source.contains("type ToolInputStream = base.ToolInputStream;"));
     assert!(source.contains("grep(") && source.contains("base.StartedToolInvocation<string[]>"));
     assert!(source.contains("replace(") && source.contains("base.StartedToolInvocation<void>"));
-    assert!(source.contains("this.runtime.start([], typedInput, stdin, true)"));
-    assert!(source.contains("this.runtime.start([\"replace\"], typedInput, undefined, true)"));
+    assert!(source.contains("this.runtime.start([], typedInput, stdin, true, false)"));
+    assert!(
+        source.contains("this.runtime.start([\"replace\"], typedInput, undefined, true, false)")
+    );
     assert!(source.contains("[...this.inherited"));
     assert!(source.contains("{ tag: 'record', fields }"));
     assert!(source.contains("const __golemSchemaGraphs = {"));
@@ -1546,7 +1548,7 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     );
     assert!(source.contains("base.typedSchemaValueConforms(expectedGraph, typed)"));
     assert!(source.contains(
-        "base.startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel())"
+        "base.startedToolInvocation(invocation.stdout, invocation.stderr, settledResult, () => invocation.cancel())"
     ));
     assert!(source.contains("invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream')"));
     assert!(source.contains("tool result did not contain a value"));
@@ -1561,7 +1563,7 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     std::fs::write(
         package_dir.join(format!("{package_name}.ts")),
         format!(
-            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<{{ result: string[]; stdout: Uint8Array }}> = started.collect();\nvoid stdout; void result; void collected;\n"
+            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> | undefined = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<base.CollectedToolInvocation<string[]>> = started.collect();\nvoid stdout; void result; void collected;\n"
         ),
     )
     .unwrap();

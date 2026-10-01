@@ -140,56 +140,56 @@ func MakeStreamWriteErrorConcurrentOperation() StreamWriteError {
 	return StreamWriteError{StreamWriteErrorConcurrentOperation, nil}
 }
 
-//go:wasmimport golem:tool/streams@0.1.0 [resource-drop]tool-stdout-writer
-func resourceDropToolStdoutWriter(handle int32)
+//go:wasmimport golem:tool/streams@0.1.0 [resource-drop]tool-output-writer
+func resourceDropToolOutputWriter(handle int32)
 
 // Host-owned writer supplied to a tool or middleware implementation. Exactly
 // one write, finish, or fail operation may be outstanding. The first terminal
 // is immutable; dropping an open writer selects `abandoned`.
-type ToolStdoutWriter struct {
+type ToolOutputWriter struct {
 	handle *witRuntime.Handle
 }
 
-func (self *ToolStdoutWriter) TakeHandle() int32 {
+func (self *ToolOutputWriter) TakeHandle() int32 {
 	return self.handle.Take()
 }
 
-func (self *ToolStdoutWriter) SetHandle(handle int32) {
+func (self *ToolOutputWriter) SetHandle(handle int32) {
 	self.handle.Set(handle)
 }
 
-func (self *ToolStdoutWriter) Handle() int32 {
+func (self *ToolOutputWriter) Handle() int32 {
 	return self.handle.Use()
 }
 
-func (self *ToolStdoutWriter) Drop() {
+func (self *ToolOutputWriter) Drop() {
 	handle := self.handle.TakeOrNil()
 	if handle != 0 {
-		resourceDropToolStdoutWriter(handle)
+		resourceDropToolOutputWriter(handle)
 	}
 }
 
-func ToolStdoutWriterFromOwnHandle(handleValue int32) *ToolStdoutWriter {
+func ToolOutputWriterFromOwnHandle(handleValue int32) *ToolOutputWriter {
 	handle := witRuntime.MakeHandle(handleValue)
-	value := &ToolStdoutWriter{handle}
+	value := &ToolOutputWriter{handle}
 	runtime.AddCleanup(value, func(_ int) {
 		handleValue := handle.TakeOrNil()
 		if handleValue != 0 {
-			resourceDropToolStdoutWriter(handleValue)
+			resourceDropToolOutputWriter(handleValue)
 		}
 	}, 0)
 	return value
 }
 
-func ToolStdoutWriterFromBorrowHandle(handleValue int32) *ToolStdoutWriter {
+func ToolOutputWriterFromBorrowHandle(handleValue int32) *ToolOutputWriter {
 	handle := witRuntime.MakeHandle(handleValue)
-	return &ToolStdoutWriter{handle}
+	return &ToolOutputWriter{handle}
 }
 
-//go:wasmimport golem:tool/streams@0.1.0 [async-lower][method]tool-stdout-writer.write
-func wasm_import_method_tool_stdout_writer_write(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr) int32
+//go:wasmimport golem:tool/streams@0.1.0 [async-lower][method]tool-output-writer.write
+func wasm_import_method_tool_output_writer_write(arg0 int32, arg1 uintptr, arg2 uint32, arg3 uintptr) int32
 
-func (self *ToolStdoutWriter) Write(bytes []uint8) witTypes.Result[witTypes.Unit, StreamWriteError] {
+func (self *ToolOutputWriter) Write(bytes []uint8) witTypes.Result[witTypes.Unit, StreamWriteError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
@@ -197,7 +197,7 @@ func (self *ToolStdoutWriter) Write(bytes []uint8) witTypes.Result[witTypes.Unit
 	data := unsafe.Pointer(unsafe.SliceData(bytes))
 	pinner.Pin(data)
 
-	witAsync.SubtaskWait(uint32(wasm_import_method_tool_stdout_writer_write((self).Handle(), uintptr(data), uint32(len(bytes)), returnArea)))
+	witAsync.SubtaskWait(uint32(wasm_import_method_tool_output_writer_write((self).Handle(), uintptr(data), uint32(len(bytes)), returnArea)))
 	var result witTypes.Result[witTypes.Unit, StreamWriteError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
@@ -266,16 +266,16 @@ func (self *ToolStdoutWriter) Write(bytes []uint8) witTypes.Result[witTypes.Unit
 
 }
 
-//go:wasmimport golem:tool/streams@0.1.0 [async-lower][method]tool-stdout-writer.finish
-func wasm_import_method_tool_stdout_writer_finish(arg0 int32, arg1 uintptr) int32
+//go:wasmimport golem:tool/streams@0.1.0 [async-lower][method]tool-output-writer.finish
+func wasm_import_method_tool_output_writer_finish(arg0 int32, arg1 uintptr) int32
 
-func (self *ToolStdoutWriter) Finish() witTypes.Result[witTypes.Unit, StreamWriteError] {
+func (self *ToolOutputWriter) Finish() witTypes.Result[witTypes.Unit, StreamWriteError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
 	returnArea := uintptr(witRuntime.Allocate(pinner, (6 * 4), 4))
 
-	witAsync.SubtaskWait(uint32(wasm_import_method_tool_stdout_writer_finish((self).Handle(), returnArea)))
+	witAsync.SubtaskWait(uint32(wasm_import_method_tool_output_writer_finish((self).Handle(), returnArea)))
 	var result witTypes.Result[witTypes.Unit, StreamWriteError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:
@@ -344,10 +344,10 @@ func (self *ToolStdoutWriter) Finish() witTypes.Result[witTypes.Unit, StreamWrit
 
 }
 
-//go:wasmimport golem:tool/streams@0.1.0 [async-lower][method]tool-stdout-writer.fail
-func wasm_import_method_tool_stdout_writer_fail(arg0 int32, arg1 int32, arg2 uintptr, arg3 uint32, arg4 uintptr) int32
+//go:wasmimport golem:tool/streams@0.1.0 [async-lower][method]tool-output-writer.fail
+func wasm_import_method_tool_output_writer_fail(arg0 int32, arg1 int32, arg2 uintptr, arg3 uint32, arg4 uintptr) int32
 
-func (self *ToolStdoutWriter) Fail(reason ByteStreamFailure) witTypes.Result[witTypes.Unit, StreamWriteError] {
+func (self *ToolOutputWriter) Fail(reason ByteStreamFailure) witTypes.Result[witTypes.Unit, StreamWriteError] {
 	pinner := &runtime.Pinner{}
 	defer pinner.Unpin()
 
@@ -387,7 +387,7 @@ func (self *ToolStdoutWriter) Fail(reason ByteStreamFailure) witTypes.Result[wit
 		panic("unreachable")
 	}
 
-	witAsync.SubtaskWait(uint32(wasm_import_method_tool_stdout_writer_fail((self).Handle(), variant, variant0, variant1, returnArea)))
+	witAsync.SubtaskWait(uint32(wasm_import_method_tool_output_writer_fail((self).Handle(), variant, variant0, variant1, returnArea)))
 	var result witTypes.Result[witTypes.Unit, StreamWriteError]
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(returnArea), 0))) {
 	case 0:

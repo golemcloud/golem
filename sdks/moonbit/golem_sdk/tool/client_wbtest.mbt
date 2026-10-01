@@ -1,30 +1,16 @@
 ///|
-test "collect preserves structured-result error precedence over stdout failure" {
+test "collect preserves every result and output outcome" {
   let result : Result[InvocationResult, ToolError[NoToolError]] = Err(
     ToolError::Rpc(RpcError::Cancelled),
   )
-  let selected = select_collected_terminals(
+  let collected = select_collected_terminals(
     result,
-    CollectedStdout::Failed(ToolStreamError::Failed("stdout failed")),
+    Err(ToolStreamError::Failed("stdout failed")),
+    Ok(Some(b"stderr")),
   )
-  assert_true(selected is Err(ToolError::Rpc(RpcError::Cancelled)))
-}
-
-///|
-test "collect reports stdout failure after structured success" {
-  try
-    select_collected_terminals(
-      (
-        Ok({ result: None, stdout: None, }) :
-        Result[InvocationResult, ToolError[NoToolError]]),
-      CollectedStdout::Failed(ToolStreamError::Failed("stdout failed")),
-    )
-  catch {
-    ToolStreamError::Failed("stdout failed") => ()
-    _ => fail("expected stdout failure")
-  } noraise {
-    _ => fail("expected stdout failure")
-  }
+  assert_true(collected.result is Err(ToolError::Rpc(RpcError::Cancelled)))
+  assert_true(collected.stdout is Err(ToolStreamError::Failed("stdout failed")))
+  assert_eq(collected.stderr, Ok(Some(b"stderr")))
 }
 
 ///|

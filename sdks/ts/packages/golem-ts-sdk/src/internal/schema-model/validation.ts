@@ -246,6 +246,7 @@ function checkType(
       case 'bool':
       case 'char':
       case 'string':
+      case 'uuid':
       case 'path':
       case 'url':
       case 'datetime':

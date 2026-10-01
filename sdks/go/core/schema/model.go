@@ -270,6 +270,9 @@ type DatetimeType struct{}
 // DurationType is a signed span, carried as nanoseconds.
 type DurationType struct{}
 
+// UUIDType is a 128-bit universally unique identifier.
+type UUIDType struct{}
+
 // QuantityType is a fixed-point measurement carrying its unit.
 type QuantityType struct{ Spec QuantitySpec }
 
@@ -376,6 +379,7 @@ func (PathType) isSchemaTypeBody()           {}
 func (UrlType) isSchemaTypeBody()            {}
 func (DatetimeType) isSchemaTypeBody()       {}
 func (DurationType) isSchemaTypeBody()       {}
+func (UUIDType) isSchemaTypeBody()           {}
 func (QuantityType) isSchemaTypeBody()       {}
 func (UnionType) isSchemaTypeBody()          {}
 func (SecretType) isSchemaTypeBody()         {}

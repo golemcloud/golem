@@ -182,7 +182,7 @@ fn foreign_leaf_types_round_trip() {
     round_trip(Bound::Excluded(-3i64));
     round_trip::<Bound<i64>>(Bound::Unbounded);
 
-    // UpdateMode (proto enum): case 0 and the non-zero case 1.
+    // UpdateMode (proto enum): all cases.
     round_trip(UpdateMode::Automatic);
     round_trip(UpdateMode::Manual);
 

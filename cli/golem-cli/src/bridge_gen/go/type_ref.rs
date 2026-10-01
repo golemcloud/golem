@@ -91,6 +91,7 @@ pub fn render<'a>(
             writer.import("time");
             "time.Duration".to_string()
         }
+        SchemaType::Uuid { .. } => format!("{}.UUID", values(writer)),
 
         // An explicit Option rather than *T. Both lower to option<T>, but a
         // pointer is ambiguous when it nests — Option[Option[T]] is clear where

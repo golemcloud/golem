@@ -44,6 +44,7 @@ Both misconfigurations described below stop it at startup:
 |---|---|---|
 | `GOLEM__PERSISTENCE__TYPE` | `Postgres` | `Etcd` |
 | Shard manager replicas | exactly one | any number; one is elected, the rest stand by |
+| Quota state | in Postgres | in etcd, with the shard state |
 
 The endpoint list must be bracketed — `'["http://etcd:2379"]'`. Unbracketed it is read as a single
 string and fails to deserialize. Only `http://` endpoints are accepted: TLS is not configurable and

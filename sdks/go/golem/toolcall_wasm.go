@@ -45,15 +45,15 @@ func startToolCallHost(
 		stdinArg = witTypes.Some(handle)
 		go pumpToolStdin(writer, closed, stdin)
 	}
-	stdoutArg := witTypes.None[*toolHost.ToolStdout]()
+	stdoutArg := witTypes.None[*toolHost.ToolOutput]()
 	var out *byteReader
 	if stdout {
-		handle, reader := toolHost.CreateStdout()
+		handle, reader := toolHost.CreateOutput()
 		stdoutArg = witTypes.Some(handle)
 		out = &byteReader{src: reader}
 	}
 
-	future := rpc.AsyncInvokeAndAwait(slices.Clone(path), input, stdinArg, stdoutArg)
+	future := rpc.AsyncInvokeAndAwait(slices.Clone(path), input, stdinArg, stdoutArg, witTypes.None[*toolHost.ToolOutput]())
 	return toolCall{
 		stdout: out,
 		wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {

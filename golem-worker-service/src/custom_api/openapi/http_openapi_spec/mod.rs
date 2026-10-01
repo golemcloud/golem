@@ -139,6 +139,12 @@ impl HttpApiOpenApiSpec {
                 .is_some_and(|call| call.stream_slots.is_some())
         });
         for (route, route_schema) in ordered {
+            if matches!(
+                route.behavior,
+                RichRouteBehaviour::OidcPkceAuthorize(_) | RichRouteBehaviour::OidcPkceToken(_)
+            ) {
+                continue;
+            }
             let Some(method) = route.route_match.method() else {
                 continue;
             };
@@ -158,6 +164,7 @@ impl HttpApiOpenApiSpec {
                     &mut component_schemas,
                     &mut security_schemes,
                     &mut paths,
+                    public_origin,
                 )?;
                 continue;
             }
@@ -169,7 +176,8 @@ impl HttpApiOpenApiSpec {
             {
                 operation.as_object_mut().unwrap().remove("operationId");
             }
-            operation["security"] = build_security(&route.security, &mut security_schemes)?;
+            operation["security"] =
+                build_security(&route.security, &mut security_schemes, public_origin)?;
 
             let mut path = render_full_path(&route.path);
             if matches!(
@@ -457,6 +465,7 @@ fn build_response_headers(model: &RouteResponseOpenApiSchema) -> Option<Value> {
 pub(super) fn build_security(
     security: &RichRouteSecurity,
     schemes: &mut Map<String, Value>,
+    public_origin: &str,
 ) -> Result<Value, String> {
     let (name, scopes, definition) = match security {
         RichRouteSecurity::None => return Ok(json!([])),
@@ -471,10 +480,33 @@ pub(super) fn build_security(
         ),
         RichRouteSecurity::SecurityScheme(inner) => {
             let details = &inner.security_scheme;
-            let issuer_url = details
-                .provider_type
-                .issuer_url()
-                .map_err(|_| "Invalid OpenID issuer")?;
+            let definition = match &details.login {
+                golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(_) => {
+                    let issuer_url = details
+                        .provider_type
+                        .issuer_url()
+                        .map_err(|_| "Invalid OpenID issuer")?;
+                    json!({
+                        "type":"openIdConnect",
+                        "openIdConnectUrl":format!("{}/.well-known/openid-configuration", issuer_url.url().as_str().trim_end_matches('/')),
+                        "description":format!("OpenID Connect cookie login for {}", details.name),
+                    })
+                }
+                golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(_) => {
+                    let origin = public_origin.trim_end_matches('/');
+                    json!({
+                        "type": "oauth2",
+                        "description": format!("Golem authorization code flow with PKCE (S256) for {}. Use the returned opaque bearer token in the Authorization header.", details.name),
+                        "flows": {
+                            "authorizationCode": {
+                                "authorizationUrl": format!("{origin}{}", golem_service_base::custom_api::pkce_authorization_path(&details.id)),
+                                "tokenUrl": format!("{origin}{}", golem_service_base::custom_api::pkce_token_path(&details.id)),
+                                "scopes": details.scopes.iter().map(|scope| (scope.to_string(), json!(""))).collect::<Map<String, Value>>()
+                            }
+                        }
+                    })
+                }
+            };
             (
                 details.name.0.clone(),
                 details
@@ -482,11 +514,7 @@ pub(super) fn build_security(
                     .iter()
                     .map(|scope| scope.to_string())
                     .collect::<Vec<_>>(),
-                json!({
-                    "type":"openIdConnect",
-                    "openIdConnectUrl":format!("{}/.well-known/openid-configuration", issuer_url.url().as_str().trim_end_matches('/')),
-                    "description":format!("OpenID Connect provider for {}", details.name),
-                }),
+                definition,
             )
         }
     };

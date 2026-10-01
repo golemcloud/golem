@@ -19,9 +19,10 @@ use crate::config::EtcdConfig;
 use crate::metrics;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::etcd_connection::connect_for_election;
-use crate::sharding::etcd_retry::{RETRY_MAX, RETRY_MIN, retry_retriable_until};
+use crate::sharding::etcd_retry::retry_retriable_until;
 use etcd_client::{
-    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper,
+    Client, Compare, CompareOp, LeaderKey, LeaseClient, LeaseKeepAliveStream, LeaseKeeper, TxnOp,
+    TxnOpResponse, TxnResponse,
 };
 use golem_common::retriable_error::IsRetriableError;
 use std::collections::VecDeque;
@@ -95,6 +96,26 @@ impl LeaderFence {
     /// The compare that makes leadership a precondition of a transaction.
     pub fn compare(&self) -> Compare {
         Compare::create_revision(self.key.clone(), CompareOp::Equal, self.create_revision)
+    }
+
+    /// The operation a fenced transaction's else-branch starts with, so that a refusal can be
+    /// attributed by [`Self::held_after_refusal`].
+    pub fn read_back(&self) -> TxnOp {
+        TxnOp::get(self.key.clone(), None)
+    }
+
+    /// Whether a transaction carrying [`Self::compare`] was refused while this fence still held,
+    /// judged from its else-branch, which must start with [`Self::read_back`]. If it did, some
+    /// other precondition failed. Leadership that cannot be confirmed - a missing or recreated
+    /// leader key, or no else-response at all - is reported as not held, which is the safe answer.
+    pub fn held_after_refusal(&self, response: &TxnResponse) -> bool {
+        matches!(
+            response.op_responses().first(),
+            Some(TxnOpResponse::Get(get))
+                if get.kvs().first().is_some_and(|kv| {
+                    kv.create_revision() == self.create_revision
+                })
+        )
     }
 }
 
@@ -392,6 +413,8 @@ pub struct LeaderElection {
     election_name: String,
     lease_ttl: Duration,
     request_timeout: Duration,
+    retry_min_delay: Duration,
+    retry_max_delay: Duration,
     standby_log_interval: Duration,
     identity: String,
     shutdown: CancellationToken,
@@ -414,6 +437,8 @@ impl LeaderElection {
             election_name: election_name.into(),
             lease_ttl: config.leader_lease_ttl,
             request_timeout: config.request_timeout,
+            retry_min_delay: config.retry_min_delay,
+            retry_max_delay: config.retry_max_delay,
             standby_log_interval: STANDBY_LOG_INTERVAL,
             identity: identity(),
             shutdown: CancellationToken::new(),
@@ -465,7 +490,7 @@ impl LeaderElection {
     }
 
     async fn campaign_loop(&self) -> Result<Elected, ShardManagerError> {
-        let mut backoff = RETRY_MIN;
+        let mut backoff = self.retry_min_delay;
 
         loop {
             if self.shutdown.is_cancelled() {
@@ -483,7 +508,7 @@ impl LeaderElection {
                             return Err(ShardManagerError::ShutdownRequested);
                         }
                     }
-                    backoff = std::cmp::min(backoff * 2, RETRY_MAX);
+                    backoff = std::cmp::min(backoff.saturating_mul(2), self.retry_max_delay);
                 }
                 Err(err) => return Err(err),
             }
@@ -626,7 +651,11 @@ impl LeaderElection {
         lease_id: i64,
         budget: Duration,
     ) -> Result<(), ShardManagerError> {
-        let deadline = Instant::now() + budget;
+        let deadline = Instant::now().checked_add(budget).ok_or_else(|| {
+            ShardManagerError::Internal(
+                "Leader fence confirmation budget exceeds the clock range".to_string(),
+            )
+        })?;
         let response = retry_retriable_until(
             "confirming the won leader key",
             || {
@@ -642,6 +671,8 @@ impl LeaderElection {
                 }
             },
             deadline,
+            self.retry_min_delay,
+            self.retry_max_delay,
         )
         .await?;
 

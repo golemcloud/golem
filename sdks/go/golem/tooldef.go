@@ -1154,7 +1154,13 @@ func passThroughToolError(err error) types.ToolError {
 // accepts exactly one terminal and treats a dropped writer as abandoned, so
 // choosing one here keeps a failing handler from looking like an abandoned
 // transfer.
-func runWithStdout(label string, stdout *ToolStdout, run func() (reflect.Value, error)) (out reflect.Value, err error) {
+func runWithStdout(label string, stdout *ToolStdout, run func() (reflect.Value, error)) (reflect.Value, error) {
+	return runWithOutputs(label, []*ToolStdout{stdout}, run)
+}
+
+// runWithOutputs runs a handler, finishing every output stream when it
+// succeeds and failing them when it fails.
+func runWithOutputs(label string, outputs []*ToolStdout, run func() (reflect.Value, error)) (out reflect.Value, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if re, ok := r.(*RaisedToolError); ok {
@@ -1163,12 +1169,15 @@ func runWithStdout(label string, stdout *ToolStdout, run func() (reflect.Value, 
 				err = fmt.Errorf("command %s panicked: %s", label, panicMessage(r))
 			}
 		}
-		if err != nil {
-			_ = stdout.Fail(StreamFailed(err.Error()))
-			return
-		}
-		if ferr := stdout.finish(); ferr != nil {
-			err = ferr
+		for _, o := range outputs {
+			if o == nil {
+				continue
+			}
+			if err != nil {
+				_ = o.Fail(StreamFailed(err.Error()))
+			} else if ferr := o.finish(); ferr != nil {
+				err = ferr
+			}
 		}
 	}()
 	out, err = run()

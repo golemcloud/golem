@@ -54,9 +54,10 @@ let result = command
 
 `invoke_value` accepts a schema-native value. Both forms validate inputs before opening
 RPC and validate declared outputs when the call completes. `start_value` returns a pending
-invocation with separate stdout, result, collection, and cancellation capabilities. Use
-it for a command with required stdout; `collect` drains stdout while awaiting the result.
-`trigger_value` is available for commands without required caller-readable stdout.
+invocation with separate stdout, stderr, result, collection, and cancellation capabilities. Use
+it for a command with either required output; `collect` drains both outputs concurrently while
+awaiting the result. `trigger_value` is available only for commands without required
+caller-readable outputs.
 
 `DynamicToolClient` accepts a caller-packed `TypedSchemaValue` and command path when no
 descriptor is available. It offers awaited, pending, and trigger calls, but has no

@@ -403,6 +403,10 @@ fn round_trip_rich_constructors() {
         SchemaType::url(UrlRestrictions::default()),
     );
     round_trip_all(
+        SchemaValue::Uuid(uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").unwrap()),
+        SchemaType::uuid(),
+    );
+    round_trip_all(
         SchemaValue::Datetime {
             value: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
         },
@@ -424,6 +428,29 @@ fn round_trip_rich_constructors() {
         }),
         quantity_kg(),
     );
+}
+
+#[test]
+fn uuid_display_is_native_and_rejects_old_record_encoding() {
+    let ty = SchemaType::uuid();
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value =
+        SchemaValue::Uuid(uuid::Uuid::parse_str("123e4567-e89b-12d3-a456-426614174000").unwrap());
+
+    for language in [
+        SourceLanguage::Rust,
+        SourceLanguage::TypeScript,
+        SourceLanguage::Scala,
+        SourceLanguage::MoonBit,
+    ] {
+        let rendered = render_schema_value(&graph, &ty, &value, &language);
+        assert_eq!(rendered, "Uuid(\"123e4567-e89b-12d3-a456-426614174000\")");
+        assert_eq!(
+            parse_value_for_language(&rendered, &graph, &ty, &language).unwrap(),
+            value
+        );
+        assert!(parse_value_for_language("{ high: 1, low: 2 }", &graph, &ty, &language).is_err());
+    }
 }
 
 fn quantity_kg() -> SchemaType {

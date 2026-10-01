@@ -890,6 +890,7 @@ fn echo_tool() -> Tool {
                     constraints: vec![],
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: Some(ToolResultSpec {
                         type_: SchemaType::string(),
                         doc: doc("result"),

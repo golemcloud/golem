@@ -303,7 +303,7 @@ describe("capability-sensitive component exports", () => {
       v.binary(new Uint8Array([9, 255])),
       v.flags([true, false, true]),
       v.duration(1500000001n),
-      v.variant(2, v.record([v.record([v.record([v.u64(17n), v.u64(31n)])])])),
+      v.variant(2, v.record([v.record([v.uuid({ highBits: 17n, lowBits: 31n })])])),
     ])
     expect(
       schemaValueFromWit(
@@ -469,6 +469,7 @@ describe("capability-sensitive component exports", () => {
           { graph: codec.schemaGraph, value },
           undefined,
           undefined,
+          undefined,
           { tag: "anonymous" },
         )
         expect(schemaValueFromWit(result.result.value)).toEqual(v.f64(38))
@@ -482,6 +483,7 @@ describe("capability-sensitive component exports", () => {
             { graph: asymmetric.schemaGraph, value },
             undefined,
             undefined,
+            undefined,
             { tag: "anonymous" },
           ),
         ).rejects.toMatchObject({ tag: "invalid-input" })
@@ -490,6 +492,7 @@ describe("capability-sensitive component exports", () => {
             "double",
             [],
             { graph: { typeNodes: [], defs: [], root: 99 }, value },
+            undefined,
             undefined,
             undefined,
             { tag: "anonymous" },
@@ -503,6 +506,7 @@ describe("capability-sensitive component exports", () => {
               graph: { typeNodes: [], defs: [], root: 99 },
               value: { valueNodes: [{ tag: "record-value", val: [] }], root: 0 },
             },
+            undefined,
             undefined,
             undefined,
             { tag: "anonymous" },
@@ -531,6 +535,7 @@ describe("capability-sensitive component exports", () => {
           input,
           ["nested"],
           input,
+          undefined,
           undefined,
           undefined,
           { tag: "anonymous" },

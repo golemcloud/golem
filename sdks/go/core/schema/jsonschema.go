@@ -417,6 +417,9 @@ func (r Ref) renderBody(body SchemaTypeBody) (obj, error) {
 			"title":                "Duration in nanoseconds",
 		}, nil
 
+	case UUIDType:
+		return obj{"type": "string", "format": "uuid"}, nil
+
 	case QuantityType:
 		return quantitySchema(b.Spec), nil
 

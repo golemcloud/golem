@@ -183,6 +183,30 @@ struct Container<Inner> {
 #[schema(transparent)]
 struct UserId(String);
 
+#[derive(Debug, PartialEq, IntoSchema, FromSchema, Clone)]
+#[schema(transparent)]
+struct LobbyId(golem_schema::model::Uuid);
+
+#[test]
+fn uuid_and_transparent_uuid_newtype_use_first_class_schema_nodes() {
+    let uuid =
+        golem_schema::model::Uuid::parse_str("dd00721b-3329-4621-a01d-c71f02cd78c6").unwrap();
+    let graph = try_into_schema_graph::<LobbyId>().unwrap();
+
+    assert!(matches!(
+        graph.root,
+        golem_schema::schema::SchemaType::Uuid { .. }
+    ));
+    assert_eq!(
+        LobbyId(uuid).to_value(),
+        golem_schema::schema::SchemaValue::Uuid(uuid)
+    );
+    assert_eq!(
+        LobbyId::from_value(&golem_schema::schema::SchemaValue::Uuid(uuid)).unwrap(),
+        LobbyId(uuid)
+    );
+}
+
 fn container_strategy() -> impl Strategy<Value = Container<UserId>> {
     proptest::collection::vec("[a-z]{1,4}", 0..6).prop_map(|ids| Container {
         items: ids.into_iter().map(UserId).collect(),

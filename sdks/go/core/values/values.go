@@ -30,6 +30,7 @@
 package values
 
 import (
+	"encoding/hex"
 	"fmt"
 	"reflect"
 )
@@ -460,4 +461,26 @@ func QuantitySetParts(ptr any, mantissa int64, scale int32, unit string) bool {
 	}
 	q.quantitySetValue(mantissa, scale, unit)
 	return true
+}
+
+// UUID is a 128-bit universally unique identifier in network byte order,
+// lowering to the WIT uuid type.
+type UUID [16]byte
+
+// String renders the canonical lowercase 8-4-4-4-12 form.
+func (u UUID) String() string {
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
+
+// ParseUUID reads the 8-4-4-4-12 hexadecimal form, in either case.
+func ParseUUID(s string) (UUID, error) {
+	var u UUID
+	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return u, fmt.Errorf("%q is not a hyphenated UUID", s)
+	}
+	digits := s[0:8] + s[9:13] + s[14:18] + s[19:23] + s[24:36]
+	if _, err := hex.Decode(u[:], []byte(digits)); err != nil {
+		return UUID{}, fmt.Errorf("%q is not a hyphenated UUID", s)
+	}
+	return u, nil
 }

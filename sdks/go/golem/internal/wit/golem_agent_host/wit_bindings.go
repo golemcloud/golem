@@ -1653,13 +1653,17 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 			case 28:
 
-				variant162 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+				variant162 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 			case 29:
 
-				variant162 = golem_core_types.MakeSchemaTypeBodyDurationType()
+				variant162 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 			case 30:
+
+				variant162 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+			case 31:
 				value127 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				result129 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -1696,7 +1700,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value127, AllowedSuffixes: result129, Min: option131, Max: option133})
 
-			case 31:
+			case 32:
 				result155 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -1827,7 +1831,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result155})
 
-			case 32:
+			case 33:
 				var option157 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
@@ -1843,7 +1847,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 				variant162 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option157})
 
-			case 33:
+			case 34:
 				var option159 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -1859,11 +1863,11 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option159})
 
-			case 34:
+			case 35:
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-			case 35:
+			case 36:
 				var option160 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -1878,7 +1882,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyFutureType(option160)
 
-			case 36:
+			case 37:
 				var option161 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -3834,13 +3838,17 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 				case 28:
 
-					variant420 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+					variant420 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 				case 29:
 
-					variant420 = golem_core_types.MakeSchemaTypeBodyDurationType()
+					variant420 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 				case 30:
+
+					variant420 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+				case 31:
 					value385 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					result387 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -3877,7 +3885,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value385, AllowedSuffixes: result387, Min: option389, Max: option391})
 
-				case 31:
+				case 32:
 					result413 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -4008,7 +4016,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result413})
 
-				case 32:
+				case 33:
 					var option415 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 					case 0:
@@ -4024,7 +4032,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 					variant420 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option415})
 
-				case 33:
+				case 34:
 					var option417 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -4040,11 +4048,11 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option417})
 
-				case 34:
+				case 35:
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-				case 35:
+				case 36:
 					var option418 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -4059,7 +4067,7 @@ func GetAllAgentTypes() []golem_agent_common.RegisteredAgentType {
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyFutureType(option418)
 
-				case 36:
+				case 37:
 					var option419 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -6254,13 +6262,17 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 			case 28:
 
-				variant162 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+				variant162 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 			case 29:
 
-				variant162 = golem_core_types.MakeSchemaTypeBodyDurationType()
+				variant162 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 			case 30:
+
+				variant162 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+			case 31:
 				value127 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				result129 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -6297,7 +6309,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value127, AllowedSuffixes: result129, Min: option131, Max: option133})
 
-			case 31:
+			case 32:
 				result155 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -6428,7 +6440,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result155})
 
-			case 32:
+			case 33:
 				var option157 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
@@ -6444,7 +6456,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 				variant162 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option157})
 
-			case 33:
+			case 34:
 				var option159 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -6460,11 +6472,11 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option159})
 
-			case 34:
+			case 35:
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-			case 35:
+			case 36:
 				var option160 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -6479,7 +6491,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyFutureType(option160)
 
-			case 36:
+			case 37:
 				var option161 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -8435,13 +8447,17 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 				case 28:
 
-					variant420 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+					variant420 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 				case 29:
 
-					variant420 = golem_core_types.MakeSchemaTypeBodyDurationType()
+					variant420 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 				case 30:
+
+					variant420 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+				case 31:
 					value385 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					result387 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -8478,7 +8494,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value385, AllowedSuffixes: result387, Min: option389, Max: option391})
 
-				case 31:
+				case 32:
 					result413 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -8609,7 +8625,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result413})
 
-				case 32:
+				case 33:
 					var option415 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 					case 0:
@@ -8625,7 +8641,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 					variant420 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option415})
 
-				case 33:
+				case 34:
 					var option417 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -8641,11 +8657,11 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option417})
 
-				case 34:
+				case 35:
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-				case 35:
+				case 36:
 					var option418 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -8660,7 +8676,7 @@ func GetAgentType(agentTypeName string) witTypes.Option[golem_agent_common.Regis
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyFutureType(option418)
 
-				case 36:
+				case 37:
 					var option419 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -10856,13 +10872,17 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 			case 28:
 
-				variant162 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+				variant162 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 			case 29:
 
-				variant162 = golem_core_types.MakeSchemaTypeBodyDurationType()
+				variant162 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 			case 30:
+
+				variant162 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+			case 31:
 				value127 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				result129 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -10899,7 +10919,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value127, AllowedSuffixes: result129, Min: option131, Max: option133})
 
-			case 31:
+			case 32:
 				result155 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -11030,7 +11050,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result155})
 
-			case 32:
+			case 33:
 				var option157 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
@@ -11046,7 +11066,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 				variant162 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option157})
 
-			case 33:
+			case 34:
 				var option159 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -11062,11 +11082,11 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option159})
 
-			case 34:
+			case 35:
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-			case 35:
+			case 36:
 				var option160 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -11081,7 +11101,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 				variant162 = golem_core_types.MakeSchemaTypeBodyFutureType(option160)
 
-			case 36:
+			case 37:
 				var option161 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -13037,13 +13057,17 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 				case 28:
 
-					variant420 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+					variant420 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 				case 29:
 
-					variant420 = golem_core_types.MakeSchemaTypeBodyDurationType()
+					variant420 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 				case 30:
+
+					variant420 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+				case 31:
 					value385 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					result387 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -13080,7 +13104,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value385, AllowedSuffixes: result387, Min: option389, Max: option391})
 
-				case 31:
+				case 32:
 					result413 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -13211,7 +13235,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result413})
 
-				case 32:
+				case 33:
 					var option415 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 					case 0:
@@ -13227,7 +13251,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 					variant420 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option415})
 
-				case 33:
+				case 34:
 					var option417 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -13243,11 +13267,11 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option417})
 
-				case 34:
+				case 35:
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-				case 35:
+				case 36:
 					var option418 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -13262,7 +13286,7 @@ func GetAgentTypeByAgentId(agentId string) witTypes.Option[golem_agent_common.Re
 
 					variant420 = golem_core_types.MakeSchemaTypeBodyFutureType(option418)
 
-				case 36:
+				case 37:
 					var option419 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -14487,20 +14511,26 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -14510,7 +14540,7 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -14519,22 +14549,22 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -15878,13 +15908,17 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 				case 28:
 
-					variant196 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+					variant196 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 				case 29:
 
-					variant196 = golem_core_types.MakeSchemaTypeBodyDurationType()
+					variant196 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 				case 30:
+
+					variant196 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+				case 31:
 					value161 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					result163 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -15921,7 +15955,7 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 					variant196 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value161, AllowedSuffixes: result163, Min: option165, Max: option167})
 
-				case 31:
+				case 32:
 					result189 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -16052,7 +16086,7 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 					variant196 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result189})
 
-				case 32:
+				case 33:
 					var option191 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 					case 0:
@@ -16068,7 +16102,7 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 					variant196 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option191})
 
-				case 33:
+				case 34:
 					var option193 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -16084,11 +16118,11 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 					variant196 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option193})
 
-				case 34:
+				case 35:
 
 					variant196 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-				case 35:
+				case 36:
 					var option194 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -16103,7 +16137,7 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 					variant196 = golem_core_types.MakeSchemaTypeBodyFutureType(option194)
 
-				case 36:
+				case 37:
 					var option195 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -16455,35 +16489,39 @@ func MakeAgentId(agentTypeName string, input golem_core_types.SchemaValueTree, p
 
 				case 27:
 
-					variant235 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+					variant235 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 28:
 
-					variant235 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+					variant235 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 29:
+
+					variant235 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+				case 30:
 					value233 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 					variant235 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value233})
 
-				case 30:
+				case 31:
 					value234 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 					variant235 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value234, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-				case 31:
+				case 32:
 
 					variant235 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 32:
+				case 33:
 
 					variant235 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 33:
+				case 34:
 
 					variant235 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 34:
+				case 35:
 
 					variant235 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -17810,13 +17848,17 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 			case 28:
 
-				variant160 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+				variant160 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 			case 29:
 
-				variant160 = golem_core_types.MakeSchemaTypeBodyDurationType()
+				variant160 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 			case 30:
+
+				variant160 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+			case 31:
 				value125 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				result127 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -17853,7 +17895,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 				variant160 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value125, AllowedSuffixes: result127, Min: option129, Max: option131})
 
-			case 31:
+			case 32:
 				result153 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 				for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 					base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -17984,7 +18026,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 				variant160 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result153})
 
-			case 32:
+			case 33:
 				var option155 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 				case 0:
@@ -18000,7 +18042,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 				variant160 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option155})
 
-			case 33:
+			case 34:
 				var option157 witTypes.Option[string]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -18016,11 +18058,11 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 				variant160 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option157})
 
-			case 34:
+			case 35:
 
 				variant160 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-			case 35:
+			case 36:
 				var option158 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -18035,7 +18077,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 				variant160 = golem_core_types.MakeSchemaTypeBodyFutureType(option158)
 
-			case 36:
+			case 37:
 				var option159 witTypes.Option[int32]
 				switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 				case 0:
@@ -18387,35 +18429,39 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 			case 27:
 
-				variant199 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+				variant199 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 			case 28:
 
-				variant199 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+				variant199 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 			case 29:
+
+				variant199 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+			case 30:
 				value197 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 				variant199 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value197})
 
-			case 30:
+			case 31:
 				value198 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 				variant199 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value198, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-			case 31:
+			case 32:
 
 				variant199 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 32:
+			case 33:
 
 				variant199 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 33:
+			case 34:
 
 				variant199 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 34:
+			case 35:
 
 				variant199 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -19749,13 +19795,17 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 				case 28:
 
-					variant369 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+					variant369 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 				case 29:
 
-					variant369 = golem_core_types.MakeSchemaTypeBodyDurationType()
+					variant369 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 				case 30:
+
+					variant369 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+				case 31:
 					value334 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					result336 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -19792,7 +19842,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 					variant369 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value334, AllowedSuffixes: result336, Min: option338, Max: option340})
 
-				case 31:
+				case 32:
 					result362 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 					for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 						base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -19923,7 +19973,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 					variant369 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result362})
 
-				case 32:
+				case 33:
 					var option364 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 					case 0:
@@ -19939,7 +19989,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 					variant369 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option364})
 
-				case 33:
+				case 34:
 					var option366 witTypes.Option[string]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -19955,11 +20005,11 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 					variant369 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option366})
 
-				case 34:
+				case 35:
 
 					variant369 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-				case 35:
+				case 36:
 					var option367 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -19974,7 +20024,7 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 					variant369 = golem_core_types.MakeSchemaTypeBodyFutureType(option367)
 
-				case 36:
+				case 37:
 					var option368 witTypes.Option[int32]
 					switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 					case 0:
@@ -20326,35 +20376,39 @@ func ParseAgentId(agentId string) witTypes.Result[witTypes.Tuple3[string, golem_
 
 				case 27:
 
-					variant408 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+					variant408 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 28:
 
-					variant408 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+					variant408 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 29:
+
+					variant408 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+				case 30:
 					value406 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 					variant408 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value406})
 
-				case 30:
+				case 31:
 					value407 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 					variant408 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value407, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-				case 31:
+				case 32:
 
 					variant408 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 32:
+				case 33:
 
 					variant408 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 33:
+				case 34:
 
 					variant408 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 34:
+				case 35:
 
 					variant408 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -20756,20 +20810,26 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -20779,7 +20839,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -20788,22 +20848,22 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -22422,17 +22482,21 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyDatetimeType:
+			case golem_core_types.SchemaTypeBodyUuidType:
 
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-			case golem_core_types.SchemaTypeBodyDurationType:
+			case golem_core_types.SchemaTypeBodyDatetimeType:
 
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+			case golem_core_types.SchemaTypeBodyDurationType:
+
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 			case golem_core_types.SchemaTypeBodyQuantityType:
 				payload := (element).Body.QuantityType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 				utf8110 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 				pinner.Pin(utf8110)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -22490,7 +22554,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaTypeBodyUnionType:
 				payload := (element).Body.UnionType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 				slice136 := (payload).Branches
 				length138 := uint32(len(slice136))
 				result137 := witRuntime.Allocate(pinner, uintptr(length138*(23*4)), 4)
@@ -22675,7 +22739,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaTypeBodySecretType:
 				payload := (element).Body.SecretType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 				switch (payload).Category.Tag() {
@@ -22696,7 +22760,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaTypeBodyQuotaTokenType:
 				payload := (element).Body.QuotaTokenType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 				switch (payload).ResourceName.Tag() {
 				case witTypes.OptionNone:
@@ -22716,7 +22780,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaTypeBodyPermissionCardType:
 				payload := (element).Body.PermissionCardType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 				var result141 int32
 				if (payload).Polymorphic {
 					result141 = 1
@@ -22727,7 +22791,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaTypeBodyFutureType:
 				payload := (element).Body.FutureType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -22744,7 +22808,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaTypeBodyStreamType:
 				payload := (element).Body.StreamType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -23221,20 +23285,26 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8187)))
 
+			case golem_core_types.SchemaValueNodeUuidValue:
+				payload := element.UuidValue()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 			case golem_core_types.SchemaValueNodeDatetimeValue:
 				payload := element.DatetimeValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 			case golem_core_types.SchemaValueNodeDurationValue:
 				payload := element.DurationValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 			case golem_core_types.SchemaValueNodeQuantityValueNode:
 				payload := element.QuantityValueNode()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 				utf8188 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -23244,7 +23314,7 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaValueNodeUnionValue:
 				payload := element.UnionValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 				utf8189 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 				pinner.Pin(utf8189)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -23253,22 +23323,22 @@ func MakeWasmRpc(agentTypeName string, constructor golem_core_types.SchemaValueT
 
 			case golem_core_types.SchemaValueNodeSecretValue:
 				payload := element.SecretValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 				payload := element.QuotaTokenHandle()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			case golem_core_types.SchemaValueNodePermissionCardHandle:
 				payload := element.PermissionCardHandle()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			case golem_core_types.SchemaValueNodeStreamValue:
 				payload := element.StreamValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			default:
@@ -23623,20 +23693,26 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -23646,7 +23722,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -23655,22 +23731,22 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -25289,17 +25365,21 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 					panic("unreachable")
 				}
 
-			case golem_core_types.SchemaTypeBodyDatetimeType:
+			case golem_core_types.SchemaTypeBodyUuidType:
 
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-			case golem_core_types.SchemaTypeBodyDurationType:
+			case golem_core_types.SchemaTypeBodyDatetimeType:
 
 				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+			case golem_core_types.SchemaTypeBodyDurationType:
+
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 			case golem_core_types.SchemaTypeBodyQuantityType:
 				payload := (element).Body.QuantityType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 				utf8110 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 				pinner.Pin(utf8110)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -25357,7 +25437,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaTypeBodyUnionType:
 				payload := (element).Body.UnionType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 				slice136 := (payload).Branches
 				length138 := uint32(len(slice136))
 				result137 := witRuntime.Allocate(pinner, uintptr(length138*(23*4)), 4)
@@ -25542,7 +25622,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaTypeBodySecretType:
 				payload := (element).Body.SecretType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 				switch (payload).Category.Tag() {
@@ -25563,7 +25643,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaTypeBodyQuotaTokenType:
 				payload := (element).Body.QuotaTokenType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 				switch (payload).ResourceName.Tag() {
 				case witTypes.OptionNone:
@@ -25583,7 +25663,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaTypeBodyPermissionCardType:
 				payload := (element).Body.PermissionCardType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 				var result141 int32
 				if (payload).Polymorphic {
 					result141 = 1
@@ -25594,7 +25674,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaTypeBodyFutureType:
 				payload := (element).Body.FutureType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -25611,7 +25691,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaTypeBodyStreamType:
 				payload := (element).Body.StreamType()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 				switch payload.Tag() {
 				case witTypes.OptionNone:
@@ -26088,20 +26168,26 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf8187)))
 
+			case golem_core_types.SchemaValueNodeUuidValue:
+				payload := element.UuidValue()
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+				*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 			case golem_core_types.SchemaValueNodeDatetimeValue:
 				payload := element.DatetimeValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 			case golem_core_types.SchemaValueNodeDurationValue:
 				payload := element.DurationValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 			case golem_core_types.SchemaValueNodeQuantityValueNode:
 				payload := element.QuantityValueNode()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 				*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 				utf8188 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -26111,7 +26197,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaValueNodeUnionValue:
 				payload := element.UnionValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 				utf8189 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 				pinner.Pin(utf8189)
 				*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -26120,22 +26206,22 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 			case golem_core_types.SchemaValueNodeSecretValue:
 				payload := element.SecretValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 				payload := element.QuotaTokenHandle()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			case golem_core_types.SchemaValueNodePermissionCardHandle:
 				payload := element.PermissionCardHandle()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			case golem_core_types.SchemaValueNodeStreamValue:
 				payload := element.StreamValue()
-				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+				*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 				*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 			default:
@@ -27489,13 +27575,17 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 					case 28:
 
-						variant365 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant365 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant365 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant365 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant365 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value330 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result332 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -27532,7 +27622,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 						variant365 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value330, AllowedSuffixes: result332, Min: option334, Max: option336})
 
-					case 31:
+					case 32:
 						result358 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -27663,7 +27753,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 						variant365 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result358})
 
-					case 32:
+					case 33:
 						var option360 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -27679,7 +27769,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 						variant365 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option360})
 
-					case 33:
+					case 34:
 						var option362 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -27695,11 +27785,11 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 						variant365 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option362})
 
-					case 34:
+					case 35:
 
 						variant365 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option363 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -27714,7 +27804,7 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 						variant365 = golem_core_types.MakeSchemaTypeBodyFutureType(option363)
 
-					case 36:
+					case 37:
 						var option364 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -28066,35 +28156,39 @@ func WasmRpcCreate(agentTypeName string, constructor golem_core_types.SchemaValu
 
 					case 27:
 
-						variant404 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant404 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant404 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant404 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant404 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value402 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant404 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value402})
 
-					case 30:
+					case 31:
 						value403 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant404 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value403, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant404 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant404 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant404 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant404 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -28461,20 +28555,26 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -28484,7 +28584,7 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -28493,22 +28593,22 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -28781,35 +28881,39 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 				case 27:
 
-					variant51 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+					variant51 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 28:
 
-					variant51 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+					variant51 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 29:
+
+					variant51 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+				case 30:
 					value49 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 					variant51 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value49})
 
-				case 30:
+				case 31:
 					value50 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 					variant51 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value50, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-				case 31:
+				case 32:
 
 					variant51 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 32:
+				case 33:
 
 					variant51 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 33:
+				case 34:
 
 					variant51 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 34:
+				case 35:
 
 					variant51 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -30159,13 +30263,17 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 					case 28:
 
-						variant225 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant225 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant225 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant225 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant225 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value190 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result192 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -30202,7 +30310,7 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 						variant225 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value190, AllowedSuffixes: result192, Min: option194, Max: option196})
 
-					case 31:
+					case 32:
 						result218 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -30333,7 +30441,7 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 						variant225 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result218})
 
-					case 32:
+					case 33:
 						var option220 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -30349,7 +30457,7 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 						variant225 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option220})
 
-					case 33:
+					case 34:
 						var option222 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -30365,11 +30473,11 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 						variant225 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option222})
 
-					case 34:
+					case 35:
 
 						variant225 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option223 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -30384,7 +30492,7 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 						variant225 = golem_core_types.MakeSchemaTypeBodyFutureType(option223)
 
-					case 36:
+					case 37:
 						var option224 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -30736,35 +30844,39 @@ func (self *WasmRpc) InvokeAndAwait(methodName string, input golem_core_types.Sc
 
 					case 27:
 
-						variant264 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant264 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant264 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant264 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant264 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value262 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant264 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value262})
 
-					case 30:
+					case 31:
 						value263 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant264 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value263, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant264 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant264 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant264 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant264 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -31131,20 +31243,26 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -31154,7 +31272,7 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -31163,22 +31281,22 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -32543,13 +32661,17 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 					case 28:
 
-						variant200 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant200 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant200 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant200 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant200 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value165 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result167 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -32586,7 +32708,7 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value165, AllowedSuffixes: result167, Min: option169, Max: option171})
 
-					case 31:
+					case 32:
 						result193 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -32717,7 +32839,7 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result193})
 
-					case 32:
+					case 33:
 						var option195 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -32733,7 +32855,7 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 						variant200 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option195})
 
-					case 33:
+					case 34:
 						var option197 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -32749,11 +32871,11 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option197})
 
-					case 34:
+					case 35:
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option198 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -32768,7 +32890,7 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyFutureType(option198)
 
-					case 36:
+					case 37:
 						var option199 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -33120,35 +33242,39 @@ func (self *WasmRpc) Invoke(methodName string, input golem_core_types.SchemaValu
 
 					case 27:
 
-						variant239 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant239 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant239 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant239 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant239 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value237 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant239 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value237})
 
-					case 30:
+					case 31:
 						value238 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant239 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value238, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant239 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -33515,20 +33641,26 @@ func (self *WasmRpc) AsyncInvokeAndAwait(methodName string, input golem_core_typ
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -33538,7 +33670,7 @@ func (self *WasmRpc) AsyncInvokeAndAwait(methodName string, input golem_core_typ
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -33547,22 +33679,22 @@ func (self *WasmRpc) AsyncInvokeAndAwait(methodName string, input golem_core_typ
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -33929,20 +34061,26 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -33952,7 +34090,7 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -33961,22 +34099,22 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -35341,13 +35479,17 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 					case 28:
 
-						variant200 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant200 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant200 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant200 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant200 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value165 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result167 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -35384,7 +35526,7 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value165, AllowedSuffixes: result167, Min: option169, Max: option171})
 
-					case 31:
+					case 32:
 						result193 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -35515,7 +35657,7 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result193})
 
-					case 32:
+					case 33:
 						var option195 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -35531,7 +35673,7 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 						variant200 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option195})
 
-					case 33:
+					case 34:
 						var option197 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -35547,11 +35689,11 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option197})
 
-					case 34:
+					case 35:
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option198 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -35566,7 +35708,7 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyFutureType(option198)
 
-					case 36:
+					case 37:
 						var option199 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -35918,35 +36060,39 @@ func (self *WasmRpc) ScheduleInvocation(scheduledTime wasi_clocks_0_3_0_system_c
 
 					case 27:
 
-						variant239 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant239 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant239 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant239 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant239 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value237 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant239 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value237})
 
-					case 30:
+					case 31:
 						value238 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant239 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value238, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant239 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -36313,20 +36459,26 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len(payload)))
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)) = uint32(uintptr(uintptr(utf822)))
 
+		case golem_core_types.SchemaValueNodeUuidValue:
+			payload := element.UuidValue()
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = int64((payload).HighBits)
+			*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)) = int64((payload).LowBits)
+
 		case golem_core_types.SchemaValueNodeDatetimeValue:
 			payload := element.DatetimeValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(27))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Seconds
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = int32((payload).Nanoseconds)
 
 		case golem_core_types.SchemaValueNodeDurationValue:
 			payload := element.DurationValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Nanoseconds
 
 		case golem_core_types.SchemaValueNodeQuantityValueNode:
 			payload := element.QuantityValueNode()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
 			*(*int64)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Mantissa
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)) = (payload).Scale
 			utf823 := unsafe.Pointer(unsafe.StringData((payload).Unit))
@@ -36336,7 +36488,7 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 		case golem_core_types.SchemaValueNodeUnionValue:
 			payload := element.UnionValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf824 := unsafe.Pointer(unsafe.StringData((payload).Tag))
 			pinner.Pin(utf824)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).Tag)))
@@ -36345,22 +36497,22 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 		case golem_core_types.SchemaValueNodeSecretValue:
 			payload := element.SecretValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeQuotaTokenHandle:
 			payload := element.QuotaTokenHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodePermissionCardHandle:
 			payload := element.PermissionCardHandle()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		case golem_core_types.SchemaValueNodeStreamValue:
 			payload := element.StreamValue()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).TakeHandle()
 
 		default:
@@ -37725,13 +37877,17 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 					case 28:
 
-						variant200 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant200 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant200 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant200 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant200 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value165 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result167 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -37768,7 +37924,7 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value165, AllowedSuffixes: result167, Min: option169, Max: option171})
 
-					case 31:
+					case 32:
 						result193 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -37899,7 +38055,7 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result193})
 
-					case 32:
+					case 33:
 						var option195 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -37915,7 +38071,7 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 						variant200 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option195})
 
-					case 33:
+					case 34:
 						var option197 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -37931,11 +38087,11 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option197})
 
-					case 34:
+					case 35:
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option198 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -37950,7 +38106,7 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 						variant200 = golem_core_types.MakeSchemaTypeBodyFutureType(option198)
 
-					case 36:
+					case 37:
 						var option199 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -38302,35 +38458,39 @@ func (self *WasmRpc) ScheduleCancelableInvocation(scheduledTime wasi_clocks_0_3_
 
 					case 27:
 
-						variant239 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant239 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant239 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant239 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant239 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value237 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant239 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value237})
 
-					case 30:
+					case 31:
 						value238 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant239 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value238, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant239 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant239 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -38618,35 +38778,39 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 				case 27:
 
-					variant18 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+					variant18 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 28:
 
-					variant18 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+					variant18 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 				case 29:
+
+					variant18 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+				case 30:
 					value16 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 					variant18 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value16})
 
-				case 30:
+				case 31:
 					value17 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 					variant18 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value17, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-				case 31:
+				case 32:
 
 					variant18 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 32:
+				case 33:
 
 					variant18 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 33:
+				case 34:
 
 					variant18 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-				case 34:
+				case 35:
 
 					variant18 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -39996,13 +40160,17 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 					case 28:
 
-						variant192 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
+						variant192 = golem_core_types.MakeSchemaTypeBodyUuidType()
 
 					case 29:
 
-						variant192 = golem_core_types.MakeSchemaTypeBodyDurationType()
+						variant192 = golem_core_types.MakeSchemaTypeBodyDatetimeType()
 
 					case 30:
+
+						variant192 = golem_core_types.MakeSchemaTypeBodyDurationType()
+
+					case 31:
 						value157 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						result159 := make([]string, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 3*4)))); index++ {
@@ -40039,7 +40207,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 						variant192 = golem_core_types.MakeSchemaTypeBodyQuantityType(golem_core_types.QuantitySpec{BaseUnit: value157, AllowedSuffixes: result159, Min: option161, Max: option163})
 
-					case 31:
+					case 32:
 						result185 := make([]golem_core_types.UnionBranch, 0, *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 						for index := 0; index < int(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))); index++ {
 							base := unsafe.Add(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8)))), index*(23*4))
@@ -40170,7 +40338,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 						variant192 = golem_core_types.MakeSchemaTypeBodyUnionType(golem_core_types.UnionSpec{Branches: result185})
 
-					case 32:
+					case 33:
 						var option187 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4)))) {
 						case 0:
@@ -40186,7 +40354,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 						variant192 = golem_core_types.MakeSchemaTypeBodySecretType(golem_core_types.SecretSpec{Inner: *(*int32)(unsafe.Add(unsafe.Pointer(base), 8)), Category: option187})
 
-					case 33:
+					case 34:
 						var option189 witTypes.Option[string]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -40202,11 +40370,11 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 						variant192 = golem_core_types.MakeSchemaTypeBodyQuotaTokenType(golem_core_types.QuotaTokenSpec{ResourceName: option189})
 
-					case 34:
+					case 35:
 
 						variant192 = golem_core_types.MakeSchemaTypeBodyPermissionCardType(golem_core_types.PermissionCardSpec{Polymorphic: (uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) != 0)})
 
-					case 35:
+					case 36:
 						var option190 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -40221,7 +40389,7 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 						variant192 = golem_core_types.MakeSchemaTypeBodyFutureType(option190)
 
-					case 36:
+					case 37:
 						var option191 witTypes.Option[int32]
 						switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))) {
 						case 0:
@@ -40573,35 +40741,39 @@ func (self *FutureInvokeResult) Get() witTypes.Result[witTypes.Option[golem_core
 
 					case 27:
 
-						variant231 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+						variant231 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 28:
 
-						variant231 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+						variant231 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 					case 29:
+
+						variant231 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+					case 30:
 						value229 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 						variant231 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value229})
 
-					case 30:
+					case 31:
 						value230 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 						variant231 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value230, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-					case 31:
+					case 32:
 
 						variant231 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 32:
+					case 33:
 
 						variant231 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 33:
+					case 34:
 
 						variant231 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-					case 34:
+					case 35:
 
 						variant231 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
@@ -42244,17 +42416,21 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 				panic("unreachable")
 			}
 
-		case golem_core_types.SchemaTypeBodyDatetimeType:
+		case golem_core_types.SchemaTypeBodyUuidType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(28))
 
-		case golem_core_types.SchemaTypeBodyDurationType:
+		case golem_core_types.SchemaTypeBodyDatetimeType:
 
 			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(29))
 
+		case golem_core_types.SchemaTypeBodyDurationType:
+
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+
 		case golem_core_types.SchemaTypeBodyQuantityType:
 			payload := (element).Body.QuantityType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(30))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
 			utf876 := unsafe.Pointer(unsafe.StringData((payload).BaseUnit))
 			pinner.Pin(utf876)
 			*(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))) = uint32(uint32(len((payload).BaseUnit)))
@@ -42312,7 +42488,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		case golem_core_types.SchemaTypeBodyUnionType:
 			payload := (element).Body.UnionType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(31))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
 			slice102 := (payload).Branches
 			length104 := uint32(len(slice102))
 			result103 := witRuntime.Allocate(pinner, uintptr(length104*(23*4)), 4)
@@ -42497,7 +42673,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		case golem_core_types.SchemaTypeBodySecretType:
 			payload := (element).Body.SecretType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(32))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
 			*(*int32)(unsafe.Add(unsafe.Pointer(base), 8)) = (payload).Inner
 
 			switch (payload).Category.Tag() {
@@ -42518,7 +42694,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		case golem_core_types.SchemaTypeBodyQuotaTokenType:
 			payload := (element).Body.QuotaTokenType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(33))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
 
 			switch (payload).ResourceName.Tag() {
 			case witTypes.OptionNone:
@@ -42538,7 +42714,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		case golem_core_types.SchemaTypeBodyPermissionCardType:
 			payload := (element).Body.PermissionCardType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(34))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
 			var result107 int32
 			if (payload).Polymorphic {
 				result107 = 1
@@ -42549,7 +42725,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		case golem_core_types.SchemaTypeBodyFutureType:
 			payload := (element).Body.FutureType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(35))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -42566,7 +42742,7 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 		case golem_core_types.SchemaTypeBodyStreamType:
 			payload := (element).Body.StreamType()
-			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(36))
+			*(*int8)(unsafe.Add(unsafe.Pointer(base), 0)) = int8(int32(37))
 
 			switch payload.Tag() {
 			case witTypes.OptionNone:
@@ -42954,35 +43130,39 @@ func GetConfigValue(key []string, expected golem_core_types.SchemaGraph) witType
 
 			case 27:
 
-				variant146 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
+				variant146 = golem_core_types.MakeSchemaValueNodeUuidValue(golem_core_types.Uuid{HighBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 8))), LowBits: uint64(*(*int64)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 			case 28:
 
-				variant146 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+				variant146 = golem_core_types.MakeSchemaValueNodeDatetimeValue(golem_core_types.Datetime{Seconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Nanoseconds: uint32(*(*int32)(unsafe.Add(unsafe.Pointer(base), 16)))})
 
 			case 29:
+
+				variant146 = golem_core_types.MakeSchemaValueNodeDurationValue(golem_core_types.DurationValuePayload{Nanoseconds: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8))})
+
+			case 30:
 				value144 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 1*4)))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (16 + 2*4))))
 
 				variant146 = golem_core_types.MakeSchemaValueNodeQuantityValueNode(golem_core_types.QuantityValue{Mantissa: *(*int64)(unsafe.Add(unsafe.Pointer(base), 8)), Scale: *(*int32)(unsafe.Add(unsafe.Pointer(base), 16)), Unit: value144})
 
-			case 30:
+			case 31:
 				value145 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(base), 8))))), *(*uint32)(unsafe.Add(unsafe.Pointer(base), (8 + 1*4))))
 
 				variant146 = golem_core_types.MakeSchemaValueNodeUnionValue(golem_core_types.UnionValuePayload{Tag: value145, Body: *(*int32)(unsafe.Add(unsafe.Pointer(base), (8 + 2*4)))})
 
-			case 31:
+			case 32:
 
 				variant146 = golem_core_types.MakeSchemaValueNodeSecretValue(golem_core_types.SecretFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 32:
+			case 33:
 
 				variant146 = golem_core_types.MakeSchemaValueNodeQuotaTokenHandle(golem_core_types.QuotaTokenFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 33:
+			case 34:
 
 				variant146 = golem_core_types.MakeSchemaValueNodePermissionCardHandle(golem_core_types.PermissionCardFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 
-			case 34:
+			case 35:
 
 				variant146 = golem_core_types.MakeSchemaValueNodeStreamValue(golem_core_types.SchemaValueStreamFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(base), 8))))))
 

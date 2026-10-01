@@ -23,7 +23,7 @@ use crate::command_handler::log::render_command_output_document_masked;
 use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
-use crate::log::{LogColorize, LogOutput, Output, log_action};
+use crate::log::{LogColorize, log_action};
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
     EnvironmentToolGrantGetView, EnvironmentToolGrantListView, EnvironmentToolGrantRestoreView,
@@ -44,6 +44,7 @@ use golem_client::invocation_session::{
 };
 use golem_client::model::{
     NativeToolDescribeRequest, NativeToolInvocationMode, NativeToolInvocationRequest,
+    NativeToolResult,
 };
 use golem_common::base_model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
@@ -55,7 +56,8 @@ use golem_common::model::environment_tool_middleware_grant::{
     EnvironmentToolMiddlewareGrantCreation, EnvironmentToolMiddlewareGrantDeletion,
 };
 use golem_common::model::invocation_session_public::{
-    INVOCATION_SESSION_VERSION, PublicClientMessage, PublicNativeToolTarget, PublicTypedValue,
+    INVOCATION_SESSION_VERSION, PublicClientMessage, PublicInvocationResult,
+    PublicNativeToolTarget, PublicTypedValue,
 };
 use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
@@ -318,11 +320,14 @@ impl ToolCommandHandler {
     }
 
     async fn cmd_invoke(&self, args: ToolInvokeArgs) -> anyhow::Result<()> {
-        let _raw_stdout_guard =
-            (args.stdout && args.output.is_none()).then(|| LogOutput::new(Output::Stderr));
+        let raw_stdout = args.stdout && args.output.is_none();
+        let raw_stderr = args.stderr && args.stderr_output.is_none();
+        let report_destination = live_report_destination(raw_stdout, raw_stderr);
         self.ctx.silence_app_context_init().await;
 
-        if (args.stdin.is_some() || args.stdout) && (args.trigger || args.schedule_at.is_some()) {
+        if (args.stdin.is_some() || args.stdout || args.stderr)
+            && (args.trigger || args.schedule_at.is_some())
+        {
             bail!("--trigger and --schedule-at cannot be used with live streams");
         }
         if args.lookup
@@ -406,7 +411,7 @@ impl ToolCommandHandler {
             "Using",
             format!("idempotency key: {}", key.value.log_color_highlight()),
         );
-        let live = args.stdin.is_some() || args.stdout;
+        let live = args.stdin.is_some() || args.stdout || args.stderr;
         if live {
             let public_target = match (&agent_id, component_id) {
                 (Some(agent_id), None) => PublicNativeToolTarget::Agent {
@@ -421,6 +426,7 @@ impl ToolCommandHandler {
             let input = public_typed_value(input)?;
             let initial = InvocationSessionStateSnapshot {
                 delivered_output_cursors: Default::default(),
+                stable_stream_bindings: Default::default(),
                 pending_operation: Some(PublicClientMessage::ToolStart {
                     attempt_id: uuid::Uuid::new_v4(),
                     application: target_environment.application_name.to_string(),
@@ -432,13 +438,11 @@ impl ToolCommandHandler {
                     input: Box::new(input),
                     stdin: args.stdin.is_some(),
                     stdout: args.stdout,
+                    stderr: args.stderr,
                     version: INVOCATION_SESSION_VERSION,
                 }),
                 session_token: None,
             };
-            let raw_to_process_stdout =
-                live_report_destination(args.stdout, args.output.as_deref())
-                    == LiveReportDestination::Stderr;
             let mut reader = match args.stdin {
                 Some(path) if path == Path::new("-") => Some(process_stdin_reader()),
                 Some(path) => Some(Box::pin(tokio::fs::File::open(&path).await.map_err(
@@ -453,6 +457,13 @@ impl ToolCommandHandler {
                 None if args.stdout => Box::pin(tokio::io::stdout()),
                 None => Box::pin(tokio::io::sink()),
             };
+            let mut stderr_writer: Pin<Box<dyn AsyncWrite + Send>> = match args.stderr_output {
+                Some(path) => Box::pin(tokio::fs::File::create(&path).await.map_err(|error| {
+                    anyhow!("Failed to create tool stderr '{}': {error}", path.display())
+                })?),
+                None if args.stderr => Box::pin(tokio::io::stderr()),
+                None => Box::pin(tokio::io::sink()),
+            };
             let session = InvocationSession::open(
                 Arc::new(CliSessionRequestProvider::new(self.ctx.clone())),
                 None,
@@ -465,23 +476,29 @@ impl ToolCommandHandler {
             let cancelled = async {
                 let _ = tokio::signal::ctrl_c().await;
             };
-            let result =
-                drive_native_tool_session_until(session, reader.take(), &mut writer, cancelled)
-                    .await
-                    .map_err(|error| match &error {
-                        golem_client::invocation_session::SessionTransportError::Io(io_error)
-                            if io_error.kind() == std::io::ErrorKind::Interrupted =>
-                        {
-                            anyhow!(PipedExitCode(130))
-                        }
-                        _ => anyhow!(error),
-                    })?;
+            let result = drive_native_tool_session_until(
+                session,
+                reader.take(),
+                &mut writer,
+                &mut stderr_writer,
+                cancelled,
+            )
+            .await
+            .map_err(|error| match &error {
+                golem_client::invocation_session::SessionTransportError::Io(io_error)
+                    if io_error.kind() == std::io::ErrorKind::Interrupted =>
+                {
+                    anyhow!(PipedExitCode(130))
+                }
+                _ => anyhow!(error),
+            })?;
             let view = ToolInvocationSessionView {
                 target: public_target,
                 idempotency_key: key,
                 result,
             };
-            if raw_to_process_stdout {
+            let failed = public_tool_failed(&view.result);
+            if report_destination == LiveReportDestination::Stderr {
                 let format = if self.ctx.format() == Format::Text {
                     Format::PrettyJson
                 } else {
@@ -496,9 +513,13 @@ impl ToolCommandHandler {
                         view,
                     )?
                 );
-                return Ok(());
+                return finish_tool_report(failed);
             }
-            return self.ctx.log_handler().log_output(view);
+            if report_destination == LiveReportDestination::Suppress {
+                return finish_tool_report(failed);
+            }
+            self.ctx.log_handler().log_output(view)?;
+            return finish_tool_report(failed);
         }
         let mode = if args.lookup {
             NativeToolInvocationMode::Lookup
@@ -536,9 +557,11 @@ impl ToolCommandHandler {
             )
             .await
             .map_service_error()?;
+        let failed = native_tool_result_failed(response.result.as_ref());
         self.ctx
             .log_handler()
-            .log_output(ToolInvokeView { response })
+            .log_output(ToolInvokeView { response })?;
+        finish_tool_report(failed)
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {
@@ -824,23 +847,50 @@ fn process_stdin_reader() -> Pin<Box<dyn AsyncRead + Send>> {
 enum LiveReportDestination {
     Stdout,
     Stderr,
+    Suppress,
 }
 
-fn live_report_destination(stdout: bool, output: Option<&Path>) -> LiveReportDestination {
-    if stdout && output.is_none() {
-        LiveReportDestination::Stderr
+fn live_report_destination(raw_stdout: bool, raw_stderr: bool) -> LiveReportDestination {
+    match (raw_stdout, raw_stderr) {
+        (false, _) => LiveReportDestination::Stdout,
+        (true, false) => LiveReportDestination::Stderr,
+        (true, true) => LiveReportDestination::Suppress,
+    }
+}
+
+fn public_tool_failed(result: &PublicInvocationResult) -> bool {
+    matches!(result, PublicInvocationResult::ToolFailure { .. })
+}
+
+fn native_tool_result_failed(result: Option<&NativeToolResult>) -> bool {
+    matches!(result, Some(NativeToolResult::Failure(_)))
+}
+
+fn finish_tool_report(failed: bool) -> anyhow::Result<()> {
+    if failed {
+        Err(anyhow!(PipedExitCode(1)))
     } else {
-        LiveReportDestination::Stdout
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LiveReportDestination, live_report_destination, public_typed_value};
+    use super::{
+        LiveReportDestination, finish_tool_report, live_report_destination,
+        native_tool_result_failed, public_tool_failed, public_typed_value,
+    };
+    use crate::error::PipedExitCode;
+    use crate::log::{
+        Output, RawOutputReservation, TracingSuppression, TracingWriter, reservation_aware_output,
+        tracing_writer,
+    };
+    use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
+    use golem_common::model::invocation_session_public::PublicInvocationResult;
+    use golem_common::model::tool::SerializableToolRpcError;
     use golem_common::schema::{
         NamedFieldType, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
     };
-    use std::path::Path;
     use test_r::test;
 
     #[test]
@@ -887,16 +937,76 @@ mod tests {
     #[test]
     fn raw_process_stdout_keeps_structured_report_on_stderr() {
         assert_eq!(
-            live_report_destination(true, None),
+            live_report_destination(true, false),
             LiveReportDestination::Stderr
         );
         assert_eq!(
-            live_report_destination(true, Some(Path::new("raw.bin"))),
+            live_report_destination(false, true),
             LiveReportDestination::Stdout
         );
         assert_eq!(
-            live_report_destination(false, None),
-            LiveReportDestination::Stdout
+            live_report_destination(true, true),
+            LiveReportDestination::Suppress
         );
+        {
+            let _reservation = RawOutputReservation::new(false, true);
+            assert_eq!(reservation_aware_output(Output::Stderr), Output::Stdout);
+        }
+        {
+            let _reservation = RawOutputReservation::new(true, false);
+            assert_eq!(reservation_aware_output(Output::Stdout), Output::Stderr);
+        }
+        {
+            let _reservation = RawOutputReservation::new(true, true);
+            assert_eq!(reservation_aware_output(Output::Stdout), Output::None);
+            assert_eq!(reservation_aware_output(Output::Stderr), Output::None);
+        }
+    }
+
+    #[test]
+    fn observed_structured_tool_failure_uses_failure_exit_status() {
+        let public_success = PublicInvocationResult::ToolSuccess { result: None };
+        let public_failure = PublicInvocationResult::ToolFailure {
+            code: "custom-error".to_string(),
+            message: Some("broken".to_string()),
+            custom_error: None,
+        };
+        let native_success = NativeToolResult::Success(NativeToolSuccess { result: None });
+        let native_failure = NativeToolResult::Failure(NativeToolFailure {
+            error: SerializableToolRpcError::ProtocolError("broken".to_string()),
+        });
+
+        assert!(!public_tool_failed(&public_success));
+        assert!(public_tool_failed(&public_failure));
+        assert!(!native_tool_result_failed(Some(&native_success)));
+        assert!(native_tool_result_failed(Some(&native_failure)));
+        assert!(!native_tool_result_failed(None));
+        assert!(finish_tool_report(false).is_ok());
+        let error = finish_tool_report(true).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<PipedExitCode>().map(|exit| exit.0),
+            Some(1)
+        );
+
+        for (raw_stdout, raw_stderr) in [(true, false), (false, true), (true, true)] {
+            let _destination = live_report_destination(raw_stdout, raw_stderr);
+            assert_eq!(
+                finish_tool_report(public_tool_failed(&public_failure))
+                    .unwrap_err()
+                    .downcast_ref::<PipedExitCode>()
+                    .map(|exit| exit.0),
+                Some(1)
+            );
+        }
+    }
+
+    #[test]
+    fn raw_process_stderr_suppresses_tracing() {
+        assert!(matches!(tracing_writer(), TracingWriter::Stderr(_)));
+        {
+            let _suppression = TracingSuppression::new();
+            assert!(matches!(tracing_writer(), TracingWriter::Sink(_)));
+        }
+        assert!(matches!(tracing_writer(), TracingWriter::Stderr(_)));
     }
 }

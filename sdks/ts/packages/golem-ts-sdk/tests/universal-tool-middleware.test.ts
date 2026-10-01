@@ -183,7 +183,7 @@ describe('universal tool middleware dispatch', () => {
     expect(stdin.close).not.toHaveBeenCalled();
     expect(stdout.close).not.toHaveBeenCalled();
     await result.stdout?.[Symbol.asyncIterator]().return?.();
-    expect(stdout.close).toHaveBeenCalledOnce();
+    expect(stdout.close).not.toHaveBeenCalled();
   });
 
   it('short-circuits and replaces a result while closing unforwarded stdin', async () => {
@@ -228,7 +228,7 @@ describe('universal tool middleware dispatch', () => {
     expect(receivedStdin).toBeDefined();
     expect(stdout.close).not.toHaveBeenCalled();
     await receivedStdin?.[Symbol.asyncIterator]().return?.();
-    expect(stdout.close).toHaveBeenCalledOnce();
+    expect(stdout.close).not.toHaveBeenCalled();
   });
 
   it('transfers outer stdin into final stdout without closing it', async () => {

@@ -639,6 +639,7 @@ pub struct PublicToolSessionStart {
     pub input: PublicTypedValue,
     pub stdin: bool,
     pub stdout: bool,
+    pub stderr: bool,
     pub idempotency_key: String,
     pub attempt_id: uuid::Uuid,
     pub expected_deployment_revision: Option<DeploymentRevision>,
@@ -1133,7 +1134,7 @@ impl WorkerService {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<OplogIndex> {
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
@@ -1156,9 +1157,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
             )
-            .await?;
-
-        Ok(())
+            .await
     }
 
     pub async fn get_oplog(
@@ -2549,6 +2548,7 @@ impl WorkerService {
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
+                stderr: start.stderr,
                 fresh_owner,
                 expected_deployment_revision: start
                     .expected_deployment_revision
@@ -3124,6 +3124,7 @@ impl WorkerService {
                 input,
                 stdin: false,
                 stdout: false,
+                stderr: false,
                 fresh_owner,
                 expected_deployment_revision: None,
             }),
@@ -4499,9 +4500,9 @@ mod tests {
             _: bool,
             _: EnvironmentId,
             _: AuthCtx,
-        ) -> WorkerResult<()> {
+        ) -> WorkerResult<OplogIndex> {
             self.effects.lock().unwrap().push("update");
-            Ok(())
+            Ok(OplogIndex::INITIAL)
         }
 
         async fn get_oplog(

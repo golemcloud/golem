@@ -5157,7 +5157,6 @@ async fn test_naming_extremes() {
         ])
         .await;
     assert!(outputs.success_or_dump());
-
     let outputs = ctx
         .cli([
             cmd::AGENT,
@@ -5531,6 +5530,431 @@ async fn test_agent_list_mode_filter_in_ts_repl() {
         },
     )
     .await;
+}
+
+fn write_update_await_agent(
+    ctx: &TestContext,
+    revision_marker: u64,
+    ping_prefix: &str,
+    reject_snapshot: bool,
+) {
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        formatdoc! { r#"
+            use golem_rust::{{agent_definition, agent_implementation}};
+
+            const REVISION_MARKER: u64 = {revision_marker};
+            const PING_PREFIX: &str = "{ping_prefix}";
+            const REJECT_SNAPSHOT: bool = {reject_snapshot};
+
+            #[agent_definition(snapshotting = "enabled")]
+            pub trait UpdateAwaitAgent {{
+                fn new(id: String) -> Self;
+                fn ping(&self) -> String;
+                fn revision_marker(&self) -> u64;
+            }}
+
+            struct UpdateAwaitAgentImpl {{
+                id: String,
+            }}
+
+            #[agent_implementation]
+            impl UpdateAwaitAgent for UpdateAwaitAgentImpl {{
+                fn new(id: String) -> Self {{
+                    Self {{ id }}
+                }}
+
+                fn ping(&self) -> String {{
+                    format!("{{}}:{{}}", PING_PREFIX, self.id)
+                }}
+
+                fn revision_marker(&self) -> u64 {{
+                    REVISION_MARKER
+                }}
+
+                async fn save_snapshot(&self) -> Result<Vec<u8>, String> {{
+                    Ok(self.id.as_bytes().to_vec())
+                }}
+
+                async fn load_snapshot(
+                    bytes: Vec<u8>,
+                    _context: golem_rust::agentic::SnapshotRestoreContext,
+                ) -> Result<Self, String> {{
+                    if REJECT_SNAPSHOT {{
+                        Err("manual snapshot rejected".to_string())
+                    }} else {{
+                        String::from_utf8(bytes)
+                            .map(|id| Self {{ id }})
+                            .map_err(|error| error.to_string())
+                    }}
+                }}
+            }}
+        "# },
+    )
+    .unwrap();
+}
+
+async fn build_and_deploy_update_await_agent(
+    ctx: &TestContext,
+    component_name: &str,
+    expected_revision: u64,
+    ping_prefix: &str,
+    reject_snapshot: bool,
+) {
+    write_update_await_agent(ctx, expected_revision, ping_prefix, reject_snapshot);
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::GET,
+            component_name,
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let component = outputs
+        .stdout_json::<UpdateAwaitComponentView>()
+        .into_iter()
+        .next()
+        .expect("component get must produce structured output");
+    assert_eq!(component.component_revision, expected_revision);
+}
+
+async fn invoke_update_await_agent(ctx: &TestContext, id: &str, ping_prefix: &str) {
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!(r#"UpdateAwaitAgent("{id}")"#),
+            "ping",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains(format!("{ping_prefix}:{id}")));
+}
+
+async fn get_update_await_metadata(ctx: &TestContext, agent: &str) -> UpdateAwaitAgentMetadata {
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::GET, agent, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    outputs
+        .stdout_json::<UpdateAwaitAgentGetView>()
+        .into_iter()
+        .next()
+        .expect("agent get must produce structured output")
+        .metadata
+}
+
+async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &str) {
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::LIST,
+            "UpdateAwaitAgent",
+            flag::FORMAT,
+            "json",
+            "--max-count",
+            "10",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let listed_agent = outputs
+        .stdout_json::<UpdateAwaitAgentListView>()
+        .into_iter()
+        .next()
+        .expect("agent list must produce structured output")
+        .agents
+        .into_iter()
+        .find(|listed| listed.agent_id == agent)
+        .expect("queued agent must be listed");
+    assert!(listed_agent.updates.is_empty());
+
+    let outputs = ctx
+        .cli([cmd::AGENT, "oplog", agent, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let has_queued_manual_update =
+        outputs
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .any(|entry| {
+                entry
+                    .pointer("/entry/type")
+                    .and_then(|value| value.as_str())
+                    == Some("PendingAgentInvocation")
+                    && entry
+                        .pointer("/entry/invocation/type")
+                        .and_then(|value| value.as_str())
+                        == Some("ManualUpdate")
+                    && entry
+                        .pointer("/entry/invocation/targetRevision")
+                        .and_then(|value| value.as_u64())
+                        == Some(1)
+            });
+    assert!(has_queued_manual_update);
+}
+
+fn output_contains(outputs: &crate::app::Output, expected: &str) -> bool {
+    outputs.stdout_contains(expected) || outputs.stderr_contains(expected)
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_update_await_correlates_exact_admitted_attempts() {
+    let mut ctx = TestContext::new();
+    let app_name = "agent-update-await-correlation";
+    let component_name = "agent-update-await-correlation:rust-main";
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: {app_name}
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              {app_name}:rust-main:
+                templates: rust
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 0, "stable", false).await;
+    for id in ["queued", "bulk", "automatic"] {
+        invoke_update_await_agent(&ctx, id, "stable").await;
+    }
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 1, "stable", false).await;
+
+    let queued_agent = r#"UpdateAwaitAgent("queued")"#;
+    ctx.server_process.take().unwrap().kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "update",
+            queued_agent,
+            "manual",
+            "1",
+            "--disable-wakeup",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert_queued_manual_update_before_pending(&ctx, queued_agent).await;
+
+    let outputs = ctx
+        .cli([cmd::AGENT, "update", queued_agent, "manual", "1", "--await"])
+        .await;
+    assert!(!outputs.success());
+    assert!(output_contains(
+        &outputs,
+        "The same update is already in progress"
+    ));
+
+    let automatic_agent = r#"UpdateAwaitAgent("automatic")"#;
+    invoke_update_await_agent(&ctx, "automatic", "stable").await;
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "update",
+            automatic_agent,
+            "automatic",
+            "1",
+            "--await",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let automatic_attempts_before_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(automatic_attempts_before_bulk, 1);
+
+    let outputs = ctx
+        .cli([
+            "update-agents",
+            "--update-mode",
+            "manual",
+            "--await",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(!outputs.success());
+    let bulk_result = outputs
+        .stdout_json::<UpdateAwaitBulkResult>()
+        .into_iter()
+        .next()
+        .expect("bulk update must produce structured output");
+    let bulk_agent_ids = bulk_result
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"bulk\")"));
+    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"queued\")"));
+    assert!(!bulk_agent_ids.contains("UpdateAwaitAgent(\"automatic\")"));
+    assert_eq!(bulk_agent_ids.len(), 2);
+    assert_eq!(bulk_result.errors.len(), 1);
+    assert_eq!(
+        bulk_result.errors[0].agent_id,
+        "UpdateAwaitAgent(\"queued\")"
+    );
+    assert!(
+        bulk_result.errors[0]
+            .error
+            .contains("The same update is already in progress")
+    );
+    let bulk_agent = r#"UpdateAwaitAgent("bulk")"#;
+    let bulk_metadata = get_update_await_metadata(&ctx, bulk_agent).await;
+    assert!(bulk_metadata.updates.iter().any(|update| {
+        update.kind == "SuccessfulUpdate" && update.target_revision == 1 && update.mode == "manual"
+    }));
+    let automatic_attempts_after_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(
+        automatic_attempts_after_bulk,
+        automatic_attempts_before_bulk
+    );
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 2, "stable", false).await;
+
+    for (agent, mode) in [(bulk_agent, "manual"), (automatic_agent, "automatic")] {
+        let outputs = ctx
+            .cli([cmd::AGENT, "update", agent, mode, "2", "--await"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 3, "changed", true).await;
+
+    for (agent, mode) in [(bulk_agent, "manual"), (automatic_agent, "automatic")] {
+        for expected_failure_count in 1..=2 {
+            let outputs = ctx
+                .cli([cmd::AGENT, "update", agent, mode, "3", "--await"])
+                .await;
+            assert!(!outputs.success());
+
+            let metadata = get_update_await_metadata(&ctx, agent).await;
+            let failures = metadata
+                .updates
+                .iter()
+                .filter(|update| {
+                    update.kind == "FailedUpdate"
+                        && update.target_revision == 3
+                        && update.mode == mode
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(failures.len(), expected_failure_count);
+            let indexes = failures
+                .iter()
+                .map(|failure| {
+                    failure
+                        .pending_update_index
+                        .expect("an admitted update must have an attempt index")
+                })
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(indexes.len(), expected_failure_count);
+            let selected_failure = failures
+                .iter()
+                .max_by_key(|failure| failure.pending_update_index)
+                .unwrap();
+            assert!(
+                output_contains(&outputs, &selected_failure.timestamp),
+                "{mode} update did not report the newly admitted attempt's failure"
+            );
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitComponentView {
+    component_revision: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitAgentGetView {
+    metadata: UpdateAwaitAgentMetadata,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UpdateAwaitAgentListView {
+    agents: Vec<UpdateAwaitListedAgent>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitListedAgent {
+    agent_id: String,
+    updates: Vec<UpdateAwaitRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitAgentMetadata {
+    updates: Vec<UpdateAwaitRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitRecord {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: String,
+    target_revision: u64,
+    pending_update_index: Option<u64>,
+    mode: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkResult {
+    agents: Vec<UpdateAwaitBulkAgent>,
+    errors: Vec<UpdateAwaitBulkError>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkAgent {
+    agent_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkError {
+    agent_id: String,
+    error: String,
 }
 
 // JSON view of the `agent list` structured output. We only need the `agents`

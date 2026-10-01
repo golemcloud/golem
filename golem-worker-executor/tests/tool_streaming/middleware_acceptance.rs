@@ -106,7 +106,7 @@ macro_rules! setup_probe_chain {
     };
 }
 
-async fn start_probe_effect_server() -> (
+pub(super) async fn start_probe_effect_server() -> (
     u16,
     tokio::sync::mpsc::UnboundedReceiver<String>,
     tokio::task::JoinHandle<()>,
@@ -1078,6 +1078,23 @@ async fn incapable_middleware_preserves_capable_streaming_staging_and_reconstruc
             .get_file_contents(&worker_id, "/decorated-capable.bin")
             .await?,
         input
+    );
+    let dual_size = 97_u64;
+    let dual: Vec<Vec<u8>> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "collect_capable_dual",
+            data_value!("/decorated-capable-dual.bin", dual_size),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        dual,
+        vec![
+            vec![b'o'; dual_size as usize],
+            vec![b'e'; dual_size as usize]
+        ]
     );
     executor.simulated_crash(&worker_id).await?;
     let next = b"fresh-after-reconstruction-19".to_vec();

@@ -64,6 +64,7 @@ pub(all) enum SchemaTypeBody {
   Binary(@types.BinaryRestrictions)
   Path(@types.PathSpec)
   Url(@types.UrlRestrictions)
+  Uuid
   Datetime
   Duration
   Quantity(@types.QuantitySpec)
@@ -176,6 +177,7 @@ pub(all) enum SchemaValue {
   Binary(FixedArray[Byte], String?)
   Path(String)
   Url(String)
+  Uuid(@types.Uuid)
   Datetime(@types.Datetime)
   // total nanoseconds (signed)
   Duration(Int64)

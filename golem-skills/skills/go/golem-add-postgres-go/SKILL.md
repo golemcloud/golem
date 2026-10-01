@@ -99,7 +99,7 @@ func init() {
 
 ## Parameters and Row Getters
 
-Parameters are ordinary Go values — `nil`, `bool`, the sized int/float widths, `string`, `[]byte`, `uuid.UUID`, and `time.Time` map to their natural Postgres types:
+Parameters are ordinary Go values — `nil`, `bool`, the sized int/float widths, `string`, `[]byte`, `golem.UUID`, and `time.Time` map to their natural Postgres types:
 
 ```go
 golem.Must(db.Exec(

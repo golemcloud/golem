@@ -110,6 +110,7 @@ Adding another agent = another `agents/<name>/` folder + one more blank import h
 Parameter and result types are Go structs; each exported field becomes one WIT field, named by lower-camel-casing the Go name (`AmountCents` → `amountCents`).
 
 - Use sized integers (`int64`, `uint64`, …). Bare `int`/`uint` are **rejected** — their width is platform-dependent.
+- `time.Time`, `time.Duration` and `golem.UUID` are `datetime`, `duration` and `uuid`; `golem.ParseUUID` reads one from text.
 - A `*T` field means `option<T>`. A nil slice/map is an **empty** list/map, never "absent" — use `*[]T` if you must distinguish.
 - Variants/enums are declared with `golem.DefineVariant` / `golem.DefineEnum`. A variant case type is its payload; a case with no payload is an empty struct (`type Cash struct{}`).
 - When the payload cannot carry the variant's marker method without changing what it is — a `time.Time`, a `golem.Text`, an `Option`, another variant — wrap it in a one-field struct and register it with `golem.WrappedCase`. `type At time.Time` would publish a different schema; `type At struct{ Value time.Time }` with `WrappedCase[At]("at")` publishes `at(datetime)`. Unions have `golem.WrappedBranch` for the same reason.

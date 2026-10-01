@@ -126,8 +126,12 @@ func init() {
 		input types.TypedSchemaValue,
 		stdin toolExports.Stdin,
 		stdout toolExports.Stdout,
+		stderr toolExports.Stderr,
 		principal common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+		// Commands defined in Go declare no standard error; one supplied
+		// regardless is finished empty.
+		defer func() { _ = newToolStdout(stderr).finish() }()
 		e, ok := toolDefs.get(toolName)
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
@@ -165,6 +169,7 @@ func init() {
 		input types.TypedSchemaValue,
 		stdin mwExports.Stdin,
 		stdout mwExports.Stdout,
+		stderr mwExports.Stderr,
 		principal common.Principal,
 		wrapped *underlying.UnderlyingTool,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
@@ -176,6 +181,7 @@ func init() {
 			input:       input,
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
 			stdout:      newToolStdout(toolExports.Stdout(stdout)),
+			stderr:      newToolStdout(toolExports.Stdout(stderr)),
 			principal:   principalFromWit(principal),
 			under:       newUnderlyingLayer(wrapped),
 		})

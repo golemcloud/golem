@@ -592,6 +592,7 @@ message UpdateDescription {
   oneof description {
     golem.common.Empty auto_update = 1;
     SnapshotBasedUpdateParameters snapshot_based = 2;
+    golem.common.Empty snapshot_assisted_automatic = 3;
   }
 }
 
@@ -599,6 +600,7 @@ message PendingUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 target_revision = 2;
   UpdateDescription update_description = 3;
+  uint64 update_attempt_index = 4;
 }
 
 message SuccessfulUpdateParameters {
@@ -606,12 +608,30 @@ message SuccessfulUpdateParameters {
   uint64 target_revision = 2;
   uint64 new_component_size = 3;
   repeated PluginInstallationDescription new_active_plugins = 10;
+  optional SnapshotAssistedUpdateDetails snapshot_assisted_details = 11;
+}
+
+message SnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
 }
 
 message FailedUpdateParameters {
   google.protobuf.Timestamp timestamp = 1;
   uint64 target_revision = 2;
   optional string details = 3;
+  optional FailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 4;
+  optional uint64 update_attempt_index = 5;
+}
+
+message FailedSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  optional uint64 snapshot_index = 4;
+  optional string ineligibility_reason = 5;
 }
 
 message GrowMemoryParameters {
@@ -756,6 +776,8 @@ message PublicToolInvocationOperation {
   bool has_stdin = 2;
   bool has_stdout = 3;
   bool declares_stdout = 4;
+  bool has_stderr = 5;
+  bool declares_stderr = 6;
 }
 
 message PublicEntityInvocationOperation {

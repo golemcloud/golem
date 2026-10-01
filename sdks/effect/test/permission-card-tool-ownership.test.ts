@@ -116,6 +116,7 @@ describe("permission-card ownership across tool boundaries", () => {
         { graph: codec.schemaGraph, value: wire },
         undefined,
         undefined,
+        undefined,
         {},
       ),
     ).rejects.toBeDefined()
@@ -133,6 +134,7 @@ describe("permission-card ownership across tool boundaries", () => {
       "card-guest",
       [],
       { graph: codec.schemaGraph, value: successfulInput },
+      undefined,
       undefined,
       undefined,
       {},
@@ -172,6 +174,7 @@ describe("permission-card ownership across tool boundaries", () => {
             cancel: vi.fn(),
           },
           undefined,
+          undefined,
         ] as const
       }),
     }
@@ -186,6 +189,7 @@ describe("permission-card ownership across tool boundaries", () => {
         { graph: codec.schemaGraph, value: malformed },
         undefined,
         undefined,
+        undefined,
         { tag: "anonymous" },
         wrapped as never,
       ),
@@ -198,6 +202,7 @@ describe("permission-card ownership across tool boundaries", () => {
       emptyParameters(),
       [],
       { graph: codec.schemaGraph, value: malformed },
+      undefined,
       undefined,
       undefined,
       { tag: "anonymous" },

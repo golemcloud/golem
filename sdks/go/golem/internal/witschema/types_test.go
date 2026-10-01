@@ -159,6 +159,8 @@ func sampleBody(tag uint8, inner int32) (types.SchemaTypeBody, bool) {
 		return types.MakeSchemaTypeBodyDatetimeType(), true
 	case types.SchemaTypeBodyDurationType:
 		return types.MakeSchemaTypeBodyDurationType(), true
+	case types.SchemaTypeBodyUuidType:
+		return types.MakeSchemaTypeBodyUuidType(), true
 	case types.SchemaTypeBodyQuantityType:
 		return types.MakeSchemaTypeBodyQuantityType(types.QuantitySpec{
 			BaseUnit: "B", Min: witTypes.None[types.QuantityValue](),

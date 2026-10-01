@@ -19,6 +19,7 @@ use golem_common::schema::canonical::{
     binary as canon_binary, datetime as canon_datetime, duration as canon_duration,
     path as canon_path, permission_card as canon_permission_card, quantity as canon_quantity,
     quota_token as canon_quota_token, secret as canon_secret, text as canon_text, url as canon_url,
+    uuid as canon_uuid,
 };
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{
@@ -271,6 +272,12 @@ fn parse_cm_value_inner<D: Dialect>(
         }
         SchemaType::Path { .. } => D::parse_path(lexer),
         SchemaType::Url { .. } => D::parse_url(lexer),
+        SchemaType::Uuid { .. } => {
+            let s = parse_rich_constructor(lexer, "Uuid")?;
+            canon_uuid::from_text(&s)
+                .map(SchemaValue::Uuid)
+                .map_err(|e| perr(lexer.position(), &format!("invalid UUID value: {e}")))
+        }
         SchemaType::Datetime { .. } => D::parse_datetime(lexer),
         SchemaType::Duration { .. } => D::parse_duration(lexer),
         SchemaType::Quantity { .. } => D::parse_quantity(lexer),

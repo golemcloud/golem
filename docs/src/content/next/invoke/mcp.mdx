@@ -75,9 +75,13 @@ Use either `include` or `exclude`, never both. Patterns are space-separated comm
 
 Inputs use the human-readable JSON shapes advertised by `tools/list`, including defaults and repeated collections. Constraints are enforced before invocation and by native tool dispatch. Host-managed capabilities and nested typed streams cannot be exported. Standard annotations become `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint`; these hints do not change permissions or execution semantics.
 
-### Finite stdin and stdout
+### Finite stdin, stdout, and stderr
 
-MCP buffers each byte stream, with a **16 MiB limit per direction**. Declared stdin becomes an `_stdin` string argument, required only when the tool requires stdin. It contains UTF-8 text when every declared MIME type is textual, or base64 otherwise. Stdout is drained while stdin is being sent, and becomes text, image, audio, or an embedded resource according to its declared MIME type. Structured results are returned as `structuredContent` matching the advertised output schema, with a `value` wrapper when needed to produce a root object.
+MCP buffers each byte stream, with a separate **16 MiB limit for stdin, stdout, and stderr**. Exceeding any limit fails the MCP call; Golem does not truncate stream data. Declared stdin becomes an `_stdin` string argument, required only when the tool requires stdin. It contains UTF-8 text when every declared MIME type is textual, or base64 otherwise. Stdout and stderr are drained concurrently while stdin is being sent. Each becomes text, image, audio, or an embedded resource according to its declared MIME type. An output declared only with `text/*` MIME types must contain valid UTF-8 or the MCP call fails.
+
+MCP has no native fd 2, so successful content lists stdout before stderr and tags every projected block with `_meta["golem.cloud/tool-channel"]` set to `"stdout"` or `"stderr"`. Binary resources use distinct `/stdout` and `/stderr` URIs. This order does not imply cross-channel byte ordering, and stderr content alone does not set `isError`. On tool failure Golem still drains both outputs but omits their content, matching the existing stdout limitation.
+
+Structured results are returned as `structuredContent` matching the advertised output schema, with a `value` wrapper when needed to produce a root object.
 
 Invalid parameters, constraint violations, and invalid results produce JSON-RPC `-32602` errors. Tool execution and custom errors produce `isError: true`. MCP does not expose native formatter selection, exit-code semantics, repetition modes, the alias graph, or middleware composition; middleware still runs normally.
 
