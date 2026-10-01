@@ -116,7 +116,7 @@ async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u64> {
 
 /// Reads a ledger entry name, `<end ms>-<0|1>-<unique part>`, as the time of the prune and whether
 /// it marked packs.
-pub(super) fn parse_ledger_entry(name: &str) -> Option<PruneLedger> {
+fn parse_ledger_entry(name: &str) -> Option<PruneLedger> {
     let mut parts = name.splitn(3, '-');
     let ended = parts.next()?.parse::<u64>().ok()?;
     let awaiting_removal = match parts.next()? {
@@ -141,7 +141,7 @@ fn beyond_margin(time: Timestamp, now: Timestamp) -> bool {
 
 /// Gives the ledger from the listed entries: the entry with the greatest time. A name that does not
 /// parse and a time more than the margin after `now` are left out. No entry gives the default.
-pub(super) fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedger {
+fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedger {
     listed
         .iter()
         .filter_map(|blob| parse_ledger_entry(blob.path.file_name()?.to_str()?))
@@ -156,7 +156,7 @@ pub(super) fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedge
 
 /// Gives the paths of the listed entries whose time is before `ended`, in whole milliseconds as
 /// an entry name holds it.
-pub(super) fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Box<[Box<Path>]> {
+fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Box<[Box<Path>]> {
     listed
         .iter()
         .filter(|blob| {
@@ -232,31 +232,31 @@ pub(super) async fn remove_older_ledgers(files: &SnapshotFiles, ended: Timestamp
 /// The freed bytes of the settled records, and the paths of those records.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct FreedRecords {
-    pub(super) bytes: u64,
-    pub(super) counted: Box<[Box<Path>]>,
+    bytes: u64,
+    counted: Box<[Box<Path>]>,
 }
 
 /// A record of freed bytes that a delete wrote: its path, the bytes in its name, and the ids of
 /// the snapshot files of that delete, when its content parses.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FreedRecord {
-    pub(super) path: Box<Path>,
-    pub(super) bytes: u64,
-    pub(super) snapshots: Option<Box<[Box<str>]>>,
+struct FreedRecord {
+    path: Box<Path>,
+    bytes: u64,
+    snapshots: Option<Box<[Box<str>]>>,
 }
 
 /// The directory of the snapshot files of a repository.
 pub(super) const SNAPSHOTS_PATH: &str = "snapshots";
 
 /// Gives the content of a record: the id of each snapshot file of the delete, one on each line.
-pub(super) fn record_content(snapshots: &[Box<str>]) -> String {
+fn record_content(snapshots: &[Box<str>]) -> String {
     snapshots.join("\n")
 }
 
 /// Reads the snapshot ids from the content of a record. Each line must be an id of 64 hex
 /// characters. A content without an id does not parse, because a reader can see a record that a
 /// write has not filled yet.
-pub(super) fn parse_record(content: &[u8]) -> Option<Box<[Box<str>]>> {
+fn parse_record(content: &[u8]) -> Option<Box<[Box<str>]>> {
     let text = std::str::from_utf8(content).ok()?;
     text.lines()
         .filter(|line| !line.is_empty())
@@ -271,7 +271,7 @@ pub(super) fn parse_record(content: &[u8]) -> Option<Box<[Box<str>]>> {
 /// Gives the settled records and the sum of their bytes. A record is settled when it names at
 /// least one snapshot file and none of them exists. Any other record counts as zero bytes and
 /// stays, and so does a record whose content does not parse.
-pub(super) fn settle(records: &[FreedRecord], existing: &HashSet<Box<str>>) -> FreedRecords {
+fn settle(records: &[FreedRecord], existing: &HashSet<Box<str>>) -> FreedRecords {
     let settled = records
         .iter()
         .filter(|record| {
@@ -314,14 +314,14 @@ pub(super) async fn record_freed(
 
 /// A record of freed bytes that a listing found: its path and the bytes in its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ListedFreed {
-    pub(super) path: Box<Path>,
-    pub(super) bytes: u64,
+struct ListedFreed {
+    path: Box<Path>,
+    bytes: u64,
 }
 
 /// Lists the names of the records of freed bytes, and reads no content. A name that does not
 /// parse is left out, so it counts as zero bytes and stays.
-pub(super) async fn list_freed_names(files: &SnapshotFiles) -> anyhow::Result<Box<[ListedFreed]>> {
+async fn list_freed_names(files: &SnapshotFiles) -> anyhow::Result<Box<[ListedFreed]>> {
     Ok(files
         .list_below("list_freed", Path::new(FREED_PATH))
         .await?
@@ -337,7 +337,7 @@ pub(super) async fn list_freed_names(files: &SnapshotFiles) -> anyhow::Result<Bo
 }
 
 /// Gives the sum of the bytes in the names of the listed records.
-pub(super) fn named_bytes(listed: &[ListedFreed]) -> u64 {
+fn named_bytes(listed: &[ListedFreed]) -> u64 {
     listed
         .iter()
         .map(|record| record.bytes)
@@ -347,7 +347,7 @@ pub(super) fn named_bytes(listed: &[ListedFreed]) -> u64 {
 /// Reads the listed records of freed bytes, lists the snapshot files one time, and gives the
 /// settled records. A record that a prune deleted after the listing is left out. Without records,
 /// no snapshot file is listed.
-pub(super) async fn settle_freed(
+async fn settle_freed(
     files: &SnapshotFiles,
     listed: &[ListedFreed],
 ) -> anyhow::Result<FreedRecords> {
@@ -495,10 +495,7 @@ pub(super) fn claims_directory(ledger: &PruneLedger) -> Box<Path> {
 
 /// Lists the claims and the markers in the directory, from their names. A name that does not
 /// parse is left out.
-pub(super) async fn list_claims(
-    files: &SnapshotFiles,
-    directory: &Path,
-) -> anyhow::Result<Box<[ClaimEntry]>> {
+async fn list_claims(files: &SnapshotFiles, directory: &Path) -> anyhow::Result<Box<[ClaimEntry]>> {
     Ok(files
         .list_below("list_claims", directory)
         .await?
@@ -571,7 +568,7 @@ async fn write_leased_marker(
 
 /// Writes the first marker of the claim at the path `marker`, then takes the claim, and tells
 /// whether this delete holds the claim. The caller makes the path and the lease before the write,
-/// so a guard can delete the marker when the delete stops during the write. A delete that loses
+/// so the claim can delete the marker when the delete stops during the write. A delete that loses
 /// the claim deletes its marker.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
@@ -678,7 +675,7 @@ pub(super) async fn release_claim(
 /// older than the ledger of `ended`: the directory `none`, and each directory whose time is before
 /// `ended`. A newer directory can hold a live claim of a later prune, and a directory whose name is
 /// not a time is not a directory of claims, so both stay.
-pub(super) fn old_claim_directories(
+fn old_claim_directories(
     listed: impl IntoIterator<Item = impl AsRef<Path>>,
     ended: Timestamp,
 ) -> Box<[Box<Path>]> {
