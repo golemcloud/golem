@@ -3029,6 +3029,14 @@ async fn ts_sqlite_snapshot_keeps_in_memory_databases_and_restores_file_database
     };
     let names: Vec<&str> = multipart.parts.iter().map(|part| &*part.name).collect();
     assert_eq!(names, vec!["state", "db:memDb"]);
+    assert_eq!(multipart.parts[1].content_type, "application/x-sqlite3");
+    let MultipartPartData::Raw(memory_database) = &multipart.parts[1].data else {
+        return Err(anyhow!("the db:memDb part is not raw bytes"));
+    };
+    assert!(
+        !memory_database.data.is_empty(),
+        "the db:memDb part is empty"
+    );
     let MultipartPartData::Json(envelope) = &multipart.parts[0].data else {
         return Err(anyhow!("the state part is not JSON"));
     };
