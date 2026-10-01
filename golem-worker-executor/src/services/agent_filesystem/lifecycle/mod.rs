@@ -2664,9 +2664,12 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
             continue;
         };
         let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
-        if change.is_some() && opened.is_read_only_file() {
+        if change.is_some()
+            && let Err(refusal) = refuse_read_only_change(opened.is_read_only_file())
+        {
+            // The open goes to the guest, so the node closes through the adapter.
             execute_close(Arc::clone(&generation), opened.into_node()).await?;
-            return Err(Error::Access(AccessError::NotPermitted));
+            return Err(refusal);
         }
         if open_returns_directory(options) {
             let directory_key = opened
@@ -2749,9 +2752,18 @@ fn authorize_writable_target<Adapter: SandboxFilesystemAdapter>(
     follow: SandboxFollow,
 ) -> Result<(), Error> {
     match target.is_read_only_file(follow) {
-        Ok(false) => Ok(()),
-        Ok(true) => Err(Error::Access(AccessError::NotPermitted)),
+        Ok(read_only) => refuse_read_only_change(read_only),
         Err(source) => Err(classify_query_error(generation, source)),
+    }
+}
+
+/// Refuses a change to the contents or times of a regular file without write permission.
+/// `read_only` tells whether the object is such a file.
+fn refuse_read_only_change(read_only: bool) -> Result<(), Error> {
+    if read_only {
+        Err(Error::Access(AccessError::NotPermitted))
+    } else {
+        Ok(())
     }
 }
 
@@ -2980,9 +2992,9 @@ async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
         follow: Follow::Yes,
     };
     let opened = execute_open(Arc::clone(generation), target, options).await?;
-    if opened.is_read_only_file() {
-        return Err(Error::Access(AccessError::NotPermitted));
-    }
+    // The node is not registered and is used only in this operation, so a refusal drops it, as
+    // the end of the operation does.
+    refuse_read_only_change(opened.is_read_only_file())?;
     Ok(opened.into_node())
 }
 
