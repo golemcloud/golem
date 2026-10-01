@@ -224,7 +224,7 @@ EXPECTED = {
         b"unsupported in bash-tool\n", NESTING,
     ),
     "edge large: recursion with locals": (
-        0, b"49\n", b"bash: line 1: f: maximum function nesting level exceeded (49): deeper nesting "
+        0, b"44\n", b"bash: line 1: f: maximum function nesting level exceeded (44): deeper nesting "
         b"is unsupported in bash-tool\n", NESTING,
     ),
 }
