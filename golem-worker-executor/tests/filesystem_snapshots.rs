@@ -355,8 +355,20 @@ impl Agent {
         executor: &TestWorkerExecutor,
         operation: Operation,
     ) -> anyhow::Result<(OplogIndex, String)> {
+        let before = self.records(executor).await?.snapshots.len();
         self.apply_all(executor, &[operation]).await?;
-        let name = self.confirmed(executor).await?;
+        // The snapshot record of the operation comes after the invocation ends, so the wait
+        // looks only at the records that the oplog did not hold before the operation.
+        let name = eventually(Duration::from_secs(30), || async {
+            let records = self.records(executor).await?;
+            Ok(records
+                .snapshots
+                .get(before..)
+                .and_then(|newer| newer.iter().rev().flatten().next())
+                .filter(|name| records.is_confirmed(name))
+                .map(|name| name.to_string()))
+        })
+        .await?;
         let oplog = executor
             .get_oplog(&self.worker_id, OplogIndex::INITIAL)
             .await?;
