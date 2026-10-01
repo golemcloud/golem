@@ -204,22 +204,21 @@ type LoadedField =
   | { kind: 'other' };
 
 /**
- * The steps of a load, in order: the databases to open (in memory when `location` is null, else
- * at `location` after a check that a file exists there), the bytes to restore, and the
- * databases to warm, by field name.
+ * The steps of a load, by field name: the locations whose files must exist, the databases to
+ * open (in memory when `location` is null), and the databases to warm.
  */
 type RestorePlan = {
+  check: string[];
   open: Array<{ name: string; location: string | null }>;
-  restore: Array<{ name: string; bytes: Uint8Array }>;
   warm: Array<{ name: string; allPages: boolean }>;
 };
 
 /**
  * Decides how a load puts the snapshot databases into the restored state. A field that holds a
  * database keeps it. An empty field gets a new database: in memory for an in-memory entry, at
- * its location for a file entry. A field that holds any other value fails the load. The bytes
- * of each in-memory entry are restored into its database. Each open database is then warmed
- * once: it reads its schema and, when file-backed, every page.
+ * its location for a file entry, whose file must exist. A field that holds any other value fails
+ * the load. Each open database is then warmed once: it reads its schema and, when file-backed,
+ * every page.
  */
 export function planRestore(
   fields: ReadonlyArray<readonly [string, LoadedField]>,
@@ -227,7 +226,7 @@ export function planRestore(
 ): { tag: 'ok'; val: RestorePlan } | { tag: 'err'; val: string } {
   const byName = new Map<string, LoadedField>(fields);
   const names = fields.map(([name]) => name);
-  const plan: RestorePlan = { open: [], restore: [], warm: [] };
+  const plan: RestorePlan = { check: [], open: [], warm: [] };
   const entries: Array<[string, string | null]> = [
     ...databases.inMemory.map(({ name }): [string, null] => [name, null]),
     ...Object.entries(databases.fileDatabases),
@@ -238,12 +237,14 @@ export function planRestore(
       return { tag: 'err', val: `snapshot database field "${name}" is not a DatabaseSync` };
     }
     if (field.kind === 'empty') {
+      if (location !== null) {
+        plan.check.push(location);
+      }
       plan.open.push({ name, location });
       byName.set(name, { kind: 'database', instance: -plan.open.length, open: true, location });
       names.push(name);
     }
   }
-  plan.restore = databases.inMemory.map(({ name, bytes }) => ({ name, bytes }));
   const warmed = new Set<number>();
   for (const name of names) {
     const field = byName.get(name);
@@ -256,8 +257,23 @@ export function planRestore(
 }
 
 /**
- * Puts the snapshot databases into `state` as `planRestore` decides, and fails the load when no
- * file exists at the location of a database that it must open. The warm-up makes the first
+ * The error of a load that must open a file-backed database at a location where no file exists,
+ * given the locations of `plan.check` that exist; null when every such file exists.
+ */
+export function missingDatabaseFile(
+  plan: RestorePlan,
+  existing: ReadonlySet<string>,
+): string | null {
+  const missing = plan.open.find(({ location }) => location !== null && !existing.has(location));
+  return missing
+    ? `snapshot database field "${missing.name}": no database file at ${missing.location}`
+    : null;
+}
+
+/**
+ * Puts the snapshot databases into `state` as `planRestore` decides, and fails the load as
+ * `missingDatabaseFile` decides. Restores the bytes of each in-memory entry into its database,
+ * then warms the databases of the plan. The warm-up makes the first
  * recorded statements after the load match a live connection that holds its pages in cache;
  * otherwise snapshot recovery falls back to an older snapshot or a full replay.
  */
@@ -270,15 +286,17 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
   if (plan.tag === 'err') {
     throw new Error(plan.val);
   }
-  for (const { name, location } of plan.val.open) {
-    if (location !== null && !existsSync(location)) {
-      throw new Error(`snapshot database field "${name}": no database file at ${location}`);
-    }
+  const missing = missingDatabaseFile(
+    plan.val,
+    new Set(plan.val.check.filter((location) => existsSync(location))),
+  );
+  if (missing !== null) {
+    throw new Error(missing);
   }
   for (const { name, location } of plan.val.open) {
     state[name] = new DatabaseSync(location ?? IN_MEMORY_LOCATION, REOPENED_DATABASE_OPTIONS);
   }
-  for (const { name, bytes } of plan.val.restore) {
+  for (const { name, bytes } of databases.inMemory) {
     restoreDatabaseSync(state[name] as DatabaseSync, bytes);
   }
   for (const { name, allPages } of plan.val.warm) {

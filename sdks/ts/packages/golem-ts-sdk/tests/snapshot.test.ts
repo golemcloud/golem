@@ -551,11 +551,11 @@ describe('snapshot — restore plan', () => {
     ).toEqual({
       tag: 'ok',
       val: {
+        check: ['/data/app.db'],
         open: [
           { name: 'memDb', location: null },
           { name: 'fileDb', location: '/data/app.db' },
         ],
-        restore: [{ name: 'memDb', bytes }],
         warm: [
           { name: 'memDb', allPages: false },
           { name: 'fileDb', allPages: true },
@@ -580,8 +580,8 @@ describe('snapshot — restore plan', () => {
     ).toEqual({
       tag: 'ok',
       val: {
+        check: [],
         open: [],
-        restore: [{ name: 'memDb', bytes }],
         warm: [
           { name: 'memDb', allPages: false },
           { name: 'fileDb', allPages: true },
@@ -589,6 +589,26 @@ describe('snapshot — restore plan', () => {
         ],
       },
     });
+  });
+
+  it('fails when a file that the load must open does not exist', async () => {
+    const { missingDatabaseFile } = await import('../src/internal/databaseSnapshot');
+    const plan = {
+      check: ['/data/app.db', '/data/other.db'],
+      open: [
+        { name: 'memDb', location: null },
+        { name: 'fileDb', location: '/data/app.db' },
+        { name: 'otherDb', location: '/data/other.db' },
+      ],
+      warm: [],
+    };
+    expect(missingDatabaseFile(plan, new Set(['/data/app.db', '/data/other.db']))).toBeNull();
+    expect(missingDatabaseFile(plan, new Set(['/data/app.db']))).toBe(
+      'snapshot database field "otherDb": no database file at /data/other.db',
+    );
+    expect(missingDatabaseFile(plan, new Set())).toBe(
+      'snapshot database field "fileDb": no database file at /data/app.db',
+    );
   });
 
   it('fails when a recorded field holds a value that is not a database', async () => {
