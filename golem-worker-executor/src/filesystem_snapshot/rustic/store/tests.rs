@@ -3430,7 +3430,7 @@ fn vanishing_snapshots_after_the_claim(
                 && op_label != "list";
             if snapshot_read
                 && vanished
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
                         (count < vanishing).then_some(count + 1)
                     })
                     .is_ok()

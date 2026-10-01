@@ -2712,7 +2712,7 @@ mod tests {
             }
             if self
                 .failed_sends_remaining
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::Relaxed,
                     std::sync::atomic::Ordering::Relaxed,
                     |remaining| remaining.checked_sub(1),
