@@ -72,8 +72,9 @@ pub(crate) struct HostDirectories {
 /// gone. An owner that knows the end of the directory calls it. A drop without a discard removes
 /// the directory as a best effort, does not check, and only logs a failure.
 ///
-/// A host directory keeps the volume root that it is in usable while it lives, also after its
-/// provisioning is dropped.
+/// `.scratch` and `.initial-files` keep the volume root that they are in usable while they live,
+/// also after their provisioning is dropped. A directory that [`HostDirectory::create_in`] makes
+/// holds no root; it lives in its parent.
 #[derive(Debug)]
 pub(crate) struct HostDirectory {
     path: HostPath,
@@ -168,8 +169,8 @@ impl Drop for HostDirectory {
 /// Without a configured root on unmanaged storage, the root is a new temporary directory that the
 /// two host directories keep while they live. Removes what an earlier process left under each
 /// name first. On managed storage, a host directory that has a project identity gives an error.
-/// When `.initial-files` cannot be made, `.scratch` is removed again, and nothing is left under
-/// either name.
+/// When `.initial-files` cannot be made, the function removes the `.scratch` that it made, and a
+/// failure of that removal is the error. A leftover that the function could not remove stays.
 pub(super) async fn make_host_directories(
     provisioning: &SandboxFilesystemProvisioning,
 ) -> Result<HostDirectories, FilesystemStorageError> {

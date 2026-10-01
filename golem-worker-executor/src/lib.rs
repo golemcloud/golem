@@ -220,7 +220,7 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
 ///
 /// On a Unix platform it first clears bit 0o200 of the file mode creation mask of the process and
 /// keeps the other bits, so each file that an agent creates has write permission for its owner.
-/// Every process that runs agents starts them here, before any agent filesystem exists.
+/// Each executor starts its active agents here, before any of its agent filesystems exists.
 async fn start_active_agents<
     Ctx: WorkerCtx,
     BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,

@@ -370,7 +370,6 @@ impl FilesystemVolume {
     /// Whether the volume is managed XFS storage.
     pub(crate) fn is_managed(&self) -> bool {
         match &self.mode {
-            #[cfg(target_os = "linux")]
             FilesystemVolumeMode::Managed { .. } => true,
             FilesystemVolumeMode::UnmanagedDevelopment => false,
         }
@@ -1371,17 +1370,13 @@ impl<'a> CapabilityTempFile<'a> {
     }
 
     /// Gives the file the name `destination`, in place of what is at that name, as
-    /// [`tree_copy::clear_for_replacement`] decides for a file.
+    /// [`tree_copy::clear_for_replacement`] decides.
     fn persist_replacing(mut self, destination: &Path) -> std::io::Result<()> {
         let name = self
             .name
             .as_ref()
             .expect("capability temporary file name missing");
-        tree_copy::clear_for_replacement(
-            self.directory.as_dir(),
-            destination,
-            &tree_copy::TreeEntryKind::File,
-        )?;
+        tree_copy::clear_for_replacement(self.directory.as_dir(), destination)?;
         self.directory
             .as_dir()
             .rename(name, self.directory.as_dir(), destination)?;

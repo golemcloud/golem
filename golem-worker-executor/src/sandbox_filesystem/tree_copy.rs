@@ -226,9 +226,11 @@ pub(super) fn copy_contents(
     };
     let entries = list_tree(source, excluded)?;
     let plan = link_plan(&entries);
-    plan.copied
+    entries
         .iter()
-        .try_for_each(|entry| copy_out_entry(source, destination, entry, copy_mode))?;
+        .enumerate()
+        .filter(|(position, _)| plan.copies(*position))
+        .try_for_each(|(_, entry)| copy_out_entry(source, destination, entry, copy_mode))?;
     entries
         .iter()
         .rev()
@@ -243,14 +245,20 @@ pub(super) fn copy_contents(
     Ok(plan.groups)
 }
 
-/// The entries of a listing that a copy makes, and the other names of each object that it makes
-/// once.
+/// Which entries of a listing a copy makes, and the other names of each object that it makes once.
 #[derive(Debug, PartialEq)]
-struct LinkPlan<'a> {
-    /// The entries to copy, in the order of the listing.
-    copied: Vec<&'a TreeEntry>,
+struct LinkPlan {
+    /// The positions in the listing of the names that the copy does not make, in ascending order.
+    later: Box<[usize]>,
     /// A group for each object that the listing has at more than one name.
     groups: Box<[LinkGroup]>,
+}
+
+impl LinkPlan {
+    /// Whether the copy makes the entry at `position` in the listing.
+    fn copies(&self, position: usize) -> bool {
+        self.later.binary_search(&position).is_err()
+    }
 }
 
 /// Plans the copy of a listing that holds hard links.
@@ -258,31 +266,32 @@ struct LinkPlan<'a> {
 /// An entry without a link identity is copied. A regular file or a symlink with more than one name
 /// is copied once, at the first name that the listing gives, and its later names go into its
 /// [`LinkGroup`] in the order of the listing. An identity that the listing gives at one name only
-/// gives no group.
-fn link_plan(entries: &[TreeEntry]) -> LinkPlan<'_> {
-    let (_, copied, groups) = entries.iter().fold(
+/// gives no group. A listing without hard links allocates nothing for the plan.
+fn link_plan(entries: &[TreeEntry]) -> LinkPlan {
+    let (_, later, groups) = entries.iter().enumerate().fold(
         (
             HashMap::<&NativeFileIdentity, usize>::new(),
-            Vec::with_capacity(entries.len()),
+            Vec::new(),
             Vec::<(&Path, Vec<&Path>)>::new(),
         ),
-        |(mut positions, mut copied, mut groups), entry| {
-            match &entry.link {
-                None => copied.push(entry),
-                Some(identity) => match positions.get(identity) {
-                    Some(&position) => groups[position].1.push(&entry.relative),
+        |(mut positions, mut later, mut groups), (position, entry)| {
+            if let Some(identity) = &entry.link {
+                match positions.get(identity) {
+                    Some(&group) => {
+                        groups[group].1.push(&entry.relative);
+                        later.push(position);
+                    }
                     None => {
                         positions.insert(identity, groups.len());
                         groups.push((&entry.relative, Vec::new()));
-                        copied.push(entry);
                     }
-                },
+                }
             }
-            (positions, copied, groups)
+            (positions, later, groups)
         },
     );
     LinkPlan {
-        copied,
+        later: later.into_boxed_slice(),
         groups: groups
             .into_iter()
             .filter(|(_, others)| !others.is_empty())
@@ -408,7 +417,6 @@ pub(super) fn seed_entry(
         TreeEntryKind::Symlink(link_target) => seed_symlink(
             base,
             destination,
-            &entry.kind,
             link_target,
             entry.modified,
             context.placement,
@@ -466,7 +474,7 @@ fn seed_file(
 }
 
 /// Makes a symlink to `link_target` at `destination` under `directory`, with the modification
-/// time `modified`. `source` is the listed kind of the source symlink.
+/// time `modified`.
 ///
 /// With `CreateNew`, the symlink is made at its name in one call, and its `AlreadyExists` error
 /// applies the `Refuse` row of [`placement_action`]. A symlink that takes the place of a target is
@@ -474,7 +482,6 @@ fn seed_file(
 fn seed_symlink(
     directory: &cap_std::fs::Dir,
     destination: &Path,
-    source: &TreeEntryKind,
     link_target: &Path,
     modified: Option<SystemTime>,
     placement: SeedPlacement,
@@ -486,7 +493,7 @@ fn seed_symlink(
         SeedPlacement::Replace => {
             let temporary = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
             make_symlink(parent, link_target, &temporary, modified)
-                .and_then(|()| clear_for_replacement(parent, &name, source))
+                .and_then(|()| clear_for_replacement(parent, &name))
                 .and_then(|()| parent.rename(&temporary, parent, &name))
                 .inspect_err(|_| {
                     let _ = parent.remove_file(&temporary);
@@ -577,7 +584,6 @@ fn seed_listed_entry<'a>(
         TreeEntryKind::Symlink(link_target) => seed_symlink(
             target,
             &entry.relative,
-            &entry.kind,
             link_target,
             entry.modified,
             context.placement,
@@ -597,10 +603,11 @@ enum SeededDirectory {
 
 /// Makes the directory at `path` in `directory` for a directory in a seed source.
 ///
-/// The directory is made first, so that a concurrent change cannot slip between a check and the
-/// creation. When something is already at the path, [`placement_action`] decides: a directory
-/// merges under every placement, and another kind of object gives an `AlreadyExists` error with
-/// `CreateNew` and is removed with `Replace`.
+/// A free path is made with one call and no check before it. When something is already at the
+/// path, [`placement_action`] decides: a directory merges under every placement, and another kind
+/// of object gives an `AlreadyExists` error with `CreateNew` and is removed with `Replace`. The
+/// removal and the second creation of `Replace` are separate calls, so a concurrent change between
+/// them gives an error.
 fn seed_directory_at(
     directory: &cap_std::fs::Dir,
     path: &Path,
@@ -678,22 +685,22 @@ fn occupant(metadata: &cap_std::fs::Metadata) -> Occupant {
     }
 }
 
-/// Makes `name` in `directory` ready for an object of the kind `source` that a `Replace` seed
-/// renames there, as [`placement_action`] decides.
+/// Makes `name` in `directory` ready for a file or a symlink that a `Replace` seed renames there,
+/// as [`placement_action`] decides for a source that is not a directory.
 ///
 /// A free name and an object that the rename replaces stay as they are. A directory goes away with
-/// all that is in it. A symlink is not followed.
+/// all that is in it. A symlink is not followed. A file and a symlink have the same row in the
+/// table, so the function asks the table for a file.
 pub(super) fn clear_for_replacement(
     directory: &cap_std::fs::Dir,
     name: &Path,
-    source: &TreeEntryKind,
 ) -> std::io::Result<()> {
     let found = match directory.symlink_metadata(name) {
         Ok(metadata) => occupant(&metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
-    match placement_action(source, found, SeedPlacement::Replace) {
+    match placement_action(&TreeEntryKind::File, found, SeedPlacement::Replace) {
         PlacementAction::RemoveDirectory => directory.remove_dir_all(name),
         PlacementAction::Overwrite => Ok(()),
         PlacementAction::Merge | PlacementAction::Refuse => {
@@ -1014,6 +1021,16 @@ mod tests {
         }
     }
 
+    /// The names that a copy with `plan` makes, in the order of the listing.
+    fn copied_names<'a>(plan: &LinkPlan, entries: &'a [TreeEntry]) -> Vec<&'a str> {
+        entries
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| plan.copies(*position))
+            .map(|(_, entry)| entry.relative.to_str().unwrap())
+            .collect()
+    }
+
     fn group(first: &str, others: &[&str]) -> LinkGroup {
         LinkGroup {
             first: Box::from(Path::new(first)),
@@ -1039,13 +1056,8 @@ mod tests {
 
         let plan = link_plan(&entries);
 
-        assert_eq!(
-            plan.copied
-                .iter()
-                .map(|entry| entry.relative.to_str().unwrap())
-                .collect::<Vec<_>>(),
-            ["a", "b1", "c1", "d", "e"]
-        );
+        assert_eq!(copied_names(&plan, &entries), ["a", "b1", "c1", "d", "e"]);
+        assert_eq!(plan.later, Box::from([3, 6, 7]));
         assert_eq!(
             plan.groups,
             Box::from([group("b1", &["b2", "b3"]), group("c1", &["c2"])])
@@ -1058,7 +1070,8 @@ mod tests {
 
         let plan = link_plan(&entries);
 
-        assert_eq!(plan.copied, entries.iter().collect::<Vec<_>>());
+        assert_eq!(copied_names(&plan, &entries), ["a", "b"]);
+        assert!(plan.later.is_empty());
         assert!(plan.groups.is_empty());
     }
 

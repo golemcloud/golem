@@ -117,8 +117,8 @@ const OWNER_WRITE_BIT: libc::mode_t = 0o200;
 /// gives the current mask, and then to that mask without the owner write bit. Between the two
 /// calls, a file that another thread creates gets the usual permissions of the mask 0o022.
 ///
-/// Executor bootstrap calls this once, before it starts the agent filesystem service, in every
-/// process that runs agents. Windows has no file mode creation mask. There, a file is read-only
+/// Executor bootstrap calls this each time it starts an executor, before it starts the agent
+/// filesystem service. Windows has no file mode creation mask. There, a file is read-only
 /// only when its read-only attribute is set, and an agent cannot set that attribute, so bootstrap
 /// changes nothing.
 #[cfg(unix)]
