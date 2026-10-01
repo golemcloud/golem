@@ -227,12 +227,13 @@ async fn start_active_agents<
 >(
     bootstrap: &BootstrapImpl,
     golem_config: &GolemConfig,
+    initial_files_service: Arc<InitialAgentFilesService>,
     shutdown_token: tokio_util::sync::CancellationToken,
 ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
     #[cfg(unix)]
     services::agent_filesystem::keep_owner_write_permission();
     bootstrap
-        .create_active_agents(golem_config, shutdown_token)
+        .create_active_agents(golem_config, initial_files_service, shutdown_token)
         .await
 }
 
@@ -260,6 +261,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
         Ok(Arc::new(
@@ -267,6 +269,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 &golem_config.active_agents,
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
+                initial_files_service,
                 &golem_config.agent_status_flush,
                 shutdown_token,
             )
@@ -975,13 +978,15 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_agents =
-        start_active_agents(bootstrap, &golem_config, shutdown_token.clone()).await?;
-
-    let file_loader = Arc::new(FileLoader::new(
+    let active_agents = start_active_agents(
+        bootstrap,
+        &golem_config,
         initial_files_service.clone(),
-        active_agents.agent_filesystems().initial_files_directory(),
-    ));
+        shutdown_token.clone(),
+    )
+    .await?;
+
+    let file_loader = active_agents.agent_filesystems().file_loader();
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
         active_agents.clone(),
@@ -1481,11 +1486,18 @@ mod tests {
         async fn create_active_agents(
             &self,
             _golem_config: &GolemConfig,
+            _initial_files_service: Arc<InitialAgentFilesService>,
             _shutdown_token: tokio_util::sync::CancellationToken,
         ) -> anyhow::Result<Arc<ActiveAgents<Context>>> {
             *self.mask.lock().unwrap() = Some(thread_file_creation_mask());
             Err(anyhow!("the test starts no active agents"))
         }
+    }
+
+    fn in_memory_initial_files_service() -> Arc<InitialAgentFilesService> {
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        )))
     }
 
     /// The snapshot service gets the storage mode of the agent filesystems: on unmanaged storage
@@ -1512,6 +1524,7 @@ mod tests {
                 &golem_config.active_agents,
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
+                in_memory_initial_files_service(),
                 &golem_config.agent_status_flush,
                 shutdown.token(),
             )
@@ -1551,6 +1564,7 @@ mod tests {
                 .block_on(start_active_agents(
                     &bootstrap,
                     &GolemConfig::default(),
+                    in_memory_initial_files_service(),
                     tokio_util::sync::CancellationToken::new(),
                 ))
                 .is_ok();

@@ -195,8 +195,8 @@ async fn host_directories() -> HostDirectories {
 }
 
 /// Makes the cache directory of a file loader on unmanaged storage with a temporary root.
-async fn initial_files_directory() -> Arc<HostDirectory> {
-    Arc::new(host_directories().await.initial_files)
+async fn initial_files_directory() -> HostDirectory {
+    host_directories().await.initial_files
 }
 
 /// Makes a scratch directory on unmanaged storage with a temporary root.

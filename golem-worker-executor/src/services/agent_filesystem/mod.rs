@@ -19,11 +19,13 @@ use crate::sandbox_filesystem::{
     FilesystemVolume, HostDirectories, HostDirectory, SandboxFilesystemProvisioning,
     observe_space_blocking,
 };
+use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use golem_common::model::OwnedAgentId;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -184,15 +186,15 @@ pub(crate) struct AgentFilesystems {
     pressure: FilesystemPressureConfig,
     filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
     scratch: Arc<HostDirectory>,
-    initial_files: Arc<HostDirectory>,
+    file_loader: Arc<FileLoader>,
 }
 
 impl AgentFilesystems {
     /// Binds filesystem provisioning and pressure settings for an executor. The provisioning makes
-    /// the host directories `.scratch`, for captures and restores, and `.initial-files`, for the
-    /// downloads of initial files.
+    /// the host directories `.scratch`, for captures and restores, and `.initial-files`, which goes
+    /// by value to the file loader of the service. The loader keeps the downloads of initial files
+    /// from `initial_files_service` there.
     ///
-    /// Callers create this service during executor startup, before any agent filesystem exists.
     /// The service changes no state of the process. Making the host directories removes what an
     /// earlier process left under their names. Returns an error for invalid provisioning settings,
     /// host directories that cannot be made, failed volume observation, or a pressure target
@@ -200,6 +202,7 @@ impl AgentFilesystems {
     /// directories, logs a failed discard, and returns the error of the check.
     pub(crate) async fn new(
         settings: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
     ) -> Result<Self, FilesystemStorageError> {
         let (
             provisioning,
@@ -231,16 +234,16 @@ impl AgentFilesystems {
             pressure: settings.pressure.clone(),
             filesystem_object_limit_policy: settings.filesystem_object_limit_policy.clone(),
             scratch: Arc::new(scratch),
-            initial_files: Arc::new(initial_files),
+            file_loader: Arc::new(FileLoader::new(initial_files_service, initial_files)),
         })
     }
 
-    /// Returns the `.initial-files` host directory that binding made.
+    /// Returns the file loader that owns the `.initial-files` host directory.
     ///
-    /// Executor bootstrap gives it to the one file loader of the executor, which keeps its
-    /// downloads there. The executor has exactly one file loader on this directory.
-    pub(crate) fn initial_files_directory(&self) -> Arc<HostDirectory> {
-        Arc::clone(&self.initial_files)
+    /// Each call gives the same loader. No other loader can have the directory, because the loader
+    /// owns the only value of it.
+    pub(crate) fn file_loader(&self) -> Arc<FileLoader> {
+        Arc::clone(&self.file_loader)
     }
 
     /// Returns the pressure thresholds used to recover writes on the provisioned volume.
@@ -352,6 +355,12 @@ mod tests {
     use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
     use test_r::test;
 
+    fn initial_files_service() -> Arc<InitialAgentFilesService> {
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        )))
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_file_mode_creation_mask_loses_only_the_owner_write_bit() {
@@ -400,7 +409,7 @@ mod tests {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(AgentFilesystems::new(&settings));
+                .block_on(AgentFilesystems::new(&settings, initial_files_service()));
             (bound, thread_file_creation_mask())
         });
 
@@ -490,7 +499,7 @@ mod tests {
                 total_filesystem_objects: u64::MAX,
                 available_filesystem_objects: u64::MAX,
             },
-            AgentFilesystems::new(&settings),
+            AgentFilesystems::new(&settings, initial_files_service()),
         )
         .await
         .unwrap();
@@ -525,7 +534,7 @@ mod tests {
                 total_filesystem_objects: u64::MAX,
                 available_filesystem_objects: u64::MAX,
             },
-            AgentFilesystems::new(&settings),
+            AgentFilesystems::new(&settings, initial_files_service()),
         )
         .await;
 
@@ -551,7 +560,7 @@ mod tests {
                 total_filesystem_objects: u64::MAX,
                 available_filesystem_objects: u64::MAX,
             },
-            AgentFilesystems::new(&settings),
+            AgentFilesystems::new(&settings, initial_files_service()),
         )
         .await;
 
@@ -572,7 +581,9 @@ mod tests {
             ..FilesystemStorageConfig::default()
         };
 
-        let filesystems = AgentFilesystems::new(&settings).await.unwrap();
+        let _filesystems = AgentFilesystems::new(&settings, initial_files_service())
+            .await
+            .unwrap();
 
         [".scratch", ".initial-files"].into_iter().for_each(|name| {
             assert!(
@@ -583,9 +594,34 @@ mod tests {
                 "binding must remove what an earlier process left in {name}"
             );
         });
-        assert_eq!(
-            filesystems.initial_files_directory().path().as_path(),
-            root.path().join(".initial-files")
+    }
+
+    /// The loader owns `.initial-files`: the directory stays while the loader lives, also after the
+    /// service is dropped, and goes away with the loader.
+    #[test]
+    async fn agent_filesystems_give_the_initial_files_directory_to_their_one_file_loader() {
+        let root = tempfile::tempdir().unwrap();
+        let settings = FilesystemStorageConfig {
+            deterministic_root_dir: Some(root.path().to_path_buf()),
+            ..FilesystemStorageConfig::default()
+        };
+        let initial_files = root.path().join(".initial-files");
+
+        let filesystems = AgentFilesystems::new(&settings, initial_files_service())
+            .await
+            .unwrap();
+        let loader = filesystems.file_loader();
+        assert!(Arc::ptr_eq(&loader, &filesystems.file_loader()));
+        drop(filesystems);
+
+        assert!(
+            initial_files.is_dir(),
+            "the directory must live while its loader lives"
+        );
+        drop(loader);
+        assert!(
+            !initial_files.exists(),
+            "the directory must go away with its loader"
         );
     }
 
@@ -605,7 +641,7 @@ mod tests {
                 total_filesystem_objects: u64::MAX,
                 available_filesystem_objects: u64::MAX,
             },
-            AgentFilesystems::new(&settings),
+            AgentFilesystems::new(&settings, initial_files_service()),
         )
         .await;
 
@@ -628,7 +664,7 @@ mod tests {
                 total_filesystem_objects: observed_total_objects,
                 available_filesystem_objects: observed_total_objects,
             },
-            AgentFilesystems::new(&settings),
+            AgentFilesystems::new(&settings, initial_files_service()),
         )
         .await;
 

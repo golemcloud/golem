@@ -83,6 +83,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -735,6 +736,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
@@ -747,6 +749,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             active_agents_config,
             memory_config,
             storage_config,
+            initial_files_service,
             agent_status_flush_config,
             shutdown_token,
         )
@@ -762,10 +765,12 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
-        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config).await?);
+        let agent_filesystems =
+            Arc::new(AgentFilesystems::new(storage_config, initial_files_service).await?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
