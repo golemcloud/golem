@@ -193,9 +193,10 @@ export function decodeSnapshotDatabases(
 }
 
 /**
- * Puts the snapshot databases into `state`. An entry whose field is empty gets a new database,
- * in memory or opened at its location, and the bytes of each in-memory entry are restored into
- * its database. Each open database then reads its schema and, when file-backed, every page, so
+ * Puts the snapshot databases into `state`. An entry whose field is `undefined` gets a new
+ * database, in memory or opened at its location; a field that holds any other value that is not
+ * a `DatabaseSync`, `null` included, fails the load. The bytes of each in-memory entry are
+ * restored into its database. Each open database then reads its schema and, when file-backed, every page, so
  * that the first recorded statements after the load match a live connection that holds its pages
  * in cache; otherwise snapshot recovery falls back to a full replay.
  */

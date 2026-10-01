@@ -920,6 +920,48 @@ describe('snapshot — in-memory and file-backed databases', () => {
     ]);
   });
 
+  it.each([
+    ['null', null],
+    ['a value that is not a database', { path: '/data/app.db' }],
+  ])(
+    'fails the load when a custom load returns %s for a recorded database field',
+    async (_description, value) => {
+      const env = await isolate();
+      env
+        .isolatedDefineAgent({
+          name: 'WrongDatabaseField',
+          id: { name: z.string() },
+          snapshotting: { state: z.object({ count: z.number() }) },
+          methods: {},
+        })
+        .implement({
+          init: () => ({ count: 0 }),
+          methods: {},
+          snapshot: {
+            load() {
+              return { count: 9, fileDb: value };
+            },
+          },
+        });
+      env.select('WrongDatabaseField');
+
+      await expect(
+        env.isolatedGuest.loadSnapshot.load({
+          payload: new TextEncoder().encode(
+            JSON.stringify({
+              version: 1,
+              principal: { tag: 'anonymous' },
+              state: { count: 9 },
+              fileDatabases: { fileDb: '/data/app.db' },
+            }),
+          ),
+          mimeType: 'application/json',
+        }),
+      ).rejects.toContain('snapshot database field \\"fileDb\\" is not a DatabaseSync');
+      expect(env.constructed).toEqual([]);
+    },
+  );
+
   it('does not warm a database that a custom load leaves closed', async () => {
     const env = await isolate();
     env
