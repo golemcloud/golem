@@ -2667,7 +2667,8 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
         if change.is_some()
             && let Err(refusal) = refuse_read_only_change(opened.is_read_only_file())
         {
-            // The open goes to the guest, so the node closes through the adapter.
+            // A node of the guest open path closes through `execute_close`, which retries the
+            // close and decides the effect of a failed close on the generation.
             execute_close(Arc::clone(&generation), opened.into_node()).await?;
             return Err(refusal);
         }
