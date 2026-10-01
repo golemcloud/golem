@@ -14,10 +14,10 @@
 
 //! A filesystem snapshot store that keeps each snapshot in the memory of the process.
 //!
-//! The snapshots of a scope are one immutable slice. Each change makes a new slice from the old one
-//! with a pure function. The store puts the new slice in place under a lock that no await holds. A
-//! restore keeps the tree that it read under the lock, so a delete at the same time cannot change
-//! it. Two scopes that a copy made share trees that never change.
+//! The snapshots of an agent are one immutable slice. Each change makes a new slice from the old
+//! one with a pure function. The store puts the new slice in place under a lock that no await
+//! holds. A restore keeps the tree that it read under the lock, so a delete at the same time
+//! cannot change it. Two agents whose snapshots a copy made share trees that never change.
 
 mod tree;
 
@@ -26,7 +26,7 @@ mod tests;
 
 use super::clock::{Clock, SystemClock};
 use super::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError, newest_first, snapshot_time,
 };
 use async_trait::async_trait;
@@ -42,11 +42,17 @@ use tree::{TreeEntry, read_tree, tree_info, write_tree};
 /// platform other than unix, a save of a tree with a symlink gives `Source` and publishes nothing.
 #[derive(Clone)]
 pub(crate) struct InMemorySnapshotStore {
-    scopes: Arc<Mutex<HashMap<SnapshotScope, Arc<[Stored]>>>>,
+    agents: Arc<Mutex<HashMap<AgentSnapshots, Arc<[Stored]>>>>,
     clock: Arc<dyn Clock>,
 }
 
-/// One snapshot of a scope.
+impl Default for InMemorySnapshotStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One snapshot of an agent.
 #[derive(Clone)]
 struct Stored {
     name: SnapshotName,
@@ -64,20 +70,20 @@ impl InMemorySnapshotStore {
     /// Makes a store that holds no snapshot and reads the time from the clock.
     fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
-            scopes: Arc::default(),
+            agents: Arc::default(),
             clock,
         }
     }
 
-    /// Gives the snapshots of each scope. No lock is held across an await, so a panic cannot leave
-    /// a change half made. The store therefore uses the map of a poisoned lock as it is.
-    fn scopes(&self) -> MutexGuard<'_, HashMap<SnapshotScope, Arc<[Stored]>>> {
-        self.scopes.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Gives the snapshots of each agent. No lock is held across an await, so a panic cannot
+    /// leave a change half made. The store therefore uses the map of a poisoned lock as it is.
+    fn agents(&self) -> MutexGuard<'_, HashMap<AgentSnapshots, Arc<[Stored]>>> {
+        self.agents.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Gives the snapshots of the scope. A scope that holds nothing gives an empty slice.
-    fn snapshots_of(&self, scope: &SnapshotScope) -> Arc<[Stored]> {
-        self.scopes().get(scope).cloned().unwrap_or_default()
+    /// Gives the snapshots of the agent. An agent without snapshots gives an empty slice.
+    fn snapshots_of(&self, agent: &AgentSnapshots) -> Arc<[Stored]> {
+        self.agents().get(agent).cloned().unwrap_or_default()
     }
 }
 
@@ -103,11 +109,11 @@ fn with_saved(snapshots: &[Stored], snapshot: Stored) -> Result<Arc<[Stored]>, S
     }
 }
 
-/// Gives the snapshots without the snapshot with the name.
-fn without(snapshots: &[Stored], name: &SnapshotName) -> Arc<[Stored]> {
+/// Gives the snapshots without the snapshots with the names `names`.
+fn without(snapshots: &[Stored], names: &[SnapshotName]) -> Arc<[Stored]> {
     snapshots
         .iter()
-        .filter(|stored| stored.name != *name)
+        .filter(|stored| !names.contains(&stored.name))
         .cloned()
         .collect()
 }
@@ -128,12 +134,12 @@ async fn blocking<T: Send + 'static>(
 impl FilesystemSnapshotStore for InMemorySnapshotStore {
     async fn save(
         &self,
-        scope: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         _parent: Option<(&SnapshotName, ChangeDetection)>,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
-        let snapshots = self.snapshots_of(scope);
+        let snapshots = self.snapshots_of(agent);
         if found(&snapshots, name).is_some() {
             return Err(SnapshotStoreError::AlreadyExists);
         }
@@ -147,8 +153,8 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 
         // A save of the same name can finish during the read, so the check runs again in the
         // step that publishes the snapshot.
-        let mut scopes = self.scopes();
-        let current = scopes.get(scope).cloned().unwrap_or_default();
+        let mut agents = self.agents();
+        let current = agents.get(agent).cloned().unwrap_or_default();
         let saved = with_saved(
             &current,
             Stored {
@@ -157,17 +163,17 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
                 tree,
             },
         )?;
-        scopes.insert(scope.clone(), saved);
+        agents.insert(agent.clone(), saved);
         Ok(info)
     }
 
     async fn restore(
         &self,
-        scope: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
-        let snapshots = self.snapshots_of(scope);
+        let snapshots = self.snapshots_of(agent);
         let stored = found(&snapshots, name)
             .cloned()
             .ok_or(SnapshotStoreError::NotFound)?;
@@ -182,18 +188,18 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 
     async fn stat(
         &self,
-        scope: &SnapshotScope,
+        agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
-        Ok(found(&self.snapshots_of(scope), name).map(|stored| stored.info))
+        Ok(found(&self.snapshots_of(agent), name).map(|stored| stored.info))
     }
 
     async fn list(
         &self,
-        scope: &SnapshotScope,
+        agent: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         Ok(newest_first(
-            self.snapshots_of(scope)
+            self.snapshots_of(agent)
                 .iter()
                 .map(|stored| (stored.name.clone(), stored.info)),
         ))
@@ -201,33 +207,66 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
 
     async fn delete(
         &self,
-        scope: &SnapshotScope,
-        name: &SnapshotName,
+        agent: &AgentSnapshots,
+        names: &[SnapshotName],
     ) -> Result<(), SnapshotStoreError> {
-        let mut scopes = self.scopes();
-        if let Some(snapshots) = scopes.get(scope) {
-            let kept = without(snapshots, name);
-            scopes.insert(scope.clone(), kept);
+        let mut agents = self.agents();
+        if let Some(snapshots) = agents.get(agent) {
+            let kept = without(snapshots, names);
+            agents.insert(agent.clone(), kept);
         }
         Ok(())
     }
 
-    async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
-        self.scopes().remove(scope);
+    async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
+        self.agents().remove(agent);
         Ok(())
     }
 
-    async fn copy_scope(
+    async fn copy_all(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
-        // The snapshots never change, so the two scopes can hold the same slice and stay
-        // independent. A change of one scope puts a new slice in that scope only.
-        let mut scopes = self.scopes();
-        if let Some(snapshots) = scopes.get(from).cloned() {
-            scopes.insert(to.clone(), snapshots);
+        // The snapshots never change, so the two agents can hold the same slice and stay
+        // independent. A change for one agent puts a new slice in place for that agent only.
+        let mut agents = self.agents();
+        if let Some(snapshots) = agents.get(from).cloned() {
+            agents.insert(to.clone(), snapshots);
         }
         Ok(())
+    }
+}
+
+/// The times that a test store gives its saves: each new name gets a time ten minutes after the
+/// name before it, so that retention sees times far apart.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct SpacedTimes(Mutex<HashMap<Box<str>, Timestamp>>);
+
+#[cfg(test)]
+impl SpacedTimes {
+    /// The time of the first save.
+    pub(crate) const FIRST_MILLIS: u64 = 1_800_000_000_000;
+    /// The time between two saves.
+    const SPACING_MILLIS: u64 = 10 * 60 * 1000;
+
+    /// Gives `info` with the time of `name`, and gives a new name the next time.
+    pub(crate) fn timed(&self, name: &SnapshotName, info: SnapshotInfo) -> SnapshotInfo {
+        let mut times = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = times.len() as u64;
+        let created_at = *times
+            .entry(Box::from(name.as_str()))
+            .or_insert_with(|| Timestamp::from(Self::FIRST_MILLIS + count * Self::SPACING_MILLIS));
+        SnapshotInfo { created_at, ..info }
+    }
+
+    /// Gives `info` with the time of `name` when it has one, and gives no time to a new name.
+    pub(crate) fn known(&self, name: &SnapshotName, info: SnapshotInfo) -> SnapshotInfo {
+        let times = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        SnapshotInfo {
+            created_at: times.get(name.as_str()).copied().unwrap_or(info.created_at),
+            ..info
+        }
     }
 }

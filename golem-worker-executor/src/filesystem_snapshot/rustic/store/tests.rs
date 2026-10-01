@@ -40,7 +40,7 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
 };
 use crate::filesystem_snapshot::contract_tests::{self, OpenStore, new_scope};
 use crate::filesystem_snapshot::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError,
 };
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
@@ -137,7 +137,7 @@ fn fixture_tree() -> Scratch {
 /// Restores the name into a new directory, and gives the listing of the directory.
 async fn restored_listing(
     store: &RusticSnapshotStore,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Result<Vec<Listed>, SnapshotStoreError> {
     let into = Scratch::new();
@@ -145,7 +145,7 @@ async fn restored_listing(
     Ok(listing(into.path()))
 }
 
-async fn listed_names(store: &RusticSnapshotStore, scope: &SnapshotScope) -> Vec<String> {
+async fn listed_names(store: &RusticSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
     store
         .list(scope)
         .await
@@ -173,11 +173,11 @@ async fn blobs(
     paths
 }
 
-async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> PruneLedger {
+async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) -> PruneLedger {
     read_ledger(
         &files_of(
             storage.clone(),
-            scope.0.clone(),
+            (*scope.0).clone(),
             Duration::from_secs(2),
             CancellationToken::new(),
         ),
@@ -188,12 +188,12 @@ async fn ledger<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScop
 }
 
 /// Gives the sum of the bytes in the names of the records of freed bytes of the scope.
-async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) -> u64 {
+async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) -> u64 {
     let listed = storage
         .list_blobs_below(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed"),
         )
         .await
@@ -670,11 +670,11 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     });
     let held = polled_until(REACH_LIMIT, || index_writes() > before).await;
     assert!(held, "the save did not reach its index write");
-    let deleted = store.delete(&scope, &name("p-old")).await;
+    let deleted = store.delete(&scope, &[name("p-old")]).await;
     let pruned_while_held = ledger(&storage, &scope).await.last_prune.is_some();
     storage.open_gate();
     let saved = saving.await.unwrap();
-    let pruned_again = store.delete(&scope, &name("p-none")).await;
+    let pruned_again = store.delete(&scope, &[name("p-none")]).await;
 
     assert_eq!(
         (
@@ -849,7 +849,7 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new(&format!("snapshots/{}", "ab".repeat(32))),
             b"not a snapshot",
         )
@@ -895,12 +895,12 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
 
-    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
     let after_first = ledger(&storage, &scope).await;
     let after_first_freed = freed(&storage, &scope).await;
     // The margin for clock skew keeps the next prune back, so the ledger moves back.
     age_ledger(&storage, &scope, &after_first).await;
-    store.delete(&scope, &name("p-none")).await.unwrap();
+    store.delete(&scope, &[name("p-none")]).await.unwrap();
     let packs_after = blobs(&*storage, &scope.0, "data/").await;
 
     assert_eq!(
@@ -928,21 +928,21 @@ fn data_listings(calls: &[(&'static str, String)]) -> usize {
 /// record of one freed byte.
 async fn set_last_prune<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     last_prune: golem_common::model::Timestamp,
 ) {
     storage
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed/1-test"),
             GONE_SNAPSHOT.as_bytes(),
         )
         .await
         .unwrap();
     storage
-        .delete_dir("test", "test", scope.0.clone(), Path::new(LEDGERS_PATH))
+        .delete_dir("test", "test", (*scope.0).clone(), Path::new(LEDGERS_PATH))
         .await
         .unwrap();
     put_ledger_entry(
@@ -957,7 +957,7 @@ async fn set_last_prune<S: BlobStorage + 'static>(
 /// which is more than the grace period of each test and the margin for clock skew.
 async fn age_ledger<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     ledger: &PruneLedger,
 ) {
     let back = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap() + 2 * 3_600_000;
@@ -965,7 +965,7 @@ async fn age_ledger<S: BlobStorage + 'static>(
         .last_prune
         .map_or(0, |last| last.to_millis().saturating_sub(back));
     storage
-        .delete_dir("test", "test", scope.0.clone(), Path::new(LEDGERS_PATH))
+        .delete_dir("test", "test", (*scope.0).clone(), Path::new(LEDGERS_PATH))
         .await
         .unwrap();
     put_ledger_entry(
@@ -979,14 +979,14 @@ async fn age_ledger<S: BlobStorage + 'static>(
 /// Writes a ledger entry with the name.
 async fn put_ledger_entry<S: BlobStorage + 'static>(
     storage: &Arc<S>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &str,
 ) {
     storage
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             &Path::new(LEDGERS_PATH).join(name),
             b"",
         )
@@ -1017,7 +1017,7 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
     set_last_prune(&storage, &scope, now).await;
     let before_first = storage.calls().len();
 
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
     let before_second = storage.calls().len();
     set_last_prune(
         &storage,
@@ -1025,7 +1025,7 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
         golem_common::model::Timestamp::from(now.to_millis().saturating_sub(2 * 3_600_000)),
     )
     .await;
-    store.delete(&scope, &name("p-2")).await.unwrap();
+    store.delete(&scope, &[name("p-2")]).await.unwrap();
     let calls = storage.calls();
 
     assert_eq!(
@@ -1034,6 +1034,58 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
             data_listings(&calls[before_second..]),
         ),
         (0, 1)
+    );
+}
+
+/// Counts the listings of the snapshot files of a repository in `calls`.
+fn snapshot_listings(calls: &[(&'static str, String)]) -> usize {
+    calls
+        .iter()
+        .filter(|(op_label, path)| *op_label == "list" && path.starts_with("snapshots"))
+        .count()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_batch_delete_lists_the_snapshots_once_and_deletes_each_name_of_the_batch() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(storage.clone(), policy(LONG_DEADLINE, NEVER, LONG_DEADLINE));
+    let scope = new_scope();
+    let trees = ["one", "two", "three", "four"].map(one_file_tree);
+    futures::stream::iter(["p-1", "p-2", "p-3", "p-kept"].into_iter().zip(&trees))
+        .for_each(|(snapshot, tree)| {
+            let store = &store;
+            let scope = &scope;
+            async move {
+                store
+                    .save(scope, &name(snapshot), tree.path(), None)
+                    .await
+                    .unwrap();
+            }
+        })
+        .await;
+    let before = storage.calls().len();
+
+    store
+        .delete(
+            &scope,
+            &[name("p-1"), name("p-2"), name("p-unknown"), name("p-3")],
+        )
+        .await
+        .unwrap();
+    let calls = storage.calls();
+    let remaining = store
+        .list(&scope)
+        .await
+        .unwrap()
+        .iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (snapshot_listings(&calls[before..]), remaining),
+        (1, vec!["p-kept".to_string()])
     );
 }
 
@@ -1062,7 +1114,7 @@ async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
         .await
         .unwrap();
 
-    let deleted = store.delete(&scope, &name("p-deleted")).await;
+    let deleted = store.delete(&scope, &[name("p-deleted")]).await;
     let after = ledger(&storage, &scope).await;
     let after_freed = freed(&storage, &scope).await;
 
@@ -1083,7 +1135,7 @@ fn prunes(calls: &[(&'static str, String)]) -> usize {
 }
 
 /// Saves a tree of one file with the content under each name.
-async fn save_each(store: &RusticSnapshotStore, scope: &SnapshotScope, names: &[&str]) {
+async fn save_each(store: &RusticSnapshotStore, scope: &AgentSnapshots, names: &[&str]) {
     futures::stream::iter(names)
         .for_each(|text| async move {
             let tree = one_file_tree(text);
@@ -1120,7 +1172,7 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
     let paused = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     // The second delete lists the freed records too. So the gate would hold it for ever when the
     // first delete did not reach its listing first.
@@ -1130,7 +1182,7 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
         "the first delete did not reach its listing of the freed records"
     );
 
-    let pruned = store.delete(&scope, &name("p-2")).await;
+    let pruned = store.delete(&scope, &[name("p-2")]).await;
     let after_prune = ledger(&storage, &scope).await;
     storage.open_gate();
     let paused = tokio::time::timeout(LIMIT, paused).await;
@@ -1182,7 +1234,7 @@ async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
     let pruning = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
 
@@ -1190,7 +1242,7 @@ async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed/7-late"),
             GONE_SNAPSHOT.as_bytes(),
         )
@@ -1233,7 +1285,7 @@ async fn a_late_older_ledger_entry_does_not_win() {
     .await;
 
     let read = ledger(&storage, &scope).await;
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
 
     assert_eq!(
         (
@@ -1278,7 +1330,7 @@ async fn a_prune_deletes_the_older_ledger_entries_and_keeps_a_newer_one() {
     let pruning = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
 
@@ -1305,7 +1357,7 @@ async fn a_prune_deletes_the_older_ledger_entries_and_keeps_a_newer_one() {
 }
 
 /// Gives the time of the newest marker of the claims of the scope.
-async fn claim_time(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Option<u64> {
+async fn claim_time(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Option<u64> {
     blobs(storage, &scope.0, "golem/prune-claims/")
         .await
         .iter()
@@ -1320,7 +1372,7 @@ async fn claim_time(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Opt
 
 /// Moves each marker of the claims of the scope back by two hours and the margin, so no marker
 /// holds its ledger.
-async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &SnapshotScope) {
+async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshots) {
     let stale = golem_common::model::Timestamp::now_utc()
         .to_millis()
         .saturating_sub(2 * 3_600_000 + 2 * 60_000);
@@ -1328,7 +1380,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &Snapshot
         .list_blobs_below(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims"),
         )
         .await
@@ -1347,7 +1399,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &Snapshot
             let (storage, scope) = (storage.clone(), scope.clone());
             async move {
                 storage
-                    .delete("test", "test", scope.0.clone(), &path)
+                    .delete("test", "test", (*scope.0).clone(), &path)
                     .await
                     .unwrap();
                 let aged = path
@@ -1355,7 +1407,7 @@ async fn age_claims<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &Snapshot
                     .unwrap_or(Path::new(""))
                     .join(format!("{number}@{stale}-aged"));
                 storage
-                    .put_raw("test", "test", scope.0.clone(), &aged, b"")
+                    .put_raw("test", "test", (*scope.0).clone(), &aged, b"")
                     .await
                     .unwrap();
             }
@@ -1405,7 +1457,7 @@ async fn a_prune_refreshes_the_claim_with_its_own_number() {
         let (storage, scope) = (storage.clone(), scope.clone());
         async move {
             storage
-                .put_raw("test", "test", scope.0.clone(), Path::new(&path), &[])
+                .put_raw("test", "test", (*scope.0).clone(), Path::new(&path), &[])
                 .await
                 .unwrap();
         }
@@ -1413,7 +1465,7 @@ async fn a_prune_refreshes_the_claim_with_its_own_number() {
     .await;
     let pruning = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let refreshes = || {
         storage
@@ -1489,7 +1541,7 @@ async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_after_refreshes
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &name("p-1")).await;
+    let failed = store.delete(&scope, &[name("p-1")]).await;
     let refreshes = storage
         .calls()
         .iter()
@@ -1540,7 +1592,7 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     let pruning = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     // The second delete claims and lists the packs too. So the gate would hold its prune for ever
     // when the first delete did not reach its listing first.
@@ -1565,7 +1617,7 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     )
     .await
     .is_ok();
-    let second = store.delete(&scope, &name("p-2")).await;
+    let second = store.delete(&scope, &[name("p-2")]).await;
     let prunes_while_held = prunes(&storage.calls());
     storage.open_gate();
     let pruned = tokio::time::timeout(LIMIT, pruning).await;
@@ -1593,7 +1645,7 @@ fn is_backend_call(op_label: &str) -> bool {
 }
 
 /// Gives the entries of the claims of the scope.
-async fn claim_entries(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> Vec<ClaimEntry> {
+async fn claim_entries(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> Vec<ClaimEntry> {
     blobs(storage, &scope.0, "golem/prune-claims/")
         .await
         .iter()
@@ -1626,7 +1678,7 @@ async fn a_prune_whose_refreshes_fail_stops_when_its_lease_runs_out_and_keeps_it
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
     let calls = storage.calls();
     let backend_calls_after_claim = calls
         .iter()
@@ -1691,7 +1743,7 @@ async fn a_prune_goes_on_after_one_failed_refresh_when_the_later_refreshes_succe
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
     let calls = storage.calls();
     let backend_calls_after_claim = calls
         .iter()
@@ -1746,7 +1798,7 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
         let (storage, scope) = (storage.clone(), scope.clone());
         async move {
             storage
-                .put_raw("test", "test", scope.0.clone(), Path::new(&path), &[])
+                .put_raw("test", "test", (*scope.0).clone(), Path::new(&path), &[])
                 .await
                 .unwrap();
         }
@@ -1754,7 +1806,7 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
     .await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let held = eventually(|| {
         storage
@@ -1804,7 +1856,7 @@ async fn a_ledger_entry_ahead_within_the_margin_of_the_moved_clock_holds_the_pru
     put_ledger_entry(&storage, &scope, &format!("{ahead}-0-ahead")).await;
     clock.advance(Duration::from_secs(20));
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(prunes(&storage.calls()), 0);
@@ -1848,7 +1900,7 @@ async fn a_save_and_a_prune_take_their_times_from_the_injected_clock() {
         .await
         .unwrap();
     save_each(&store, &scope, &["p-2"]).await;
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
     let calls = storage.calls();
     let written = ["write_marker", "final_marker", "write_ledger"]
         .map(|op_label| written_times(&calls, op_label));
@@ -1896,7 +1948,7 @@ async fn the_refresh_markers_of_a_prune_take_their_times_from_the_injected_clock
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let pruning = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let refreshed =
         eventually(|| written_times(&storage.calls(), "refresh_claim").len() >= 2).await;
@@ -1938,7 +1990,7 @@ async fn the_second_ledger_read_of_a_delete_compares_with_the_injected_clock() {
     clock.advance(Duration::from_secs(20));
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let claiming = eventually(|| {
         storage
@@ -1970,7 +2022,7 @@ async fn the_final_marker_of_a_dropped_delete_takes_its_time_from_the_injected_c
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let started = eventually(|| prunes(&storage.calls()) == 1).await;
     deleting.abort();
@@ -2011,7 +2063,7 @@ async fn a_ledger_write_after_the_lease_ran_out_is_not_sent_and_the_claim_stays(
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
     let calls = storage.calls();
     let entries = claim_entries(&storage, &scope).await;
 
@@ -2056,7 +2108,7 @@ async fn a_ledger_write_that_starts_within_the_lease_ends_at_the_end_of_the_leas
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
     let calls = storage.calls();
     let entries = claim_entries(&storage, &scope).await;
 
@@ -2094,7 +2146,7 @@ async fn the_lease_of_a_prune_starts_at_its_first_marker_so_a_prune_without_a_re
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
     let calls = storage.calls();
 
     assert!(deleted.is_ok(), "{deleted:?}");
@@ -2141,11 +2193,11 @@ async fn a_delete_within_the_hold_reads_no_record_of_freed_bytes_and_lists_no_pa
     );
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2", "p-3"]).await;
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
     let pruned = ledger(&storage, &scope).await.last_prune.is_some();
     let from = storage.calls().len();
 
-    let deleted = store.delete(&scope, &name("p-2")).await;
+    let deleted = store.delete(&scope, &[name("p-2")]).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2168,7 +2220,7 @@ async fn a_delete_whose_named_bytes_are_below_the_threshold_reads_no_record_cont
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let from = storage.calls().len();
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2194,7 +2246,7 @@ async fn a_delete_whose_named_bytes_reach_the_threshold_reads_and_settles_the_re
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let from = storage.calls().len();
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2224,14 +2276,14 @@ async fn a_prune_deletes_the_claims_of_old_ledgers() {
             let scope = scope.clone();
             async move {
                 storage
-                    .put_raw("test", "test", scope.0.clone(), Path::new(path), b"100")
+                    .put_raw("test", "test", (*scope.0).clone(), Path::new(path), b"100")
                     .await
                     .unwrap();
             }
         })
         .await;
 
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
 
     assert_eq!(
         (
@@ -2262,14 +2314,14 @@ async fn a_prune_keeps_the_claims_of_a_newer_ledger() {
             let scope = scope.clone();
             async move {
                 storage
-                    .put_raw("test", "test", scope.0.clone(), Path::new(path), b"")
+                    .put_raw("test", "test", (*scope.0).clone(), Path::new(path), b"")
                     .await
                     .unwrap();
             }
         })
         .await;
 
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
 
     assert_eq!(
         (
@@ -2296,7 +2348,7 @@ async fn a_prune_deletes_an_empty_claim_directory_of_an_old_ledger() {
         .create_dir(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims/100"),
         )
         .await
@@ -2305,13 +2357,13 @@ async fn a_prune_deletes_an_empty_claim_directory_of_an_old_ledger() {
         storage.list_dir(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims"),
         )
     };
     let before = list_claims().await.unwrap();
 
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
 
     assert_eq!(
         (
@@ -2351,12 +2403,12 @@ async fn a_failed_ledger_write_after_a_prune_keeps_the_claim_so_no_second_prune_
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2", "p-3"]).await;
 
-    let failed = store.delete(&scope, &name("p-1")).await;
+    let failed = store.delete(&scope, &[name("p-1")]).await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let second = store.delete(&scope, &name("p-2")).await;
+    let second = store.delete(&scope, &[name("p-2")]).await;
     let prunes_after_second = prunes(&storage.calls());
     age_claims(&storage, &scope).await;
-    let third = store.delete(&scope, &name("p-3")).await;
+    let third = store.delete(&scope, &[name("p-3")]).await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -2397,7 +2449,7 @@ async fn a_forget_that_fails_after_the_record_write_leaves_the_record() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(
         deleted.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -2418,7 +2470,7 @@ fn is_forget(op_label: &str, path: &Path) -> bool {
 }
 
 /// Gives the path of each record of freed bytes of the scope.
-async fn records(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+async fn records(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
     blobs(storage, &scope.0, "golem/prune-freed/").await
 }
 
@@ -2447,7 +2499,7 @@ async fn a_prune_keeps_the_record_of_a_delete_that_has_not_forgotten_its_snapsho
     );
     let paused = tokio::spawn({
         let scope = scope.clone();
-        async move { pausing.delete(&scope, &name("p-1")).await }
+        async move { pausing.delete(&scope, &[name("p-1")]).await }
     });
     let at_forget = eventually(|| {
         held.calls()
@@ -2457,7 +2509,7 @@ async fn a_prune_keeps_the_record_of_a_delete_that_has_not_forgotten_its_snapsho
     .await;
     let paused_record = records(&inner, &scope).await;
 
-    plain.delete(&scope, &name("p-2")).await.unwrap();
+    plain.delete(&scope, &[name("p-2")]).await.unwrap();
     let after_prune = records(&inner, &scope).await;
     let pruned = ledger(&inner, &scope).await;
     age_ledger(&inner, &scope, &pruned).await;
@@ -2524,7 +2576,7 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
             policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
         );
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &name("p-1")).await }
+        async move { deleting.delete(&scope, &[name("p-1")]).await }
     });
     let first_at_forget = eventually(|| forgetting.waiting_steps() > 0).await;
     let first_record = records(&inner, &scope).await;
@@ -2534,7 +2586,7 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
             policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
         );
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &name("p-2")).await }
+        async move { deleting.delete(&scope, &[name("p-2")]).await }
     });
     let second_at_prune = eventually(|| pruning.waiting_steps() > 0).await;
 
@@ -2545,7 +2597,7 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
     let after_prune = records(&inner, &scope).await;
     let pruned = ledger(&inner, &scope).await;
     age_ledger(&inner, &scope, &pruned).await;
-    plain.delete(&scope, &name("p-3")).await.unwrap();
+    plain.delete(&scope, &[name("p-3")]).await.unwrap();
 
     assert!(matches!(first, Ok(Ok(Ok(())))), "{first:?}");
     assert!(matches!(second, Ok(Ok(Ok(())))), "{second:?}");
@@ -2581,15 +2633,15 @@ async fn a_record_whose_snapshot_still_exists_counts_nothing_and_does_not_make_a
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-freed/1000000000-kept"),
             snapshot.as_bytes(),
         )
         .await
         .unwrap();
 
-    store.delete(&scope, &name("p-unknown")).await.unwrap();
-    store.delete(&scope, &name("p-unknown")).await.unwrap();
+    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
+    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
 
     assert_eq!(
         (
@@ -2623,7 +2675,7 @@ async fn a_record_write_that_answers_already_exists_counts_as_written() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2666,12 +2718,12 @@ async fn a_delete_sees_the_marker_of_a_claim_that_is_not_taken_yet_and_does_not_
     let holding = tokio::spawn({
         let deleting = store(first.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &name("p-1")).await }
+        async move { deleting.delete(&scope, &[name("p-1")]).await }
     });
     let held = eventually(|| writes.load(Ordering::SeqCst) >= 2).await;
 
     let seen = store(second.clone(), policy(LONG_DEADLINE, ALWAYS, grace))
-        .delete(&scope, &name("p-2"))
+        .delete(&scope, &[name("p-2")])
         .await;
     first.open_gate();
     let holding = tokio::time::timeout(LIMIT, holding).await;
@@ -2716,7 +2768,7 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
     let holding = tokio::spawn({
         let deleting = store(first.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &name("p-1")).await }
+        async move { deleting.delete(&scope, &[name("p-1")]).await }
     });
     let held = eventually(|| {
         first
@@ -2729,7 +2781,7 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims/none/1"),
             b"",
         )
@@ -2737,7 +2789,7 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
         .unwrap();
 
     let seen = store(second.clone(), policy(LONG_DEADLINE, ALWAYS, grace))
-        .delete(&scope, &name("p-2"))
+        .delete(&scope, &[name("p-2")])
         .await;
     first.open_gate();
     let holding = tokio::time::timeout(LIMIT, holding).await;
@@ -2779,7 +2831,7 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     let first = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     // The second delete claims and reads too, so the gate would hold it for ever when the first
     // delete did not reach its read first.
@@ -2789,7 +2841,7 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
         "the first delete did not reach its first read after its claim"
     );
 
-    let second = store.delete(&scope, &name("p-2")).await;
+    let second = store.delete(&scope, &[name("p-2")]).await;
     storage.open_gate();
     let first = tokio::time::timeout(LIMIT, first).await;
     let calls = storage.calls();
@@ -2831,7 +2883,7 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
     let late = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     // The second delete lists the claims too, so the gate would hold it for ever when the first
     // delete did not reach its listing first.
@@ -2841,7 +2893,7 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
         "the first delete did not reach its listing of the claims"
     );
 
-    let pruned = store.delete(&scope, &name("p-2")).await;
+    let pruned = store.delete(&scope, &[name("p-2")]).await;
     storage.open_gate();
     let late = tokio::time::timeout(LIMIT, late).await;
 
@@ -2884,9 +2936,9 @@ async fn a_failed_second_read_of_the_ledger_deletes_the_claim_and_a_retry_of_the
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &name("p-1")).await;
+    let failed = store.delete(&scope, &[name("p-1")]).await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let retried = store.delete(&scope, &name("p-1")).await;
+    let retried = store.delete(&scope, &[name("p-1")]).await;
     let after = ledger(&storage, &scope).await;
 
     assert!(
@@ -2943,7 +2995,7 @@ async fn a_delete_dropped_after_a_failed_second_read_still_releases_its_claim() 
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let held = eventually(|| {
         storage
@@ -3006,7 +3058,7 @@ async fn a_delete_dropped_after_its_claim_and_before_its_prune_releases_the_clai
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let claimed = |calls: &[(&'static str, String)]| {
         calls
@@ -3054,7 +3106,7 @@ async fn shut_down_waits_for_the_release_of_a_delete_dropped_after_its_claim() {
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let held = eventually(|| {
         storage
@@ -3120,7 +3172,7 @@ fn final_markers(calls: &[(&'static str, String)]) -> usize {
 }
 
 /// Gives the number of markers of the claims of the scope.
-async fn markers(storage: &ScriptedBlobStorage, scope: &SnapshotScope) -> usize {
+async fn markers(storage: &ScriptedBlobStorage, scope: &AgentSnapshots) -> usize {
     claim_entries(storage, scope)
         .await
         .iter()
@@ -3142,7 +3194,7 @@ async fn a_shut_down_during_a_started_prune_still_writes_its_final_marker_and_wa
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let started = eventually(|| prunes(&storage.calls()) == 1).await;
 
@@ -3176,7 +3228,7 @@ async fn a_delete_dropped_during_a_started_prune_writes_its_final_marker() {
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let started = eventually(|| prunes(&storage.calls()) == 1).await;
 
@@ -3213,7 +3265,7 @@ async fn a_prune_writes_one_final_marker() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
     let ended = eventually(|| store.work_in_flight() == 0).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
@@ -3241,7 +3293,7 @@ async fn a_shut_down_after_the_claim_still_releases_it() {
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let held = eventually(|| {
         storage
@@ -3312,9 +3364,9 @@ async fn a_release_whose_claim_delete_is_refused_still_deletes_its_marker_and_th
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &name("p-1")).await;
+    let failed = store.delete(&scope, &[name("p-1")]).await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let retried = store.delete(&scope, &name("p-1")).await;
+    let retried = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -3342,7 +3394,7 @@ async fn a_release_whose_marker_delete_is_refused_still_deletes_the_claim() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &name("p-1")).await;
+    let failed = store.delete(&scope, &[name("p-1")]).await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
 
     assert!(
@@ -3403,7 +3455,7 @@ async fn a_prune_plans_again_when_a_snapshot_file_is_gone_at_its_read_and_prunes
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &name("p-1")).await;
+    let deleted = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -3428,7 +3480,7 @@ async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_releases_its_cl
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &name("p-1")).await;
+    let failed = store.delete(&scope, &[name("p-1")]).await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -3478,12 +3530,12 @@ async fn a_prune_that_fails_keeps_its_claim_so_no_second_prune_runs_within_the_h
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &name("p-1")).await;
+    let failed = store.delete(&scope, &[name("p-1")]).await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let retried = store.delete(&scope, &name("p-1")).await;
+    let retried = store.delete(&scope, &[name("p-1")]).await;
     let after_retry = ledger(&storage, &scope).await;
     age_claims(&storage, &scope).await;
-    let later = store.delete(&scope, &name("p-1")).await;
+    let later = store.delete(&scope, &[name("p-1")]).await;
     let after = ledger(&storage, &scope).await;
 
     assert!(
@@ -3518,14 +3570,14 @@ async fn a_claim_without_a_marker_does_not_block_a_prune() {
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new("golem/prune-claims/none/0"),
             &[],
         )
         .await
         .unwrap();
 
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
 
     assert!(ledger(&storage, &scope).await.last_prune.is_some());
 }
@@ -3541,7 +3593,7 @@ async fn a_prune_that_succeeds_deletes_the_claims_and_the_counted_records_of_fre
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
 
     assert_eq!(
         (
@@ -3573,7 +3625,7 @@ async fn a_delete_below_the_threshold_does_not_prune() {
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
 
-    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
     let after = ledger(&storage, &scope).await;
     let after_freed = freed(&storage, &scope).await;
 
@@ -3610,9 +3662,9 @@ async fn no_second_prune_runs_within_the_hold_after_a_prune() {
         })
         .await;
 
-    store.delete(&scope, &name("p-a")).await.unwrap();
+    store.delete(&scope, &[name("p-a")]).await.unwrap();
     let after_first = ledger(&storage, &scope).await;
-    store.delete(&scope, &name("p-b")).await.unwrap();
+    store.delete(&scope, &[name("p-b")]).await.unwrap();
     let after_second = ledger(&storage, &scope).await;
     let after_second_freed = freed(&storage, &scope).await;
 
@@ -3659,13 +3711,13 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
 
-    let failed = store.delete(&scope, &name("p-deleted")).await;
+    let failed = store.delete(&scope, &[name("p-deleted")]).await;
     let after_failure = ledger(&storage, &scope).await;
     let after_failure_freed = freed(&storage, &scope).await;
     refuse.store(false, Ordering::SeqCst);
     // The prune started, so its claim stays until the hold passed.
     age_claims(&storage, &scope).await;
-    let retried = store.delete(&scope, &name("p-deleted")).await;
+    let retried = store.delete(&scope, &[name("p-deleted")]).await;
     let after_retry = ledger(&storage, &scope).await;
     let after_retry_freed = freed(&storage, &scope).await;
 
@@ -3703,10 +3755,10 @@ async fn a_deleted_scope_holds_no_blob() {
         .save(&scope, &name("p-2"), second.path(), None)
         .await
         .unwrap();
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
     let before = blobs(&*storage, &scope.0, "").await;
 
-    store.delete_scope(&scope).await.unwrap();
+    store.delete_all(&scope).await.unwrap();
 
     assert_eq!(
         (
@@ -3809,7 +3861,12 @@ async fn a_blob_call_of_a_cancelled_operation_does_not_start() {
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
     let cancel = tokio_util::sync::CancellationToken::new();
     cancel.cancel();
-    let files = files_of(storage.clone(), new_scope().0, LONG_DEADLINE, cancel);
+    let files = files_of(
+        storage.clone(),
+        (*new_scope().0).clone(),
+        LONG_DEADLINE,
+        cancel,
+    );
 
     let read = files
         .get("read_ledger", Path::new("golem/prune-ledgers/1000-0-0f0f"))
@@ -3836,7 +3893,7 @@ async fn shut_down_waits_for_a_blob_call_of_the_store_that_is_not_polled() {
         policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
-    let deleting = store.delete_scope(&scope);
+    let deleting = store.delete_all(&scope);
     tokio::pin!(deleting);
     let pending = futures::poll!(&mut deleting).is_pending();
 
@@ -3890,7 +3947,7 @@ async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_pol
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleted_name = name("p-1");
-    let deleting = store.delete(&scope, &deleted_name);
+    let deleting = store.delete(&scope, std::slice::from_ref(&deleted_name));
     tokio::pin!(deleting);
     let reached = tokio::select! {
         biased;
@@ -3955,7 +4012,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
     let copying = tokio::spawn({
         let store = store.clone();
         let (from, to) = (from.clone(), to.clone());
-        async move { store.copy_scope(&from, &to).await }
+        async move { store.copy_all(&from, &to).await }
     });
     let held = eventually(|| {
         storage
@@ -3971,7 +4028,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
             let (inner, from) = (&inner, &from);
             async move {
                 inner
-                    .delete("test", "test", from.0.clone(), Path::new(path))
+                    .delete("test", "test", (*from.0).clone(), Path::new(path))
                     .await
                     .unwrap();
             }
@@ -4012,7 +4069,7 @@ async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listi
     let (from, to) = (new_scope(), new_scope());
     save_each(&store, &from, &["p-1"]).await;
 
-    let copied = store.copy_scope(&from, &to).await;
+    let copied = store.copy_all(&from, &to).await;
 
     assert!(copied.is_ok(), "{copied:?}");
     assert_eq!(
@@ -4047,7 +4104,7 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
     let mut copying = tokio::spawn({
         let store = store.clone();
         let (from, to) = (from.clone(), to.clone());
-        async move { store.copy_scope(&from, &to).await }
+        async move { store.copy_all(&from, &to).await }
     });
     let held = eventually(|| {
         storage
@@ -4145,7 +4202,7 @@ async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_stor
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &name("p-1")).await }
+        async move { store.delete(&scope, &[name("p-1")]).await }
     });
     let listing = eventually(|| {
         storage
@@ -4343,7 +4400,7 @@ fn holding_index_reads(
 /// through a store that prunes at once. The prune deletes the index file of `p-2`.
 async fn scope_with_a_prune_to_come(
     shared: &Arc<InMemoryBlobStorage>,
-) -> (SnapshotScope, Arc<RusticSnapshotStore>, Scratch) {
+) -> (AgentSnapshots, Arc<RusticSnapshotStore>, Scratch) {
     let pruning = store(
         shared.clone(),
         policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
@@ -4378,7 +4435,7 @@ async fn a_restore_whose_index_file_a_prune_deleted_after_the_listing_gives_retr
     });
     let reached = eventually(|| held.load(Ordering::SeqCst) > 0).await;
 
-    let deleted = pruning.delete(&scope, &name("p-2")).await;
+    let deleted = pruning.delete(&scope, &[name("p-2")]).await;
     let pruned = ledger(&shared, &scope).await.last_prune.is_some();
     hold.store(false, Ordering::SeqCst);
     storage.open_gate();
@@ -4410,7 +4467,7 @@ async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryab
     });
     let reached = eventually(|| held.load(Ordering::SeqCst) > 0).await;
 
-    let deleted = pruning.delete(&scope, &name("p-2")).await;
+    let deleted = pruning.delete(&scope, &[name("p-2")]).await;
     let pruned = ledger(&shared, &scope).await.last_prune.is_some();
     hold.store(false, Ordering::SeqCst);
     storage.open_gate();
@@ -4583,8 +4640,8 @@ async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
         .unwrap();
     store.shut_down().await;
 
-    let deleted = store.delete_scope(&scope).await;
-    let copied = store.copy_scope(&scope, &other).await;
+    let deleted = store.delete_all(&scope).await;
+    let copied = store.copy_all(&scope, &other).await;
 
     assert!(
         deleted
@@ -4721,7 +4778,7 @@ async fn a_dropped_operation_stops_its_blocking_work() {
                 drop_when(
                     &storage,
                     reached,
-                    store.delete(&scope, &name("p-1")).map(|_| ()),
+                    store.delete(&scope, &[name("p-1")]).map(|_| ()),
                 )
                 .await
             }
@@ -4749,7 +4806,7 @@ async fn a_dropped_operation_stops_its_blocking_work() {
 /// Gives the snapshot files of the scope that the bridge reads, on a blocking thread.
 async fn snapshot_files(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
 ) -> Vec<rustic_core::repofile::SnapshotFile> {
     let backend = backend_of(storage, scope, LONG_DEADLINE);
     tokio::task::spawn_blocking(move || {
@@ -5039,7 +5096,13 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
         .await
         .unwrap();
     inner
-        .put_raw("test", "test", scope.0.clone(), Path::new(&gone), b"listed")
+        .put_raw(
+            "test",
+            "test",
+            (*scope.0).clone(),
+            Path::new(&gone),
+            b"listed",
+        )
         .await
         .unwrap();
 
@@ -5065,7 +5128,7 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
         .await
         .unwrap();
 
-    store.delete(&scope, &name("p-unknown")).await.unwrap();
+    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
 
     assert_eq!(
         blobs(&*storage, &scope.0, "golem/").await,
@@ -5103,7 +5166,7 @@ async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pa
         .put_raw(
             "test",
             "test",
-            scope.0.clone(),
+            (*scope.0).clone(),
             Path::new(&unindexed),
             b"a pack that no index lists",
         )
@@ -5111,7 +5174,7 @@ async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pa
         .unwrap();
     set_last_prune(&storage, &scope, golem_common::model::Timestamp::from(0)).await;
 
-    store.delete(&scope, &name("p-unknown")).await.unwrap();
+    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
     let after = ledger(&storage, &scope).await;
     let after_freed = freed(&storage, &scope).await;
 
@@ -5220,7 +5283,7 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
         .map(|summary| summary.data_added_packed)
         .sum::<u64>();
 
-    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
 
     assert_eq!((added > 1, freed(&storage, &scope).await), (true, added));
 }
@@ -5273,13 +5336,13 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
         .await
         .unwrap();
     let packs = storage
-        .list_blobs_below("test", "test", scope.0.clone(), Path::new("data"))
+        .list_blobs_below("test", "test", (*scope.0).clone(), Path::new("data"))
         .await
         .unwrap();
     futures::future::join_all(packs.iter().map(|pack| {
         let zeros = vec![0; usize::try_from(pack.size).unwrap()];
         let storage = storage.clone();
-        let namespace = scope.0.clone();
+        let namespace = (*scope.0).clone();
         async move {
             storage
                 .put_raw("test", "test", namespace, &pack.path, &zeros)
@@ -5291,7 +5354,7 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
     .collect::<anyhow::Result<Vec<()>>>()
     .unwrap();
 
-    let deleted = store.delete(&scope, &name("p-deleted")).await;
+    let deleted = store.delete(&scope, &[name("p-deleted")]).await;
 
     assert!(
         deleted
@@ -5369,7 +5432,7 @@ async fn the_forget_of_a_delete_runs_its_storage_calls_in_a_rayon_pool_of_its_ow
     save_each(&store, &scope, &["p-1"]).await;
     taken_calls(&calls);
 
-    store.delete(&scope, &name("p-1")).await.unwrap();
+    store.delete(&scope, &[name("p-1")]).await.unwrap();
     let forgets = taken_threads(&calls, "delete", "snapshots/");
 
     assert_eq!(
@@ -5487,7 +5550,7 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
         .unwrap();
     taken_calls(&calls);
 
-    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
     let prune = taken_calls(&calls)
         .into_iter()
         .skip_while(|(op_label, _, _)| op_label != "read_ledger")
@@ -5580,7 +5643,7 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
         .save(&scope, &name("p-kept"), kept_tree.path(), None)
         .await
         .unwrap();
-    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
 
     let barrier = Arc::new(std::sync::Barrier::new(TASKS));
     let blocking = futures::future::join_all((0..TASKS).map(|_| {
@@ -5639,7 +5702,7 @@ async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_n
         .unwrap();
     std::mem::take(&mut *calls.lock().unwrap());
 
-    store.delete(&scope, &name("p-both")).await.unwrap();
+    store.delete(&scope, &[name("p-both")]).await.unwrap();
     let recorded = std::mem::take(&mut *calls.lock().unwrap());
     let from_workers = recorded
         .iter()
@@ -5723,7 +5786,7 @@ const DROP_REPEATS: usize = 300;
 const SWEEP_CASES: u32 = 1000;
 
 /// Saves the two snapshots that each case deletes, in a scope that each case copies.
-async fn prepared_scope() -> (Arc<InMemoryBlobStorage>, SnapshotScope) {
+async fn prepared_scope() -> (Arc<InMemoryBlobStorage>, AgentSnapshots) {
     let shared = Arc::new(InMemoryBlobStorage::new());
     let prepared = new_scope();
     save_each(
@@ -5916,5 +5979,77 @@ async fn a_restore_builds_its_pool_with_the_restore_reader_threads() {
     assert_eq!(
         (restored.ok(), restore_pools),
         (Some(listing(tree.path())), vec![NonZeroUsize::new(3)])
+    );
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_delete_dropped_in_its_prune_while_a_save_of_the_same_agent_runs_keeps_the_saved_snapshots()
+ {
+    // The first listing of the packs after the arm waits at the gate. That is the prune of the
+    // delete. The test drops the delete there, saves a new snapshot of the same agent, and then
+    // lets the prune of the dropped delete go on.
+    let hold_next_listing = Arc::new(AtomicBool::new(false));
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let hold_next_listing = hold_next_listing.clone();
+        move |op_label, path| {
+            if op_label == "list"
+                && path == "data"
+                && hold_next_listing.swap(false, Ordering::SeqCst)
+            {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, ALWAYS, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let (kept_tree, new_tree) = (one_file_tree("kept"), fixture_tree());
+    save_each(&store, &scope, &["p-old"]).await;
+    store
+        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .await
+        .unwrap();
+    hold_next_listing.store(true, Ordering::SeqCst);
+
+    let deleting = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { store.delete(&scope, &[name("p-old")]).await }
+    });
+    let held = eventually(|| prunes(&storage.calls()) >= 1).await;
+    deleting.abort();
+    let dropped = deleting.await;
+    let saved = store
+        .save(&scope, &name("p-new"), new_tree.path(), None)
+        .await;
+    storage.open_gate();
+    let ended = eventually(|| store.work_in_flight() == 0).await;
+    let deleted_again = store.delete(&scope, &[name("p-none")]).await;
+
+    assert!(
+        dropped.as_ref().is_err_and(|error| error.is_cancelled()),
+        "{dropped:?}"
+    );
+    assert_eq!(
+        (
+            held,
+            saved.is_ok(),
+            ended,
+            deleted_again.is_ok(),
+            restored_listing(&store, &scope, &name("p-kept")).await.ok(),
+            restored_listing(&store, &scope, &name("p-new")).await.ok(),
+        ),
+        (
+            true,
+            true,
+            true,
+            true,
+            Some(listing(kept_tree.path())),
+            Some(listing(new_tree.path())),
+        )
     );
 }

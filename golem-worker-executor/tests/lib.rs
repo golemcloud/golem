@@ -34,6 +34,7 @@ pub mod concurrent_runtime_events;
 pub mod durability;
 pub mod external_durable_stream;
 pub mod filesystem_inspection;
+pub mod filesystem_snapshots;
 pub mod fork;
 pub mod fuel;
 pub mod hot_update;
@@ -118,6 +119,7 @@ tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
 tag_suite!(filesystem_inspection, group3);
 tag_suite!(revert, group3);
+tag_suite!(filesystem_snapshots, group3);
 
 tag_suite!(websocket, group4);
 tag_suite!(agent, group4);

@@ -15,6 +15,7 @@
 pub mod active_agents;
 pub(crate) mod activity;
 pub mod agent_filesystem;
+pub mod agent_filesystem_snapshots;
 pub mod agent_memory_meter;
 pub mod agent_types;
 pub mod agent_webhooks;
@@ -54,6 +55,7 @@ pub mod worker_event;
 pub mod worker_fork;
 pub mod worker_proxy;
 
+use self::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use self::agent_webhooks::AgentWebhooksService;
 use self::environment_state::EnvironmentStateService;
 use crate::durable_host::websocket::WebSocketConnectionPool;
@@ -237,6 +239,10 @@ pub trait HasEnvironmentStateService {
     fn environment_state_service(&self) -> Arc<dyn EnvironmentStateService>;
 }
 
+pub trait HasAgentFilesystemSnapshots {
+    fn agent_filesystem_snapshots(&self) -> Arc<AgentFilesystemSnapshots>;
+}
+
 pub trait HasNativeToolCatalog<Ctx: WorkerCtx> {
     fn native_tool_catalog(&self) -> Arc<crate::native_tool::NativeToolCatalog<Ctx>>;
 }
@@ -277,6 +283,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasWebSocketConnectionPool
     + HasMcpTransport
     + HasEnvironmentStateService
+    + HasAgentFilesystemSnapshots
     + HasExtraDeps<Ctx>
     + HasLeakSentinel
     + Clone
@@ -320,6 +327,7 @@ impl<
         + HasWebSocketConnectionPool
         + HasMcpTransport
         + HasEnvironmentStateService
+        + HasAgentFilesystemSnapshots
         + HasExtraDeps<Ctx>
         + HasLeakSentinel
         + Clone
@@ -367,6 +375,7 @@ pub struct All<Ctx: WorkerCtx> {
     websocket_connection_pool: WebSocketConnectionPool,
     mcp_transport: Arc<mcp::McpTransport>,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
     native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     extra_deps: Ctx::ExtraDeps,
     /// A no-op sentinel that participates in the `All` lifecycle.
@@ -413,6 +422,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             websocket_connection_pool: self.websocket_connection_pool.clone(),
             mcp_transport: self.mcp_transport.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            agent_filesystem_snapshots: self.agent_filesystem_snapshots.clone(),
             native_tool_catalog: self.native_tool_catalog.clone(),
             extra_deps: self.extra_deps.clone(),
             leak_sentinel: self.leak_sentinel.clone(),
@@ -460,6 +470,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         websocket_connection_pool: WebSocketConnectionPool,
         mcp_transport: Arc<mcp::McpTransport>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         extra_deps: Ctx::ExtraDeps,
         leak_sentinel: Arc<()>,
@@ -500,6 +511,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             websocket_connection_pool,
             mcp_transport,
             environment_state_service,
+            agent_filesystem_snapshots,
             native_tool_catalog,
             extra_deps,
             leak_sentinel,
@@ -550,6 +562,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.websocket_connection_pool(),
             this.mcp_transport(),
             this.environment_state_service(),
+            this.agent_filesystem_snapshots(),
             this.native_tool_catalog(),
             this.extra_deps(),
             this.leak_sentinel(),
@@ -766,6 +779,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasHttpConnectionPool for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWebSocketConnectionPool for T {
     fn websocket_connection_pool(&self) -> WebSocketConnectionPool {
         self.all().websocket_connection_pool.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentFilesystemSnapshots for T {
+    fn agent_filesystem_snapshots(&self) -> Arc<AgentFilesystemSnapshots> {
+        self.all().agent_filesystem_snapshots.clone()
     }
 }
 

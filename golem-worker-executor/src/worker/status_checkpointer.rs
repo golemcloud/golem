@@ -399,6 +399,16 @@ mod tests {
     }
 
     #[test]
+    async fn a_worker_service_that_stores_no_rejections_gives_no_rejected_snapshots() {
+        let rejected = RecordingWorkerService::default()
+            .get_rejected_periodic_snapshots(&owned_agent_id(), AgentFingerprint(Uuid::nil()))
+            .await
+            .unwrap();
+
+        assert!(rejected.is_empty());
+    }
+
+    #[test]
     async fn idle_first_checkpoint_is_always_written() {
         let service = Arc::new(RecordingWorkerService::default());
         let cp = checkpointer(service.clone(), 100);

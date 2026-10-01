@@ -7,16 +7,17 @@ use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogPayload,
-    QueuedCardEvent, UpdateDescription,
+    AgentError, AgentResourceId, OplogEntry, OplogErrorKind, OplogPayload, QueuedCardEvent,
+    UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord,
+    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AutomaticSnapshot,
     DurableStreamSessionIndex, ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey,
     InvocationResultMembership, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
     PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
+    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SnapshotFiles,
+    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::{deserialize, try_deserialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -642,11 +643,8 @@ fn update_status_with_precomputed_regions(
         component_size,
         component_revision_for_replay,
         last_manual_update_snapshot_index,
-        last_automatic_snapshot_index,
-        last_automatic_snapshot_timestamp,
-        last_automatic_snapshot_component_revision,
-        last_automatic_snapshot_filesystem_snapshot,
-        last_automatic_snapshot_confirmed,
+        last_automatic_snapshot,
+        previous_usable_automatic_snapshot,
     ) = calculate_update_fields(
         last_known.pending_updates,
         last_known.failed_updates,
@@ -655,11 +653,8 @@ fn update_status_with_precomputed_regions(
         last_known.component_size,
         last_known.component_revision_for_replay,
         last_known.last_manual_update_snapshot_index,
-        last_known.last_automatic_snapshot_index,
-        last_known.last_automatic_snapshot_timestamp,
-        last_known.last_automatic_snapshot_component_revision,
-        last_known.last_automatic_snapshot_filesystem_snapshot,
-        last_known.last_automatic_snapshot_confirmed,
+        last_known.last_automatic_snapshot,
+        last_known.previous_usable_automatic_snapshot,
         &deleted_regions,
         &new_entries,
     );
@@ -728,11 +723,8 @@ fn update_status_with_precomputed_regions(
         component_revision_for_replay,
         current_retry_state,
         last_manual_update_snapshot_index,
-        last_automatic_snapshot_index,
-        last_automatic_snapshot_timestamp,
-        last_automatic_snapshot_component_revision,
-        last_automatic_snapshot_filesystem_snapshot,
-        last_automatic_snapshot_confirmed,
+        last_automatic_snapshot,
+        previous_usable_automatic_snapshot,
         agent_mode,
     })
 }
@@ -1514,11 +1506,8 @@ fn calculate_update_fields(
     initial_component_size: u64,
     initial_component_revision_for_replay: ComponentRevision,
     initial_last_manual_update_snapshot_index: Option<OplogIndex>,
-    initial_last_automatic_snapshot_index: Option<OplogIndex>,
-    initial_last_automatic_snapshot_timestamp: Option<Timestamp>,
-    initial_last_automatic_snapshot_component_revision: Option<ComponentRevision>,
-    initial_last_automatic_snapshot_filesystem_snapshot: Option<FilesystemSnapshotName>,
-    initial_last_automatic_snapshot_confirmed: bool,
+    initial_last_automatic_snapshot: Option<AutomaticSnapshot>,
+    initial_previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -1529,11 +1518,8 @@ fn calculate_update_fields(
     u64,
     ComponentRevision,
     Option<OplogIndex>,
-    Option<OplogIndex>,
-    Option<Timestamp>,
-    Option<ComponentRevision>,
-    Option<FilesystemSnapshotName>,
-    bool,
+    Option<AutomaticSnapshot>,
+    Option<UsableAutomaticSnapshot>,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
@@ -1542,13 +1528,8 @@ fn calculate_update_fields(
     let mut size = initial_component_size;
     let mut component_revision_for_replay = initial_component_revision_for_replay;
     let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
-    let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
-    let mut last_automatic_snapshot_timestamp = initial_last_automatic_snapshot_timestamp;
-    let mut last_automatic_snapshot_component_revision =
-        initial_last_automatic_snapshot_component_revision;
-    let mut last_automatic_snapshot_filesystem_snapshot =
-        initial_last_automatic_snapshot_filesystem_snapshot;
-    let mut last_automatic_snapshot_confirmed = initial_last_automatic_snapshot_confirmed;
+    let mut last_automatic_snapshot = initial_last_automatic_snapshot;
+    let mut previous_usable_automatic_snapshot = initial_previous_usable_automatic_snapshot;
 
     for (oplog_idx, entry) in entries {
         // Skipping entries in deleted regions (by revert)
@@ -1599,16 +1580,14 @@ fn calculate_update_fields(
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
+                    oplog_index: *oplog_idx,
                 });
                 revision = *target_revision;
                 size = *new_component_size;
 
                 let applied_update = pending_updates.pop_front();
-                last_automatic_snapshot_index = None;
-                last_automatic_snapshot_timestamp = None;
-                last_automatic_snapshot_component_revision = None;
-                last_automatic_snapshot_filesystem_snapshot = None;
-                last_automatic_snapshot_confirmed = false;
+                last_automatic_snapshot = None;
+                previous_usable_automatic_snapshot = None;
 
                 if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased,
@@ -1625,19 +1604,33 @@ fn calculate_update_fields(
                 filesystem_snapshot,
                 ..
             } => {
-                last_automatic_snapshot_index = Some(*oplog_idx);
-                last_automatic_snapshot_timestamp = Some(*timestamp);
-                last_automatic_snapshot_component_revision = Some(revision);
-                last_automatic_snapshot_filesystem_snapshot = filesystem_snapshot.clone();
-                last_automatic_snapshot_confirmed = false;
+                // A usable candidate becomes the fallback, also when the new record reuses its
+                // filesystem snapshot name: each record has its own application snapshot, which
+                // can fail to load on its own.
+                if let Some(usable) = last_automatic_snapshot
+                    .take()
+                    .and_then(AutomaticSnapshot::into_usable)
+                {
+                    previous_usable_automatic_snapshot = Some(usable);
+                }
+                last_automatic_snapshot = Some(AutomaticSnapshot {
+                    index: *oplog_idx,
+                    timestamp: *timestamp,
+                    component_revision: revision,
+                    files: SnapshotFiles::named(filesystem_snapshot.clone()),
+                });
             }
             OplogEntry::SnapshotConfirmed {
                 filesystem_snapshot,
                 ..
-            } if last_automatic_snapshot_filesystem_snapshot.as_ref()
-                == Some(filesystem_snapshot) =>
-            {
-                last_automatic_snapshot_confirmed = true;
+            } => {
+                last_automatic_snapshot =
+                    last_automatic_snapshot
+                        .take()
+                        .map(|last| AutomaticSnapshot {
+                            files: last.files.confirmed(filesystem_snapshot),
+                            ..last
+                        });
             }
             _ => {}
         }
@@ -1650,11 +1643,8 @@ fn calculate_update_fields(
         size,
         component_revision_for_replay,
         last_manual_update_snapshot_index,
-        last_automatic_snapshot_index,
-        last_automatic_snapshot_timestamp,
-        last_automatic_snapshot_component_revision,
-        last_automatic_snapshot_filesystem_snapshot,
-        last_automatic_snapshot_confirmed,
+        last_automatic_snapshot,
+        previous_usable_automatic_snapshot,
     )
 }
 

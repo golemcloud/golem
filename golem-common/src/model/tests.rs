@@ -1377,6 +1377,19 @@ fn agent_status_record_agent_mode_is_not_serialized() {
         component_revision: ComponentRevision::new(7).unwrap(),
         component_size: 1234,
         received_card_transfers,
+        last_automatic_snapshot: Some(crate::model::AutomaticSnapshot {
+            index: crate::model::oplog::OplogIndex::from_u64(9),
+            timestamp: crate::model::Timestamp::from(1_000),
+            component_revision: ComponentRevision::new(7).unwrap(),
+            files: crate::model::SnapshotFiles::Confirmed(
+                crate::model::oplog::FilesystemSnapshotName::periodic(),
+            ),
+        }),
+        previous_usable_automatic_snapshot: Some(crate::model::UsableAutomaticSnapshot {
+            index: crate::model::oplog::OplogIndex::from_u64(5),
+            component_revision: ComponentRevision::new(7).unwrap(),
+            filesystem_snapshot: Some(crate::model::oplog::FilesystemSnapshotName::periodic()),
+        }),
         export_fork_admissions: ExportForkAdmissions {
             owner_fingerprint: Some(AgentFingerprint(Uuid::new_v4())),
             reservations: HashMap::new(),
@@ -1598,4 +1611,74 @@ fn durable_stream_session_index_rejects_malformed_inline_payload() {
         .apply_oplog_entry(OplogIndex::from_u64(1), &entry)
         .unwrap_err();
     assert!(error.contains("failed to decode"));
+}
+
+#[test]
+fn an_automatic_snapshot_is_usable_when_confirmed_or_without_a_name() {
+    use crate::model::SnapshotFiles;
+    let name = crate::model::oplog::FilesystemSnapshotName::periodic();
+    let usable = |files: SnapshotFiles| {
+        crate::model::AutomaticSnapshot {
+            index: crate::model::oplog::OplogIndex::from_u64(10),
+            timestamp: crate::model::Timestamp::from(1_000),
+            component_revision: ComponentRevision::new(2).unwrap(),
+            files,
+        }
+        .usable()
+        .map(|usable| usable.filesystem_snapshot)
+    };
+
+    assert_eq!(
+        [
+            usable(SnapshotFiles::Unnamed),
+            usable(SnapshotFiles::Confirmed(name.clone())),
+            usable(SnapshotFiles::Unconfirmed(name.clone())),
+        ],
+        [Some(None), Some(Some(name)), None]
+    );
+}
+
+#[test]
+fn the_files_of_an_automatic_snapshot_give_their_name_and_their_confirmation() {
+    use crate::model::SnapshotFiles;
+    let name = crate::model::oplog::FilesystemSnapshotName::periodic();
+    let files = [
+        SnapshotFiles::Unnamed,
+        SnapshotFiles::Unconfirmed(name.clone()),
+        SnapshotFiles::Confirmed(name.clone()),
+    ];
+
+    assert_eq!(
+        files
+            .each_ref()
+            .map(|files| (files.name().cloned(), files.is_confirmed())),
+        [
+            (None, false),
+            (Some(name.clone()), false),
+            (Some(name), true)
+        ]
+    );
+}
+
+#[test]
+fn only_the_named_filesystem_snapshot_of_an_automatic_snapshot_is_confirmed() {
+    use crate::model::SnapshotFiles;
+    let name = crate::model::oplog::FilesystemSnapshotName::periodic();
+    let other = crate::model::oplog::FilesystemSnapshotName::periodic();
+    let confirmed = |files: SnapshotFiles, by: &crate::model::oplog::FilesystemSnapshotName| {
+        files.confirmed(by)
+    };
+
+    assert_eq!(
+        [
+            confirmed(SnapshotFiles::named(Some(name.clone())), &name),
+            confirmed(SnapshotFiles::named(Some(name.clone())), &other),
+            confirmed(SnapshotFiles::named(None), &name),
+        ],
+        [
+            SnapshotFiles::Confirmed(name.clone()),
+            SnapshotFiles::Unconfirmed(name),
+            SnapshotFiles::Unnamed,
+        ]
+    );
 }

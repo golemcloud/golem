@@ -27,6 +27,7 @@ use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
 use crate::worker::status::fold_invocation_result_entries;
 use async_trait::async_trait;
@@ -63,6 +64,21 @@ const STATUS_UPDATES_FIELD: &str = "updates";
 const STATUS_RECEIVED_CARD_TRANSFER_PREFIX: &str = "tr:";
 const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
 const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
+
+/// The rejected automatic snapshot entries to store: `current` and `new` together, as
+/// [`kept_rejections`] keeps them for `status`, in index order. `None` when they equal `current`,
+/// so nothing needs a write.
+fn rejections_to_store(
+    current: Vec<OplogIndex>,
+    status: &AgentStatusRecord,
+    new: &HashSet<OplogIndex>,
+) -> Option<Vec<OplogIndex>> {
+    let current = current
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let kept = kept_rejections(status, current.iter().chain(new).copied());
+    (kept != current).then(|| kept.into_iter().collect())
+}
 
 fn status_received_card_transfer_field(transfer_id: &uuid::Uuid) -> String {
     format!("{STATUS_RECEIVED_CARD_TRANSFER_PREFIX}{transfer_id}")
@@ -165,14 +181,8 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         component_revision_for_replay: status.component_revision_for_replay,
         current_retry_state: status.current_retry_state.clone(),
         last_manual_update_snapshot_index: status.last_manual_update_snapshot_index,
-        last_automatic_snapshot_index: status.last_automatic_snapshot_index,
-        last_automatic_snapshot_timestamp: status.last_automatic_snapshot_timestamp,
-        last_automatic_snapshot_component_revision: status
-            .last_automatic_snapshot_component_revision,
-        last_automatic_snapshot_filesystem_snapshot: status
-            .last_automatic_snapshot_filesystem_snapshot
-            .clone(),
-        last_automatic_snapshot_confirmed: status.last_automatic_snapshot_confirmed,
+        last_automatic_snapshot: status.last_automatic_snapshot.clone(),
+        previous_usable_automatic_snapshot: status.previous_usable_automatic_snapshot.clone(),
         agent_mode: status.agent_mode,
         export_fork_admissions: status.export_fork_admissions.clone(),
     }
@@ -401,19 +411,26 @@ pub trait WorkerService: Send + Sync {
         fingerprint: AgentFingerprint,
     ) -> Result<(), WorkerExecutorError>;
 
-    async fn get_rejected_periodic_snapshot_through(
+    /// Gives the stored indexes of the rejected automatic snapshot entries of the incarnation
+    /// `fingerprint`, or an empty set when none is stored.
+    async fn get_rejected_periodic_snapshots(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
-    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-        Ok(None)
+    ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
+        Ok(HashSet::new())
     }
 
-    async fn reject_periodic_snapshots_through(
+    /// Adds `oplog_indexes` to the stored rejected automatic snapshot entries of the incarnation
+    /// `fingerprint`, and keeps only the entries that a start of `status` can still select, as
+    /// [`kept_rejections`] says. So the stored set holds at most two entries. Each set of one
+    /// incarnation is apart from the sets of the others. A write that changes nothing is skipped.
+    async fn reject_periodic_snapshots(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
-        _oplog_index: OplogIndex,
+        _status: &AgentStatusRecord,
+        _oplog_indexes: &HashSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         Err(WorkerExecutorError::runtime(
             "snapshot rejection storage is unavailable",
@@ -1766,53 +1783,59 @@ impl WorkerService for DefaultWorkerService {
             .await
     }
 
-    async fn get_rejected_periodic_snapshot_through(
+    async fn get_rejected_periodic_snapshots(
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Option<OplogIndex>, WorkerExecutorError> {
-        let value: Option<Result<OplogIndex, String>> = self
+    ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
+        let value: Option<Result<Vec<OplogIndex>, String>> = self
             .key_value_storage
-            .with_entity(
-                "worker",
-                "get_rejected_periodic_snapshot_through",
-                "oplog_index",
-            )
+            .with_entity("worker", "get_rejected_periodic_snapshots", "oplog_indexes")
             .get_attempt_deserialize(
                 Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id),
                 &Self::rejected_periodic_snapshots_field(fingerprint),
             )
             .await
             .map_err(WorkerExecutorError::runtime)?;
-        value.transpose().map_err(WorkerExecutorError::runtime)
+        value
+            .transpose()
+            .map(|indexes| indexes.into_iter().flatten().collect())
+            .map_err(WorkerExecutorError::runtime)
     }
 
-    async fn reject_periodic_snapshots_through(
+    async fn reject_periodic_snapshots(
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        oplog_index: OplogIndex,
+        status: &AgentStatusRecord,
+        oplog_indexes: &HashSet<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         let namespace = Self::rejected_periodic_snapshots_namespace(&owned_agent_id.agent_id);
         let field = Self::rejected_periodic_snapshots_field(fingerprint);
         loop {
             let current = self
                 .key_value_storage
-                .with_entity("worker", "read_rejected_periodic_snapshot", "oplog_index")
+                .with_entity(
+                    "worker",
+                    "read_rejected_periodic_snapshots",
+                    "oplog_indexes",
+                )
                 .get_raw(namespace.clone(), &field)
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
-            if let Some(current) = &current {
-                let current_index: OplogIndex =
-                    deserialize(current).map_err(WorkerExecutorError::runtime)?;
-                if current_index >= oplog_index {
-                    return Ok(());
+            let current_indexes = match &current {
+                Some(current) => {
+                    deserialize::<Vec<OplogIndex>>(current).map_err(WorkerExecutorError::runtime)?
                 }
-            }
-            let encoded = serialize(&oplog_index).map_err(WorkerExecutorError::runtime)?;
+                None => Vec::new(),
+            };
+            let Some(to_store) = rejections_to_store(current_indexes, status, oplog_indexes) else {
+                return Ok(());
+            };
+            let encoded = serialize(&to_store).map_err(WorkerExecutorError::runtime)?;
             let updated = self
                 .key_value_storage
-                .with_entity("worker", "reject_periodic_snapshots_through", "oplog_index")
+                .with_entity("worker", "reject_periodic_snapshots", "oplog_indexes")
                 .compare_and_set_many_raw(
                     namespace.clone(),
                     &field,
@@ -2775,6 +2798,32 @@ mod tests {
     }
 
     #[test]
+    fn rejections_to_store_are_in_index_order_keep_only_candidates_and_nothing_when_unchanged() {
+        let index = OplogIndex::from_u64;
+        let status = with_candidates(7, Some(3));
+        assert_eq!(
+            [
+                rejections_to_store(vec![index(7)], &status, &HashSet::from([index(3)])),
+                rejections_to_store(
+                    vec![index(3), index(7)],
+                    &status,
+                    &HashSet::from([index(7), index(3)])
+                ),
+                rejections_to_store(Vec::new(), &status, &HashSet::new()),
+                rejections_to_store(Vec::new(), &status, &HashSet::from([index(5)])),
+                rejections_to_store(vec![index(3), index(5)], &status, &HashSet::new()),
+            ],
+            [
+                Some(vec![index(3), index(7)]),
+                None,
+                None,
+                None,
+                Some(vec![index(3)]),
+            ]
+        );
+    }
+
+    #[test]
     async fn get_recovers_uuid_named_non_agent_component_worker() {
         let component_id = ComponentId::new();
         let environment_id = EnvironmentId::new();
@@ -2821,34 +2870,98 @@ mod tests {
         assert!(result.last_known_status.is_some());
     }
 
+    /// A status whose two candidates for a start are the automatic snapshot entries `last` and
+    /// `previous`.
+    fn with_candidates(last: u64, previous: Option<u64>) -> AgentStatusRecord {
+        AgentStatusRecord {
+            last_automatic_snapshot: Some(golem_common::model::AutomaticSnapshot {
+                index: OplogIndex::from_u64(last),
+                timestamp: Timestamp::from(1_000),
+                component_revision: ComponentRevision::INITIAL,
+                files: golem_common::model::SnapshotFiles::Unnamed,
+            }),
+            previous_usable_automatic_snapshot: previous.map(|previous| {
+                golem_common::model::UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(previous),
+                    component_revision: ComponentRevision::INITIAL,
+                    filesystem_snapshot: None,
+                }
+            }),
+            ..AgentStatusRecord::default()
+        }
+    }
+
     #[test]
-    async fn rejected_periodic_snapshot_watermark_is_monotonic_and_incarnation_scoped() {
+    async fn the_stored_rejections_keep_only_the_candidates_of_the_status_of_the_write() {
+        let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
+        let fingerprint = AgentFingerprint::new();
+        let stored = || service.get_rejected_periodic_snapshots(&owned_agent_id, fingerprint);
+
+        service
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                fingerprint,
+                &with_candidates(12, Some(7)),
+                &HashSet::from([OplogIndex::from_u64(7), OplogIndex::from_u64(3)]),
+            )
+            .await
+            .unwrap();
+        let before = stored().await.unwrap();
+        service
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                fingerprint,
+                &with_candidates(20, Some(12)),
+                &HashSet::from([OplogIndex::from_u64(20)]),
+            )
+            .await
+            .unwrap();
+        let after = stored().await.unwrap();
+
+        assert_eq!(before, HashSet::from([OplogIndex::from_u64(7)]));
+        assert_eq!(after, HashSet::from([OplogIndex::from_u64(20)]));
+    }
+
+    #[test]
+    async fn rejected_periodic_snapshots_are_exact_indexes_and_incarnation_scoped() {
         let (service, _, owned_agent_id) = index_test_service(BTreeMap::new());
         let first = AgentFingerprint::new();
         let second = AgentFingerprint::new();
+        let expected = HashSet::from([OplogIndex::from_u64(7), OplogIndex::from_u64(12)]);
+        let status = with_candidates(12, Some(7));
 
         service
-            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(12))
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                first,
+                &status,
+                &HashSet::from([OplogIndex::from_u64(12)]),
+            )
             .await
             .unwrap();
         service
-            .reject_periodic_snapshots_through(&owned_agent_id, first, OplogIndex::from_u64(7))
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                first,
+                &status,
+                &HashSet::from([OplogIndex::from_u64(7)]),
+            )
             .await
             .unwrap();
 
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .get_rejected_periodic_snapshots(&owned_agent_id, first)
                 .await
                 .unwrap(),
-            Some(OplogIndex::from_u64(12))
+            expected
         );
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, second)
+                .get_rejected_periodic_snapshots(&owned_agent_id, second)
                 .await
                 .unwrap(),
-            None
+            HashSet::new()
         );
 
         service
@@ -2857,10 +2970,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .get_rejected_periodic_snapshots(&owned_agent_id, first)
                 .await
                 .unwrap(),
-            Some(OplogIndex::from_u64(12))
+            expected
         );
 
         service
@@ -2874,10 +2987,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .get_rejected_periodic_snapshots(&owned_agent_id, first)
                 .await
                 .unwrap(),
-            None
+            HashSet::new()
         );
     }
 
@@ -3163,6 +3276,7 @@ mod tests {
         status.successful_updates.push(SuccessfulUpdateRecord {
             timestamp: Timestamp::from(1_700_000_001_000u64),
             target_revision: ComponentRevision::new(3).unwrap(),
+            oplog_index: OplogIndex::from_u64(6),
         });
         status
     }
@@ -4066,7 +4180,12 @@ mod tests {
                 .await
                 .unwrap();
             service
-                .reject_periodic_snapshots_through(&owned_agent_id, fingerprint, status.oplog_idx)
+                .reject_periodic_snapshots(
+                    &owned_agent_id,
+                    fingerprint,
+                    &with_candidates(status.oplog_idx.into(), None),
+                    &HashSet::from([status.oplog_idx]),
+                )
                 .await
                 .unwrap();
             storage
@@ -4136,17 +4255,17 @@ mod tests {
         );
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, first)
+                .get_rejected_periodic_snapshots(&owned_agent_id, first)
                 .await
                 .unwrap(),
-            None
+            HashSet::new()
         );
         assert_eq!(
             service
-                .get_rejected_periodic_snapshot_through(&owned_agent_id, second)
+                .get_rejected_periodic_snapshots(&owned_agent_id, second)
                 .await
                 .unwrap(),
-            Some(second_status.oplog_idx)
+            HashSet::from([second_status.oplog_idx])
         );
         assert_eq!(
             service

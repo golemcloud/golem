@@ -700,6 +700,45 @@ impl TestWorkerExecutor {
         Ok(())
     }
 
+    /// The number of captures of agent filesystems on this executor with the metric label
+    /// `outcome`, such as `unchanged`. The metric counts the captures of every executor of the
+    /// process; this counts this executor only.
+    pub fn filesystem_captures(&self, outcome: &str) -> u64 {
+        use golem_worker_executor::services::HasAgentFilesystemSnapshots;
+
+        self.services
+            .as_ref()
+            .expect("test service graph is captured")
+            .agent_filesystem_snapshots()
+            .captures(outcome)
+    }
+
+    /// Reads the stored oplog of the durable agent from the oplog service. It does not ask the
+    /// executor, so it works when the shard of the agent is no longer assigned here.
+    pub async fn stored_oplog(&self, agent_id: &AgentId) -> Vec<OplogEntry> {
+        use golem_worker_executor::services::HasOplogService;
+
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let oplog = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured")
+            .oplog_service();
+        let last = oplog
+            .get_last_index(&owned_agent_id, AgentMode::Durable)
+            .await;
+        oplog
+            .read_exact(
+                &owned_agent_id,
+                AgentMode::Durable,
+                OplogIndex::INITIAL,
+                last.as_u64(),
+            )
+            .await
+            .into_values()
+            .collect()
+    }
+
     pub async fn export_fork_admission_records(
         &self,
         agent_id: &AgentId,
@@ -791,6 +830,30 @@ impl TestWorkerExecutor {
         self.leak_detector.clone()
     }
 
+    /// Removes the agents from the cache of the executor, drops the executor, and waits until
+    /// its service graph is released, for at most 30 seconds. A cached agent refers to the graph,
+    /// and a drop only asks the tasks of the executor to stop, so without this a start that
+    /// follows in the same process can find what the old graph still holds, such as the
+    /// exclusive lock of a managed XFS root. A test calls this before the next start.
+    pub async fn release(self) -> anyhow::Result<()> {
+        use futures::StreamExt as _;
+        let released = self.leak_detector();
+        if let Some(services) = &self.services {
+            remove_cached_agents(&services.active_agents()).await?;
+        }
+        if let Some(active_agents) = &self.production_active_agents {
+            remove_cached_agents(active_agents).await?;
+        }
+        drop(self);
+        let gone = futures::stream::repeat(())
+            .then(|()| tokio::time::sleep(Duration::from_millis(10)))
+            .filter(|()| std::future::ready(released.upgrade().is_none()));
+        tokio::time::timeout(Duration::from_secs(30), std::pin::pin!(gone).next())
+            .await
+            .map(drop)
+            .map_err(|_| anyhow::anyhow!("the executor was not released within 30 seconds"))
+    }
+
     pub fn auth_ctx(&self) -> AuthCtx {
         AuthCtx::User(UserAuthCtx {
             account_id: self.context.account_id,
@@ -811,6 +874,41 @@ impl TestWorkerExecutor {
             &OwnedAgentId::new(self.context.default_environment_id, agent_id),
             api,
         )
+    }
+
+    /// Stores the automatic snapshot entries at `indexes` as rejected for the incarnation of the
+    /// agent, as a start that could not load them does. A later start of the agent selects none
+    /// of them.
+    pub async fn reject_automatic_snapshots(
+        &self,
+        agent_id: &AgentId,
+        indexes: impl IntoIterator<Item = OplogIndex>,
+    ) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker_service = self
+            .services
+            .as_ref()
+            .ok_or_else(|| anyhow!("the test service graph is not captured"))?
+            .worker_service();
+        let metadata = worker_service
+            .get(&owned_agent_id)
+            .await?
+            .ok_or_else(|| anyhow!("no metadata for {owned_agent_id}"))?;
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let status = worker.get_non_detached_last_known_status().await;
+        worker_service
+            .reject_periodic_snapshots(
+                &owned_agent_id,
+                metadata.initial_worker_metadata.fingerprint,
+                &status,
+                &indexes.into_iter().collect(),
+            )
+            .await?;
+        Ok(())
     }
 
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
@@ -1001,6 +1099,23 @@ impl TestWorkerExecutor {
         let oplog_index = oplog.add(entry).await?;
         oplog.commit(CommitLevel::Always).await?;
         Ok(oplog_index)
+    }
+
+    /// Queues an interrupt of `kind` on the loaded worker, as a shard move or an executor-side
+    /// stop does. Unlike the interrupt API, it also reaches a worker whose status is idle.
+    pub async fn interrupt_loaded_worker(
+        &self,
+        agent_id: &AgentId,
+        kind: golem_service_base::error::worker_executor::InterruptKind,
+    ) -> anyhow::Result<()> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(&owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
+        let _ = worker.set_interrupting(kind).await;
+        Ok(())
     }
 
     pub async fn queue_card_revocation(
@@ -1922,6 +2037,13 @@ pub struct TestExecutorOverrides {
     /// should expose to running agents (mirrors `retryPolicyDefaults` in
     /// `golem.yaml`).  When `None`, an empty policy list is used.
     pub retry_policies: Option<Vec<NamedRetryPolicy>>,
+    /// Keeps filesystem snapshots in this store, with these upload settings, on any storage
+    /// mode. A test keeps the store across restarts of the executor. When `None`, the
+    /// configuration decides.
+    pub filesystem_snapshot_store: Option<(
+        golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore,
+        golem_worker_executor::services::golem_config::FilesystemSnapshotUploadConfig,
+    )>,
 }
 
 fn make_base_test_config(deps: &WorkerExecutorTestDependencies) -> GolemConfig {
@@ -2086,6 +2208,24 @@ fn apply_redis_storage_config(
         SchedulerStorageConfig::Sqlite(scheduler_sqlite_storage_config(deps, context));
 }
 
+/// Removes every cached agent of `agents`, so that no cached agent keeps the service graph of
+/// the executor. Fails at once, and names the agent, when the cache refuses a removal.
+async fn remove_cached_agents<Ctx: WorkerCtx>(agents: &ActiveAgents<Ctx>) -> anyhow::Result<()> {
+    use futures::{StreamExt as _, TryStreamExt as _};
+    futures::stream::iter(agents.snapshot().await)
+        .map(Ok)
+        .try_for_each(|(agent_id, worker)| async move {
+            if agents.remove_worker(&worker, false).await {
+                Ok(())
+            } else {
+                Err(anyhow!(
+                    "the cached agent {agent_id} was not removed from the released executor"
+                ))
+            }
+        })
+        .await
+}
+
 async fn start_executor_with_config(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
@@ -2105,7 +2245,9 @@ async fn start_executor_with_config(
     let services = Arc::new(Mutex::new(None));
 
     context.wait_for_shut_down_executors().await;
-    let details = run(
+    // The future of an executor start is large. It lives on the heap, so a test that starts
+    // several executors keeps a small stack.
+    let details = Box::pin(run(
         config,
         prometheus.clone(),
         handle,
@@ -2114,7 +2256,7 @@ async fn start_executor_with_config(
         additional_test_deps.clone(),
         services.clone(),
         &mut join_set,
-    )
+    ))
     .await?;
     context.register_executor(details.invocation_loops.clone());
     let grpc_port = details.grpc_port;
@@ -3206,6 +3348,15 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         }
     }
 
+    fn filesystem_snapshot_store(
+        &self,
+    ) -> Option<golem_worker_executor::services::agent_filesystem_snapshots::StoreSource> {
+        self.overrides
+            .filesystem_snapshot_store
+            .as_ref()
+            .map(|(store, uploads)| store.source(uploads.clone()))
+    }
+
     fn create_environment_state_service(
         &self,
         _config: &EnvironmentStateServiceConfig,
@@ -3889,6 +4040,39 @@ pub async fn start_with_agent_storage_quota(
         TestExecutorOverrides::default(),
         None,
         "Timeout waiting for agent-storage-quota server to start",
+    )
+    .await
+}
+
+/// Starts an executor on managed XFS that takes a snapshot after each invocation, with the
+/// filesystem snapshot settings `filesystem_snapshots`.
+#[cfg(target_os = "linux")]
+pub async fn start_with_filesystem_snapshots_on_managed_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    max_disk_space_bytes: u64,
+    managed_xfs_root: PathBuf,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.managed_xfs_root_dir =
+                    Some(managed_xfs_root.to_path_buf());
+                config.filesystem_snapshots = filesystem_snapshots.clone();
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for managed filesystem snapshot server to start",
     )
     .await
 }
@@ -4687,6 +4871,10 @@ impl Oplog for TestOplog {
             return OplogEntry::no_op(None);
         }
         let mut entry = self.oplog.read(oplog_index).await;
+        if matches!(entry, OplogEntry::Snapshot { .. }) {
+            self.additional_test_deps
+                .record_oplog_call(&self.owned_agent_id, "read_automatic_snapshot");
+        }
         if let Some(payload_id) = self
             .additional_test_deps
             .snapshot_download_failures

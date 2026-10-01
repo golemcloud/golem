@@ -1334,6 +1334,108 @@ impl Default for InvocationResultMembership {
     }
 }
 
+/// The newest automatic snapshot entry in the oplog, with the filesystem snapshot that it names
+/// and the confirmation of that snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AutomaticSnapshot {
+    /// The index of the `Snapshot` entry.
+    pub index: OplogIndex,
+    /// The time of the `Snapshot` entry.
+    pub timestamp: Timestamp,
+    /// The component revision that made the entry.
+    pub component_revision: ComponentRevision,
+    /// The filesystem snapshot that the entry names, with its confirmation.
+    pub files: SnapshotFiles,
+}
+
+/// The filesystem snapshot that an automatic snapshot entry names, with its confirmation. Only a
+/// named snapshot can be confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum SnapshotFiles {
+    /// The entry names no filesystem snapshot: it has no filesystem capture.
+    Unnamed,
+    /// The entry names this filesystem snapshot, and no `SnapshotConfirmed` entry confirmed it.
+    Unconfirmed(FilesystemSnapshotName),
+    /// A `SnapshotConfirmed` entry with the same name follows the entry.
+    Confirmed(FilesystemSnapshotName),
+}
+
+impl SnapshotFiles {
+    /// The files of a new entry that names `name`, before any confirmation.
+    pub fn named(name: Option<FilesystemSnapshotName>) -> Self {
+        name.map_or(Self::Unnamed, Self::Unconfirmed)
+    }
+
+    /// The name of the filesystem snapshot, when the entry names one.
+    pub fn name(&self) -> Option<&FilesystemSnapshotName> {
+        match self {
+            Self::Unnamed => None,
+            Self::Unconfirmed(name) | Self::Confirmed(name) => Some(name),
+        }
+    }
+
+    /// Whether a `SnapshotConfirmed` entry confirmed the named filesystem snapshot.
+    pub fn is_confirmed(&self) -> bool {
+        matches!(self, Self::Confirmed(_))
+    }
+
+    /// The files after a `SnapshotConfirmed` entry of `name`: confirmed when the entry names
+    /// `name` and is unconfirmed, and unchanged otherwise.
+    pub fn confirmed(self, name: &FilesystemSnapshotName) -> Self {
+        match self {
+            Self::Unconfirmed(own) if &own == name => Self::Confirmed(own),
+            files => files,
+        }
+    }
+}
+
+impl AutomaticSnapshot {
+    /// The entry as a baseline of a start, when it is usable, as [`AutomaticSnapshot::usable`]
+    /// gives it, without a copy of its name.
+    pub fn into_usable(self) -> Option<UsableAutomaticSnapshot> {
+        let filesystem_snapshot = match self.files {
+            SnapshotFiles::Unnamed => None,
+            SnapshotFiles::Confirmed(name) => Some(name),
+            SnapshotFiles::Unconfirmed(_) => return None,
+        };
+        Some(UsableAutomaticSnapshot {
+            index: self.index,
+            component_revision: self.component_revision,
+            filesystem_snapshot,
+        })
+    }
+
+    /// The entry as a baseline of a start, when it is usable: its filesystem snapshot is
+    /// confirmed, or it names none.
+    pub fn usable(&self) -> Option<UsableAutomaticSnapshot> {
+        let filesystem_snapshot = match &self.files {
+            SnapshotFiles::Unnamed => None,
+            SnapshotFiles::Confirmed(name) => Some(name.clone()),
+            SnapshotFiles::Unconfirmed(_) => return None,
+        };
+        Some(UsableAutomaticSnapshot {
+            index: self.index,
+            component_revision: self.component_revision,
+            filesystem_snapshot,
+        })
+    }
+}
+
+/// An automatic snapshot entry that a start can use as its baseline: its filesystem snapshot is
+/// confirmed, or it has no filesystem snapshot name.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct UsableAutomaticSnapshot {
+    /// The index of the `Snapshot` entry.
+    pub index: OplogIndex,
+    /// The component revision that made the entry.
+    pub component_revision: ComponentRevision,
+    /// The filesystem snapshot name of the entry, which a `SnapshotConfirmed` entry confirmed.
+    /// `None` when the entry has no filesystem snapshot name.
+    pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+}
+
 /// Contains status information about a worker according to a given oplog index.
 ///
 /// This status is just cached information, all fields must be computable by the oplog alone.
@@ -1378,20 +1480,20 @@ pub struct AgentStatusRecord {
     /// Index of the last manual update snapshot index. Agent will call load_snapshot
     /// on this payload before starting replay.
     pub last_manual_update_snapshot_index: Option<OplogIndex>,
-    /// Index of the last automatic snapshot index. Must be >= last_manual_snapshot_index.
-    /// Agent will call load_snapshot on this payload before starting replay. If the load_snapshot
-    /// fails this will be ignored and a full replay from last_manual_snapshot_index will performed.
-    pub last_automatic_snapshot_index: Option<OplogIndex>,
-    /// Timestamp of the last automatic snapshot entry in the oplog.
-    pub last_automatic_snapshot_timestamp: Option<Timestamp>,
-    /// Component revision that created the last automatic snapshot.
-    pub last_automatic_snapshot_component_revision: Option<ComponentRevision>,
-    /// The filesystem snapshot name that the last automatic snapshot entry holds. `None` when
-    /// that entry has no filesystem capture.
-    pub last_automatic_snapshot_filesystem_snapshot: Option<FilesystemSnapshotName>,
-    /// True when a `SnapshotConfirmed` entry with the same name follows the last automatic
-    /// snapshot entry. The filesystem snapshot is a usable baseline only when this is true.
-    pub last_automatic_snapshot_confirmed: bool,
+    /// The last automatic snapshot entry. Its index is after `last_manual_update_snapshot_index`.
+    /// A start that selects it calls load_snapshot on its payload before it starts the replay. If
+    /// the load_snapshot fails, the start rejects this entry and tries
+    /// `previous_usable_automatic_snapshot`, then the last manual update snapshot, then a full
+    /// replay.
+    pub last_automatic_snapshot: Option<AutomaticSnapshot>,
+    /// The newest automatic snapshot entry before the last one that was usable when the entry
+    /// after it came: an entry with a confirmed filesystem snapshot, or an entry without a
+    /// filesystem snapshot name. A new entry moves a usable last entry here, also when it reuses
+    /// the filesystem snapshot name of that entry, because each entry has its own application
+    /// snapshot. A start uses this entry when the last automatic snapshot entry is not usable, or
+    /// when the last entry does not load or restore. A successful update clears it together with
+    /// the last automatic snapshot entry.
+    pub previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
     /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part
     /// of the serialized record (it is persisted separately) and defaults to `Durable` on
@@ -1432,11 +1534,8 @@ impl Default for AgentStatusRecord {
             component_revision_for_replay: ComponentRevision::INITIAL,
             current_retry_state: HashMap::new(),
             last_manual_update_snapshot_index: None,
-            last_automatic_snapshot_index: None,
-            last_automatic_snapshot_timestamp: None,
-            last_automatic_snapshot_component_revision: None,
-            last_automatic_snapshot_filesystem_snapshot: None,
-            last_automatic_snapshot_confirmed: false,
+            last_automatic_snapshot: None,
+            previous_usable_automatic_snapshot: None,
             agent_mode: AgentMode::Durable,
         }
     }
@@ -2066,6 +2165,9 @@ pub struct FailedUpdateRecord {
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
+    /// The index of the `SuccessfulUpdate` entry. It orders the update against other entries,
+    /// which the timestamps of different executors cannot do.
+    pub oplog_index: OplogIndex,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

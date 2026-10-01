@@ -17,6 +17,8 @@ pub mod config;
 pub mod durable_host;
 pub(crate) mod filesystem_pressure;
 pub(crate) mod filesystem_snapshot;
+#[cfg(feature = "test-utils")]
+pub mod filesystem_snapshot_testing;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;
@@ -65,6 +67,9 @@ use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_agents::{ActiveAgents, InvocationLoops};
+use crate::services::agent_filesystem_snapshots::{
+    AgentFilesystemSnapshots, StoreSource, VolumeRoom,
+};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -180,6 +185,35 @@ impl Drop for RunDetails {
             let _ = handle.join();
         }
     }
+}
+
+/// Binds the service of the filesystem snapshots to the configuration, with the store `given`
+/// when a bootstrap gives one, and otherwise the configured store on `blob_storage`. The service
+/// stops its jobs and its store when the executor shuts down.
+fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
+    golem_config: &GolemConfig,
+    given: Option<StoreSource>,
+    blob_storage: Arc<dyn BlobStorage>,
+    active_agents: &Arc<ActiveAgents<Ctx>>,
+    shutdown: &services::shutdown::Shutdown,
+) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
+    let filesystems = active_agents.agent_filesystems();
+    let source = given.unwrap_or_else(|| {
+        StoreSource::configured(
+            blob_storage,
+            VolumeRoom::Pressure {
+                volume: filesystems.volume().clone(),
+                pressure: filesystems.pressure_policy().clone(),
+            },
+        )
+    });
+    AgentFilesystemSnapshots::bind(
+        &golem_config.filesystem_snapshots,
+        source,
+        filesystems.provisioning().uses_managed_storage(),
+        shutdown,
+    )
+    .map_err(|error| anyhow!(error))
 }
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
@@ -367,6 +401,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc
     }
 
+    /// Gives a store of the filesystem snapshots that replaces the store that the configuration
+    /// names. The default gives none.
+    fn filesystem_snapshot_store(&self) -> Option<StoreSource> {
+        None
+    }
+
     fn wrap_worker_enumeration_service(
         &self,
         service: Arc<dyn WorkerEnumerationService>,
@@ -402,6 +442,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         resource_limits: Arc<dyn ResourceLimits>,
         quota_service: Arc<dyn QuotaService>,
@@ -447,6 +488,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
@@ -492,6 +534,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             resource_limits.clone(),
             shutdown_token.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
@@ -540,6 +583,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             websocket_connection_pool.clone(),
             mcp_transport,
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog,
             additional_deps,
             leak_sentinel,
@@ -1059,6 +1103,14 @@ pub async fn create_worker_executor_impl<
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
+    let agent_filesystem_snapshots = bind_agent_filesystem_snapshots(
+        &golem_config,
+        bootstrap.filesystem_snapshot_store(),
+        blob_storage.clone(),
+        &active_agents,
+        &shutdown,
+    )?;
+
     let direct_invocation_auth_service =
         bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
 
@@ -1094,6 +1146,7 @@ pub async fn create_worker_executor_impl<
             oplog_processor_plugin,
             agent_type_service,
             environment_state_service,
+            agent_filesystem_snapshots,
             agent_webhooks_service,
             resource_limits,
             quota_service,
@@ -1286,11 +1339,13 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
         .initialize(grpc_port)
         .await;
 
-    let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
+    // The start of the service recovers the agents, and its future is large. It lives on the
+    // heap, so the stack of the caller stays small.
+    let worker_impl = Box::pin(WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,
         lazy_worker_activator,
         grpc_port,
-    )
+    ))
     .await?;
 
     let service = WorkerExecutorServer::new(worker_impl)

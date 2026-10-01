@@ -1429,7 +1429,7 @@ async fn dropping_reconstruction_observer_never_publishes_resident_and_deletes()
 
     let transition = finish_reconstruction(filesystem);
     assert!(matches!(
-        generation.registry.lease_call(),
+        generation.registry.lease_call(CallEffect::Read),
         Err(AccessError::Transitioning)
     ));
     drop(transition);
@@ -1476,7 +1476,7 @@ async fn dropping_an_unstarted_call_cancels_it_without_sandbox_work() {
 #[test]
 async fn first_call_poll_runs_the_exact_operation_in_the_caller_task() {
     let registry = Arc::new(GenerationRegistry::new());
-    let lease = registry.lease_call().unwrap();
+    let lease = registry.lease_call(CallEffect::Read).unwrap();
     let caller_thread = std::thread::current().id();
     let operation_thread = Arc::new(Mutex::new(None));
     let observed_thread = Arc::clone(&operation_thread);
@@ -1494,7 +1494,7 @@ async fn first_call_poll_runs_the_exact_operation_in_the_caller_task() {
 #[timeout("5s")]
 async fn dropping_a_started_call_transfers_the_same_operation_once() {
     let registry = Arc::new(GenerationRegistry::new());
-    let lease = registry.lease_call().unwrap();
+    let lease = registry.lease_call(CallEffect::Read).unwrap();
     let starts = Arc::new(AtomicUsize::new(0));
     let completions = Arc::new(AtomicUsize::new(0));
     let started = Arc::new(Notify::new());

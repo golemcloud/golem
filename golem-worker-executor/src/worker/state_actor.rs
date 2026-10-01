@@ -58,9 +58,10 @@ use super::{
     PendingMemoryGrowth, RetirementReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
     WorkerStatusMetric,
 };
+use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
-use crate::services::{All, HasActiveAgents, HasConfig, HasSchedulerService};
+use crate::services::{All, HasActiveAgents, HasConfig, HasSchedulerService, HasShardService};
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
 use chrono::Utc;
@@ -68,7 +69,7 @@ use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogIndex};
 use golem_common::model::{
     AgentFingerprint, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
     ScheduledAction, Timestamp,
@@ -79,7 +80,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Handle to the worker-state actor's two job queues. Dropping it requests ordered shutdown.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
@@ -250,7 +251,22 @@ enum StatusJob {
     Reattach {
         done: oneshot::Sender<()>,
     },
+    /// Writes the confirmation record of a filesystem snapshot when the last automatic snapshot
+    /// record still has the name. The check and the append run in this one job, so no other
+    /// status job runs between them. The job holds the instance guard of its caller until it
+    /// ends, so the instance cannot stop while it runs, and it calls `on_confirmed` with the
+    /// instance under that guard when it answers `Confirmed`.
+    ConfirmFilesystemSnapshot {
+        name: FilesystemSnapshotName,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        on_confirmed: OnConfirmed,
+        done: oneshot::Sender<ConfirmOutcome>,
+    },
 }
+
+/// What a confirmation does with the instance when it gives `Confirmed`, before the instance
+/// guard is released.
+pub(crate) type OnConfirmed = Box<dyn FnOnce(&WorkerInstance) + Send>;
 
 /// A request processed by the lifecycle task. Notifications and ordinary growth persistence are
 /// fire-and-forget. Ordered oplog entries await a reply but never take the worker's `instance`
@@ -491,6 +507,19 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     StatusJob::Reattach { done } => {
                         state.reattach().await;
                         let _ = done.send(());
+                    }
+                    StatusJob::ConfirmFilesystemSnapshot {
+                        name,
+                        instance_guard,
+                        on_confirmed,
+                        done,
+                    } => {
+                        let outcome = state.confirm_filesystem_snapshot(name).await;
+                        if outcome == ConfirmOutcome::Confirmed {
+                            on_confirmed(&instance_guard);
+                        }
+                        let _ = done.send(outcome);
+                        drop(instance_guard);
                     }
                 }
             }
@@ -779,6 +808,27 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
     }
 
+    /// Writes the confirmation record of the filesystem snapshot `name`, as
+    /// [`StatusJob::ConfirmFilesystemSnapshot`] says. The job holds `instance_guard` until it ends.
+    /// A status task that has ended, or that drops the job, gives [`ConfirmOutcome::Deferred`].
+    /// Only `Worker::confirm_as` calls it, after the owner gate lets the confirmation through.
+    pub(super) async fn append_confirmation(
+        &self,
+        name: FilesystemSnapshotName,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        on_confirmed: OnConfirmed,
+    ) -> ConfirmOutcome {
+        self.commit
+            .try_run_status_job(|done| StatusJob::ConfirmFilesystemSnapshot {
+                name,
+                instance_guard,
+                on_confirmed,
+                done,
+            })
+            .await
+            .unwrap_or(ConfirmOutcome::Deferred)
+    }
+
     pub fn queue_ordered_oplog_entry(
         &self,
         worker: Arc<Worker<Ctx>>,
@@ -804,6 +854,17 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 }
 
 impl OwnerCommitController {
+    /// Sends a job to the status task and waits for its reply. Gives `None` when the task has
+    /// ended or dropped the job without a reply. It never panics.
+    async fn try_run_status_job<R>(
+        &self,
+        make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob,
+    ) -> Option<R> {
+        let (done, done_rx) = oneshot::channel();
+        self.status_jobs.send(make_job(done)).ok()?;
+        done_rx.await.ok()
+    }
+
     pub async fn commit_and_update_state(
         &self,
         level: CommitLevel,
@@ -839,6 +900,73 @@ impl OwnerCommitController {
     }
 }
 
+/// Whether the last automatic snapshot record of `status` has `name` and its confirmation.
+fn confirmed_with_name(status: &AgentStatusRecord, name: &FilesystemSnapshotName) -> bool {
+    status.last_automatic_snapshot.as_ref().is_some_and(|last| {
+        matches!(&last.files, golem_common::model::SnapshotFiles::Confirmed(own) if own == name)
+    })
+}
+
+/// What a confirmation job does before its append, after its first commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BeforeAppend {
+    /// The job appends nothing and replies this. Nobody asks the admission.
+    Reply(ConfirmOutcome),
+    /// The job appends the confirmation record when this executor still admits work of the
+    /// agent, and replies `Deferred` otherwise. The job asks the admission last.
+    NeedsAdmission,
+}
+
+/// The reply of a confirmation job before its append, or `None` when the job appends the
+/// confirmation record. It asks `admission` only when `decision` needs it, and at most once.
+fn reply_before_append(
+    decision: BeforeAppend,
+    admission: impl FnOnce() -> bool,
+) -> Option<ConfirmOutcome> {
+    match decision {
+        BeforeAppend::Reply(reply) => Some(reply),
+        BeforeAppend::NeedsAdmission if !admission() => Some(ConfirmOutcome::Deferred),
+        BeforeAppend::NeedsAdmission => None,
+    }
+}
+
+/// Decides a confirmation job before its append, after its first commit, over the status and
+/// before the admission of the shard.
+fn confirmation_before_append(
+    detached: bool,
+    status: &AgentStatusRecord,
+    name: &FilesystemSnapshotName,
+) -> BeforeAppend {
+    if detached {
+        BeforeAppend::Reply(ConfirmOutcome::Deferred)
+    } else if confirmed_with_name(status, name) {
+        BeforeAppend::Reply(ConfirmOutcome::Confirmed)
+    } else if status
+        .last_automatic_snapshot
+        .as_ref()
+        .and_then(|last| last.files.name())
+        != Some(name)
+    {
+        BeforeAppend::Reply(ConfirmOutcome::Superseded)
+    } else {
+        BeforeAppend::NeedsAdmission
+    }
+}
+
+/// Decides a confirmation job after its append and its second commit. Only a status that folded
+/// the confirmation of the record with `name` gives `Confirmed`.
+fn confirmation_after_append(
+    detached: bool,
+    status: &AgentStatusRecord,
+    name: &FilesystemSnapshotName,
+) -> ConfirmOutcome {
+    if !detached && confirmed_with_name(status, name) {
+        ConfirmOutcome::Confirmed
+    } else {
+        ConfirmOutcome::Deferred
+    }
+}
+
 fn queue_status_notification<Ctx: WorkerCtx>(
     lifecycle_jobs: &mpsc::UnboundedSender<LifecycleJob<Ctx>>,
     notification_queued: &AtomicBool,
@@ -858,6 +986,73 @@ async fn complete_status_job<R>(transaction: impl Future<Output = R>, done: ones
 }
 
 impl<Ctx: WorkerCtx> StatusState<Ctx> {
+    /// The confirmation job of a filesystem snapshot. It commits, checks that the status is
+    /// attached and that the last automatic snapshot record has `name`, checks that this executor
+    /// still admits work of the agent, appends the confirmation record, commits, and decides from
+    /// the folded status. A commit or append the oplog refuses because the shard has a new owner
+    /// gives `Deferred`; the refusal has already started the retirement of the agent. An append
+    /// that fails for another cause also gives `Deferred`. A commit that fails for a cause other
+    /// than a fence panics in `commit_and_update_state`, as every commit of the status task does.
+    async fn confirm_filesystem_snapshot(&self, name: FilesystemSnapshotName) -> ConfirmOutcome {
+        if self
+            .commit_and_update_state(CommitLevel::Always, None)
+            .await
+            .is_err()
+        {
+            return ConfirmOutcome::Deferred;
+        }
+        // The admission reads the clock and the shard assignment, so it is asked last, and only
+        // when the decision needs it.
+        let admitted = || {
+            self.deps
+                .shard_service()
+                .check_admission(&self.owned_agent_id.agent_id)
+                .is_ok()
+        };
+        match reply_before_append(
+            confirmation_before_append(
+                self.detached.load(Ordering::Acquire),
+                &self.last_known_status.load(),
+                &name,
+            ),
+            admitted,
+        ) {
+            Some(reply) => reply,
+            None => {
+                match self
+                    .oplog
+                    .add(OplogEntry::snapshot_confirmed(name.clone()))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(OplogError::Fenced(fence)) => {
+                        self.retire_fenced_agent(fence);
+                        return ConfirmOutcome::Deferred;
+                    }
+                    Err(error) => {
+                        warn!(
+                            error = %error,
+                            "Failed to append the confirmation of a filesystem snapshot"
+                        );
+                        return ConfirmOutcome::Deferred;
+                    }
+                }
+                if self
+                    .commit_and_update_state(CommitLevel::Always, None)
+                    .await
+                    .is_err()
+                {
+                    return ConfirmOutcome::Deferred;
+                }
+                confirmation_after_append(
+                    self.detached.load(Ordering::Acquire),
+                    &self.last_known_status.load(),
+                    &name,
+                )
+            }
+        }
+    }
+
     /// Retires the agent after a background oplog write was refused because its shard moved.
     ///
     /// Spawned rather than awaited: this runs on the status task, which must never take the
@@ -1364,6 +1559,203 @@ mod tests {
             idempotency_key: Some(key),
             manual_update_target_revision: None,
         }
+    }
+
+    fn with_candidate(
+        name: Option<&golem_common::model::oplog::FilesystemSnapshotName>,
+        confirmed: bool,
+    ) -> AgentStatusRecord {
+        AgentStatusRecord {
+            last_automatic_snapshot: Some(golem_common::model::AutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                timestamp: golem_common::model::Timestamp::from(1_000),
+                component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                files: match (name, confirmed) {
+                    (Some(name), true) => {
+                        golem_common::model::SnapshotFiles::Confirmed(name.clone())
+                    }
+                    (name, _) => golem_common::model::SnapshotFiles::named(name.cloned()),
+                },
+            }),
+            ..AgentStatusRecord::default()
+        }
+    }
+
+    #[test]
+    fn a_confirmation_job_goes_on_to_the_admission_only_for_the_unconfirmed_candidate() {
+        use super::{BeforeAppend, ConfirmOutcome, confirmation_before_append};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let name = FilesystemSnapshotName::periodic();
+        let other = FilesystemSnapshotName::periodic();
+
+        let cases = [
+            confirmation_before_append(true, &with_candidate(Some(&name), false), &name),
+            confirmation_before_append(false, &with_candidate(Some(&name), true), &name),
+            confirmation_before_append(false, &with_candidate(Some(&other), false), &name),
+            confirmation_before_append(false, &with_candidate(None, false), &name),
+            confirmation_before_append(false, &with_candidate(Some(&name), false), &name),
+        ];
+
+        // Only the last case goes on to the admission; the others reply at once.
+        assert_eq!(
+            cases,
+            [
+                BeforeAppend::Reply(ConfirmOutcome::Deferred),
+                BeforeAppend::Reply(ConfirmOutcome::Confirmed),
+                BeforeAppend::Reply(ConfirmOutcome::Superseded),
+                BeforeAppend::Reply(ConfirmOutcome::Superseded),
+                BeforeAppend::NeedsAdmission,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_confirmation_job_asks_the_admission_once_and_only_when_its_decision_needs_it() {
+        use super::{BeforeAppend, ConfirmOutcome, reply_before_append};
+        let asked = std::cell::Cell::new(0);
+        let admission = |admitted| {
+            let asked = &asked;
+            move || {
+                asked.set(asked.get() + 1);
+                admitted
+            }
+        };
+
+        let replied = reply_before_append(
+            BeforeAppend::Reply(ConfirmOutcome::Superseded),
+            admission(true),
+        );
+        let asked_after_reply = asked.get();
+        let appends = reply_before_append(BeforeAppend::NeedsAdmission, admission(true));
+        let refused = reply_before_append(BeforeAppend::NeedsAdmission, admission(false));
+
+        assert_eq!(
+            (replied, asked_after_reply, appends, refused, asked.get()),
+            (
+                Some(ConfirmOutcome::Superseded),
+                0,
+                None,
+                Some(ConfirmOutcome::Deferred),
+                2
+            )
+        );
+    }
+
+    #[test]
+    fn after_its_append_a_confirmation_job_answers_superseded_never() {
+        use super::{ConfirmOutcome, confirmation_after_append};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let name = FilesystemSnapshotName::periodic();
+        let other = FilesystemSnapshotName::periodic();
+
+        let cases = [
+            confirmation_after_append(false, &with_candidate(Some(&name), true), &name),
+            confirmation_after_append(true, &with_candidate(Some(&name), true), &name),
+            confirmation_after_append(false, &with_candidate(Some(&name), false), &name),
+            confirmation_after_append(false, &with_candidate(Some(&other), true), &name),
+        ];
+
+        assert_eq!(
+            cases,
+            [
+                ConfirmOutcome::Confirmed,
+                ConfirmOutcome::Deferred,
+                ConfirmOutcome::Deferred,
+                ConfirmOutcome::Deferred,
+            ]
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn a_confirmation_to_a_stopped_status_task_is_deferred_and_does_not_panic() {
+        use super::{ConfirmOutcome, WorkerInstance};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "stopped-status".into(),
+            },
+        );
+        let (status_jobs, status_rx) = mpsc::unbounded_channel();
+        let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
+        let stop = WorkerStateActorStop::new(
+            || {},
+            tokio::spawn(async {}),
+            status_jobs.clone(),
+            tokio::spawn(async {}),
+            async {},
+        );
+        let actor = WorkerStateActor::<Context> {
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
+            lifecycle_jobs,
+            notification_queued: Arc::new(AtomicBool::new(false)),
+            stop,
+            owned_agent_id,
+        };
+        drop(status_rx);
+        let guard = Arc::new(tokio::sync::Mutex::new(WorkerInstance::Unresolved))
+            .lock_owned()
+            .await;
+
+        let reply = actor
+            .append_confirmation(FilesystemSnapshotName::periodic(), guard, Box::new(|_| {}))
+            .await;
+
+        assert_eq!(reply, ConfirmOutcome::Deferred);
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn a_confirmation_gives_the_reply_of_the_status_task() {
+        use super::{ConfirmOutcome, WorkerInstance};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "replying-status".into(),
+            },
+        );
+        let (status_jobs, mut status_rx) = mpsc::unbounded_channel();
+        let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
+        let stop = WorkerStateActorStop::new(
+            || {},
+            tokio::spawn(std::future::pending()),
+            status_jobs.clone(),
+            tokio::spawn(async {}),
+            async {},
+        );
+        let actor = WorkerStateActor::<Context> {
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
+            lifecycle_jobs,
+            notification_queued: Arc::new(AtomicBool::new(false)),
+            stop,
+            owned_agent_id,
+        };
+        let status_task = tokio::spawn(async move {
+            if let Some(StatusJob::ConfirmFilesystemSnapshot { done, .. }) = status_rx.recv().await
+            {
+                let _ = done.send(ConfirmOutcome::Superseded);
+            }
+        });
+        let guard = Arc::new(tokio::sync::Mutex::new(WorkerInstance::Unresolved))
+            .lock_owned()
+            .await;
+
+        let reply = actor
+            .append_confirmation(FilesystemSnapshotName::periodic(), guard, Box::new(|_| {}))
+            .await;
+        status_task.await.unwrap();
+
+        assert_eq!(reply, ConfirmOutcome::Superseded);
     }
 
     #[test]

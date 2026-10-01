@@ -4353,8 +4353,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .data()
                         .get_public_state()
                         .worker()
-                        .unavailable_periodic_snapshot_through
-                        .fetch_max(snapshot_index.into(), Ordering::AcqRel);
+                        .mark_periodic_unavailable(snapshot_index);
                     return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
                 return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
@@ -4546,8 +4545,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .worker()
-            .rejected_periodic_snapshot_through
-            .fetch_max(snapshot_index.into(), Ordering::AcqRel);
+            .reject_periodic(snapshot_index);
         RetryDecision::Immediate
     }
 
@@ -4975,23 +4973,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     debug!("Replaying oplog finished");
                     let pending_update = self.state.pending_update.lock().await.take();
                     if let Some(pending_update) = pending_update {
-                        match pending_update.description {
+                        match &pending_update.description {
                             UpdateDescription::Automatic { target_revision } => {
+                                let target_revision = *target_revision;
                                 debug!("Finalizing pending automatic update");
 
                                 if let Err(error) = self
                                     .update_state_to_new_component_revision(target_revision)
                                     .await
                                 {
-                                    let stringified_error =
-                                        format!("Applying worker update failed: {error}");
-
-                                    self.on_worker_update_failed(
-                                        target_revision,
-                                        Some(stringified_error),
-                                    )
-                                    .await?;
-
+                                    // The update stays pending, so the start records it as
+                                    // failed and starts again at the current revision.
+                                    *self.state.pending_update.lock().await = Some(pending_update);
                                     Err(error)?
                                 };
 
@@ -6570,24 +6563,13 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         };
         match prepare_result {
             Ok(None) => {
-                let worker = store.as_context().data().get_public_state().worker();
-                let rejected = worker
-                    .rejected_periodic_snapshot_through
-                    .load(Ordering::Acquire);
-                if rejected != 0 {
-                    let metadata = worker.get_initial_worker_metadata();
-                    worker
-                        .worker_service()
-                        .reject_periodic_snapshots_through(
-                            &metadata.owned_agent_id(),
-                            metadata.fingerprint,
-                            OplogIndex::from_u64(rejected),
-                        )
-                        .await?;
-                }
-                worker
-                    .unavailable_periodic_snapshot_through
-                    .store(0, Ordering::Release);
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .settle_exclusions_after_prepare()
+                    .await?;
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }

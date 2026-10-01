@@ -38,7 +38,7 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
 };
 use crate::filesystem_snapshot::contract_tests::new_scope;
 use crate::filesystem_snapshot::{
-    ChangeDetection as StoreChangeDetection, FilesystemSnapshotStore, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection as StoreChangeDetection, FilesystemSnapshotStore, SnapshotName,
     SnapshotStoreError,
 };
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
@@ -118,9 +118,9 @@ fn fixture_tree() -> Scratch {
 }
 
 /// Gives the path of each blob of the scope, in the order of the paths.
-async fn stored_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+async fn stored_paths(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
     let mut paths = storage
-        .list_blobs_below("test", "test", scope.0.clone(), Path::new(""))
+        .list_blobs_below("test", "test", (*scope.0).clone(), Path::new(""))
         .await
         .unwrap()
         .iter()
@@ -131,7 +131,7 @@ async fn stored_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> V
 }
 
 /// Gives the path of each pack of the scope, in the order of the paths.
-async fn pack_paths(storage: &InMemoryBlobStorage, scope: &SnapshotScope) -> Vec<String> {
+async fn pack_paths(storage: &InMemoryBlobStorage, scope: &AgentSnapshots) -> Vec<String> {
     stored_paths(storage, scope)
         .await
         .into_iter()
@@ -157,7 +157,7 @@ fn one_file_tree(file: &'static str, content: &str) -> Scratch {
 }
 
 /// Gives the id in hex of each pack of data blobs in the repository of the scope.
-async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
+async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &AgentSnapshots) -> Box<[Box<str>]> {
     with_existing_repository(
         storage.clone(),
         scope,
@@ -179,7 +179,7 @@ async fn data_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -
 }
 
 /// Gives the id in hex of each pack of tree blobs in the repository of the scope.
-async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, scope: &SnapshotScope) -> Box<[Box<str>]> {
+async fn tree_packs(storage: &Arc<InMemoryBlobStorage>, scope: &AgentSnapshots) -> Box<[Box<str>]> {
     with_existing_repository(
         storage.clone(),
         scope,
@@ -245,11 +245,16 @@ pub(super) async fn polled_until(bound: Duration, condition: impl Fn() -> bool) 
 /// calls wait for at most `deadline`.
 pub(super) fn backend_of(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     deadline: Duration,
 ) -> Arc<BlobBackend> {
     Arc::new(BlobBackend::new(
-        files_of(storage, scope.0.clone(), deadline, CancellationToken::new()),
+        files_of(
+            storage,
+            (*scope.0).clone(),
+            deadline,
+            CancellationToken::new(),
+        ),
         Handle::current(),
         KEPT_PACKS_LIMIT,
     ))
@@ -259,7 +264,7 @@ pub(super) fn backend_of(
 /// blocking thread. Each call on the storage waits for at most `deadline`.
 async fn prune_with(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     deadline: Duration,
     settings: PruneSettings,
 ) -> anyhow::Result<Option<PruneReport>> {
@@ -271,7 +276,7 @@ async fn prune_with(
 /// restores that snapshot into the empty directory `into` with the options, on a blocking thread.
 async fn restore_named(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &SnapshotName,
     into: &Path,
     options: RestoreOptions,
@@ -291,7 +296,7 @@ async fn restore_named(
 /// thread. Each call on the storage waits for at most `deadline`.
 async fn with_existing_repository<R: Send + 'static>(
     storage: Arc<dyn BlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     deadline: Duration,
     work: impl FnOnce(&RusticRepository<OpenStatus>) -> anyhow::Result<R> + Send + 'static,
 ) -> anyhow::Result<R> {
@@ -900,7 +905,7 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
 
     // The first prune marks the packs that only the deleted name used, and the second prune
     // deletes them, because they stay marked for no time.
-    store.delete(&scope, &name("p-first")).await.unwrap();
+    store.delete(&scope, &[name("p-first")]).await.unwrap();
     let settings = PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
@@ -1175,7 +1180,7 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
             .save(&scope, &name("p-second"), tree.path(), None)
             .await
             .unwrap();
-        store.delete(&scope, &name("p-first")).await.unwrap();
+        store.delete(&scope, &[name("p-first")]).await.unwrap();
         let settings = PruneSettings {
             fast_repack,
             keep_delete: Duration::ZERO,

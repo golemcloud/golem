@@ -36,8 +36,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, DurableStreamEventSummary, HostRequest, HostResponse, OplogEntry,
-    OplogIndex, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
+    DurableFunctionType, DurableStreamEventSummary, FilesystemSnapshotName, HostRequest,
+    HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
+    UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
@@ -1268,13 +1269,14 @@ pub trait OplogOps: Oplog {
         target_revision: ComponentRevision,
         payload: Vec<u8>,
         mime_type: String,
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
     ) -> Result<UpdateDescription, String> {
         let payload = self.upload_payload_owned(payload).await?;
         Ok(UpdateDescription::SnapshotBased {
             target_revision,
             payload,
             mime_type,
-            filesystem_snapshot: None,
+            filesystem_snapshot,
         })
     }
 

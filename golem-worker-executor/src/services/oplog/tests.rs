@@ -4508,6 +4508,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             ComponentRevision::new(11).unwrap(),
             vec![1, 2, 3],
             "application/octet-stream".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -4974,6 +4975,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             ComponentRevision::new(11).unwrap(),
             large_payload4.clone(),
             "application/octet-stream".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -8162,6 +8164,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             ComponentRevision::new(2).unwrap(),
             inline,
             "application/inline".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -8183,6 +8186,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             ComponentRevision::new(3).unwrap(),
             external,
             "application/external".to_string(),
+            None,
         )
         .await
         .unwrap();

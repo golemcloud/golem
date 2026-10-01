@@ -41,7 +41,7 @@ pub(super) mod clock;
 pub(super) mod fixture;
 
 use super::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError,
 };
 use fixture::{
@@ -116,6 +116,10 @@ const CASES: &[(&str, Case)] = &[
     ("delete_is_idempotent", |open| {
         delete_is_idempotent(open).boxed()
     }),
+    (
+        "a_batch_delete_removes_its_names_and_keeps_every_other_snapshot",
+        |open| a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open).boxed(),
+    ),
     ("a_delete_keeps_every_other_snapshot", |open| {
         a_delete_keeps_every_other_snapshot(open).boxed()
     }),
@@ -195,8 +199,8 @@ pub(crate) fn register(
 }
 
 /// Gives a scope that no other test uses.
-pub(super) fn new_scope() -> SnapshotScope {
-    SnapshotScope::agent(&OwnedAgentId::new(
+pub(super) fn new_scope() -> AgentSnapshots {
+    AgentSnapshots::agent(&OwnedAgentId::new(
         EnvironmentId(Uuid::new_v4()),
         &AgentId {
             component_id: ComponentId(Uuid::new_v4()),
@@ -220,7 +224,7 @@ fn new_tree(entries: &[(&str, Spec)]) -> Scratch {
 /// info that the restore gave.
 async fn restored(
     store: &dyn FilesystemSnapshotStore,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Result<(Vec<Listed>, SnapshotInfo), SnapshotStoreError> {
     let into = Scratch::new();
@@ -231,14 +235,14 @@ async fn restored(
 /// Gives the listing of the restored snapshot, or panics with the error of the restore.
 async fn restored_listing(
     store: &dyn FilesystemSnapshotStore,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     name: &SnapshotName,
 ) -> Vec<Listed> {
     restored(store, scope, name).await.unwrap().0
 }
 
 /// Gives the names of the listing of a scope, in the order of the listing.
-async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &SnapshotScope) -> Vec<String> {
+async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
     store
         .list(scope)
         .await
@@ -645,7 +649,7 @@ async fn a_deleted_name_stops_resolving_at_once(open: OpenStore) {
         .await
         .unwrap();
 
-    store.delete(&scope, &name("p-deleted")).await.unwrap();
+    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
     let stat = store.stat(&scope, &name("p-deleted")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-deleted")).await;
     let names = listed_names(&*store, &scope).await;
@@ -667,15 +671,70 @@ async fn delete_is_idempotent(open: OpenStore) {
         .unwrap();
 
     let results = [
-        store.delete(&unused, &name("p-twice")).await.is_ok(),
-        store.delete(&scope, &name("p-never")).await.is_ok(),
-        store.delete(&scope, &name("p-twice")).await.is_ok(),
-        store.delete(&scope, &name("p-twice")).await.is_ok(),
+        store.delete(&unused, &[name("p-twice")]).await.is_ok(),
+        store.delete(&scope, &[name("p-never")]).await.is_ok(),
+        store.delete(&scope, &[name("p-twice")]).await.is_ok(),
+        store.delete(&scope, &[name("p-twice")]).await.is_ok(),
     ];
 
     assert_eq!(
         (results, listed_names(&*store, &scope).await),
         ([true; 4], Vec::<String>::new())
+    );
+}
+
+async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: OpenStore) {
+    // Two names of the batch hold snapshots, one is unknown, and two snapshots stay outside it.
+    let store = open();
+    let scope = new_scope();
+    let shared = new_tree(&fixture());
+    let other = new_tree(&one_file("other"));
+    store
+        .save(&scope, &name("p-batch-1"), shared.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-batch-2"), other.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept-1"), shared.path(), None)
+        .await
+        .unwrap();
+    store
+        .save(&scope, &name("p-kept-2"), other.path(), None)
+        .await
+        .unwrap();
+
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-batch-1"), name("p-unknown"), name("p-batch-2")],
+        )
+        .await;
+    let again = store
+        .delete(&scope, &[name("p-batch-1"), name("p-batch-2")])
+        .await;
+    let mut names = listed_names(&*store, &scope).await;
+    names.sort();
+
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert!(again.is_ok(), "{again:?}");
+    assert_eq!(
+        (
+            names,
+            store.stat(&scope, &name("p-batch-1")).await.unwrap(),
+            store.stat(&scope, &name("p-batch-2")).await.unwrap(),
+            restored_listing(&*store, &scope, &name("p-kept-1")).await,
+            restored_listing(&*store, &scope, &name("p-kept-2")).await,
+        ),
+        (
+            vec!["p-kept-1".to_string(), "p-kept-2".to_string()],
+            None,
+            None,
+            listing(shared.path()),
+            listing(other.path()),
+        )
     );
 }
 
@@ -698,7 +757,7 @@ async fn a_delete_keeps_every_other_snapshot(open: OpenStore) {
         .await
         .unwrap();
 
-    store.delete(&scope, &name("p-twin-1")).await.unwrap();
+    store.delete(&scope, &[name("p-twin-1")]).await.unwrap();
 
     assert_eq!(
         (
@@ -726,7 +785,7 @@ async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing
     let raced = name("p-raced");
     let (restore, deleted) = futures::join!(
         restored(&*store, &scope, &raced),
-        store.delete(&scope, &raced)
+        store.delete(&scope, std::slice::from_ref(&raced))
     );
 
     deleted.unwrap();
@@ -754,7 +813,7 @@ async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: Op
     let (restored_name, deleted_name) = (name("p-restored"), name("p-deleted"));
     let (restore, deleted) = futures::join!(
         restored(&*store, &scope, &restored_name),
-        store.delete(&scope, &deleted_name)
+        store.delete(&scope, std::slice::from_ref(&deleted_name))
     );
 
     deleted.unwrap();
@@ -782,7 +841,7 @@ async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: O
     let (saved, restore, deleted) = futures::join!(
         store.save(&scope, &third_name, third.path(), None),
         restored(&*store, &scope, &first_name),
-        store.delete(&scope, &second_name)
+        store.delete(&scope, std::slice::from_ref(&second_name))
     );
 
     saved.unwrap();
@@ -815,7 +874,7 @@ async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) 
         .await
         .unwrap();
 
-    store.delete_scope(&scope).await.unwrap();
+    store.delete_all(&scope).await.unwrap();
     let names = listed_names(&*store, &scope).await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-2")).await;
@@ -850,9 +909,9 @@ async fn delete_scope_is_idempotent_and_keeps_other_scopes(open: OpenStore) {
         .unwrap();
 
     let results = [
-        store.delete_scope(&new_scope()).await.is_ok(),
-        store.delete_scope(&deleted).await.is_ok(),
-        store.delete_scope(&deleted).await.is_ok(),
+        store.delete_all(&new_scope()).await.is_ok(),
+        store.delete_all(&deleted).await.is_ok(),
+        store.delete_all(&deleted).await.is_ok(),
     ];
 
     assert_eq!(
@@ -887,7 +946,7 @@ async fn a_copied_scope_has_the_same_names_infos_and_trees(open: OpenStore) {
         .unwrap();
     let source = store.list(&from).await.unwrap();
 
-    store.copy_scope(&from, &to).await.unwrap();
+    store.copy_all(&from, &to).await.unwrap();
 
     assert_eq!(
         (
@@ -923,16 +982,16 @@ async fn copied_scopes_are_independent(open: OpenStore) {
         .save(&from, &name("p-2"), tree.path(), None)
         .await
         .unwrap();
-    store.copy_scope(&from, &to).await.unwrap();
+    store.copy_all(&from, &to).await.unwrap();
 
-    store.delete(&from, &name("p-1")).await.unwrap();
+    store.delete(&from, &[name("p-1")]).await.unwrap();
     store
         .save(&to, &name("p-3"), later.path(), None)
         .await
         .unwrap();
     let target_after_source_delete = restored_listing(&*store, &to, &name("p-1")).await;
     let source_names = listed_names(&*store, &from).await;
-    store.delete_scope(&to).await.unwrap();
+    store.delete_all(&to).await.unwrap();
 
     assert_eq!(
         (
@@ -961,7 +1020,7 @@ async fn a_copy_of_an_unused_scope_leaves_the_target_unused(open: OpenStore) {
         .await
         .unwrap();
 
-    store.copy_scope(&new_scope(), &to).await.unwrap();
+    store.copy_all(&new_scope(), &to).await.unwrap();
 
     assert_eq!(listed_names(&*store, &to).await, Vec::<String>::new());
 }
@@ -983,7 +1042,7 @@ async fn one_name_in_two_scopes_gives_two_snapshots(open: OpenStore) {
     let first_restored = restored_listing(&*store, &first_scope, &name("p-same")).await;
     let second_restored = restored_listing(&*store, &second_scope, &name("p-same")).await;
 
-    store.delete(&first_scope, &name("p-same")).await.unwrap();
+    store.delete(&first_scope, &[name("p-same")]).await.unwrap();
 
     assert_eq!(
         (
@@ -1107,11 +1166,54 @@ async fn a_dropped_save_publishes_nothing_and_leaves_the_name_free(open: OpenSto
     );
 }
 
+/// The number of threads of the blocking pool of the runtime of [`no_method_blocks_the_runtime`].
+/// The case holds all of them while a call starts, so no work of the call can run on them before
+/// the call gives its thread back.
+const GATED_BLOCKING_THREADS: usize = 4;
+
+/// A gate that holds the threads of a blocking pool until it opens.
+#[derive(Default)]
+struct BlockingGate {
+    opened: std::sync::Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+impl BlockingGate {
+    /// Holds the calling thread until the gate opens.
+    fn wait(&self) {
+        let opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        drop(
+            self.changed
+                .wait_while(opened, |opened| !*opened)
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+    }
+
+    /// Opens the gate, and gives whether it was closed.
+    fn open(&self) -> bool {
+        let mut opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let was_closed = !*opened;
+        *opened = true;
+        self.changed.notify_all();
+        was_closed
+    }
+}
+
 async fn no_method_blocks_the_runtime(open: OpenStore) {
-    // The calls run in a `LocalSet` on one thread, next to a local task that counts. The task runs
-    // only while a call waits. So a call that does its work without giving the thread back leaves
-    // the count as it was. The test-r runtime has more than one thread, so a task of that runtime
-    // could count on another thread. The `LocalSet` keeps the count on the thread of the calls.
+    // The calls run in a `LocalSet` on one thread, next to a local task. The test future awaits
+    // nothing but the call, so the local task runs only while the call gives the thread back.
+    // Before each call, gate tasks hold every thread of the blocking pool, and the first run of
+    // the local task opens the gate. A store that does its work on the blocking pool therefore
+    // gives the thread back before its work can start, and the gate opens during the call. A
+    // store that does its work in the call itself never gives the thread back, so the gate is
+    // still closed when the call ends. The case reads no clock and does not depend on how the
+    // threads are scheduled.
     let store = open();
     let scope = new_scope();
     let tree = new_tree(&[(
@@ -1124,45 +1226,72 @@ async fn no_method_blocks_the_runtime(open: OpenStore) {
     let into = Scratch::new();
     let tree_path = tree.path().to_path_buf();
     let into_path = into.path().to_path_buf();
-    let handle = tokio::runtime::Handle::current();
 
-    let (during_save, during_restore) = tokio::task::spawn_blocking(move || {
-        handle.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let ticks = Arc::new(AtomicU64::new(0));
+    let (opened_by_save, opened_by_restore) = tokio::task::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(GATED_BLOCKING_THREADS)
+            .enable_all()
+            .build()
+            .unwrap();
+        let opened = runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let current = Arc::new(std::sync::Mutex::new(None::<Arc<BlockingGate>>));
+            let opened_by_ticker = Arc::new(AtomicU64::new(0));
             let ticker = tokio::task::spawn_local({
-                let ticks = ticks.clone();
+                let current = current.clone();
+                let opened_by_ticker = opened_by_ticker.clone();
                 futures::stream::repeat(()).for_each(move |()| {
-                    let ticks = ticks.clone();
-                    async move {
-                        ticks.fetch_add(1, Ordering::SeqCst);
-                        tokio::task::yield_now().await;
+                    let gate = current.lock().unwrap().clone();
+                    if let Some(gate) = gate
+                        && gate.open()
+                    {
+                        opened_by_ticker.fetch_add(1, Ordering::SeqCst);
                     }
+                    tokio::task::yield_now()
                 })
             });
-            let counted = |from: u64| ticks.load(Ordering::SeqCst) - from;
+            let close = || {
+                let gate = Arc::new(BlockingGate::default());
+                (0..GATED_BLOCKING_THREADS).for_each(|_| {
+                    let gate = gate.clone();
+                    drop(tokio::task::spawn_blocking(move || gate.wait()));
+                });
+                *current.lock().unwrap() = Some(gate.clone());
+                gate
+            };
+            let opened_during = |gate: Arc<BlockingGate>, before: u64| {
+                *current.lock().unwrap() = None;
+                gate.open();
+                opened_by_ticker.load(Ordering::SeqCst) > before
+            };
 
-            let before_save = ticks.load(Ordering::SeqCst);
+            let before = opened_by_ticker.load(Ordering::SeqCst);
+            let gate = close();
             store
                 .save(&scope, &name("p-large"), &tree_path, None)
                 .await
                 .unwrap();
-            let during_save = counted(before_save);
-            let before_restore = ticks.load(Ordering::SeqCst);
+            let opened_by_save = opened_during(gate, before);
+            let before = opened_by_ticker.load(Ordering::SeqCst);
+            let gate = close();
             store
                 .restore(&scope, &name("p-large"), &into_path)
                 .await
                 .unwrap();
-            let during_restore = counted(before_restore);
+            let opened_by_restore = opened_during(gate, before);
             ticker.abort();
-            (during_save, during_restore)
-        }))
+            (opened_by_save, opened_by_restore)
+        }));
+        runtime.shutdown_background();
+        opened
     })
     .await
     .unwrap();
 
     assert!(
-        during_save > 0 && during_restore > 0,
-        "the local task counted {during_save} times during the save and {during_restore} times during the restore"
+        opened_by_save && opened_by_restore,
+        "the call gave the thread back during the save: {opened_by_save}, during the restore: \
+         {opened_by_restore}"
     );
     assert_eq!(listing(into.path()), listing(tree.path()));
 }

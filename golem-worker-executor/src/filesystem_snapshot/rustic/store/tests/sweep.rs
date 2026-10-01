@@ -351,12 +351,12 @@ impl Case {
 /// the rules of the prune protocol.
 pub(super) async fn run_case(
     shared: &Arc<InMemoryBlobStorage>,
-    prepared: &SnapshotScope,
+    prepared: &AgentSnapshots,
     schedule: &Schedule,
 ) -> Result<(), String> {
     let scope = new_scope();
     store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO))
-        .copy_scope(prepared, &scope)
+        .copy_all(prepared, &scope)
         .await
         .map_err(|error| format!("the copy of the prepared scope failed: {error}"))?;
     let deletes = [0, 1].map(|who| {
@@ -385,7 +385,7 @@ pub(super) async fn run_case(
         let scope = scope.clone();
         let task = tokio::spawn({
             let deleting = deleting.clone();
-            async move { deleting.delete(&scope, &name(["p-1", "p-2"][who])).await }
+            async move { deleting.delete(&scope, &[name(["p-1", "p-2"][who])]).await }
         });
         Delete {
             store: deleting,
@@ -594,7 +594,7 @@ fn final_markers_repeated(log: &[Step]) -> Vec<usize> {
 /// Checks the rules on the end state of a case.
 async fn check(
     shared: &Arc<InMemoryBlobStorage>,
-    scope: &SnapshotScope,
+    scope: &AgentSnapshots,
     schedule: &Schedule,
     log: &[Step],
     results: Vec<Result<Result<(), SnapshotStoreError>, tokio::task::JoinError>>,

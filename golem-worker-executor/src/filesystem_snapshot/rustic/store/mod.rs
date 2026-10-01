@@ -41,7 +41,7 @@ use super::{
 };
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::{
-    ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotScope,
+    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
     SnapshotStoreError, newest_first, snapshot_time,
 };
 use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
@@ -431,7 +431,6 @@ fn shut_down_error() -> SnapshotStoreError {
 impl RusticSnapshotStore {
     /// Gives the store over the blob storage, with the key and the values of the configuration,
     /// and the clock of the host.
-    #[allow(dead_code)]
     pub(crate) fn new(
         storage: Arc<dyn BlobStorage>,
         config: &FilesystemSnapshotStoreConfig,
@@ -475,7 +474,6 @@ impl RusticSnapshotStore {
     /// remains. A blob call that is not polled holds the wait until it is polled again, and then
     /// it ends at once. The runtime must not drop before it returns, because a storage call after
     /// its time driver stops aborts the process.
-    #[allow(dead_code)]
     pub(crate) async fn shut_down(&self) {
         self.root.cancel();
         self.tracker.close();
@@ -514,7 +512,7 @@ impl RusticSnapshotStore {
     /// Gives a backend over the repository of the scope for the operation with the token.
     fn scope_backend(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         token: &CancellationToken,
     ) -> Result<BlobBackend, SnapshotStoreError> {
         self.backend(self.files(scope, token))
@@ -536,10 +534,10 @@ impl RusticSnapshotStore {
     }
 
     /// Gives the blobs of the scope for the operation with the token.
-    fn files(&self, scope: &SnapshotScope, token: &CancellationToken) -> SnapshotFiles {
+    fn files(&self, scope: &AgentSnapshots, token: &CancellationToken) -> SnapshotFiles {
         SnapshotFiles::new(
             self.storage.clone(),
-            scope.0.clone(),
+            (*scope.0).clone(),
             self.policy.deadline,
             token.clone(),
             self.tracker.clone(),
@@ -561,7 +559,7 @@ impl RusticSnapshotStore {
     /// between them can be shorter. A prune that succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         token: &CancellationToken,
     ) -> Result<(), SnapshotStoreError> {
         let files = self.files(scope, token);
@@ -692,7 +690,7 @@ impl RusticSnapshotStore {
     /// cancel.
     fn publish_staged(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         staged: StagedSnapshot,
     ) -> impl Future<Output = Result<(), SnapshotStoreError>> + Send + 'static {
         let files = self.files(scope, &self.root).detached();
@@ -797,7 +795,7 @@ impl RusticSnapshotStore {
 impl FilesystemSnapshotStore for RusticSnapshotStore {
     async fn save(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
@@ -829,7 +827,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn restore(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
@@ -868,7 +866,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn stat(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
@@ -887,7 +885,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn list(
         &self,
-        scope: &SnapshotScope,
+        scope: &AgentSnapshots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         let backend = Arc::new(self.scope_backend(scope, &token)?);
@@ -903,22 +901,26 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
 
     async fn delete(
         &self,
-        scope: &SnapshotScope,
-        name: &SnapshotName,
+        scope: &AgentSnapshots,
+        names: &[SnapshotName],
     ) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
-        let name = name.clone();
+        let names = names
+            .iter()
+            .map(|name| Box::<str>::from(name.as_str()))
+            .collect::<std::collections::HashSet<_>>();
         let found = self
             .blocking(Operation::Repository, move || {
                 let Some(repository) = open_existing(backend, &key)? else {
                     return Ok(None);
                 };
+                // One listing finds every snapshot of the batch.
                 let named = scope_snapshots(&repository)?
                     .readable
                     .into_iter()
-                    .filter(|snapshot| snapshot.label == name.as_str())
+                    .filter(|snapshot| names.contains(snapshot.label.as_str()))
                     .collect::<Box<[_]>>();
                 let ids = named
                     .iter()
@@ -957,22 +959,26 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         self.prune_when_due(scope, &token).await
     }
 
-    async fn delete_scope(&self, scope: &SnapshotScope) -> Result<(), SnapshotStoreError> {
+    async fn delete_all(&self, scope: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         delete_scope(&self.files(scope, &token))
             .await
             .map_err(storage_failure)
     }
 
-    async fn copy_scope(
+    async fn copy_all(
         &self,
-        from: &SnapshotScope,
-        to: &SnapshotScope,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         let (token, _guard) = self.start()?;
         copy_scope(&self.files(from, &token), &self.files(to, &token))
             .await
             .map_err(storage_failure)
+    }
+
+    async fn shut_down(&self) {
+        RusticSnapshotStore::shut_down(self).await
     }
 }
 

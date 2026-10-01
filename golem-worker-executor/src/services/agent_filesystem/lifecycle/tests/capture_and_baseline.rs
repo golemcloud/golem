@@ -31,6 +31,18 @@ impl<F: FnOnce(&Path) -> Result<(), RestoreError> + Send> RestoreTree for Fixtur
     }
 }
 
+/// Gives the copy of a capture that must copy the tree.
+async fn copied(
+    outcome: impl Future<Output = Result<CaptureOutcome, CaptureError>> + Send + 'static,
+) -> Result<FilesystemCapture, CaptureError> {
+    outcome.await.map(|outcome| match outcome {
+        CaptureOutcome::Captured { capture, .. } => capture,
+        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles { .. } => {
+            panic!("the capture copied nothing")
+        }
+    })
+}
+
 /// Waits until `condition` holds, and fails the test after five seconds.
 async fn eventually(condition: impl Fn() -> bool) {
     assert!(
@@ -179,6 +191,17 @@ fn scratch_of<Stage: FilesystemStage>(
     Arc::clone(&filesystem.generation.as_ref().unwrap().scratch)
 }
 
+/// Programs the listing of a root that holds a file of the agent. A capture of a filesystem
+/// without declarations lists the root, and this listing makes it copy the tree.
+fn push_root_with_an_agent_file(control: &ScriptedSandboxFilesystemControl) {
+    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_read_directory(Ok(vec![crate::sandbox_filesystem::SandboxDirectoryEntry {
+        name: "agent.txt".into(),
+        kind: SandboxObjectKind::File,
+    }]));
+    control.push_close(Ok(()));
+}
+
 async fn delete_scripted_resident(
     control: &ScriptedSandboxFilesystemControl,
     filesystem: TestAgentFilesystem<Resident>,
@@ -201,9 +224,10 @@ async fn capture_waits_for_a_gated_call_and_reopens_admission() {
     let gate = control.block("read");
     let reading = tokio::spawn(read_file(&generation_handle, &file, range).unwrap());
     gate.wait_started().await;
+    push_root_with_an_agent_file(&control);
     control.push_copy_contents(Ok(Box::new([])));
 
-    let capturing = tokio::spawn(capture(&filesystem, Duration::from_secs(30)));
+    let capturing = tokio::spawn(copied(capture(&filesystem, Duration::from_secs(30), None)));
     eventually(|| {
         matches!(
             read_file(&generation_handle, &file, range).map(drop),
@@ -257,7 +281,7 @@ async fn capture_gives_busy_at_the_deadline_and_reopens_admission() {
     let reading = tokio::spawn(read_file(&generation_handle, &file, range).unwrap());
     gate.wait_started().await;
 
-    let result = capture(&filesystem, Duration::from_millis(50)).await;
+    let result = copied(capture(&filesystem, Duration::from_millis(50), None)).await;
 
     assert!(matches!(result, Err(CaptureError::Busy)));
     assert!(!has_call(&control, "copy_contents("));
@@ -292,9 +316,10 @@ async fn capture_waits_for_a_dropped_call_that_still_runs() {
     gate.wait_started().await;
     reading.abort();
     assert!(reading.await.unwrap_err().is_cancelled());
+    push_root_with_an_agent_file(&control);
     control.push_copy_contents(Ok(Box::new([])));
 
-    let capturing = tokio::spawn(capture(&filesystem, Duration::from_secs(30)));
+    let capturing = tokio::spawn(copied(capture(&filesystem, Duration::from_secs(30), None)));
     eventually(|| {
         matches!(
             read_file(&generation_handle, &file, range).map(drop),
@@ -326,12 +351,65 @@ async fn capture_waits_for_a_dropped_call_that_still_runs() {
 
 #[test]
 #[timeout("10s")]
+async fn a_capture_against_the_mark_of_a_tree_of_initial_files_checks_nothing_until_a_change() {
+    let (filesystem, control, window) = metered_resident().await;
+    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_read_directory(Ok(vec![]));
+    control.push_close(Ok(()));
+
+    let first = capture(&filesystem, Duration::from_secs(5), None)
+        .await
+        .unwrap();
+    let CaptureOutcome::InitialFiles { mark } = first else {
+        panic!("a capture of an empty tree without initial files copied the tree");
+    };
+    let calls_after_first = control.calls().len();
+    let second = capture(&filesystem, Duration::from_secs(5), Some(mark))
+        .await
+        .unwrap();
+    let calls_after_second = control.calls().len();
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Err(missing("agent directory before insert")));
+    control.push_create_directory(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Insert {
+            destination: PathTarget::at_root(&generation_handle, "agent-directory").unwrap(),
+            object: NewObject::Directory,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    push_root_with_an_agent_file(&control);
+    control.push_copy_contents(Ok(Box::new([])));
+    let third = copied(capture(&filesystem, Duration::from_secs(5), Some(mark)))
+        .await
+        .unwrap();
+
+    assert!(matches!(second, CaptureOutcome::Unchanged));
+    assert_eq!(
+        calls_after_second, calls_after_first,
+        "a capture against the mark of a tree of initial files checks no declaration and no \
+         directory"
+    );
+    assert!(has_call(&control, "copy_contents("));
+    third.discard().await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    delete_scripted_resident(&control, filesystem).await;
+}
+
+#[test]
+#[timeout("10s")]
 async fn a_deletion_waits_for_a_capture_whose_future_the_caller_dropped() {
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
     let scratch = scratch_of(&filesystem);
+    push_root_with_an_agent_file(&control);
     control.push_copy_contents(Ok(Box::new([])));
     let copy = control.block("copy_contents");
-    drop(capture(&filesystem, Duration::from_secs(30)));
+    drop(copied(capture(&filesystem, Duration::from_secs(30), None)));
     copy.wait_started().await;
     control.push_delete_and_verify(Ok(()));
 
@@ -424,7 +502,9 @@ async fn capture_leaves_out_the_read_only_files_that_hold_golem_s_file_with_a_si
         others: Box::new([Box::from(Path::new("elsewhere"))]),
     }])));
 
-    let captured = capture(&resident, Duration::from_secs(5)).await.unwrap();
+    let captured = copied(capture(&resident, Duration::from_secs(5), None))
+        .await
+        .unwrap();
 
     let copy_call = control
         .calls()
@@ -1664,7 +1744,9 @@ async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_th
                 let source_agent = agents.agent(&format!("manual-source-{index}"));
                 let source = agents.start(&source_agent, old, NO_RESTORE).await.unwrap();
                 move_onto_the_path(&agents.root(&source_agent));
-                let captured = capture(&source, Duration::from_secs(5)).await.unwrap();
+                let captured = copied(capture(&source, Duration::from_secs(5), None))
+                    .await
+                    .unwrap();
                 let manual_agent = agents.agent(&format!("manual-{index}"));
                 let manual = agents
                     .start(&manual_agent, &new, Some(copying_restore(&captured)))
@@ -2674,6 +2756,8 @@ static TIMES_CHECKS: AtomicUsize = AtomicUsize::new(0);
 /// The number of histories in which an install of the reference model found the old object of a
 /// read-only file back at its path, with other content of the declared size.
 static OLD_OBJECT_BACK_CHECKS: AtomicUsize = AtomicUsize::new(0);
+/// The number of cases in which the capture found a tree of initial files.
+static INITIAL_FILES_CHECKS: AtomicUsize = AtomicUsize::new(0);
 
 /// Starts an agent from a restore of `snapshot` with the component declarations `files`.
 async fn start_restored(
@@ -2688,6 +2772,95 @@ async fn start_restored(
         .start(&agent, &files, Some(copying_restore(snapshot)))
         .await;
     (agent, started)
+}
+
+/// Checks a start from a record without a name, which a capture that found a tree of initial
+/// files gives. A periodic start seeds the initial files of the current declarations. A manual
+/// update restores the initial files of the current declarations and applies the initial-file
+/// rule to the new declarations. Both must continue as the replay does.
+#[allow(clippy::too_many_arguments)]
+async fn compare_start_from_initial_files(
+    agents: &UnmanagedAgents,
+    history: &History,
+    before: &[HistoryStep],
+    prefix: &[StepOutcome],
+    after: &[HistoryStep],
+    at_capture: &Tree,
+    expected: Expected<'_>,
+    problems: &mut Vec<String>,
+) {
+    INITIAL_FILES_CHECKS.fetch_add(1, Ordering::Relaxed);
+    let current = declarations_at(&history.initial, before, prefix);
+    let agent = agents.agent("initial-files");
+    let files = declare_files(&agents.store, &current).await;
+    match agents.start(&agent, &files, NO_RESTORE).await {
+        Ok(started) => {
+            let started_tree = tree_without_times(&agents.root(&agent));
+            if started_tree != *at_capture {
+                problems.push(format!(
+                    "the start from the initial files holds {started_tree:?}, and the captured \
+                     agent held {at_capture:?} at the capture"
+                ));
+            }
+            compare_continuation(
+                agents,
+                "C",
+                &agent,
+                started,
+                after,
+                Expected {
+                    outcomes: expected.outcomes,
+                    tree: expected.tree,
+                    model_tree: expected.model_tree,
+                },
+                problems,
+            )
+            .await;
+        }
+        Err(error) => problems.push(format!("the start from the initial files failed: {error}")),
+    }
+    if let Some((HistoryStep::Update { files }, rest)) = after.split_first() {
+        let manual_agent = agents.agent("initial-files-manual");
+        let declared = declare_files(&agents.store, files).await;
+        let source = declare_files(&agents.store, &current).await;
+        match (
+            &expected.outcomes[0],
+            agents
+                .start(
+                    &manual_agent,
+                    &declared,
+                    InitialFilesRestore::of_read_only(source.into_boxed_slice()),
+                )
+                .await,
+        ) {
+            (StepOutcome::Done, Ok(manual)) => {
+                compare_continuation(
+                    agents,
+                    "D",
+                    &manual_agent,
+                    manual,
+                    rest,
+                    Expected {
+                        outcomes: &expected.outcomes[1..],
+                        tree: expected.tree,
+                        model_tree: expected.model_tree,
+                    },
+                    problems,
+                )
+                .await;
+            }
+            (expected, Ok(manual)) => {
+                problems.push(format!(
+                    "the manual update from the initial files started, and the replayed update \
+                     gave {expected:?}"
+                ));
+                delete(seal(manual)).await.unwrap();
+            }
+            (_, Err(error)) => problems.push(format!(
+                "the manual update from the initial files failed with {error}"
+            )),
+        }
+    }
 }
 
 /// Runs `steps` on a started agent, adds each difference from `expected` to `problems`, and
@@ -3482,7 +3655,34 @@ async fn check_restore_against_replay(
             &replay_outcomes[..capture_at]
         ));
     }
-    let snapshot = capture(&captured, Duration::from_secs(5)).await;
+    let outcome = capture(&captured, Duration::from_secs(5), None).await;
+    if let Ok(CaptureOutcome::InitialFiles { .. }) = outcome {
+        let at_capture = tree_without_times(&agents.root(&captured_agent));
+        delete(seal(captured)).await.unwrap();
+        compare_start_from_initial_files(
+            &agents,
+            history,
+            before,
+            &prefix,
+            after,
+            &at_capture,
+            Expected {
+                outcomes: &replay_outcomes[capture_at..],
+                tree: &replay_tree,
+                model_tree: &model_tree,
+            },
+            &mut problems,
+        )
+        .await;
+        proptest::prop_assert!(problems.is_empty(), "{}", problems.join("\n"));
+        return Ok(());
+    }
+    let snapshot = outcome.map(|outcome| match outcome {
+        CaptureOutcome::Captured { capture, .. } => capture,
+        CaptureOutcome::Unchanged | CaptureOutcome::InitialFiles { .. } => {
+            unreachable!("a capture without a mark gives a copy or a tree of initial files")
+        }
+    });
     let at_capture = snapshot.as_ref().ok().map(|snapshot| {
         let left_out = left_out_of(snapshot);
         (
@@ -3605,10 +3805,11 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
     eprintln!(
         "restore property: {cases} histories in {elapsed:?}, {:?} for each history, the tree with \
          times compared in {} histories, the old object of a read-only file back at its path in {} \
-         histories",
+         histories, a tree of initial files in {} histories",
         elapsed / cases.max(1),
         TIMES_CHECKS.load(Ordering::Relaxed),
-        OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed)
+        OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed),
+        INITIAL_FILES_CHECKS.load(Ordering::Relaxed)
     );
     if let Err(error) = result {
         panic!("{error}");
@@ -3626,3 +3827,5 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
         );
     }
 }
+
+mod unchanged_trees;
