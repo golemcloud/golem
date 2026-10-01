@@ -1645,7 +1645,7 @@ description = "Builds all built-in plugins"
 ## BUILT-IN TOOLS
 [tasks.build-filesystem-tools]
 dependencies = ["wit"]
-description = "Builds the built-in tool components: the filesystem tools through their manifest, and Bash reproducibly in a pinned container (builtin-tools/bash/build-bash-wasm.sh)"
+description = "Builds the built-in filesystem tool component"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build -p golem --bin golem
@@ -1654,6 +1654,12 @@ cd builtin-tools/filesystem-tools
 exec --fail-on-error ${golem} build -P release --force-build --yes
 exec --fail-on-error ${golem} exec -P release copy
 cd ../..
+'''
+
+[tasks.build-bash-tool]
+description = "Builds the built-in Bash tool component reproducibly in a pinned container (builtin-tools/bash/build-bash-wasm.sh); needs Docker"
+script_runner = "@duckscript"
+script = '''
 exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
 '''
 
@@ -1718,7 +1724,7 @@ dependencies = ["build-javascript-typescript-tools"]
 description = "Builds the built-in TypeScript tool component"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools"]
+dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools", "build-bash-tool"]
 description = "Builds all built-in tool components"
 
 [tasks.fetch-builtin-artifacts]
@@ -1847,8 +1853,16 @@ elif equals ${component} typescript-tools
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
+elif equals ${component} bash
+    build_task = set build-bash-tool
+    wasm = set builtin-tools/bash.wasm
+    artifact_id = set bash
+    exports_json = set "{\"tools\":[\"bash@0.2.0\"]}"
+    licenses = set builtin-tools/bash/LICENSE
+    source_notice = set builtin-tools/bash/NOTICE
+    sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools, bash"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD
@@ -1866,18 +1880,22 @@ size = get_file_size ${wasm}
 lock_text = readfile builtin-artifacts.lock.json
 lock = json_parse --collection ${lock_text}
 locked_artifacts = map_get ${lock} artifacts
-locked_entry = map_get ${locked_artifacts} ${artifact_id}
-locked_version = map_get ${locked_entry} version
-locked_sha256 = map_get ${locked_entry} sha256
-same_version = equals ${version} ${locked_version}
-same_bytes = equals ${sha256} ${locked_sha256}
-if ${same_version}
-    if not ${same_bytes}
-        trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
-    end
-else
-    if ${same_bytes}
-        trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
+# An artifact published for the first time has no lock entry to compare with.
+already_locked = map_contains_key ${locked_artifacts} ${artifact_id}
+if ${already_locked}
+    locked_entry = map_get ${locked_artifacts} ${artifact_id}
+    locked_version = map_get ${locked_entry} version
+    locked_sha256 = map_get ${locked_entry} sha256
+    same_version = equals ${version} ${locked_version}
+    same_bytes = equals ${sha256} ${locked_sha256}
+    if ${same_version}
+        if not ${same_bytes}
+            trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
+        end
+    else
+        if ${same_bytes}
+            trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
+        end
     end
 end
 release --recursive ${lock}
@@ -1905,6 +1923,10 @@ license_dir = set "${staging}/licenses"
 if equals ${licenses} LICENSE
     mkdir ${license_dir}
     cp LICENSE "${license_dir}/LICENSE"
+elif equals ${component} bash
+    mkdir ${license_dir}
+    cp ${licenses} "${license_dir}/LICENSE"
+    cp ${source_notice} "${license_dir}/NOTICE"
 else
     cp ${licenses} ${license_dir}
     cp ${source_notice} "${license_dir}/SOURCE.md"

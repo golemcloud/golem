@@ -25,12 +25,12 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Runtime, CLI and Rust SDK | Golem baseline above, rebuilt with this change |
 | Rust compiler | `1.98.0 (88d9e12ae 2026-08-18)` |
 | Standalone WASM runner | Wasmtime `46.0.1` |
-| Guest artifact | `builtin-tools/bash.wasm`, release build, `golem:bash` / `bash@0.2.0` |
+| Guest artifact | `builtin-tools/bash.wasm` (built, not committed), release build, `golem:bash` / `bash@0.2.0` |
 | Artifact size | 23,356,048 bytes (22.27 MiB) |
 | Artifact SHA-256 | `95410bc60350d71ebd63fe69796e6c675b34d79b541e6430dbb42fc4e30df425` |
 
-`cargo make build-builtin-tools` built the component in the pinned container the README describes
-(Build and verify), wrote it to the embedded artifact path and passed
+`cargo make build-bash-tool` built the component in the pinned container the README describes
+(Build and verify), wrote it to `builtin-tools/bash.wasm` and passed
 `wasm-tools validate --features all`. The build is reproducible: rebuilding from any checkout gives
 the same SHA-256. The standalone workspace has
 a committed lockfile and immutable Brush/Coreutils git pins, with no local fork overrides.

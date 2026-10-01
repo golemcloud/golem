@@ -22,9 +22,9 @@ they do not provision an npm or TypeScript package tree into the invoking agent.
 standard-library declarations and npm's manual pages are embedded as private read-only data. Both
 components must use the `optimized` TypeScript preset so Wizer pre-initializes their provider state.
 
-The Bash tool is built from `builtin-tools/bash` and committed as `builtin-tools/bash.wasm`
-(`cargo make build-builtin-tools` rebuilds it reproducibly). The registry does not provision it
-yet; see [its README](bash/README.md).
+The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly, in a pinned
+container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The registry does not
+provision it yet; see [its README](bash/README.md).
 
 ## Adding a component-implemented built-in tool
 

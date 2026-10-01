@@ -1,8 +1,7 @@
 # Bash built-in tool
 
-This standalone Golem application builds the Bash tool component, `bash@0.2.0`, committed as
-`builtin-tools/bash.wasm`. Provisioning it as a built-in system tool is a separate change; until
-then the registry does not offer it. It exports one command, `run`, for finite shell execution. A
+This standalone Golem application builds the Bash tool component, `bash@0.2.0`. The registry does
+not provision it yet. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
@@ -506,7 +505,7 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
 Build it from the repository root:
 
 ```shell
-cargo make build-builtin-tools   # or builtin-tools/bash/build-bash-wasm.sh
+cargo make build-bash-tool   # or builtin-tools/bash/build-bash-wasm.sh
 ```
 
 The build is reproducible: any checkout, target directory, machine or operating system gives the
@@ -515,10 +514,12 @@ same bytes. It runs in a Linux x86-64 container, `reproducible/Dockerfile`, with
 another platform Docker emulates x86-64 (about five minutes on an Apple M-series laptop). In the
 container it runs the same Cargo build as `golem.yaml`'s release preset, with the profile
 `Cargo.toml` pins. It then names the component `golem:bash` as golem-cli does, checks it with
-`wasm-tools validate --features all` and writes `builtin-tools/bash.wasm`. A rebuild of
-unchanged sources therefore gives the committed bytes, so a rebuilt `bash.wasm` differs only where a
-change reached it. The Golem SDK is a path dependency: after rebasing onto a main whose SDK
-changed, rebuild and commit `bash.wasm` again.
+`wasm-tools validate --features all` and writes `builtin-tools/bash.wasm`. That file is not
+committed: built-in artifacts are published as immutable releases of `golemcloud/golem-builtins`
+with `cargo make publish-builtin-artifact` (`BUILTIN_COMPONENT=bash`) and pinned by SHA-256 in
+`builtin-artifacts.lock.json`. A rebuild of unchanged sources gives the published bytes, so a
+rebuilt `bash.wasm` differs only where a change reached it. The Golem SDK is a path dependency:
+after a change to it, or to this workspace, publish a new artifact version.
 
 A native build cannot be reproducible, for two reasons. Cargo mixes the host platform into the
 hashes that name every crate (through the proc macros and build scripts it depends on). It also
@@ -527,12 +528,12 @@ Both reach the component's bytes. In the container the checkout is always `/gole
 is always the same; the source paths that end up in panic messages are written as `/golem`,
 `/cargo` (dependencies) and `/rustc/<commit>` (the standard library).
 `golem-cli -A builtin-tools/bash/golem.yaml build` stays the development loop, but only
-the container's output is committed. A new Rust release means updating `rust-toolchain.toml` and
-the Dockerfile's image together, then rebuilding and committing `bash.wasm`.
+the container's output is published. A new Rust release means updating `rust-toolchain.toml` and
+the Dockerfile's image together, then publishing a new artifact version.
 
-A published release is immutable: any change that alters the component bytes or exported tool
-metadata needs a new tool version (`#[tool_definition(version = …)]`), and source, lockfile and
-generated WASM are committed together.
+A published artifact is immutable: any change to the component's bytes needs a new artifact
+version, and a change to the exported tool metadata a new tool version
+(`#[tool_definition(version = …)]`) as well.
 
 The independent workspace commits its own `Cargo.lock`. Forks are pinned by git revision in the
 workspace `[patch.crates-io]`; no local dependency overrides are required.
