@@ -76,6 +76,13 @@ pool permits; swapping the replacement stream and body into the existing table s
 preserves ordinary body lifetime and replay semantics. Sending the replacement before retiring
 the old permit owner can self-wait until timeout when the per-host pool capacity is one.
 
+The response resume offset counts successful read pairs only outside replay's deleted regions,
+including reads appended after the replay target. An incomplete request can retain its original
+scope `Start` while a `Jump` hides its abandoned children; those old reads must not contribute
+alongside their replacements. The counter snapshots the existing `ReplayState` skipped regions
+and filters entries before pairing or fetching payloads. The request scope and retry budget do
+not change.
+
 Spawned store tasks use the same decision but `FallBackToTrap` there means "stop inline retries
 and let the invocation loop's trap path take over" (`durability.rs`, spawned-task section).
 

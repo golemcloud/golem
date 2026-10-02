@@ -9,8 +9,8 @@
     },
     "filesystem_tools": {
       "component": "filesystem-tools",
-      "version": "0.0.1",
-      "sha256": "e96aced8d6f3cc662b2b3da5f9fa347232ca52cb9c3872f94c3bea0bf0d5c372"
+      "version": "0.0.2",
+      "sha256": "b35ccdfcaf4e91f8075d85c96cb85a74ecb7a637e87865b1e76cf4add24414aa"
     },
     "javascript_tools": {
       "component": "javascript-tools",
@@ -26,6 +26,11 @@
       "component": "typescript-tools",
       "version": "0.0.6",
       "sha256": "b079061e2ced69489b27f422c48a40a115714f4f8100de73f8b858f7f43b850f"
+    },
+    "web_fetch": {
+      "component": "web-fetch",
+      "version": "0.0.2",
+      "sha256": "46e3014646d200755572d60c62e975886df96311cff939d9b621f9ef73fdc33b"
     }
   }
 }

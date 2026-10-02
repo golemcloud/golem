@@ -21,6 +21,7 @@ runs:
         cp -v tmp/builtin-artifacts/filesystem-tools.wasm builtin-tools/filesystem-tools.wasm
         cp -v tmp/builtin-artifacts/javascript-tools.wasm builtin-tools/javascript-tools.wasm
         cp -v tmp/builtin-artifacts/typescript-tools.wasm builtin-tools/typescript-tools.wasm
+        cp -v tmp/builtin-artifacts/web-fetch.wasm builtin-tools/web-fetch.wasm
         cp -v tmp/builtin-artifacts/otlp-exporter.wasm plugins/otlp-exporter.wasm
     # The cache a run saves is not always readable by its later jobs: a pull request from a fork
     # that changes builtin-artifacts.lock.json misses it. Download the pinned releases instead.

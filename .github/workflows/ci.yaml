@@ -189,6 +189,7 @@ jobs:
           cp builtin-tools/filesystem-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/javascript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
           cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
 
   worker-tests:

@@ -18,15 +18,15 @@ const external = (id) =>
   id === "agent-guest" ||
   id === "node:sqlite" ||
   id === "effect" ||
-  id === "effect/unstable/http" ||
-  id === "effect/unstable/httpapi" ||
+  id === "effect/http" ||
+  id === "effect/http-api" ||
   id === "@golemcloud/effect-golem" ||
   id.startsWith("@golemcloud/effect-golem/") ||
   id.startsWith("golem:") ||
   id.startsWith("wasi:")
 
 const httpFacades = [
-  ["effect/unstable/http", "GolemHttp", "effect-http"],
+  ["effect/http", "GolemHttp", "effect-http"],
   ["./src/effect-httpapi-shared.mjs", "GolemHttpApi", "effect-httpapi"],
 ].map(([specifier, namespace, name]) => ({
   input: `\0${name}`,

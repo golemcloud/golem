@@ -139,6 +139,7 @@ fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
             ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
             ("otlp_exporter", "plugins/otlp-exporter.wasm"),
             ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+            ("web_fetch", "builtin-tools/web-fetch.wasm"),
         ];
 
         local_artifacts
