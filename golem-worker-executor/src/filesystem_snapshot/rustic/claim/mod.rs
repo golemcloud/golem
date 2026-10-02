@@ -48,17 +48,25 @@ use tokio::task::JoinHandle;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::warn;
 
+/// The markers of a claim that this delete keeps: the first marker, which the claim write also
+/// uses, and each refresh marker whose write succeeded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Markers {
+    first: Arc<Path>,
+    refreshed: Vec<Box<Path>>,
+}
+
 /// What a delete still owes the claim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ClaimState {
     /// The first marker is written or being written, and this delete does not know that it wrote
     /// the claim.
-    Marking { markers: Vec<Box<Path>> },
+    Marking { markers: Markers },
     /// This delete wrote the claim, and its prune did not start.
-    Claimed { markers: Vec<Box<Path>> },
+    Claimed { markers: Markers },
     /// The prune started, so the claim needs its final marker. It stays, unless each attempt of
     /// the prune found a snapshot file gone.
-    Started { markers: Vec<Box<Path>> },
+    Started { markers: Markers },
     /// The claim needs nothing more from this delete.
     Ended,
 }
@@ -92,10 +100,12 @@ enum ClaimEvent {
 /// The storage work that a claim still needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Cleanup {
-    /// Delete the claim when `claimed`, and then each marker, by name.
+    /// Delete the claim when `claimed`, then the first marker, and then each refresh marker, by
+    /// name.
     Release {
         claimed: bool,
-        markers: Box<[Box<Path>]>,
+        first: Arc<Path>,
+        refreshed: Box<[Box<Path>]>,
     },
     /// Write the final marker, with the time of the write.
     FinalMarker,
@@ -123,10 +133,11 @@ enum Cleanup {
 fn transition(state: ClaimState, event: ClaimEvent) -> (ClaimState, Option<Cleanup>) {
     use ClaimEvent as E;
     use ClaimState as S;
-    let release = |claimed, markers: Vec<Box<Path>>| {
+    let release = |claimed, Markers { first, refreshed }: Markers| {
         Some(Cleanup::Release {
             claimed,
-            markers: markers.into_boxed_slice(),
+            first,
+            refreshed: refreshed.into_boxed_slice(),
         })
     };
     match (state, event) {
@@ -161,9 +172,9 @@ fn transition(state: ClaimState, event: ClaimEvent) -> (ClaimState, Option<Clean
     }
 }
 
-/// Gives the markers with the marker added.
-fn kept(mut markers: Vec<Box<Path>>, marker: Box<Path>) -> Vec<Box<Path>> {
-    markers.push(marker);
+/// Gives the markers with the refresh marker added.
+fn kept(mut markers: Markers, marker: Box<Path>) -> Markers {
+    markers.refreshed.push(marker);
     markers
 }
 
@@ -186,8 +197,13 @@ impl Cleanup {
     /// succeeded.
     async fn run(self, files: &SnapshotFiles, claim: &ClaimName, clock: &dyn Clock) -> bool {
         match self {
-            Self::Release { claimed, markers } => {
-                release_claim(files, &claim.directory, claim.number, claimed, &markers).await;
+            Self::Release {
+                claimed,
+                first,
+                refreshed,
+            } => {
+                let markers = std::iter::once(&*first).chain(refreshed.iter().map(Box::as_ref));
+                release_claim(files, &claim.directory, claim.number, claimed, markers).await;
                 true
             }
             Self::FinalMarker => write_final_marker(files, claim, clock.now()).await,
@@ -262,13 +278,17 @@ impl Claim {
     ) -> anyhow::Result<Option<Claim>> {
         let span = lease_span(policy.grace, policy.deadline);
         let (started, time) = marker_time(&*clock);
-        let marker = marker_path(&name.directory, name.number, time);
+        // The state and the claim write both hold the first marker.
+        let first: Arc<Path> = marker_path(&name.directory, name.number, time).into();
         let claim = Claim {
             lease: Arc::new(Lease::until(started + span)),
             span,
             refresh: refresh_period(policy.grace, policy.deadline),
             state: Arc::new(Mutex::new(ClaimState::Marking {
-                markers: vec![marker.clone()],
+                markers: Markers {
+                    first: first.clone(),
+                    refreshed: Vec::new(),
+                },
             })),
             files: files.detached(),
             clock,
@@ -276,7 +296,7 @@ impl Claim {
             _tracked: tracked,
             name,
         };
-        let won = take_claim(files, &claim.name, &marker).await?;
+        let won = take_claim(files, &claim.name, &first).await?;
         apply(
             &claim.state,
             if won {

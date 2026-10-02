@@ -12,28 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ClaimEvent, ClaimState, Cleanup, apply, transition};
+use super::{ClaimEvent, ClaimState, Cleanup, Markers, apply, transition};
 use pretty_assertions::assert_eq;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use test_r::test;
 
 fn path(name: &str) -> Box<Path> {
     Path::new(name).into()
 }
 
-fn markers() -> Vec<Box<Path>> {
-    vec![path("first")]
+fn markers() -> Markers {
+    Markers {
+        first: Arc::from(Path::new("first")),
+        refreshed: Vec::new(),
+    }
 }
 
-fn with_refresh() -> Vec<Box<Path>> {
-    vec![path("first"), path("refresh")]
+fn with_refresh() -> Markers {
+    Markers {
+        first: Arc::from(Path::new("first")),
+        refreshed: vec![path("refresh")],
+    }
 }
 
 fn release(claimed: bool) -> Option<Cleanup> {
     Some(Cleanup::Release {
         claimed,
-        markers: markers().into_boxed_slice(),
+        first: Arc::from(Path::new("first")),
+        refreshed: Box::new([]),
     })
 }
 

@@ -649,33 +649,29 @@ pub(super) fn keep_claim_fresh<'a>(
 /// path. It tries each delete also when another one fails, and each failure gives a warning. A
 /// claim that stays without its markers is old, and a marker that stays only delays a prune until
 /// its hold passed.
-pub(super) async fn release_claim(
+pub(super) async fn release_claim<'a>(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     claimed: bool,
-    markers: &[Box<Path>],
+    markers: impl IntoIterator<Item = &'a Path>,
 ) {
     let claim = directory.join(number.to_string());
-    stream::iter(
-        claimed
-            .then_some(("delete_claim", claim.as_path()))
-            .into_iter()
-            .chain(
-                markers
-                    .iter()
-                    .map(|marker| ("delete_marker", marker.as_ref())),
-            ),
-    )
-    .for_each(|(op_label, path)| async move {
-        if let Err(error) = files.delete(op_label, path).await {
-            warn!(
-                error = %format!("{error:#}"),
-                "Failed to delete the prune claim of a filesystem snapshot scope"
-            );
-        }
-    })
-    .await;
+    let deletes = claimed
+        .then_some(("delete_claim", claim.as_path()))
+        .into_iter()
+        .chain(markers.into_iter().map(|marker| ("delete_marker", marker)))
+        .collect::<Box<[_]>>();
+    stream::iter(deletes)
+        .for_each(|(op_label, path)| async move {
+            if let Err(error) = files.delete(op_label, path).await {
+                warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to delete the prune claim of a filesystem snapshot scope"
+                );
+            }
+        })
+        .await;
 }
 
 /// Gives the claim directory of each listed path below the directory of all claims whose ledger is
