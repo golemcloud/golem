@@ -14,7 +14,7 @@
 
 use super::initial_files::{
     DeclarationView, Declarations, InitialFileSources, PathLookup, PathReader, RetryPreparation,
-    declaration_view, declarations_of, directory_entries, holds_golem_file, install, observe,
+    declaration_view, declarations_of, directory_entries, holds_initial_file, install, observe,
     sandbox_path, seed_with_retry, validate_compatible,
 };
 use super::*;
@@ -358,10 +358,10 @@ fn record_error(source: anyhow::Error) -> Error {
 ///   [`CaptureOutcome::Unchanged`], and the capture makes no host directory.
 /// - When the tree is what a start from the initial files gives, the result is
 ///   [`CaptureOutcome::InitialFiles`] with the mark of the tree, and the capture makes no host
-///   directory. That is true when
-///   each declaration is a read-only initial file, each of these files is Golem's file with a
-///   single name, the tree holds nothing else except the directories on the way to these files,
-///   and no call outside an install put a chosen modification time at a path. The check does not
+///   directory. That is true when each declaration is a read-only initial file, each of these
+///   files is the declared initial file with a single name, the tree holds nothing else except the
+///   directories on the way to these files, and no call outside an install put a chosen
+///   modification time at a path. The check does not
 ///   compare the modification times of the directories: a time that the kernel gave comes back
 ///   from a replay as a new time too.
 /// - Otherwise the capture copies the tree. Then it keeps the calls stopped until 20 ms after the
@@ -372,7 +372,7 @@ fn record_error(source: anyhow::Error) -> Error {
 ///
 /// The capture directory holds `tree/` and `record.json`. The tree is
 /// the whole filesystem minus each read-only initial or entity-provisioned file that has a single
-/// name and is Golem's file at its declared path: a regular file with the declared content and
+/// name and is the initial file at its declared path: a regular file with the declared content and
 /// without write permission. The tree holds a file with more than one name once. The record gives
 /// the paths whose bytes the tree leaves out, the hard-link groups and the declarations.
 ///
@@ -569,8 +569,8 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-/// Finds the read-only declared paths that hold Golem's file with a single name. A capture leaves
-/// out the bytes of these files. The result is in path order.
+/// Finds the read-only declared paths that hold the declared initial file with a single name. A
+/// capture leaves out the bytes of these files. The result is in path order.
 async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     state: &InitialFileState,
@@ -588,7 +588,7 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
                 let (reader, lookup) = reader.read(sandbox, path).await?;
                 if let PathLookup::Found(attributes) = lookup
                     && attributes.link_count == 1
-                    && holds_golem_file(
+                    && holds_initial_file(
                         sandbox,
                         path,
                         declared,

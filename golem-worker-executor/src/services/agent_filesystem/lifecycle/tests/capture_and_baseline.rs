@@ -1381,7 +1381,7 @@ async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone(
         store.prepare(std::slice::from_ref(&installed)).await,
     )
     .await;
-    // The agent removed Golem's file, so nothing is at the path that the update changes.
+    // The agent removed the initial file, so nothing is at the path that the update changes.
     control.push_get_attributes(Err(sandbox_error(
         "get sandbox filesystem path attributes",
         std::io::ErrorKind::NotFound,
@@ -1421,7 +1421,7 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
         .declare("/config", AgentFilePermissions::ReadWrite, b"installed")
         .await;
     // A name, and the files of an update. Each update must fail with a conflict, because the path
-    // does not hold Golem's file of the old declaration.
+    // does not hold the initial file of the old declaration.
     let cases: [(&'static str, Vec<InitialAgentFile>); 3] = [
         ("a read-only update", vec![changed]),
         ("a read-write update", vec![writable]),
@@ -1442,9 +1442,9 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
                 let resident =
                     scripted_resident(&control, filesystem, store.prepare(&[installed]).await)
                         .await;
-                // The agent removed Golem's file and wrote a new file with the declared size at
-                // the path. The new file got the recorded object, and it has write bits. So only
-                // the write bits can show that it is not Golem's file.
+                // The agent removed the initial file and wrote a new file with the declared size
+                // at the path. The new file got the recorded object, and it has write bits. So
+                // only the write bits can show that it is not the initial file.
                 control.push_get_attributes(Ok(file_attributes(7, size, 1, false)));
                 let changes_before =
                     call_count(&control, "seed(") + call_count(&control, "unlink_file(");
@@ -1476,7 +1476,7 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
                 assert_eq!(
                     call_count(&control, "open("),
                     opens_before,
-                    "{name}: the write bits alone must show that the file is not Golem's file"
+                    "{name}: the write bits alone must show that the file is not the initial file"
                 );
                 assert!(
                     !filesystem_activity(&resident).has_terminal_failure(),
@@ -3048,10 +3048,10 @@ impl ReferenceModel {
         self.paths.keys().any(|path| path.starts_with(&prefix))
     }
 
-    /// Tells whether `path` holds Golem's file of the old declaration `old`: a regular file whose
-    /// content equals the declared content and that, where the declaration is read-only, has no
-    /// write permission.
-    fn holds_golem_file(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
+    /// Tells whether `path` holds the initial file of the old declaration `old`: a regular file
+    /// whose content equals the declared content and that, where the declaration is read-only, has
+    /// no write permission.
+    fn holds_initial_file(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
         match (old, self.object_at(path)) {
             (Some(declared), Some(ModelObject::File { content, writable })) => {
                 content[..] == *CONTENTS[declared.content] && !(declared.read_only && *writable)
@@ -3063,7 +3063,7 @@ impl ReferenceModel {
     /// Tells whether `path` holds the old object of a read-only file back: a read-only file with
     /// the size of the read-only declaration `old` and other content, whose object an earlier
     /// install put at `path`. The lifecycle keeps the identity of each read-only file that it
-    /// installs. It must not take that identity for Golem's file after the object came back.
+    /// installs. It must not take that identity for the initial file after the object came back.
     fn holds_old_object_back(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
         match (
             old,
@@ -3361,18 +3361,18 @@ impl ReferenceModel {
     ///
     /// The rule applies at each path where the two declarations differ, in path order, and an equal
     /// declaration changes nothing. At such a path the install expects what the current
-    /// declarations left there: Golem's file where they declare the path, and nothing where they do
-    /// not. A path that holds what the install expects gets what the new declarations give there:
-    /// the new file, or nothing. A path that holds nothing, and that the new declarations do not
-    /// have, stays as it is. Anything else is a conflict. A conflict fails the whole install,
-    /// changes nothing, and names the first conflicting path.
+    /// declarations left there: the initial file of the current declaration where they declare the
+    /// path, and nothing where they do not. A path that holds what the install expects gets what
+    /// the new declarations give there: the new file, or nothing. A path that holds nothing, and
+    /// that the new declarations do not have, stays as it is. Anything else is a conflict. A
+    /// conflict fails the whole install, changes nothing, and names the first conflicting path.
     ///
     /// Each decision reads the tree as the removals of the install leave it. The install removes
-    /// Golem's file where the new declarations do not have its path. So such a file above a path
-    /// does not block the path. A directory at a path that the new declarations have holds nothing
-    /// when every file under it is such a file and every directory in it holds at least one object.
-    /// The install removes the files first, then such directories, then puts the new files in
-    /// place.
+    /// the initial file where the new declarations do not have its path. So such a file above a
+    /// path does not block the path. A directory at a path that the new declarations have holds
+    /// nothing when every file under it is such a file and every directory in it holds at least one
+    /// object. The install removes the files first, then such directories, then puts the new files
+    /// in place.
     fn install_declarations(
         &mut self,
         component: BTreeMap<String, ModelDeclaration>,
@@ -3400,7 +3400,7 @@ impl ReferenceModel {
                 !new.contains_key(*path)
                     && old
                         .get(*path)
-                        .is_some_and(|previous| self.holds_golem_file(path, Some(previous)))
+                        .is_some_and(|previous| self.holds_initial_file(path, Some(previous)))
             })
             .cloned()
             .collect::<BTreeSet<String>>();
@@ -3413,7 +3413,7 @@ impl ReferenceModel {
             .map(|path| {
                 let empty = self.empty_after_removals(path, new.contains_key(path), &removed);
                 let expected = match old.get(path) {
-                    Some(previous) => self.holds_golem_file(path, Some(previous)),
+                    Some(previous) => self.holds_initial_file(path, Some(previous)),
                     None => empty,
                 };
                 match (expected, new.get(path)) {
