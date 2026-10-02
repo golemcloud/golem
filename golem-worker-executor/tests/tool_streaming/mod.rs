@@ -17,7 +17,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
 use axum::response::Response;
-use axum::routing::post;
+use axum::routing::{get, post};
 use futures::StreamExt;
 use golem_common::agent_id;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -47,7 +47,7 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
-use golem_common::schema::tool::{ToolMiddleware, ToolMiddlewareScope};
+use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue, VariantValuePayload, build_input_record,
@@ -107,6 +107,10 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("typescript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("web_fetch")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -1171,6 +1175,146 @@ fn assert_filesystem_tool_error(
     }
 }
 
+fn optional_u64(value: Option<u64>) -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::u64()),
+        SchemaValue::Option {
+            inner: value.map(|value| Box::new(SchemaValue::U64(value))),
+        },
+    )
+}
+
+fn optional_u32(value: Option<u32>) -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::u32()),
+        SchemaValue::Option {
+            inner: value.map(|value| Box::new(SchemaValue::U32(value))),
+        },
+    )
+}
+
+fn optional_bool(value: Option<bool>) -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::bool()),
+        SchemaValue::Option {
+            inner: value.map(|value| Box::new(SchemaValue::Bool(value))),
+        },
+    )
+}
+
+fn web_fetch_input(
+    url: String,
+    timeout_ms: Option<u64>,
+    max_response_bytes: Option<u64>,
+    max_redirects: Option<u32>,
+    convert_html_to_text: Option<bool>,
+) -> TypedSchemaValue {
+    let timeout_ms = optional_u64(timeout_ms);
+    let max_response_bytes = optional_u64(max_response_bytes);
+    let max_redirects = optional_u32(max_redirects);
+    let convert_html_to_text = optional_bool(convert_html_to_text);
+    filesystem_tool_input(vec![
+        ("url", SchemaType::string(), SchemaValue::String(url)),
+        ("timeout-ms", timeout_ms.0, timeout_ms.1),
+        (
+            "max-response-bytes",
+            max_response_bytes.0,
+            max_response_bytes.1,
+        ),
+        ("max-redirects", max_redirects.0, max_redirects.1),
+        (
+            "convert-html-to-text",
+            convert_html_to_text.0,
+            convert_html_to_text.1,
+        ),
+    ])
+}
+
+async fn invoke_web_fetch(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    idempotency_key: IdempotencyKey,
+    input: TypedSchemaValue,
+) -> anyhow::Result<
+    Result<
+        Option<SchemaValue>,
+        golem_common::model::oplog::payload::types::SerializableToolRpcError,
+    >,
+> {
+    let command_index = definition
+        .command_index_by_path(&[])
+        .expect("web-fetch root command exists");
+    let input_schema = definition.canonical_input_record_schema(command_index)?;
+    let (_, input_value) = input.into_parts();
+    let output = executor
+        .invoke_external_tool(
+            worker_id,
+            fingerprint,
+            idempotency_key,
+            ToolName::try_from("web-fetch").unwrap(),
+            Vec::new(),
+            TypedSchemaValue::new(input_schema, input_value),
+            InvocationContextStack::fresh(),
+            principal,
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result } = output.result else {
+        anyhow::bail!("expected web-fetch external tool result, got {output:?}");
+    };
+    Ok(result.map(|result| result.result.map(|value| value.into_parts().1)))
+}
+
+fn expect_web_fetch_success(
+    result: Result<Option<SchemaValue>, SerializableToolRpcError>,
+) -> anyhow::Result<(String, u16, Option<String>, String, bool)> {
+    let Ok(Some(SchemaValue::Record { fields })) = result else {
+        anyhow::bail!("expected successful web-fetch record, got {result:?}");
+    };
+    let [
+        SchemaValue::String(final_url),
+        SchemaValue::U16(status),
+        SchemaValue::Option {
+            inner: content_type,
+        },
+        SchemaValue::String(content),
+        SchemaValue::Bool(truncated),
+    ] = fields.as_slice()
+    else {
+        anyhow::bail!("unexpected web-fetch result fields: {fields:?}");
+    };
+    let content_type = match content_type {
+        Some(value) => match value.as_ref() {
+            SchemaValue::String(value) => Some(value.clone()),
+            other => anyhow::bail!("unexpected web-fetch content type: {other:?}"),
+        },
+        None => None,
+    };
+    Ok((
+        final_url.clone(),
+        *status,
+        content_type,
+        content.clone(),
+        *truncated,
+    ))
+}
+
+fn assert_web_fetch_error(
+    result: Result<Option<SchemaValue>, SerializableToolRpcError>,
+    expected_name: &str,
+) -> anyhow::Result<()> {
+    match result {
+        Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+            SerializableToolError::CustomError(error) if error.name == expected_name => Ok(()),
+            other => anyhow::bail!("expected web-fetch error '{expected_name}', got {other:?}"),
+        },
+        other => anyhow::bail!("expected web-fetch error '{expected_name}', got {other:?}"),
+    }
+}
+
 fn install_middleware_chain(
     deployment: &mut ToolDeploymentState,
     agent_type: &AgentTypeName,
@@ -1740,6 +1884,268 @@ async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, 
             .expect("serve native-order HTTP requests");
     });
     (port, task, requests)
+}
+
+struct WebFetchHttpServers {
+    source_port: u16,
+    target_port: u16,
+    source_server: tokio::task::JoinHandle<()>,
+    source_requests: Arc<AtomicUsize>,
+    target_requests: Arc<AtomicUsize>,
+    target_server: tokio::task::JoinHandle<()>,
+    bounded_body_gate: Arc<tokio::sync::Notify>,
+    timeout_started: tokio::sync::oneshot::Receiver<()>,
+    timeout_cancelled: tokio::sync::oneshot::Receiver<()>,
+    interrupted_started: tokio::sync::oneshot::Receiver<()>,
+    interrupted_requests: Arc<AtomicUsize>,
+}
+
+async fn start_web_fetch_http_servers() -> WebFetchHttpServers {
+    let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_port = target_listener.local_addr().unwrap().port();
+    let target_requests = Arc::new(AtomicUsize::new(0));
+    let target_requests_for_route = target_requests.clone();
+    let target_server = tokio::spawn(async move {
+        let app = Router::new().route(
+            "/cross-host-final",
+            get(move || async move {
+                target_requests_for_route.fetch_add(1, Ordering::SeqCst);
+                Response::builder()
+                    .header("content-type", "text/plain; charset=utf-8")
+                    .body(Body::from("cross-host target"))
+                    .unwrap()
+            }),
+        );
+        axum::serve(target_listener, app).await.unwrap();
+    });
+
+    let source_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let source_port = source_listener.local_addr().unwrap().port();
+    let cross_host_location = format!("http://127.0.0.1:{target_port}/cross-host-final");
+    let source_requests = Arc::new(AtomicUsize::new(0));
+    let source_requests_for_routes = source_requests.clone();
+    let bounded_body_gate = Arc::new(tokio::sync::Notify::new());
+    let bounded_body_gate_for_route = bounded_body_gate.clone();
+    let (timeout_started_tx, timeout_started) = tokio::sync::oneshot::channel();
+    let timeout_started_tx = Arc::new(tokio::sync::Mutex::new(Some(timeout_started_tx)));
+    let (timeout_cancelled_tx, timeout_cancelled) = tokio::sync::oneshot::channel();
+    let timeout_cancelled_tx = Arc::new(tokio::sync::Mutex::new(Some(timeout_cancelled_tx)));
+    let (interrupted_started_tx, interrupted_started) = tokio::sync::oneshot::channel();
+    let interrupted_started_tx = Arc::new(tokio::sync::Mutex::new(Some(interrupted_started_tx)));
+    let interrupted_requests = Arc::new(AtomicUsize::new(0));
+    let interrupted_requests_for_route = interrupted_requests.clone();
+    let source_server = tokio::spawn(async move {
+        let app = Router::new()
+            .route(
+                "/html",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "text/html; charset=utf-8")
+                        .body(Body::from(
+                            "<html><body><h1>Fetch title</h1><script>hidden()</script><p>Readable body.</p></body></html>",
+                        ))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/missing",
+                get(|| async {
+                    Response::builder()
+                        .status(axum::http::StatusCode::NOT_FOUND)
+                        .header("content-type", "text/plain")
+                        .body(Body::from("missing body"))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/relative",
+                get(|| async {
+                    Response::builder()
+                        .status(axum::http::StatusCode::FOUND)
+                        .header("location", "/relative-final")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/relative-final",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "text/plain")
+                        .body(Body::from("relative target"))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/cross-host",
+                get(move || {
+                    let location = cross_host_location.clone();
+                    async move {
+                        Response::builder()
+                            .status(axum::http::StatusCode::TEMPORARY_REDIRECT)
+                            .header("location", location)
+                            .body(Body::empty())
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/streaming",
+                get(move || {
+                    let gate = bounded_body_gate_for_route.clone();
+                    async move {
+                        let (body_tx, body_rx) = tokio::sync::mpsc::channel(3);
+                        tokio::spawn(async move {
+                            body_tx
+                                .send(Ok::<_, Infallible>(Bytes::from_static(b"abc")))
+                                .await
+                                .ok();
+                            // Reaching the configured limit must stop the fetch even if the peer
+                            // keeps the response stream open without sending another byte.
+                            body_tx
+                                .send(Ok(Bytes::from_static(b"de")))
+                                .await
+                                .ok();
+                            gate.notified().await;
+                            body_tx
+                                .send(Ok(Bytes::from_static(b"ghi")))
+                                .await
+                                .ok();
+                        });
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body(Body::from_stream(ReceiverStream::new(body_rx)))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/slow-stream",
+                get(move || {
+                    let started = timeout_started_tx.clone();
+                    let cancelled = timeout_cancelled_tx.clone();
+                    async move {
+                        let (body_tx, body_rx) = tokio::sync::mpsc::channel(1);
+                        tokio::spawn(async move {
+                            if body_tx
+                                .send(Ok::<_, Infallible>(Bytes::from_static(b"started")))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                            if let Some(started) = started.lock().await.take() {
+                                started.send(()).ok();
+                            }
+                            body_tx.closed().await;
+                            if let Some(cancelled) = cancelled.lock().await.take() {
+                                cancelled.send(()).ok();
+                            }
+                        });
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body(Body::from_stream(ReceiverStream::new(body_rx)))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/slow-headers",
+                get(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    Response::builder()
+                        .header("content-type", "text/plain")
+                        .body(Body::from("too late"))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/interrupted",
+                get(move || {
+                    let attempt = interrupted_requests_for_route.fetch_add(1, Ordering::SeqCst);
+                    let started = interrupted_started_tx.clone();
+                    async move {
+                        if attempt > 0 {
+                            return Response::builder()
+                                .header("content-type", "text/plain")
+                                .body(Body::from("retried after interruption"))
+                                .unwrap();
+                        }
+
+                        let (body_tx, body_rx) = tokio::sync::mpsc::channel(1);
+                        tokio::spawn(async move {
+                            if body_tx
+                                .send(Ok::<_, Infallible>(Bytes::from_static(b"started")))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                            if let Some(started) = started.lock().await.take() {
+                                started.send(()).ok();
+                            }
+                            body_tx.closed().await;
+                        });
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body(Body::from_stream(ReceiverStream::new(body_rx)))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/invalid-utf8",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "text/plain; charset=utf-8")
+                        .body(Body::from(Bytes::from_static(&[0xff])))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/binary",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "application/octet-stream")
+                        .body(Body::from(Bytes::from_static(&[0, 1, 2, 3])))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/cycle",
+                get(|| async {
+                    Response::builder()
+                        .status(axum::http::StatusCode::MOVED_PERMANENTLY)
+                        .header("location", "/cycle#again")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            )
+            .layer(axum::middleware::from_fn(
+                move |request: Request, next: axum::middleware::Next| {
+                let requests = source_requests_for_routes.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    next.run(request).await
+                }
+                },
+            ));
+        axum::serve(source_listener, app).await.unwrap();
+    });
+
+    WebFetchHttpServers {
+        source_port,
+        target_port,
+        source_server,
+        source_requests,
+        target_requests,
+        target_server,
+        bounded_body_gate,
+        timeout_started,
+        timeout_cancelled,
+        interrupted_started,
+        interrupted_requests,
+    }
 }
 async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>) {
     use tokio::io::AsyncWriteExt;
@@ -10103,6 +10509,7 @@ async fn exercise_filesystem_tools(
         .tools
         .iter()
         .map(|definition| {
+            assert!(definition.requires_filesystem);
             let name = definition
                 .name()
                 .expect("filesystem tool has a root command");
@@ -11368,6 +11775,444 @@ async fn filesystem_tools_work_through_guest_invocation(
         filesystem_tools,
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("web_fetch")] web_fetch: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, web_fetch)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", web_fetch.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definition = metadata
+        .tools
+        .iter()
+        .find(|definition| definition.name() == Some("web-fetch"))
+        .cloned()
+        .expect("web-fetch metadata is present");
+    assert!(!definition.requires_filesystem);
+    for command in &definition.commands.nodes {
+        if let Some(body) = &command.body {
+            assert!(
+                body.annotations
+                    .as_ref()
+                    .expect("web-fetch command body has annotations")
+                    .open_world
+            );
+        }
+    }
+    let command_index = definition
+        .command_index_by_path(&[])
+        .expect("web-fetch root command is present");
+    let command_body = definition.commands.nodes[command_index]
+        .body
+        .as_ref()
+        .expect("web-fetch root command has a body");
+    let conversion_option = command_body
+        .options
+        .iter()
+        .find(|option| option.long == "convert-html-to-text")
+        .expect("web-fetch exports the convert-html-to-text option");
+    assert!(!conversion_option.required);
+    assert!(matches!(
+        conversion_option.shape,
+        OptionShape::Scalar(SchemaType::Bool { .. })
+    ));
+    let input_schema = definition.canonical_input_record_schema(command_index)?;
+    let SchemaType::Record { fields, .. } = &input_schema.root else {
+        anyhow::bail!("web-fetch canonical input is not a record")
+    };
+    let conversion_field = fields
+        .iter()
+        .find(|field| field.name == "convert-html-to-text")
+        .expect("web-fetch canonical input contains convert-html-to-text");
+    assert_eq!(
+        conversion_field.body,
+        SchemaType::option(SchemaType::bool())
+    );
+    let deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem:web-fetch",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "web-fetch");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let WebFetchHttpServers {
+        source_port,
+        target_port,
+        source_server,
+        source_requests,
+        target_requests,
+        target_server,
+        bounded_body_gate,
+        timeout_started,
+        timeout_cancelled,
+        interrupted_started,
+        interrupted_requests,
+    } = start_web_fetch_http_servers().await;
+    let source_url = |path: &str| format!("http://127.0.0.1:{source_port}{path}");
+
+    let html = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/html"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(html.0, source_url("/html"));
+    assert_eq!(html.1, 200);
+    assert_eq!(html.2.as_deref(), Some("text/html; charset=utf-8"));
+    assert_eq!(
+        html.3,
+        "<html><body><h1>Fetch title</h1><script>hidden()</script><p>Readable body.</p></body></html>"
+    );
+    assert!(!html.4);
+
+    let converted_html = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/html"), None, None, None, Some(true)),
+        )
+        .await?,
+    )?;
+    assert!(
+        converted_html.3.contains("Fetch title"),
+        "{}",
+        converted_html.3
+    );
+    assert!(
+        converted_html.3.contains("Readable body."),
+        "{}",
+        converted_html.3
+    );
+    assert!(!converted_html.3.contains("hidden"), "{}", converted_html.3);
+    assert!(!converted_html.3.contains("<h1>"), "{}", converted_html.3);
+    assert!(!converted_html.3.contains("<p>"), "{}", converted_html.3);
+    assert!(!converted_html.4);
+
+    let missing = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/missing"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(missing.1, 404);
+    assert_eq!(missing.3, "missing body");
+
+    let relative = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/relative"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(relative.0, source_url("/relative-final"));
+    assert_eq!(relative.3, "relative target");
+
+    let cross_host = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/cross-host"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        cross_host.0,
+        format!("http://127.0.0.1:{target_port}/cross-host-final")
+    );
+    assert_eq!(cross_host.3, "cross-host target");
+    assert_eq!(target_requests.load(Ordering::SeqCst), 1);
+
+    let streaming = expect_web_fetch_success(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            invoke_web_fetch(
+                &executor,
+                &worker_id,
+                fingerprint,
+                principal.clone(),
+                &definition,
+                IdempotencyKey::fresh(),
+                web_fetch_input(source_url("/streaming"), None, Some(5), None, None),
+            ),
+        )
+        .await
+        .expect("bounded fetch must return before the server finishes the body")?,
+    )?;
+    bounded_body_gate.notify_waiters();
+    assert_eq!(streaming.3, "abcde");
+    assert!(streaming.4);
+
+    for (path, expected) in [
+        ("/invalid-utf8", "invalid-text-encoding"),
+        ("/binary", "unsupported-content-type"),
+        ("/cycle", "unsafe-redirect"),
+    ] {
+        let result = invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url(path), None, None, None, None),
+        )
+        .await?;
+        assert_web_fetch_error(result, expected)?;
+    }
+
+    let no_redirects = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        IdempotencyKey::fresh(),
+        web_fetch_input(source_url("/relative"), None, None, Some(0), None),
+    )
+    .await?;
+    assert_web_fetch_error(no_redirects, "redirect-limit")?;
+
+    let invalid_limit = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        IdempotencyKey::fresh(),
+        web_fetch_input(
+            source_url("/html"),
+            None,
+            Some(5 * 1024 * 1024 + 1),
+            None,
+            None,
+        ),
+    )
+    .await?;
+    assert_web_fetch_error(invalid_limit, "invalid-safety-limit")?;
+
+    let timed_out = {
+        let timed_out = invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/slow-stream"), Some(500), None, None, None),
+        );
+        let (started, result) = tokio::join!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), timeout_started),
+            tokio::time::timeout(std::time::Duration::from_secs(2), timed_out),
+        );
+        started
+            .expect("slow response body did not start")
+            .map_err(|_| anyhow::anyhow!("slow response producer stopped before starting"))?;
+        result.expect("web-fetch total deadline did not stop an active response stream")?
+    };
+    assert_web_fetch_error(timed_out, "timeout")?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), timeout_cancelled)
+        .await
+        .expect("timed-out web-fetch did not cancel the response body")
+        .map_err(|_| anyhow::anyhow!("slow response producer stopped without cancellation"))?;
+
+    let header_timeout = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        IdempotencyKey::fresh(),
+        web_fetch_input(source_url("/slow-headers"), Some(300), None, None, None),
+    )
+    .await?;
+    assert_web_fetch_error(header_timeout, "timeout")?;
+
+    let replay_key = IdempotencyKey::fresh();
+    let replay_input = web_fetch_input(source_url("/cross-host"), None, None, None, None);
+    let first = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            replay_key.clone(),
+            replay_input.clone(),
+        )
+        .await?,
+    )?;
+    let target_requests_before_restart = target_requests.load(Ordering::SeqCst);
+    assert_eq!(target_requests_before_restart, 2);
+
+    let interrupted_key = IdempotencyKey::fresh();
+    let interrupted_input =
+        web_fetch_input(source_url("/interrupted"), Some(10_000), None, None, None);
+    let interrupted = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        interrupted_key.clone(),
+        interrupted_input.clone(),
+    );
+    tokio::pin!(interrupted);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::select! {
+            started = interrupted_started => started
+                .map_err(|_| anyhow::anyhow!("interrupted response producer stopped before starting")),
+            result = &mut interrupted => anyhow::bail!(
+                "web-fetch completed before the worker interruption: {result:?}"
+            ),
+        }
+    })
+    .await
+    .expect("interrupted response body did not start")?;
+    assert_eq!(interrupted_requests.load(Ordering::SeqCst), 1);
+    let source_requests_before_restart = source_requests.load(Ordering::SeqCst);
+
+    executor.simulated_crash(&worker_id).await?;
+    let interrupted_result = expect_web_fetch_success(
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut interrupted)
+            .await
+            .expect("interrupted web-fetch did not recover after the simulated crash")?,
+    )?;
+    assert_eq!(interrupted_result.3, "retried after interruption");
+    assert_eq!(
+        interrupted_requests.load(Ordering::SeqCst),
+        2,
+        "an interrupted incomplete fetch must retry its GET during recovery"
+    );
+    assert_eq!(
+        source_requests.load(Ordering::SeqCst),
+        source_requests_before_restart + 1,
+        "component reconstruction must replay completed source requests without repeating HTTP"
+    );
+    assert_eq!(
+        target_requests.load(Ordering::SeqCst),
+        target_requests_before_restart,
+        "component reconstruction must replay completed redirected requests without repeating HTTP"
+    );
+    let replayed_interrupted = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            interrupted_key,
+            interrupted_input,
+        )
+        .await?,
+    )?;
+    assert_eq!(replayed_interrupted, interrupted_result);
+
+    let replayed = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal,
+            &definition,
+            replay_key,
+            replay_input,
+        )
+        .await?,
+    )?;
+    assert_eq!(replayed, first);
+    assert_eq!(
+        target_requests.load(Ordering::SeqCst),
+        target_requests_before_restart,
+        "completed fetch must replay after worker restart without repeating HTTP"
+    );
+    assert_eq!(
+        interrupted_requests.load(Ordering::SeqCst),
+        2,
+        "retrying a recovered incomplete fetch must not repeat its GET"
+    );
+    assert_eq!(
+        source_requests.load(Ordering::SeqCst),
+        source_requests_before_restart + 1,
+        "retrying recovered and completed fetches must not repeat HTTP"
+    );
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    source_server.abort();
+    target_server.abort();
     Ok(())
 }
 

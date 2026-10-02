@@ -23,6 +23,14 @@ data. Both components must use the `optimized` TypeScript preset so Wizer pre-in
 provider state.
 
 ## Adding a component-implemented built-in export
+The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
+`builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
+read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
+access. Its timeout, response-size, and redirect limits are optional invocation arguments, not
+deployment configuration. HTML is returned as decoded source unless the invocation enables
+conversion to readable text.
+
+## Adding a component-implemented built-in tool
 
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
    not invoke its language compiler directly.
@@ -125,3 +133,24 @@ return `path-policy-denied` before invoking the wrapped tool.
 This is argument-level policy for the named filesystem tools, not a filesystem sandbox. It does
 not restrict arbitrary filesystem behavior inside a wrapped tool and does not prevent another
 component with its own filesystem capability from accessing paths directly.
+This assumes the component exports the `FileReader` agent. The built-in filesystem tools require
+filesystem access but provision no files of their own. This example explicitly grants
+`filesystemAccess: allowed` on the agent binding; if it is omitted and no grant is inherited,
+deployment fails with an error requesting that permission. This fails closed rather than exposing
+the agent's filesystem.
+
+The `web-fetch` release is selected and bound in the same way, but requires no filesystem grant:
+
+```yaml
+tools:
+  web-fetch:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: web-fetch
+      version: 0.1.0
+
+agents:
+  ResearchAgent:
+    tools:
+      web-fetch: {}
+```
