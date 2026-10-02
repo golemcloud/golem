@@ -411,7 +411,10 @@ async function isolate() {
     SQLTagStore: FakeSqlTagStore,
     serializeDatabaseSync,
     restoreDatabaseSync,
-    isAutocommitDatabaseSync: (db: FakeDatabaseSync) => !db.inTransaction,
+    isAutocommitDatabaseSync: (db: FakeDatabaseSync) => {
+      if (!db.isOpen) throw new Error('database is not open');
+      return !db.inTransaction;
+    },
   }));
   const existingFiles = new Set(['/data/app.db', '/data/other.db']);
   const existsSync = vi.fn((path: string) => existingFiles.has(path));
@@ -907,6 +910,29 @@ describe('snapshot — in-memory and file-backed databases', () => {
     await expect(
       (await env.initiateIsolated('QuotedDatabaseName')).saveSnapshot(),
     ).rejects.toContain('Cannot snapshot in-memory database "a\\"b": its field name contains');
+  });
+
+  it('fails the save of a closed database and names its field', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'ClosedDatabaseSave',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => {
+          const fileDb = new env.FakeDatabaseSync('/data/app.db');
+          fileDb.isOpen = false;
+          return { count: 1, fileDb };
+        },
+        methods: {},
+      });
+
+    await expect((await env.initiateIsolated('ClosedDatabaseSave')).saveSnapshot()).rejects.toBe(
+      'Cannot snapshot database "fileDb": database is not open',
+    );
   });
 
   it('fails the save when a file-backed database has an open transaction', async () => {

@@ -68,6 +68,7 @@ Typed state snapshotting handles each top-level `DatabaseSync` field of the agen
 - **In-memory database** (`new DatabaseSync(':memory:')`) or **temporary database** (`new DatabaseSync('')`): the snapshot holds the contents of the database. The snapshot then uses the `multipart/mixed` format.
 - **File-backed database** (`new DatabaseSync('/app.db')`): the snapshot holds only the location of the file. The executor's filesystem snapshot restores the file before the snapshot is loaded, and the load opens the database again at that location. A load reads every page of a file-backed database that fits in SQLite's page cache (about 2 MB by default), so it costs time and memory up to that size; a larger database reads only its schema.
 - A database with an open transaction makes the save fail, also when the database is file-backed. Commit or roll back before the invocation ends.
+- A closed `DatabaseSync` in a field makes the save fail. Remove the field, or set it to an open database, before the invocation ends.
 
 ```typescript
 import { DatabaseSync } from 'node:sqlite';

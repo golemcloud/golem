@@ -131,7 +131,8 @@ export function planDatabases(
  * Takes the SQLite fields out of the state fields of a save. Gives the other fields, a
  * `db:<field>` multipart part for each in-memory database, and the location of each file-backed
  * database. Throws a string when a field holds a `StatementSync`, `Session` or `SQLTagStore`,
- * when two fields hold the same database, or when a database has an open transaction. Of a
+ * when two fields hold the same database, when a database is closed, or as `planDatabases`
+ * decides. Of a
  * file-backed database it reads only the transaction state and the location.
  */
 export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>): {
@@ -155,13 +156,7 @@ export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>)
       ordinary.push([name, val]);
     }
   }
-  const plan = planDatabases(
-    databases.map(([name, db]) => ({
-      name,
-      autocommit: isAutocommitDatabaseSync(db),
-      location: db.location(),
-    })),
-  );
+  const plan = planDatabases(databases.map(([name, db]) => readDatabaseField(name, db)));
   if (plan.tag === 'err') {
     throw plan.val;
   }
@@ -175,6 +170,15 @@ export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>)
     })),
     fileDatabases: plan.val.fileDatabases,
   };
+}
+
+/** Reads what a save needs of the database in field `name`; throws a string that names the field. */
+function readDatabaseField(name: string, db: DatabaseSync): DatabaseField {
+  try {
+    return { name, autocommit: isAutocommitDatabaseSync(db), location: db.location() };
+  } catch (error) {
+    throw `Cannot snapshot database "${name}": ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 /**
