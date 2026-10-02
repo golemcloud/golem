@@ -360,82 +360,156 @@ describe('snapshot — custom save/load', () => {
   });
 });
 
-describe('snapshot — multipart databases', () => {
-  it('attaches restored databases to fresh schema-backed state before installation', async () => {
-    vi.resetModules();
+type Constructed = { path: string; options: unknown };
 
-    const warmDatabase = vi.fn();
-    const prepare = vi.fn(() => ({ get: warmDatabase }));
-    class FakeDatabaseSync {
-      restored = new Uint8Array();
-      inTransaction = false;
-      isOpen = true;
-      prepare = prepare;
-      constructor(_path: string) {}
-      location() {
-        return null;
-      }
+/**
+ * Loads a fresh copy of the SDK with fakes of the `node:sqlite` builtin and of `existsSync`,
+ * which record the databases that the SDK opens, warms, serializes and restores.
+ */
+async function isolate() {
+  vi.resetModules();
+  const constructed: Constructed[] = [];
+  const warmed: string[] = [];
+  class FakeDatabaseSync {
+    bytes = new Uint8Array();
+    inTransaction = false;
+    isOpen = true;
+    constructor(
+      readonly path: string,
+      options?: unknown,
+    ) {
+      constructed.push({ path, options });
     }
-    class FakeStatementSync {}
-    class FakeSession {}
-    class FakeSqlTagStore {}
-    const restoreDatabaseSync = vi.fn((db: FakeDatabaseSync, bytes: Uint8Array) => {
-      db.restored = bytes.slice();
-    });
-    vi.doMock('../src/internal/sqlite', () => ({
-      DatabaseSync: FakeDatabaseSync,
-      StatementSync: FakeStatementSync,
-      Session: FakeSession,
-      SQLTagStore: FakeSqlTagStore,
-      serializeDatabaseSync: (db: FakeDatabaseSync) => db.restored.slice(),
-      restoreDatabaseSync,
-      isAutocommitDatabaseSync: (db: FakeDatabaseSync) => !db.inTransaction,
-    }));
+    location() {
+      return this.path === ':memory:' || this.path === '' ? null : this.path;
+    }
+    prepare(sql: string) {
+      return {
+        get: () => {
+          warmed.push(`${this.path}: ${sql}`);
+        },
+      };
+    }
+  }
+  class FakeStatementSync {}
+  class FakeSession {}
+  class FakeSqlTagStore {}
+  const serializeDatabaseSync = vi.fn((db: FakeDatabaseSync) => db.bytes.slice());
+  const restoreDatabaseSync = vi.fn((db: FakeDatabaseSync, bytes: Uint8Array) => {
+    db.bytes = bytes.slice();
+  });
+  vi.doMock('../src/internal/sqlite', () => ({
+    DatabaseSync: FakeDatabaseSync,
+    StatementSync: FakeStatementSync,
+    Session: FakeSession,
+    SQLTagStore: FakeSqlTagStore,
+    serializeDatabaseSync,
+    restoreDatabaseSync,
+    isAutocommitDatabaseSync: (db: FakeDatabaseSync) => !db.inTransaction,
+  }));
+  const existingFiles = new Set(['/data/app.db', '/data/other.db']);
+  const existsSync = vi.fn((path: string) => existingFiles.has(path));
+  vi.doMock('node:fs', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('node:fs')>()),
+    existsSync,
+  }));
+  const [
+    { defineAgent: isolatedDefineAgent },
+    { method: isolatedMethod },
+    isolatedGuest,
+    multipart,
+    { AgentInitiatorRegistry: isolatedInitiators },
+    { REOPENED_DATABASE_OPTIONS },
+  ] = await Promise.all([
+    import('../src/defineAgent'),
+    import('../src/method'),
+    import('../src'),
+    import('../src/internal/multipart'),
+    import('../src/internal/registry/agentInitiatorRegistry'),
+    import('../src/internal/databaseSnapshot'),
+  ]);
+  const idValue = v.record([v.string('database')]);
+  const select = (name: string) => {
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
+  };
+  const initiateIsolated = async (name: string) => {
+    select(name);
+    const result = await isolatedInitiators
+      .lookup(name)!
+      .initiate(idValue as never, { tag: 'anonymous' });
+    if (result.tag === 'err') throw result.val;
+    return result.val as unknown as {
+      saveSnapshot(): Promise<SavedAgentSnapshot>;
+    };
+  };
+  const boundaryOf = (mimeType: string) => mimeType.match(/boundary=([^\s;]+)/)![1];
+  return {
+    FakeDatabaseSync,
+    FakeStatementSync,
+    existingFiles,
+    existsSync,
+    constructed,
+    warmed,
+    serializeDatabaseSync,
+    restoreDatabaseSync,
+    isolatedDefineAgent,
+    isolatedMethod,
+    isolatedGuest,
+    multipart,
+    REOPENED_DATABASE_OPTIONS,
+    select,
+    initiateIsolated,
+    boundaryOf,
+  };
+}
 
-    try {
-      const [
-        { defineAgent: isolatedDefineAgent },
-        { method: isolatedMethod },
-        isolatedGuest,
-        { encodeMultipart, decodeMultipart },
-        { AgentInitiatorRegistry: isolatedInitiators },
-      ] = await Promise.all([
-        import('../src/defineAgent'),
-        import('../src/method'),
-        import('../src'),
-        import('../src/internal/multipart'),
-        import('../src/internal/registry/agentInitiatorRegistry'),
-      ]);
+function unmockSqlite() {
+  vi.doUnmock('../src/internal/sqlite');
+  vi.doUnmock('node:fs');
+  vi.resetModules();
+}
 
-      let initializeCalls = 0;
-      isolatedDefineAgent({
+describe('snapshot — multipart databases', () => {
+  afterEach(unmockSqlite);
+
+  it('attaches restored databases to fresh schema-backed state before installation', async () => {
+    const env = await isolate();
+    let initializeCalls = 0;
+    env
+      .isolatedDefineAgent({
         name: 'NestedDatabaseState',
         id: { name: z.string() },
         snapshotting: { state: z.object({ nested: z.any() }) },
         methods: {},
-      }).implement({
-        init: () => ({ nested: { database: new FakeDatabaseSync(':memory:') } }),
+      })
+      .implement({
+        init: () => ({ nested: { database: new env.FakeDatabaseSync(':memory:') } }),
         methods: {},
       });
-      isolatedDefineAgent({
+    env
+      .isolatedDefineAgent({
         name: 'OpenDatabaseState',
         id: { name: z.string() },
         snapshotting: { state: z.object({ count: z.number() }) },
         methods: {},
-      }).implement({
+      })
+      .implement({
         init: () => {
-          const database = new FakeDatabaseSync(':memory:');
+          const database = new env.FakeDatabaseSync(':memory:');
           database.inTransaction = true;
           return { count: 1, database };
         },
         methods: {},
       });
-      isolatedDefineAgent({
+    env
+      .isolatedDefineAgent({
         name: 'MultipartRestore',
         id: { name: z.string() },
         snapshotting: { state: z.object({ count: z.number() }) },
-        methods: { get: isolatedMethod({ input: {}, returns: z.number() }) },
-      }).implement({
+        methods: { get: env.isolatedMethod({ input: {}, returns: z.number() }) },
+      })
+      .implement({
         init: () => {
           initializeCalls += 1;
           return { count: 0 };
@@ -448,74 +522,55 @@ describe('snapshot — multipart databases', () => {
         snapshot: {
           load(bytes) {
             const { count } = JSON.parse(new TextDecoder().decode(bytes));
-            return { count, database: new FakeDatabaseSync(':memory:') };
+            return { count, database: new env.FakeDatabaseSync(':memory:') };
           },
         },
       });
 
-      const idValue = v.record([v.string('database')]);
-      const initiateIsolated = async (name: string) => {
-        (globalThis as { currentAgentId?: string }).currentAgentId =
-          `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
-        const result = await isolatedInitiators
-          .lookup(name)!
-          .initiate(idValue as never, { tag: 'anonymous' });
-        if (result.tag === 'err') throw result.val;
-        return result.val;
-      };
+    const nestedDatabase = await env.initiateIsolated('NestedDatabaseState');
+    await expect(nestedDatabase.saveSnapshot()).rejects.toContain(
+      'Cannot automatically snapshot nested resource field "nested.database"',
+    );
+    const openDatabase = await env.initiateIsolated('OpenDatabaseState');
+    await expect(openDatabase.saveSnapshot()).rejects.toContain('an open transaction exists');
 
-      const nestedDatabase = await initiateIsolated('NestedDatabaseState');
-      await expect(nestedDatabase.saveSnapshot()).rejects.toContain(
-        'Cannot automatically snapshot nested resource field "nested.database"',
-      );
-      const openDatabase = await initiateIsolated('OpenDatabaseState');
-      await expect(openDatabase.saveSnapshot()).rejects.toContain('an open transaction exists');
+    env.select('MultipartRestore');
+    const databaseBytes = new Uint8Array([4, 5, 6]);
+    const encoded = env.multipart.encodeMultipart([
+      {
+        name: 'state',
+        contentType: 'application/json',
+        body: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 17 },
+            fileDatabases: {},
+          }),
+        ),
+      },
+      {
+        name: 'db:database',
+        contentType: 'application/x-sqlite3',
+        body: databaseBytes,
+      },
+    ]);
 
-      (globalThis as { currentAgentId?: string }).currentAgentId =
-        `MultipartRestore(${JSON.stringify(schemaValueToWit(idValue))})`;
-      const databaseBytes = new Uint8Array([4, 5, 6]);
-      const encoded = encodeMultipart([
-        {
-          name: 'state',
-          contentType: 'application/json',
-          body: new TextEncoder().encode(
-            JSON.stringify({
-              version: 1,
-              principal: { tag: 'anonymous' },
-              state: { count: 17 },
-              fileDatabases: {},
-            }),
-          ),
-        },
-        {
-          name: 'db:database',
-          contentType: 'application/x-sqlite3',
-          body: databaseBytes,
-        },
-      ]);
+    await env.isolatedGuest.loadSnapshot.load({
+      payload: encoded.data,
+      mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
+    });
+    expect(initializeCalls).toBe(0);
+    expect(env.restoreDatabaseSync).toHaveBeenCalledTimes(1);
+    expect(env.restoreDatabaseSync.mock.calls[0][1]).toEqual(databaseBytes);
+    expect(env.warmed).toEqual([':memory:: SELECT count(*) FROM sqlite_master']);
 
-      await isolatedGuest.loadSnapshot.load({
-        payload: encoded.data,
-        mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
-      });
-      expect(initializeCalls).toBe(0);
-      expect(restoreDatabaseSync).toHaveBeenCalledTimes(1);
-      expect(restoreDatabaseSync.mock.calls[0][1]).toEqual(databaseBytes);
-      expect(prepare).toHaveBeenCalledWith('SELECT count(*) FROM sqlite_master');
-      expect(warmDatabase).toHaveBeenCalledTimes(1);
-
-      const saved = await isolatedGuest.saveSnapshot.save();
-      const boundary = saved.mimeType.match(/boundary=([^\s;]+)/)?.[1];
-      expect(boundary).toBeDefined();
-      const parts = decodeMultipart(saved.payload, boundary!);
-      const statePart = parts.find((part) => part.name === 'state');
-      const databasePart = parts.find((part) => part.name === 'db:database');
-      expect(JSON.parse(new TextDecoder().decode(statePart!.body)).state).toEqual({ count: 17 });
-      expect(databasePart!.body).toEqual(databaseBytes);
-    } finally {
-      vi.doUnmock('../src/internal/sqlite');
-      vi.resetModules();
-    }
+    const saved = await env.isolatedGuest.saveSnapshot.save();
+    const parts = env.multipart.decodeMultipart(saved.payload, env.boundaryOf(saved.mimeType));
+    const statePart = parts.find((part) => part.name === 'state');
+    const databasePart = parts.find((part) => part.name === 'db:database');
+    expect(JSON.parse(new TextDecoder().decode(statePart!.body)).state).toEqual({ count: 17 });
+    expect(databasePart!.body).toEqual(databaseBytes);
   });
 });
 
@@ -647,108 +702,7 @@ describe('snapshot — restore plan', () => {
 });
 
 describe('snapshot — in-memory and file-backed databases', () => {
-  type Constructed = { path: string; options: unknown };
-
-  async function isolate() {
-    vi.resetModules();
-    const constructed: Constructed[] = [];
-    const warmed: string[] = [];
-    class FakeDatabaseSync {
-      bytes = new Uint8Array();
-      inTransaction = false;
-      isOpen = true;
-      constructor(
-        readonly path: string,
-        options?: unknown,
-      ) {
-        constructed.push({ path, options });
-      }
-      location() {
-        return this.path === ':memory:' || this.path === '' ? null : this.path;
-      }
-      prepare(sql: string) {
-        return {
-          get: () => {
-            warmed.push(`${this.path}: ${sql}`);
-          },
-        };
-      }
-    }
-    class FakeStatementSync {}
-    class FakeSession {}
-    class FakeSqlTagStore {}
-    const serializeDatabaseSync = vi.fn((db: FakeDatabaseSync) => db.bytes.slice());
-    const restoreDatabaseSync = vi.fn((db: FakeDatabaseSync, bytes: Uint8Array) => {
-      db.bytes = bytes.slice();
-    });
-    vi.doMock('../src/internal/sqlite', () => ({
-      DatabaseSync: FakeDatabaseSync,
-      StatementSync: FakeStatementSync,
-      Session: FakeSession,
-      SQLTagStore: FakeSqlTagStore,
-      serializeDatabaseSync,
-      restoreDatabaseSync,
-      isAutocommitDatabaseSync: (db: FakeDatabaseSync) => !db.inTransaction,
-    }));
-    const existingFiles = new Set(['/data/app.db', '/data/other.db']);
-    const existsSync = vi.fn((path: string) => existingFiles.has(path));
-    vi.doMock('node:fs', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('node:fs')>()),
-      existsSync,
-    }));
-    const [
-      { defineAgent: isolatedDefineAgent },
-      isolatedGuest,
-      multipart,
-      { AgentInitiatorRegistry: isolatedInitiators },
-      { REOPENED_DATABASE_OPTIONS },
-    ] = await Promise.all([
-      import('../src/defineAgent'),
-      import('../src'),
-      import('../src/internal/multipart'),
-      import('../src/internal/registry/agentInitiatorRegistry'),
-      import('../src/internal/databaseSnapshot'),
-    ]);
-    const idValue = v.record([v.string('database')]);
-    const select = (name: string) => {
-      (globalThis as { currentAgentId?: string }).currentAgentId =
-        `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
-    };
-    const initiateIsolated = async (name: string) => {
-      select(name);
-      const result = await isolatedInitiators
-        .lookup(name)!
-        .initiate(idValue as never, { tag: 'anonymous' });
-      if (result.tag === 'err') throw result.val;
-      return result.val as unknown as {
-        saveSnapshot(): Promise<SavedAgentSnapshot>;
-      };
-    };
-    const boundaryOf = (mimeType: string) => mimeType.match(/boundary=([^\s;]+)/)![1];
-    return {
-      FakeDatabaseSync,
-      FakeStatementSync,
-      existingFiles,
-      existsSync,
-      constructed,
-      warmed,
-      serializeDatabaseSync,
-      restoreDatabaseSync,
-      isolatedDefineAgent,
-      isolatedGuest,
-      multipart,
-      REOPENED_DATABASE_OPTIONS,
-      select,
-      initiateIsolated,
-      boundaryOf,
-    };
-  }
-
-  afterEach(() => {
-    vi.doUnmock('../src/internal/sqlite');
-    vi.doUnmock('node:fs');
-    vi.resetModules();
-  });
+  afterEach(unmockSqlite);
 
   it('serializes an in-memory database as a db part and records a file-backed database by its location', async () => {
     const env = await isolate();
