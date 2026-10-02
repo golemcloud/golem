@@ -1,7 +1,7 @@
 /** @since 1.6.0 */
 import { Context, Effect, Schema, Scope, Stream } from "effect"
-import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
-import type * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
+import type * as HttpServerRequest from "effect/http/HttpServerRequest"
+import type * as HttpServerResponse from "effect/http/HttpServerResponse"
 import {
   compileFileMappings,
   compileRouterMount,

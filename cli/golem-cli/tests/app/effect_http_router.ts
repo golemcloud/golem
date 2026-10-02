@@ -1,7 +1,6 @@
 import { Effect, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect";
-import { Etag, HttpPlatform, HttpRouter as Routes, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import * as HttpEffect from "effect/unstable/http/HttpEffect";
-import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
+import { Etag, HttpEffect, HttpPlatform, HttpRouter as Routes, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api";
 import { defineAgent, method, Http, HttpRouter as RootHttpRouter } from "@golemcloud/effect-golem";
 import * as HttpRouter from "@golemcloud/effect-golem/HttpRouter";
 

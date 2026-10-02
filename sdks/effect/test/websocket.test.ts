@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Fiber } from "effect"
-import { Socket } from "effect/unstable/socket"
+import { Socket } from "effect/socket"
 import * as Websocket from "../src/Websocket.js"
 import * as WsFake from "./host/WsFake.js"
 import * as WsMock from "./mocks/golem-websocket-client.js"
