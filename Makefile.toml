@@ -1176,6 +1176,7 @@ dependencies = [
     "set-version",
     "publish-golem-schema-derive",
     "publish-golem-schema",
+    "publish-golem-tool-metadata",
 ]
 
 [tasks.publish-golem-schema-derive]
@@ -1187,6 +1188,11 @@ args = ["publish", "-p", "golem-schema-derive", "--allow-dirty"]
 description = "Publishes golem-schema package to crates.io"
 command = "cargo"
 args = ["publish", "-p", "golem-schema", "--allow-dirty"]
+
+[tasks.publish-golem-tool-metadata]
+description = "Publishes golem-tool-metadata package to crates.io"
+command = "cargo"
+args = ["publish", "-p", "golem-tool-metadata", "--allow-dirty"]
 
 [tasks.set-version]
 description = "Sets the version in all Cargo.toml files to the value of the VERSION environment variable"
