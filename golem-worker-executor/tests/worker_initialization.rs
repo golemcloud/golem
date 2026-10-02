@@ -981,6 +981,369 @@ async fn completion_receipt_precedes_fifo_status_fold(
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
+async fn pending_failure_waits_for_completion_projection_without_blocking_success(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::{AgentInvocationOutput, regions::OplogRegion};
+    use golem_worker_executor::services::HasEvents;
+    use golem_worker_executor::services::events::Event;
+    use golem_worker_executor::services::oplog::CommitLevel;
+
+    let (executor, worker, faults) = setup(last_unique_id, deps, component).await?;
+    let key = IdempotencyKey::new("completion-during-stop".into());
+    let context = InvocationContextStack::fresh();
+    worker
+        .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: key.clone(),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "increment".into(),
+                input: data_value!().value().clone(),
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            invocation_context: context.to_oplog_data(),
+            trace_id: context.trace_id,
+            trace_states: context.trace_states,
+            wallet_pin: Box::new(InvocationWalletPin {
+                wallet_token: WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 0,
+                },
+                pinned_card_ids: Vec::new(),
+                scope_card_id: None,
+            }),
+        })
+        .await?;
+    let discarded = worker
+        .add_and_commit_oplog(OplogEntry::grow_memory(37))
+        .await?;
+    worker
+        .add_to_oplog(OplogEntry::jump(
+            None,
+            OplogRegion {
+                start: discarded,
+                end: discarded.next(),
+            },
+        ))
+        .await?;
+    let result = AgentInvocationResult::AgentMethod {
+        output: data_value!(7u32).value().clone(),
+    };
+    let finished = worker
+        .add_to_oplog(OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            result: OplogPayload::Inline(Box::new(result.clone())),
+            method_name: Some("increment".into()),
+            consumed_fuel: 0,
+            component_revision: worker
+                .get_initial_worker_metadata()
+                .last_known_status
+                .component_revision,
+        })
+        .await?;
+    // Reconstruction's checkpoint read is before publication, unlike the recovery-index gate.
+    let fold = faults.pause_next("read_cached_status");
+    let receipt = tokio::spawn({
+        let worker = worker.clone();
+        async move {
+            worker
+                .commit_oplog_before_status_update(CommitLevel::Always)
+                .await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(20), fold.entered()).await?;
+    tokio::time::timeout(Duration::from_secs(1), receipt).await???;
+    let mut events = worker.events().subscribe();
+    let mut cleanup = Box::pin(worker.test_fail_pending_invocations());
+    assert!(poll!(cleanup.as_mut()).is_pending());
+    // No hydrated success existed when cleanup began. Publishing it must not await the fold.
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        worker.store_invocation_success(
+            &key,
+            AgentInvocationOutput {
+                result: result.clone(),
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: Some(finished),
+                agent_fingerprint: None,
+            },
+        ),
+    )
+    .await?;
+    fold.release();
+    tokio::time::timeout(Duration::from_secs(20), cleanup).await?;
+    let completion = |event: &Event| match event {
+        Event::InvocationCompleted {
+            idempotency_key,
+            result,
+            ..
+        } if idempotency_key == &key => Some(result.as_ref().clone()),
+        _ => None,
+    };
+    let observed =
+        tokio::time::timeout(Duration::from_secs(1), events.wait_for(&completion)).await???;
+    assert_eq!(observed.result, result);
+    assert!(matches!(
+        worker.lookup_invocation_result(&key).await,
+        LookupResult::Complete(Ok(_))
+    ));
+
+    // A late stop continuation after deletion must not await stopped actors or publish a failure.
+    executor.delete_worker(&worker.agent_id()).await?;
+    tokio::time::timeout(
+        Duration::from_secs(1),
+        worker.test_fail_pending_invocations(),
+    )
+    .await?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), events.wait_for(&completion))
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn jump_projection_finishes_without_its_producer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::regions::OplogRegion;
+    use golem_worker_executor::services::oplog::CommitLevel;
+
+    let (_executor, worker, faults) = setup(last_unique_id, deps, component).await?;
+    let metadata = worker.get_initial_worker_metadata();
+    let owned = OwnedAgentId::new(metadata.environment_id, &metadata.agent_id);
+    let initial = worker.get_last_known_status().await;
+    let direct = worker.add_to_oplog(OplogEntry::grow_memory(7)).await?;
+    // Consume a durable commit receipt outside the status actor. Its precommit sample must
+    // recover the missing suffix even when the subsequent actor commit returns no entries.
+    worker.oplog().commit(CommitLevel::Always).await?;
+    worker
+        .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+        .await?;
+    let caught_up = worker.get_last_known_status().await;
+    assert_eq!(caught_up.oplog_idx, direct);
+    assert_eq!(
+        caught_up.total_linear_memory_size,
+        initial.total_linear_memory_size + 7
+    );
+    for cancel_full_waiter in [false, true] {
+        let before = worker.get_last_known_status().await;
+        let discarded = worker
+            .add_and_commit_oplog(OplogEntry::grow_memory(11))
+            .await?;
+        worker.add_to_oplog(OplogEntry::grow_memory(23)).await?;
+        let jump_index = worker.oplog().current_oplog_index().await.next();
+        worker
+            .add_to_oplog(OplogEntry::jump(
+                None,
+                OplogRegion {
+                    start: discarded,
+                    end: jump_index,
+                },
+            ))
+            .await?;
+        // The checkpoint lookup is inside actor-owned reconstruction, after the commit receipt.
+        let repair = faults.pause_next("read_cached_status");
+        let producer = tokio::spawn({
+            let worker = worker.clone();
+            async move {
+                if cancel_full_waiter {
+                    worker
+                        .commit_oplog_and_update_state(CommitLevel::Always)
+                        .await
+                        .map(|_| ())
+                } else {
+                    worker
+                        .commit_oplog_before_status_update(CommitLevel::Always)
+                        .await
+                }
+            }
+        });
+        tokio::time::timeout(Duration::from_secs(20), repair.entered()).await?;
+        if cancel_full_waiter {
+            assert!(!producer.is_finished());
+            producer.abort();
+            assert!(producer.await.unwrap_err().is_cancelled());
+        } else {
+            tokio::time::timeout(Duration::from_secs(1), producer).await???;
+        }
+        let sentinel = worker.add_to_oplog(OplogEntry::grow_memory(101)).await?;
+        let status = tokio::spawn({
+            let worker = worker.clone();
+            async move { worker.get_last_known_status().await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!status.is_finished(), "status read bypassed reconstruction");
+        repair.release();
+        let status = tokio::time::timeout(Duration::from_secs(20), status).await??;
+        assert_eq!(status.oplog_idx, jump_index);
+        assert_eq!(
+            status.total_linear_memory_size,
+            before.total_linear_memory_size
+        );
+        assert!(status.skipped_regions.is_in_deleted_region(discarded));
+        // A second authoritative read neither commits the sentinel nor redoes reconstruction.
+        let checkpoint_reads = faults.calls("read_cached_status");
+        assert_eq!(*worker.get_last_known_status().await, *status);
+        assert_eq!(faults.calls("read_cached_status"), checkpoint_reads);
+        assert_eq!(
+            worker
+                .oplog_service()
+                .get_last_index(&owned, AgentMode::Durable)
+                .await,
+            jump_index
+        );
+        worker
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
+        let status = worker.get_last_known_status().await;
+        assert_eq!(status.oplog_idx, sentinel);
+        assert_eq!(
+            status.total_linear_memory_size,
+            before.total_linear_memory_size + 101
+        );
+        assert_eq!(
+            worker
+                .oplog_service()
+                .get_last_index(&owned, AgentMode::Durable)
+                .await,
+            sentinel
+        );
+    }
+    let before = worker.get_last_known_status().await;
+    let first = worker
+        .add_and_commit_oplog(OplogEntry::grow_memory(13))
+        .await?;
+    let second = worker
+        .add_and_commit_oplog(OplogEntry::grow_memory(17))
+        .await?;
+    let regions = vec![
+        OplogRegion {
+            start: first,
+            end: first,
+        },
+        OplogRegion {
+            start: second,
+            end: second,
+        },
+    ];
+    let error = golem_worker_executor::durable_host::test_commit_jumps_with_failed_registration(
+        worker.as_ref(),
+        regions,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("test registration failure"));
+    // Both Jumps were accepted even though replay registration failed.
+    let status = worker.get_last_known_status().await;
+    assert_eq!(status.oplog_idx, second.next().next());
+    assert_eq!(
+        status.total_linear_memory_size,
+        before.total_linear_memory_size
+    );
+    assert!(status.skipped_regions.is_in_deleted_region(first));
+    assert!(status.skipped_regions.is_in_deleted_region(second));
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn failure_handler_status_read_follows_concurrent_jump(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::regions::OplogRegion;
+    use golem_worker_executor::services::oplog::CommitLevel;
+
+    let context = TestContext::new(last_unique_id);
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| config.retry.max_attempts = 0)),
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let name = agent_id!("FailingCounter", "failure-status-jump");
+    let id = executor.start_agent(&component.id, name.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &name, "add", data_value!(5u64))
+        .await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let worker = executor.active_agent(&owned).await.unwrap().primary();
+    assert_eq!(
+        worker.get_last_known_status().await.status,
+        golem_common::model::AgentStatus::Idle
+    );
+    // Failure untracks the worker after the handler's first status read and Error commit.
+    let failure_fold = faults.pause_next("remove");
+    let (invocation, coordination) = tokio::join!(
+        executor.invoke_and_await_agent(&component, &name, "add", data_value!(50u64)),
+        async {
+            tokio::time::timeout(Duration::from_secs(20), failure_fold.entered()).await?;
+            let error_index = worker.oplog().current_oplog_index().await;
+            assert!(matches!(
+                worker.oplog().read(error_index).await,
+                OplogEntry::Error { .. }
+            ));
+            let jump_index = worker
+                .add_to_oplog(OplogEntry::jump(
+                    None,
+                    OplogRegion {
+                        start: error_index,
+                        end: error_index.next(),
+                    },
+                ))
+                .await?;
+            // Polling enqueues this commit while the failure handler is still waiting on its
+            // prior commit. Thus the Jump is ahead of the handler's second FIFO status read.
+            let mut jump = Box::pin(worker.commit_oplog_and_update_state(CommitLevel::Always));
+            assert!(poll!(jump.as_mut()).is_pending());
+            failure_fold.release();
+            jump.await?;
+            let status = worker.get_last_known_status().await;
+            assert_eq!(status.oplog_idx, jump_index);
+            assert!(status.skipped_regions.is_in_deleted_region(error_index));
+            Ok::<_, anyhow::Error>(())
+        }
+    );
+    coordination?;
+    let error = invocation.unwrap_err().to_string();
+    assert!(error.contains("value is too large"), "{error}");
+    assert!(!error.contains("detached"), "{error}");
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
 async fn reciprocal_cold_topologies_recover_without_initialization_cycle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

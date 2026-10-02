@@ -1293,7 +1293,7 @@ where
         )
     });
     let current_retry_policy_state = worker
-        .get_attached_last_known_status()
+        .get_last_known_status()
         .await
         .current_retry_state
         .get(&retry_point)

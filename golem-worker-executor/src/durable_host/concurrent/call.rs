@@ -2644,8 +2644,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 prepared
                     .public_state
                     .worker()
-                    .reattach_worker_status()
-                    .await;
+                    .commit_oplog_and_update_state(CommitLevel::Always)
+                    .await
+                    .map_err(|error| {
+                        (
+                            WorkerExecutorError::from(error),
+                            AccessStartCleanup {
+                                atomic_lease: prepared.atomic_lease.clone(),
+                            },
+                        )
+                    })?;
                 return Ok(AccessOpenedScope {
                     begin_index,
                     replay_handle: None,
@@ -2740,6 +2748,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             start: begin_index.next(),
                             end: pending.replay_target().next(),
                         };
+                        if let Some(hook) = store
+                            .with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+                        {
+                            hook.before_replay_access_start(
+                                Pair::FQFN,
+                                ReplayAdmissionStage::BeforeBatchedJump,
+                            )
+                            .await;
+                        }
                         commit_replay_jumps(
                             &prepared.public_state.worker(),
                             &prepared.replay_state,
@@ -2755,6 +2772,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                                 },
                             )
                         })?;
+                        if let Some(hook) = store
+                            .with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
+                        {
+                            hook.before_replay_access_start(
+                                Pair::FQFN,
+                                ReplayAdmissionStage::AfterBatchedJump,
+                            )
+                            .await;
+                        }
                         finish_prepared_access_to_live(
                             pending,
                             prepared.primary_runtime,
@@ -3367,7 +3393,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         });
 
         let current_retry_policy_state = worker
-            .get_attached_last_known_status()
+            .get_last_known_status()
             .await
             .current_retry_state
             .get(&retry_point)
@@ -3490,7 +3516,16 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         E: DurableCallTrapError,
         A: AsyncFnOnce() -> Result<Pair::Resp, E>,
     {
+        let hook = store.with(|mut access| get_ctx(access.data_mut()).replay_admission_hook());
+        if let Some(hook) = &hook {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::BeforeDeferredStart)
+                .await;
+        }
         let call = Self::start_access(store, get_ctx, request, function_type).await?;
+        if let Some(hook) = &hook {
+            hook.before_replay_access_start(Pair::FQFN, ReplayAdmissionStage::AfterDeferredStart)
+                .await;
+        }
         debug_assert!(
             call.retry.can_reexecute_on_incomplete_replay(),
             "DurableCallSession::invoke_access_deferred is only valid for re-executable calls"

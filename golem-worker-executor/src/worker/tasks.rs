@@ -45,6 +45,10 @@ struct ActorOwners {
 }
 
 impl WorkerTasks {
+    pub(crate) fn actors_stopping(&self) -> bool {
+        self.0.actors.lock().unwrap().closed
+    }
+
     pub(crate) fn register_actor(&self, actor: &Arc<WorkerStateActorStop>) {
         let mut actors = self.0.actors.lock().unwrap();
         assert!(

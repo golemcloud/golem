@@ -36,6 +36,8 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
+mod transition_probe;
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);

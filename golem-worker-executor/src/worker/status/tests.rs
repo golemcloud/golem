@@ -18,11 +18,13 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::status::{
-    calculate_last_known_status, calculate_last_known_status_for_existing_worker,
+    StatusOplogReader, calculate_last_known_status,
+    calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
     calculate_oplog_processor_checkpoints, calculate_revert_validation_regions,
-    calculate_total_linear_memory_size, fold_invocation_result_entries,
-    hydrate_initial_pending_evidence, try_fold_status_from,
+    calculate_status_with_reader, calculate_total_linear_memory_size, fold_committed_status,
+    fold_invocation_result_entries, hydrate_initial_pending_evidence, try_fold_status_from,
+    try_fold_status_from_reader,
 };
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
@@ -122,15 +124,16 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
             },
         )]);
         test_case.read_starts.lock().unwrap().clear();
-        hydrate_initial_pending_evidence(
+        let reader = StatusOplogReader::new(
             &test_case,
             &test_case.owned_agent_id,
             AgentMode::Durable,
-            &mut baseline,
-            &entries,
-        )
-        .await
-        .unwrap();
+            None,
+            OplogIndex::from_u64(13),
+        );
+        hydrate_initial_pending_evidence(&reader, &mut baseline, &entries)
+            .await
+            .unwrap();
         assert!(test_case.read_starts.lock().unwrap().is_empty());
         assert!(
             baseline
@@ -2939,7 +2942,9 @@ async fn non_existing_oplog() {
 /// Builds an oplog where a clean idle boundary (idx 3) precedes an invocation that later jumps,
 /// deleting the region [4, 7]. Returns the test case plus the clean-checkpoint baseline (idx 3),
 /// a stale live baseline inside the deleted region (idx 6), and the expected final status.
-fn jump_repair_fixture() -> (
+fn jump_repair_fixture(
+    agent_mode: AgentMode,
+) -> (
     TestCase,
     AgentStatusRecord,
     AgentStatusRecord,
@@ -2949,6 +2954,7 @@ fn jump_repair_fixture() -> (
     let k2 = IdempotencyKey::fresh();
 
     let test_case = TestCase::builder(0)
+        .agent_mode(agent_mode)
         .agent_invocation_started("a", vec![], k1.clone()) // idx 2
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
@@ -2974,8 +2980,170 @@ fn jump_repair_fixture() -> (
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn bounded_reconstruction_reads_handoff_without_flushing_newer_buffer() {
+    use crate::services::oplog::{CommitLevel, OplogArchive, gated_ephemeral_fixture};
+
+    let (test_case, checkpoint, stale_live, expected) = jump_repair_fixture(AgentMode::Ephemeral);
+    let fixture = gated_ephemeral_fixture(100).await;
+    for entry in &test_case.entries {
+        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
+    }
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    let horizon = *receipt.last_key_value().unwrap().0;
+    fixture.archive.wait_for_appends(1).await;
+    let sentinel = fixture
+        .oplog
+        .add(OplogEntry::grow_memory(9876))
+        .await
+        .unwrap();
+
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Ephemeral,
+        Some(fixture.oplog.as_ref()),
+        horizon,
+    );
+    // Exercise both checkpoint fallback and full reconstruction with the writer blocked.
+    for candidate in [Some(checkpoint), None] {
+        let result =
+            calculate_status_with_reader(&test_case, &reader, Some(stale_live.clone()), || async {
+                candidate
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(result.oplog_idx, horizon);
+    }
+    assert!(test_case.read_starts.lock().unwrap().is_empty());
+    assert_eq!(fixture.archive.length().await.unwrap(), 0);
+    // The actor's fold must not mistake a DurableOnly precommit tip for acknowledged coverage.
+    let sampled = fixture.oplog.current_oplog_index().await;
+    let receipt = fixture
+        .oplog
+        .commit(CommitLevel::DurableOnly)
+        .await
+        .unwrap();
+    let (result, gap, projected_through) = fold_committed_status(
+        &test_case,
+        &test_case.owned_agent_id,
+        fixture.oplog.as_ref(),
+        AgentMode::Ephemeral,
+        CommitLevel::DurableOnly,
+        sampled,
+        expected.clone(),
+        receipt,
+    )
+    .await;
+    assert_eq!(projected_through, horizon);
+    assert_eq!(result.unwrap(), Some(expected));
+    assert!(!gap);
+    fixture.archive.release(2);
+    let remaining = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        remaining.keys().copied().collect::<Vec<_>>(),
+        vec![sentinel]
+    );
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn bounded_fold_covers_receipt_gap_and_unpersisted_tail() {
+    use crate::services::oplog::{CommitLevel, OplogArchive, gated_ephemeral_fixture};
+
+    let mut builder = TestCase::builder(0).agent_mode(AgentMode::Ephemeral);
+    for delta in 1..80 {
+        builder = builder.grow_memory(delta);
+    }
+    let test_case = builder.build();
+    let fixture = gated_ephemeral_fixture(1).await;
+    // Forty threshold batches overflow the receipt cache. The last two remain unpersisted.
+    fixture.archive.release(38);
+    for entry in &test_case.entries {
+        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
+    }
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    assert!(!receipt.contains_key(&OplogIndex::from_u64(3)));
+    let horizon = *receipt.last_key_value().unwrap().0;
+    assert_eq!(horizon, OplogIndex::from_u64(80));
+    fixture.archive.wait_for_appends(39).await;
+    let sentinel = fixture
+        .oplog
+        .add(OplogEntry::grow_memory(9876))
+        .await
+        .unwrap();
+    // The receipt proves coverage beyond the sampled tip; an empty consumed receipt uses
+    // the precommit sample instead. Both paths must stop before the buffered sentinel.
+    for (sampled, receipt) in [
+        (OplogIndex::from_u64(78), receipt),
+        (horizon, BTreeMap::new()),
+    ] {
+        let (result, gap, projected_through) = fold_committed_status(
+            &test_case,
+            &test_case.owned_agent_id,
+            fixture.oplog.as_ref(),
+            AgentMode::Ephemeral,
+            CommitLevel::Deferred,
+            sampled,
+            test_case.entries[0].expected_status.clone(),
+            receipt,
+        )
+        .await;
+        assert_eq!(projected_through, horizon);
+        let result = result.unwrap().unwrap();
+        assert!(gap);
+        assert_eq!(result, test_case.entries[79].expected_status);
+        assert_eq!(result.total_linear_memory_size, 200 + (79 * 80 / 2));
+    }
+    assert_eq!(fixture.archive.length().await.unwrap(), 76);
+    assert!(test_case.read_starts.lock().unwrap().is_empty());
+    fixture.archive.release(3);
+    let remaining = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        remaining.keys().copied().collect::<Vec<_>>(),
+        vec![sentinel]
+    );
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+#[test]
+async fn bounded_fold_excludes_later_jump_and_rejects_ahead_baseline() {
+    let (test_case, checkpoint, stale_live, _) = jump_repair_fixture(AgentMode::Durable);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(6),
+    );
+    let result = try_fold_status_from_reader(&test_case, &reader, checkpoint)
+        .await
+        .unwrap();
+    assert_eq!(result, Some(stale_live.clone()));
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(5),
+    );
+    assert!(
+        try_fold_status_from_reader(&test_case, &reader, stale_live)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
-    let (test_case, checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     // The stale live baseline is inside the deleted region, so it cannot be folded forward.
     let direct = try_fold_status_from(
@@ -3015,7 +3183,8 @@ async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
 
 #[test]
 async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
-    let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     test_case.read_starts.lock().unwrap().clear();
 
@@ -3040,7 +3209,8 @@ async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
 
 #[test]
 async fn full_recompute_reads_each_oplog_chunk_twice() {
-    let (test_case, _checkpoint, _stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, _stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     let result = calculate_last_known_status(
         &test_case,
@@ -3060,7 +3230,8 @@ async fn full_recompute_reads_each_oplog_chunk_twice() {
 
 #[test]
 async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable() {
-    let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     // A checkpoint that itself falls inside the deleted region (idx 5) cannot be folded forward
     // either, so we must fall back to a full recompute.
@@ -3137,6 +3308,17 @@ impl TestCaseBuilder {
             previous_status_record: status,
             owned_agent_id,
         }
+    }
+
+    fn agent_mode(mut self, agent_mode: AgentMode) -> Self {
+        assert_eq!(self.entries.len(), 1);
+        let OplogEntry::Create { parameters, .. } = &mut self.entries[0].oplog_entry else {
+            unreachable!()
+        };
+        parameters.agent_mode = agent_mode;
+        self.entries[0].expected_status.agent_mode = agent_mode;
+        self.previous_status_record.agent_mode = agent_mode;
+        self
     }
 
     pub fn add(

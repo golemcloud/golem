@@ -984,7 +984,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
                                         let current_idempotency_key = self
                                             .parent
-                                            .get_non_detached_last_known_status()
+                                            .get_last_known_status()
                                             .await
                                             .current_idempotency_key
                                             .clone();
@@ -1135,7 +1135,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
             let current_idempotency_key = self
                 .parent
-                .get_non_detached_last_known_status()
+                .get_last_known_status()
                 .await
                 .current_idempotency_key
                 .clone();
@@ -1952,7 +1952,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             return true;
         }
 
-        let status = self.parent.get_non_detached_last_known_status().await;
+        let status = self.parent.get_last_known_status().await;
         !status.pending_updates.is_empty()
             || !status.pending_invocations.is_empty()
             || !matches!(
@@ -1974,7 +1974,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// Filesystem commands alternate with pending work at invocation boundaries after
     /// initialization. Selecting a durable reference does not consume it.
     async fn select_next_work(&mut self) -> SelectedWork {
-        let status = self.parent.get_non_detached_last_known_status().await;
+        let status = self.parent.get_last_known_status().await;
         let mut queue = self.active.write().await;
         queue.retain(|invocation| !invocation.is_abandoned());
         if let Err(error) = Worker::<Ctx>::ensure_not_failed(
@@ -2216,7 +2216,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 // agents get a chance to run. The worker will self-wake
                 // and re-acquire its permit through the FIFO queue if
                 // more durable work remains.
-                let status = self.parent.get_non_detached_last_known_status().await;
+                let status = self.parent.get_last_known_status().await;
                 if !status.pending_invocations.is_empty() {
                     // More durable work remains — self-wake so we return
                     // to the outer loop, release the permit (entering
@@ -2259,7 +2259,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 }
             }
             SnapshotPolicy::Periodic { .. } => {
-                let status = self.parent.get_non_detached_last_known_status().await;
+                let status = self.parent.get_last_known_status().await;
                 if matches!(
                     self.periodic_snapshot_action(&status),
                     PeriodicSnapshotAction::DueNow

@@ -1091,14 +1091,10 @@ struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsumerJournal<Ctx> {
     #[tracing::instrument(name = "durable_stream.consumer.commit", level = "debug", skip_all)]
     async fn commit(&self) -> Result<(), SessionError> {
-        let (_, changed) = self
-            .state_actor
+        self.state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
             .map_err(SessionError::Fenced)?;
-        if changed {
-            self.state_actor.notify_status_changed();
-        }
         Ok(())
     }
 
@@ -1588,7 +1584,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
             if let Some(pending) = pending {
                 pending.establishment.wait().await;
-                let status = self.get_attached_last_known_status().await;
+                let status = self.get_last_known_status().await;
                 if matches!(
                     status.status,
                     AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Suspended
@@ -1973,7 +1969,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         let _retired_lifecycle =
             if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-                if let Some(status) = worker.state_actor.observe_attached_status().await? {
+                if let Some(status) = worker.state_actor.observe_status().await? {
                     let mut metadata = worker.get_initial_worker_metadata();
                     metadata.last_known_status = status.as_ref().clone();
                     return Ok(Some(metadata));
@@ -2574,7 +2570,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     },
                 )
                 .await?;
-            let status = worker.state_actor.attached_status().await;
+            let status = worker.state_actor.status().await;
             // Returned rather than ignored: an agent created at an epoch another executor has
             // already claimed is refused here with `OplogFenced`, which its caller retries on the
             // shard's owner. Nothing is lost by returning early, since the next load repeats this
@@ -2907,7 +2903,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         return Err(error);
                     }
                 };
-                let status = this.state_actor.attached_status().await;
+                let status = this.state_actor.status().await;
                 if this.agent_mode() == AgentMode::Durable
                     && status.status == AgentStatus::Interrupted
                     && status.current_idempotency_key.is_some()
@@ -3673,11 +3669,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // The success marker is skipped for a retiring owner: for a lost shard its oplog belongs
         // to the new owner, which clears the recovery error itself when it starts the agent.
         if result.is_ok()
-            && self
-                .get_non_detached_last_known_status()
-                .await
-                .last_error_kind
-                == Some(OplogErrorKind::Recovery)
+            && self.get_last_known_status().await.last_error_kind == Some(OplogErrorKind::Recovery)
         {
             // Refused, the start is not a success: the caller stops it.
             result = self
@@ -3718,7 +3710,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         }
 
-        let latest_status = self.get_non_detached_last_known_status().await;
+        let latest_status = self.get_last_known_status().await;
         let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
             Ctx::get_last_error_and_retry_count(
                 self.all(),
@@ -3759,7 +3751,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn get_latest_worker_metadata(&self) -> AgentMetadata {
-        let updated_status = self.state_actor.attached_status().await.as_ref().clone();
+        let updated_status = self.state_actor.status().await.as_ref().clone();
         let result = self.get_initial_worker_metadata();
         AgentMetadata {
             last_known_status: updated_status,
@@ -3767,33 +3759,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// Returns the published status as an `Arc` rather than a copy: the record is large and its
-    /// `invocation_results` grows with the invocations the agent has served, and every caller
-    /// here only reads a field or two out of it.
+    /// Returns the authoritative projection after preceding actor transactions complete, without
+    /// committing buffered entries. The immutable `Arc` avoids copying the large result index.
     pub async fn get_last_known_status(&self) -> Arc<AgentStatusRecord> {
-        self.state_actor.attached_status().await
-    }
-
-    // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
-    // This just has an additional assert built in for when decisions need to be sure that they are fully up to date on the oplog.
-    // _NEVER_ call this from outside the invocation loop, as that is the only place that can reason about whether the status is detached or not.
-    pub async fn get_non_detached_last_known_status(&self) -> Arc<AgentStatusRecord> {
-        // Runs on the worker-state actor's status queue so the detached flag and the published
-        // status are observed consistently with any in-flight commit/reattach transaction.
-        self.state_actor.non_detached_status().await
-    }
-
-    /// Returns the authoritative status, reattaching it to the oplog first when necessary.
-    /// Unlike [`Self::get_non_detached_last_known_status`], this is safe for independent store
-    /// tasks that can overlap an invocation-loop jump or replay completion.
-    pub async fn get_attached_last_known_status(&self) -> Arc<AgentStatusRecord> {
-        self.state_actor.attached_status().await
+        self.state_actor.status().await
     }
 
     pub(crate) async fn get_export_fork_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
-        self.state_actor.try_attached_status().await
+        self.state_actor.try_status().await
     }
 
     pub(crate) async fn read_export_fork_candidate(
@@ -3830,7 +3805,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.owner_retirement_requested.is_cancelled() || self.oplog.is_retired() {
             return Err(self.retirement_error());
         }
-        let status = self.state_actor.try_attached_status().await?;
+        let status = self.state_actor.try_status().await?;
         if candidate.export.source_fingerprint != self.initial_worker_metadata.fingerprint
             || status
                 .deleted_regions
@@ -4352,7 +4327,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // The resident component snapshot starts at the CREATE revision and is only refreshed by
             // instance startup. Admission can happen while the owner is cold, so resolve against the
             // revision folded from the authoritative oplog status instead.
-            let component_revision = self.state_actor.attached_status().await.component_revision;
+            let component_revision = self.state_actor.status().await.component_revision;
             let component = self
                 .component_service()
                 .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
@@ -4905,7 +4880,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // when this request reaches the queue head.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         if lifecycle::has_duplicate_pending_update(&status, target_revision) {
             return Err(WorkerExecutorError::invalid_request(
                 "The same update is already in progress",
@@ -4961,11 +4936,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
-        self.state_actor
-            .attached_status()
-            .await
-            .pending_invocations
-            .clone()
+        self.state_actor.status().await.pending_invocations.clone()
     }
 
     /// Reserved constructor key, also used to recognize initialization before inspecting files.
@@ -5932,7 +5903,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let admission_index = if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
                 drop(caller_instance_guard.take());
                 loop {
-                    let status = self.state_actor.attached_status().await;
+                    let status = self.state_actor.status().await;
                     if self.lookup_invocation_result(idempotency_key).await != LookupResult::New {
                         return Ok((None, None));
                     }
@@ -6067,7 +6038,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(err.clone());
         }
 
-        let status = self.state_actor.try_attached_status().await?;
+        let status = self.state_actor.try_status().await?;
         Self::ensure_not_failed(&self.deps, &self.owned_agent_id, self.agent_mode(), &status)
             .await?;
 
@@ -6116,7 +6087,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut wallet = receiver.await.unwrap()?;
         let revoked_cards = self
-            .get_attached_last_known_status()
+            .get_last_known_status()
             .await
             .pending_card_events
             .iter()
@@ -6802,7 +6773,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await
                 .map_err(|fence| self.retired_by(fence))?;
-            self.state_actor.notify_status_changed();
         }
         if !retained_acceptance && let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -7266,7 +7236,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &IdempotencyKey,
     ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, WorkerExecutorError> {
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         self.worker_service()
             .lookup_durable_stream_session(
                 &self.owned_agent_id,
@@ -7523,7 +7493,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn recover_finished_durable_streaming_sessions(&self) -> Result<(), WorkerExecutorError> {
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         for (idempotency_key, session) in status.durable_stream_sessions.iter() {
             if session.prepared.is_none() || session.finished.is_some() {
                 continue;
@@ -7610,7 +7580,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Arc::new(move |committed| {
             let state_actor = state_actor.clone();
             Box::pin(async move {
-                let committed = if let Some(committed) = committed {
+                // Refusals reach the producer through the receipt; publication and retirement
+                // remain owned by the actor even if this producer disappears.
+                let _ = if let Some(committed) = committed {
                     state_actor
                         .commit_and_update_state_notifying(
                             CommitLevel::Always,
@@ -7622,11 +7594,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .commit_and_update_state(CommitLevel::Always)
                         .await
                 };
-                // A refusal reaches the producer through the receipt; the actor has started the
-                // retirement.
-                if let Ok((_, true)) = committed {
-                    state_actor.notify_status_changed();
-                }
             })
         })
     }
@@ -7755,7 +7722,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         retry_remote_cancellations: bool,
         session: Option<&StreamSessionKey>,
     ) -> Result<bool, WorkerExecutorError> {
-        if !self.has_durable_stream_history() {
+        let status = self.state_actor.try_status().await?;
+        if !self.durable_stream_producer.has_history() && !status.has_durable_stream_history {
             return Ok(false);
         }
         let cache = self.durable_topology_recovery.clone();
@@ -7764,7 +7732,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let owner = self.owned_agent_id.clone();
         let mode = self.agent_mode();
         let fingerprint = self.initial_worker_metadata.fingerprint;
-        let current = self.last_known_status.load().oplog_idx;
+        let current = status.oplog_idx;
         let session = session.cloned();
         let refresh = tokio::spawn(async move {
             let mut cache = cache.lock().await;
@@ -8467,18 +8435,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         commit_level: CommitLevel,
     ) -> Result<OplogIndex, OplogError> {
         match self.state_actor.commit_and_update_state(commit_level).await {
-            Ok((index, changed)) => {
-                if changed {
-                    // The notification goes through the worker-state actor's lifecycle queue so
-                    // that this method never waits on (or becomes a queued owner of) the worker
-                    // lifecycle lock. This method runs inside durable-call host futures polled by
-                    // wasmtime's store event loop and on store-keeping wasm fibers, neither of
-                    // which may block on locks shared with the other (see the `state_actor` module
-                    // docs).
-                    self.state_actor.notify_status_changed();
-                }
-                Ok(index)
-            }
+            Ok((index, _)) => Ok(index),
             Err(fence) => Err(self.retired_by(fence)),
         }
     }
@@ -8553,7 +8510,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         card_ids: &[CardId],
     ) -> Result<Vec<OplogIndex>, OplogError> {
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         let pending_revocations = status
             .pending_card_events
             .iter()
@@ -8606,7 +8563,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         if let Some(received) = status.received_card_transfers.get(&transfer_id) {
             return match received {
                 golem_common::model::ReceivedCardTransferState::Received {
@@ -8674,10 +8631,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         wakeup: Option<WorkerCommand>,
     ) -> Result<OplogIndex, OplogError> {
         let index = self.add_to_oplog(entry).await?;
-        // The caller already holds the worker lifecycle lock (and sends the wakeup itself below), so
-        // this must not enqueue a `NotifyStatusChanged` lifecycle job: the commit job is safe to
-        // await while holding the worker lifecycle lock precisely because the status task never takes
-        // that lock.
+        // The caller holds the lifecycle lock. The actor only enqueues its notification and never
+        // awaits that lock, so this commit and the caller's specific wakeup below cannot deadlock.
         let (_, changed) = self
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
@@ -8902,7 +8857,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let region_start = last_oplog_index.next();
-        let last_known_status = self.get_attached_last_known_status().await;
+        let last_known_status = self.get_last_known_status().await;
         let dropped_region = OplogRegion {
             start: region_start,
             end: region_end,
@@ -9048,7 +9003,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await?;
             }
             self.durable_stream_commit()(None).await;
-            self.reattach_worker_status().await;
+            self.hydrated_invocation_results.write().await.clear();
             self.current_component.store(Arc::new(restored_component));
             Ok(())
         }
@@ -9278,7 +9233,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // completion fold is published first. The record owns
         // `invocation_results`, which gains an entry per invocation, so deep-copying it to read
         // one key made each lookup cost more than the last.
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         let cached = self
             .hydrated_invocation_results
             .read()
@@ -9796,7 +9751,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queue = self.queue.write().await;
         queue.retain(|invocation| !invocation.is_abandoned());
         if pending_live_invocations == PendingLiveInvocationDisposition::Fail && !queue.is_empty() {
-            let status = self.get_attached_last_known_status().await;
+            let status = self.get_last_known_status().await;
             let error = Self::ensure_not_failed(
                 &self.deps,
                 &self.owned_agent_id,
@@ -9839,7 +9794,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_fail_pending_invocations(&self) {
+        self.fail_pending_invocations(WorkerExecutorError::runtime("test stop failure"))
+            .await;
+    }
+
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
+        // The early completion receipt does not join its fold. Wait before taking locks also
+        // needed by success publication, so cleanup cannot turn that receipt into a fold barrier.
+        let status = self
+            .state_actor
+            .observe_status()
+            .await
+            .unwrap_or_else(|error| panic!("Worker status observation failed: {error}"));
+        assert!(
+            status.is_some() || self.tasks.actors_stopping(),
+            "Worker status actor terminated unexpectedly"
+        );
         // A lost shard's pending invocations are not failed, they move: the shard's new owner
         // runs them. So their waiters are told to retry there, whatever stopped this generation,
         // and no result is cached. A cached failure would outlive the stop: a later lookup would
@@ -9854,14 +9827,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             error
         };
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
-        let mut origins = self.external_invocation_origins.write().await;
 
         // Publishing the provided initialization error to all queued internal operations
         for item in queued_items {
             item.fail(&error);
         }
 
-        let status = self.last_known_status.load_full();
+        // A stop continuation can resume after deletion has already drained and closed actors.
+        // Its resident waiters still need cleanup, but durable outcome publication is finished.
+        let Some(status) = status else {
+            return;
+        };
+        let mut origins = self.external_invocation_origins.write().await;
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
 
         let mut invocation_results = self.hydrated_invocation_results.write().await;
@@ -10328,12 +10305,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 })
             }
         }
-    }
-
-    // TODO: should be private, exposed for the invocation loop for now.
-    pub async fn reattach_worker_status(&self) {
-        self.hydrated_invocation_results.write().await.clear();
-        self.state_actor.reattach_worker_status().await;
     }
 
     async fn start_waiting_worker(
@@ -11166,8 +11137,12 @@ impl RunningWorker {
             });
         };
 
-        // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
-        parent.reattach_worker_status().await;
+        // Drain buffered work from the previous runtime before constructing its replacement.
+        parent
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await
+            .map_err(WorkerExecutorError::from)?;
+        parent.hydrated_invocation_results.write().await.clear();
 
         let worker_metadata = parent.get_latest_worker_metadata().await;
         let worker_metadata = if let Some(pending) =

@@ -129,8 +129,30 @@ pub(crate) async fn commit_replay_jumps<Ctx: WorkerCtx>(
             .await?;
     }
     replay_state.register_replay_jump(deleted_regions).await?;
-    worker.reattach_worker_status().await;
     Ok(())
+}
+
+#[cfg(feature = "test-utils")]
+#[doc(hidden)]
+pub async fn test_commit_jumps_with_failed_registration<Ctx: WorkerCtx>(
+    worker: &Worker<Ctx>,
+    regions: Vec<OplogRegion>,
+) -> Result<(), WorkerExecutorError> {
+    let status = worker.get_last_known_status().await;
+    let replay = ReplayState::new_for_owner(
+        worker.owned_agent_id().clone(),
+        worker.oplog(),
+        status.skipped_regions.clone(),
+        None,
+        tool::operation::OwnerToolOperations::new(),
+    )
+    .await?;
+    replay.fail_completion_delivery(
+        OplogIndex::INITIAL,
+        OplogIndex::INITIAL,
+        "test registration failure",
+    );
+    commit_replay_jumps(worker, &replay, None, regions).await
 }
 
 use self::golem::v1x::GetPromiseResultEntry;
@@ -1694,7 +1716,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(self.agent_wallet_cards_snapshot());
         }
 
-        self.public_state.worker().reattach_worker_status().await;
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
         self.check_post_replay_wallet_liveness().await?;
         self.drain_card_events_at_boundary().await?;
         let pending_revoked_cards = self
@@ -2236,11 +2261,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn pending_card_events_at_boundary(
         &mut self,
     ) -> Result<Vec<PendingCardEventRef>, WorkerExecutorError> {
-        let status = self
-            .public_state
-            .worker()
-            .get_attached_last_known_status()
-            .await;
+        let status = self.public_state.worker().get_last_known_status().await;
         let status_idx = status.oplog_idx;
         let status_pending = status.pending_card_events.clone();
 
@@ -5574,16 +5595,12 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
-        // Special case: jumping is always immediate and may not have a non-detached status.
+        // Jump reconstructs the runtime immediately without charging an application retry.
         if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
             return RetryDecision::Immediate;
         }
 
-        let latest_status_before = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
+        let latest_status_before = self.public_state.worker().get_last_known_status().await;
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
                 &latest_status_before.current_retry_state,
@@ -5698,11 +5715,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             return RetryDecision::None;
         };
 
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
+        let latest_status = self.public_state.worker().get_last_known_status().await;
 
         let giving_up = trap_type.is_invocation_rejection()
             || matches!(

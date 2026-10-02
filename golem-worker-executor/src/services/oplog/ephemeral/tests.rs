@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 use tokio::sync::{Notify, Semaphore};
 
-struct GatedArchive {
+pub(crate) struct GatedArchive {
     entries: Mutex<BTreeMap<OplogIndex, OplogEntry>>,
     append_started: Notify,
     append_permits: Semaphore,
@@ -67,13 +67,13 @@ impl Debug for GatedArchive {
 }
 
 impl GatedArchive {
-    async fn wait_for_appends(&self, count: usize) {
+    pub(crate) async fn wait_for_appends(&self, count: usize) {
         while self.append_calls.load(Ordering::Acquire) < count {
             self.append_started.notified().await;
         }
     }
 
-    fn release(&self, count: usize) {
+    pub(crate) fn release(&self, count: usize) {
         self.append_permits.add_permits(count);
     }
 }
@@ -200,12 +200,12 @@ impl OplogArchiveService for SingletonArchiveService {
     }
 }
 
-struct Fixture {
-    oplog: Arc<EphemeralOplog>,
-    archive: Arc<GatedArchive>,
+pub(crate) struct Fixture {
+    pub(crate) oplog: Arc<EphemeralOplog>,
+    pub(crate) archive: Arc<GatedArchive>,
 }
 
-async fn fixture(threshold: u64) -> Fixture {
+pub(crate) async fn fixture(threshold: u64) -> Fixture {
     let archive = Arc::new(GatedArchive::default());
     let primary: Arc<dyn OplogService> = Arc::new(
         PrimaryOplogService::new(

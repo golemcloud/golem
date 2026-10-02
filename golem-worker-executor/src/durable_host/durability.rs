@@ -2110,11 +2110,7 @@ impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     }
 
     async fn current_retry_state_for(&self, retry_from: OplogIndex) -> Option<RetryPolicyState> {
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_attached_last_known_status()
-            .await;
+        let latest_status = self.public_state.worker().get_last_known_status().await;
         latest_status.current_retry_state.get(&retry_from).cloned()
     }
 
