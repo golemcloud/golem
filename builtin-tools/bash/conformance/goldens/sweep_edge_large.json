@@ -1801,8 +1801,8 @@
    }
   },
   "edge large: recursion with locals": {
-   "script": "05acf23a50dc4a1c",
-   "status": 0,
+   "script": "3d3a6c172cce83ff",
+   "status": 1,
    "stderr": {
     "text": ""
    },
