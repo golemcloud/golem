@@ -9,8 +9,8 @@
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.8",
-      "sha256": "16bde1f04934d6779286ccb0d2d4336feb707be9ae8aa1bf51b63e25460b16b4"
+      "version": "0.0.9",
+      "sha256": "f729771a455af2d85ab8006d424e8258e8e33794ea632b06eb9f6392b0d38b31"
     },
     "javascript_tools": {
       "component": "javascript-tools",
