@@ -215,6 +215,314 @@ pub(crate) async fn start_status_code_retry_http_server(
     (port, counter, idempotency_keys)
 }
 
+#[derive(Debug)]
+pub(crate) struct CapturedStatusRetryRequest {
+    pub(crate) request_line: String,
+    pub(crate) content_length: usize,
+    pub(crate) body: Vec<u8>,
+    pub(crate) idempotency_key: Option<String>,
+}
+
+pub(crate) struct WithheldRetryResponse {
+    accepted: tokio::sync::oneshot::Receiver<()>,
+    peer_closed: mpsc::UnboundedReceiver<()>,
+    resumed_accepted: tokio::sync::oneshot::Receiver<()>,
+    release_resumed: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CapturedBodyResumeRequest {
+    pub(crate) request_line: String,
+    pub(crate) range: Option<String>,
+}
+
+impl WithheldRetryResponse {
+    pub(crate) async fn accepted(&mut self) {
+        (&mut self.accepted)
+            .await
+            .expect("retry server stopped before accepting the replacement request");
+    }
+
+    pub(crate) async fn peer_closed(&mut self) {
+        self.peer_closed
+            .recv()
+            .await
+            .expect("retry server stopped before observing replacement cancellation");
+    }
+
+    pub(crate) async fn resumed_accepted(&mut self) {
+        (&mut self.resumed_accepted)
+            .await
+            .expect("retry server stopped before accepting the reconstructed request");
+    }
+
+    pub(crate) fn release_resumed(&self) {
+        self.release_resumed.notify_one();
+    }
+}
+
+/// The first request receives HTTP 500. The replacement request is fully read but receives no
+/// response headers, and the server reports when its peer closes. Later requests receive HTTP 200
+/// so the interrupted invocation can reconstruct and finish after resume.
+pub(crate) async fn start_withheld_status_retry_http_server() -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<Mutex<Vec<CapturedStatusRetryRequest>>>,
+    WithheldRetryResponse,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let accepted_tx = Arc::new(Mutex::new(Some(accepted_tx)));
+    let (peer_closed_tx, peer_closed_rx) = mpsc::unbounded_channel();
+    let (resumed_accepted_tx, resumed_accepted_rx) = tokio::sync::oneshot::channel();
+    let resumed_accepted_tx = Arc::new(Mutex::new(Some(resumed_accepted_tx)));
+    let release_resumed = Arc::new(tokio::sync::Notify::new());
+
+    spawn(
+        {
+            let counter = counter.clone();
+            let requests = requests.clone();
+            let release_resumed = release_resumed.clone();
+            async move {
+                loop {
+                    let (mut stream, _) = match listener.accept().await {
+                        Ok(connection) => connection,
+                        Err(_) => break,
+                    };
+                    let counter = counter.clone();
+                    let requests = requests.clone();
+                    let accepted_tx = accepted_tx.clone();
+                    let peer_closed_tx = peer_closed_tx.clone();
+                    let resumed_accepted_tx = resumed_accepted_tx.clone();
+                    let release_resumed = release_resumed.clone();
+                    spawn(async move {
+                        let mut data = Vec::new();
+                        let mut buf = [0u8; 4096];
+                        let (header_end, content_length) = loop {
+                            match stream.read(&mut buf).await {
+                                Ok(0) => return,
+                                Ok(n) => data.extend_from_slice(&buf[..n]),
+                                Err(_) => return,
+                            }
+                            if let Some(position) =
+                                data.windows(4).position(|window| window == b"\r\n\r\n")
+                            {
+                                let header_end = position + 4;
+                                let header_text = String::from_utf8_lossy(&data[..header_end]);
+                                let content_length = parse_content_length(&header_text).unwrap_or(0);
+                                break (header_end, content_length);
+                            }
+                        };
+                        while data.len().saturating_sub(header_end) < content_length {
+                            match stream.read(&mut buf).await {
+                                Ok(0) => return,
+                                Ok(n) => data.extend_from_slice(&buf[..n]),
+                                Err(_) => return,
+                            }
+                        }
+
+                        let header_text = String::from_utf8_lossy(&data[..header_end]);
+                        let request_line = header_text.lines().next().unwrap_or_default().to_string();
+                        let idempotency_key = header_text.lines().find_map(|line| {
+                            line.split_once(':').and_then(|(name, value)| {
+                                name.eq_ignore_ascii_case("idempotency-key")
+                                    .then(|| value.trim().to_string())
+                            })
+                        });
+                        requests.lock().unwrap().push(CapturedStatusRetryRequest {
+                            request_line,
+                            content_length,
+                            body: data[header_end..header_end + content_length].to_vec(),
+                            idempotency_key,
+                        });
+
+                        let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+                        match attempt {
+                            1 => {
+                                let body = "retry-me";
+                                let response = format!(
+                                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                    body.len()
+                                );
+                                let _ = stream.write_all(response.as_bytes()).await;
+                                let _ = stream.shutdown().await;
+                            }
+                            2 => {
+                                if let Some(accepted_tx) = accepted_tx.lock().unwrap().take() {
+                                    let _ = accepted_tx.send(());
+                                }
+                                loop {
+                                    match stream.read(&mut buf).await {
+                                        Ok(0) | Err(_) => {
+                                            let _ = peer_closed_tx.send(());
+                                            break;
+                                        }
+                                        Ok(_) => {}
+                                    }
+                                }
+                            }
+                            3 => {
+                                if let Some(resumed_accepted_tx) =
+                                    resumed_accepted_tx.lock().unwrap().take()
+                                {
+                                    let _ = resumed_accepted_tx.send(());
+                                }
+                                release_resumed.notified().await;
+                                let body = "status-retry-ok";
+                                let response = format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                    body.len()
+                                );
+                                let _ = stream.write_all(response.as_bytes()).await;
+                                let _ = stream.shutdown().await;
+                            }
+                            _ => unreachable!("unexpected extra status retry request"),
+                        }
+                    });
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    (
+        port,
+        counter,
+        requests,
+        WithheldRetryResponse {
+            accepted: accepted_rx,
+            peer_closed: peer_closed_rx,
+            resumed_accepted: resumed_accepted_rx,
+            release_resumed,
+        },
+    )
+}
+
+/// The first request receives a partial body and is disconnected. The replacement Range request
+/// is accepted but receives no response headers, and the server reports when its peer closes.
+/// A reconstructed original request receives the full matching body after the test releases its
+/// gate.
+pub(crate) async fn start_withheld_body_resume_http_server() -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<Mutex<Vec<CapturedBodyResumeRequest>>>,
+    WithheldRetryResponse,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let accepted_tx = Arc::new(Mutex::new(Some(accepted_tx)));
+    let (peer_closed_tx, peer_closed_rx) = mpsc::unbounded_channel();
+    let (resumed_accepted_tx, resumed_accepted_rx) = tokio::sync::oneshot::channel();
+    let resumed_accepted_tx = Arc::new(Mutex::new(Some(resumed_accepted_tx)));
+    let release_resumed = Arc::new(Notify::new());
+
+    spawn(
+        {
+            let counter = counter.clone();
+            let requests = requests.clone();
+            let release_resumed = release_resumed.clone();
+            async move {
+                loop {
+                    let (mut stream, _) = match listener.accept().await {
+                        Ok(connection) => connection,
+                        Err(_) => break,
+                    };
+                    let counter = counter.clone();
+                    let requests = requests.clone();
+                    let accepted_tx = accepted_tx.clone();
+                    let peer_closed_tx = peer_closed_tx.clone();
+                    let resumed_accepted_tx = resumed_accepted_tx.clone();
+                    let release_resumed = release_resumed.clone();
+                    spawn(async move {
+                        let mut request = Vec::new();
+                        let mut buf = [0u8; 4096];
+                        loop {
+                            match stream.read(&mut buf).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => request.extend_from_slice(&buf[..n]),
+                            }
+                            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+
+                        let request = String::from_utf8_lossy(&request);
+                        let request_line = request.lines().next().unwrap_or_default().to_string();
+                        let range = request.lines().find_map(|line| {
+                            line.split_once(':').and_then(|(name, value)| {
+                                name.eq_ignore_ascii_case("range")
+                                    .then(|| value.trim().to_string())
+                            })
+                        });
+                        requests
+                            .lock()
+                            .unwrap()
+                            .push(CapturedBodyResumeRequest {
+                                request_line,
+                                range,
+                            });
+
+                        let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                        match attempt {
+                            1 => {
+                                let response = b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nres";
+                                let _ = stream.write_all(response).await;
+                                let _ = stream.flush().await;
+                            }
+                            2 => {
+                                if let Some(accepted_tx) = accepted_tx.lock().unwrap().take() {
+                                    let _ = accepted_tx.send(());
+                                }
+                                loop {
+                                    match stream.read(&mut buf).await {
+                                        Ok(0) | Err(_) => {
+                                            let _ = peer_closed_tx.send(());
+                                            break;
+                                        }
+                                        Ok(_) => {}
+                                    }
+                                }
+                            }
+                            3 => {
+                                if let Some(resumed_accepted_tx) =
+                                    resumed_accepted_tx.lock().unwrap().take()
+                                {
+                                    let _ = resumed_accepted_tx.send(());
+                                }
+                                release_resumed.notified().await;
+                                let response = b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nresumed-body";
+                                let _ = stream.write_all(response).await;
+                                let _ = stream.shutdown().await;
+                            }
+                            _ => unreachable!("unexpected extra body resume request"),
+                        }
+                    });
+                }
+            }
+        }
+        .in_current_span(),
+    );
+
+    (
+        port,
+        counter,
+        requests,
+        WithheldRetryResponse {
+            accepted: accepted_rx,
+            peer_closed: peer_closed_rx,
+            resumed_accepted: resumed_accepted_rx,
+            release_resumed,
+        },
+    )
+}
+
 pub(crate) async fn start_body_dropping_http_server(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

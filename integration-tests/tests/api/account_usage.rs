@@ -172,6 +172,7 @@ async fn account_usage_reports_all_customer_dimensions(
                     durable_storage_byte_seconds_delta,
                     ephemeral_storage_byte_seconds_delta,
                     memory_gb_seconds_delta: 7,
+                    blob_storage_bytes_delta: 0,
                     metering: ResourceUsageMetering::all_enabled(),
                 },
             )]))
@@ -289,6 +290,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
                 durable_storage_byte_seconds_delta: 0,
                 ephemeral_storage_byte_seconds_delta: 0,
                 memory_gb_seconds_delta: 0,
+                blob_storage_bytes_delta: 0,
                 metering: ResourceUsageMetering::default(),
             },
         )]))
@@ -325,6 +327,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
                 durable_storage_byte_seconds_delta: 0,
                 ephemeral_storage_byte_seconds_delta: 0,
                 memory_gb_seconds_delta: 0,
+                blob_storage_bytes_delta: 0,
                 metering: ResourceUsageMetering::all_enabled(),
             },
         )]))

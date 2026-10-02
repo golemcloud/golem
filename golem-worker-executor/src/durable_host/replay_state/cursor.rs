@@ -3205,6 +3205,15 @@ impl ReplayState {
         .await
     }
 
+    /// Snapshots replay's deleted regions for readers that also scan the live oplog suffix.
+    pub(crate) async fn skipped_regions(&self) -> Result<DeletedRegions, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            let st = state.cursor.state.lock().await;
+            Ok(st.skipped_regions.clone())
+        })
+        .await
+    }
+
     /// Whether `oplog_index` lies in a deleted (skipped) oplog region. Used as a validity guard
     /// (e.g. rejecting jumps into deleted regions), so a failed cursor read propagates as an error
     /// rather than defaulting to an answer.
@@ -3606,13 +3615,7 @@ impl ReplayState {
         // The snapshot is taken on an owned task (see `run_owned_cursor_op`): this lookup is
         // called from accessor futures (e.g. the replay-side remote-write scope checks), which
         // must never queue on the cursor mutex directly.
-        let snapshot = self
-            .run_owned_cursor_op(|state| async move {
-                let cursor = &*state.cursor;
-                let st = cursor.state.lock().await;
-                Ok(st.skipped_regions.clone())
-            })
-            .await;
+        let snapshot = self.skipped_regions().await;
         let skipped_regions = match snapshot {
             Ok(snapshot) => snapshot,
             Err(err) => {

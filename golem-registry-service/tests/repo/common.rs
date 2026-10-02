@@ -13,10 +13,14 @@
 // limitations under the License.
 
 use crate::repo::{Deps, TestDb, test_environment_default_card_record};
+use anyhow::Error;
 use assert2::{assert, check, let_assert};
+use async_trait::async_trait;
+use bytes::Bytes;
 use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
+use futures::stream::BoxStream;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{
     AgentMode, AgentTypeName, CorsOptions, CustomHttpMethod, FileMapping, HttpEndpointDetails,
@@ -160,15 +164,181 @@ use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace, ExistsResult,
+};
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use strum::IntoEnumIterator;
 use uuid::Uuid;
+
+#[derive(Debug)]
+struct FailOnceListBlobStorage {
+    inner: Arc<dyn BlobStorage>,
+    fail_next_list: AtomicBool,
+    list_attempts: AtomicUsize,
+}
+
+impl FailOnceListBlobStorage {
+    fn new(inner: Arc<dyn BlobStorage>) -> Self {
+        Self {
+            inner,
+            fail_next_list: AtomicBool::new(true),
+            list_attempts: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl BlobStorage for FailOnceListBlobStorage {
+    async fn get_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        self.inner
+            .get_stream(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_range_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        self.inner
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_stream(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
+    ) -> Result<(), Error> {
+        self.inner
+            .put_stream(target_label, op_label, namespace, path, stream)
+            .await
+    }
+
+    async fn delete(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), Error> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn create_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<(), Error> {
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<PathBuf>, Error> {
+        self.list_attempts.fetch_add(1, Ordering::AcqRel);
+        if self.fail_next_list.swap(false, Ordering::AcqRel) {
+            return Err(anyhow::anyhow!("injected reconciliation list failure"));
+        }
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<bool, Error> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<ExistsResult, Error> {
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+}
 // Common test cases -------------------------------------------------------------------------------
 
 trait DeploymentRepoTestExt {
@@ -2770,6 +2940,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
                 account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
             ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
@@ -2834,6 +3008,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
                 account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
             ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
@@ -4397,6 +4575,7 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
             total_component_count: 15.into(),
             total_worker_connection_count: 25.into(),
             total_component_storage_bytes: 1000.into(),
+            total_blob_storage_bytes: 1_000_000_000_000_000_000u64.into(),
             monthly_gas_limit: 2000.into(),
             monthly_component_upload_limit_bytes: 3000.into(),
             max_memory_per_worker: 4000.into(),
@@ -4544,6 +4723,7 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalComponentCount => 15,
             UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
+            UsageType::TotalBlobStorageBytes => 1_000_000_000_000_000_000,
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
             UsageType::MonthlyHttpCalls => 5000,
@@ -4613,6 +4793,7 @@ pub async fn test_account_usage(deps: &Deps) {
                 usage_type,
                 UsageType::MonthlyDurableAgentStorageByteSeconds
                     | UsageType::MonthlyEphemeralStorageByteSeconds
+                    | UsageType::TotalBlobStorageBytes
             );
             check!(usage.add_change(usage_type, 1000000) == within_limit);
         }
@@ -4639,6 +4820,21 @@ pub async fn test_account_usage(deps: &Deps) {
         for usage_type in UsageType::iter() {
             if usage_type.tracking() == UsageTracking::Stats {
                 check!(usage.usage(usage_type) == 1, "{usage_type:?}");
+            }
+        }
+
+        let resource_limits_usage = deps
+            .account_usage_repo
+            .get_for_resource_limits(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            if usage_type.tracking() == UsageTracking::Stats {
+                check!(
+                    resource_limits_usage.usage(usage_type) == usage.usage(usage_type),
+                    "{usage_type:?}"
+                );
             }
         }
     }
@@ -4715,6 +4911,215 @@ pub async fn test_account_usage(deps: &Deps) {
         check!(usage.usage(UsageType::TotalEnvCount) == 1);
         check!(usage.usage(UsageType::TotalComponentCount) == 1);
     }
+
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            41,
+        )
+        .await
+        .unwrap();
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            7,
+        )
+        .await
+        .unwrap();
+    let usage = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(usage.usage(UsageType::TotalBlobStorageBytes) == 7);
+
+    let application = deps.create_application(user.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let custom_namespace = golem_service_base::storage::blob::BlobStorageNamespace::CustomStorage {
+        environment_id: EnvironmentId(environment.revision.environment_id),
+    };
+    deps.blob_storage
+        .create_dir(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace.clone(),
+            std::path::Path::new("container"),
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace,
+            std::path::Path::new("container/object"),
+            &[1, 2, 3, 4, 5],
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            golem_service_base::storage::blob::BlobStorageNamespace::InitialAgentFiles {
+                environment_id: EnvironmentId(environment.revision.environment_id),
+            },
+            std::path::Path::new("not-chargeable"),
+            &[0; 100],
+        )
+        .await
+        .unwrap();
+    let _ = deps
+        .environment_repo
+        .delete(EnvironmentRevisionRecord {
+            revision_id: environment.revision.revision_id + 1,
+            ..environment.revision.clone()
+        })
+        .await
+        .unwrap();
+
+    let reconciliation_interval = std::time::Duration::from_secs(1);
+    let account_usage_service =
+        deps.account_usage_service_with_reconciliation_interval(reconciliation_interval);
+    account_usage_service
+        .get_resouce_limits(
+            AccountId(user.revision.account_id),
+            &golem_service_base::model::auth::AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let reconciled = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(reconciled.usage(UsageType::TotalBlobStorageBytes) == 5);
+
+    let mut delayed_updates = std::collections::HashMap::new();
+    delayed_updates.insert(
+        AccountId(user.revision.account_id),
+        golem_registry_service::services::account_usage::ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 5,
+            metering: ResourceUsageMetering::all_enabled(),
+        },
+    );
+    account_usage_service
+        .update_resource_usage(delayed_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let temporarily_overcounted = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(temporarily_overcounted.usage(UsageType::TotalBlobStorageBytes) == 10);
+
+    tokio::time::sleep(reconciliation_interval).await;
+    account_usage_service
+        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let converged = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(converged.usage(UsageType::TotalBlobStorageBytes) == 5);
+
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            99,
+        )
+        .await
+        .unwrap();
+    let fail_once_storage = Arc::new(FailOnceListBlobStorage::new(deps.blob_storage.clone()));
+    let retrying_service = AccountUsageService::new(
+        deps.account_usage_repo.clone(),
+        deps.account_service(),
+        deps.environment_repo.clone(),
+        fail_once_storage.clone(),
+        true,
+        std::time::Duration::from_secs(60),
+    );
+    retrying_service
+        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if fail_once_storage.list_attempts.load(Ordering::Acquire) > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let retained_after_failed_sweep = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(retained_after_failed_sweep.usage(UsageType::TotalBlobStorageBytes) == 99);
+
+    for _ in 0..100 {
+        retrying_service
+            .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+            .await
+            .unwrap();
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let converged_after_retry = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(converged_after_retry.usage(UsageType::TotalBlobStorageBytes) == 5);
 }
 
 pub async fn test_account_usage_history(deps: &Deps) {
@@ -8964,6 +9369,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8998,6 +9404,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9023,6 +9430,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9047,6 +9455,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 123,
             ephemeral_storage_byte_seconds_delta: 456,
             memory_gb_seconds_delta: 12,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9064,6 +9473,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 10,
             ephemeral_storage_byte_seconds_delta: 20,
             memory_gb_seconds_delta: 3,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9123,6 +9533,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9157,6 +9568,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9182,6 +9594,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9220,6 +9633,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9232,6 +9646,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9264,6 +9679,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -9276,6 +9692,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );

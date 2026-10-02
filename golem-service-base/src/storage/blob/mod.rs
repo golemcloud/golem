@@ -160,6 +160,40 @@ pub trait BlobStorage: Debug + Send + Sync {
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error>;
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        let mut pending = vec![path.to_path_buf()];
+        let mut blobs = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in self
+                .list_dir(target_label, op_label, namespace.clone(), &directory)
+                .await?
+            {
+                match self
+                    .exists(target_label, op_label, namespace.clone(), &entry)
+                    .await?
+                {
+                    ExistsResult::File => {
+                        if let Some(metadata) = self
+                            .get_metadata(target_label, op_label, namespace.clone(), &entry)
+                            .await?
+                        {
+                            blobs.push((entry, metadata));
+                        }
+                    }
+                    ExistsResult::Directory => pending.push(entry),
+                    ExistsResult::DoesNotExist => {}
+                }
+            }
+        }
+        Ok(blobs)
+    }
+
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
     /// A root path changes nothing and returns false. A path is at the root when it has no
@@ -387,6 +421,17 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
+    pub async fn list_blobs_below(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        self.record("list_blobs_below");
+        self.storage
+            .list_blobs_below(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
     pub async fn delete_dir(
         &self,
         namespace: BlobStorageNamespace,
@@ -551,7 +596,7 @@ pub(crate) fn blob_path_is_root(path: &Path) -> bool {
     })
 }
 
-pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
+pub fn blob_path_to_string(path: &Path) -> Result<String, Error> {
     Ok(unix_blob_path(path)?.normalize().into_string())
 }
 
@@ -595,7 +640,7 @@ pub fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        blob_file_name_to_string, blob_parent_to_string, join_blob_path,
+        blob_file_name_to_string, blob_parent_to_string, blob_path_to_string, join_blob_path,
         validate_relative_blob_path,
     };
     use std::path::Path;
@@ -637,5 +682,13 @@ mod tests {
         let path = Path::new(r"photos/animals\cat.png");
         assert_eq!(blob_parent_to_string(path).unwrap(), "photos");
         assert_eq!(blob_file_name_to_string(path).unwrap(), r"animals\cat.png");
+    }
+
+    #[test]
+    fn blob_path_identity_normalizes_current_directory_components() {
+        assert_eq!(
+            blob_path_to_string(Path::new("./photos/./cat.png")).unwrap(),
+            "photos/cat.png"
+        );
     }
 }
