@@ -1656,6 +1656,23 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.build-web-fetch]
+dependencies = ["wit"]
+description = "Builds the built-in web fetch tool component"
+script_runner = "@duckscript"
+script = '''
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem --bin golem
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+end
+set_env GOLEM_RUST_PATH "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/sdks/rust/golem-rust"
+cd builtin-tools/web-fetch
+exec --fail-on-error ${golem} build -P release --force-build --yes
+cp golem-temp/agents/golem_web_fetch_release.wasm ../web-fetch.wasm
+cd ../..
+'''
+
 [tasks.build-javascript-typescript-tools]
 dependencies = ["wit", "build-sdk-ts"]
 description = "Builds the bundled, Wizer-preinitialized JavaScript and TypeScript tool components"
@@ -1684,7 +1701,7 @@ dependencies = ["build-javascript-typescript-tools"]
 description = "Builds the built-in TypeScript tool component"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools"]
+dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools", "build-web-fetch"]
 description = "Builds all built-in tool components"
 
 [tasks.fetch-builtin-artifacts]
@@ -1703,7 +1720,7 @@ if not is_path_exists ${cache_dir}
     mkdir ${cache_dir}
 end
 
-artifact_ids = array filesystem_tools javascript_tools otlp_exporter typescript_tools
+artifact_ids = array filesystem_tools javascript_tools otlp_exporter typescript_tools web_fetch
 for artifact_id in ${artifact_ids}
     entry = map_get ${artifacts} ${artifact_id}
     component = map_get ${entry} component
@@ -1719,8 +1736,10 @@ for artifact_id in ${artifact_ids}
         destination = set builtin-tools/javascript-tools.wasm
     elif equals ${artifact_id} otlp_exporter
         destination = set plugins/otlp-exporter.wasm
-    else
+    elif equals ${artifact_id} typescript_tools
         destination = set builtin-tools/typescript-tools.wasm
+    else
+        destination = set builtin-tools/web-fetch.wasm
     end
 
     if not is_path_exists ${cached}
@@ -1794,7 +1813,7 @@ elif equals ${component} filesystem-tools
     build_task = set build-filesystem-tools
     wasm = set builtin-tools/filesystem-tools.wasm
     artifact_id = set filesystem_tools
-    exports_json = set "{\"tools\":[\"read-file@0.3.0\",\"write-file@0.3.0\",\"edit-file@0.3.0\"]}"
+    exports_json = set "{\"tools\":[\"read-file@0.4.0\",\"write-file@0.4.0\",\"edit-file@0.4.0\",\"ls@0.1.0\",\"grep@0.1.0\"],\"middlewares\":[\"path-policy@0.1.0\"]}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} javascript-tools
@@ -1813,8 +1832,16 @@ elif equals ${component} typescript-tools
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
+elif equals ${component} web-fetch
+    build_task = set build-web-fetch
+    wasm = set builtin-tools/web-fetch.wasm
+    artifact_id = set web_fetch
+    exports_json = set "{\"tools\":[\"web-fetch@0.1.0\"]}"
+    licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
+    source_notice = set LICENSE
+    sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools, web-fetch"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD
@@ -1840,10 +1867,6 @@ same_bytes = equals ${sha256} ${locked_sha256}
 if ${same_version}
     if not ${same_bytes}
         trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
-    end
-else
-    if ${same_bytes}
-        trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
     end
 end
 release --recursive ${lock}
@@ -1871,6 +1894,10 @@ license_dir = set "${staging}/licenses"
 if equals ${licenses} LICENSE
     mkdir ${license_dir}
     cp LICENSE "${license_dir}/LICENSE"
+elif equals ${component} web-fetch
+    mkdir ${license_dir}
+    cp ${licenses} "${license_dir}/THIRD_PARTY_LICENSES.html"
+    cp ${source_notice} "${license_dir}/LICENSE"
 else
     cp ${licenses} ${license_dir}
     cp ${source_notice} "${license_dir}/SOURCE.md"
@@ -2029,6 +2056,7 @@ if ${golem_cli_empty}
     golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
     set_env GOLEM_CLI ${golem_cli}
 end
+exec --fail-on-error cargo make fetch-builtin-artifacts
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
 cd ..
