@@ -23,7 +23,7 @@ standard-library declarations and npm's manual pages are embedded as private rea
 components must use the `optimized` TypeScript preset so Wizer pre-initializes their provider state.
 
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
-`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.0` supports local
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.1` supports local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
 workflows. It exposes no remote commands. The runtime provides WASI HTTP, and a separate integration
 probe verifies that explicitly injecting `isomorphic-git/http/web` uses durable WASI HTTP calls

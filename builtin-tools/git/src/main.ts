@@ -55,7 +55,7 @@ const branchResult = z.array(
 );
 
 const definition = toolDefinition("git", { requiresFilesystem: true })
-  .version("0.1.0")
+  .version("0.1.1")
   .doc({
     summary: "Run local Git workflows.",
     description:

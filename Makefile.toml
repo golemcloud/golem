@@ -1657,10 +1657,15 @@ cd ../..
 '''
 
 [tasks.build-git-tool]
-dependencies = ["wit", "build-sdk-ts"]
+dependencies = ["wit"]
 description = "Builds the built-in Git tool component"
 script_runner = "@duckscript"
 script = '''
+cd sdks/ts
+exec --fail-on-error npx pnpm install --frozen-lockfile
+exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
+exec --fail-on-error npx pnpm run build-agent-template
+cd ../..
 exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/git
