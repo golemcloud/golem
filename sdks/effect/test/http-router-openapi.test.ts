@@ -1,13 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, Stream } from "effect"
-import { Etag, HttpPlatform, HttpRouter } from "effect/unstable/http"
-import {
-  HttpApi,
-  HttpApiBuilder,
-  HttpApiEndpoint,
-  HttpApiGroup,
-  OpenApi,
-} from "effect/unstable/httpapi"
+import { Etag, HttpPlatform, HttpRouter } from "effect/http"
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/http-api"
 import * as GolemRouter from "../src/HttpRouter.js"
 import { mount } from "../src/Http.js"
 import { __resetAgents } from "../src/Agent.js"
@@ -18,7 +12,7 @@ import { v } from "../src/internal/schema-model/model.js"
 import { GuestSchemaValueStreamHandle } from "../src/internal/schema-model/schemaValueStreamHandle.js"
 import { STREAM_INTERNAL } from "../src/internal/schema-model/streamInternal.js"
 import { schemaValueToWitAsync } from "../src/internal/schema-model/wit.js"
-import { HttpServerResponse } from "effect/unstable/http"
+import { HttpServerResponse } from "effect/http"
 
 const transport = vi.hoisted(() => ({
   wrap: vi.fn(async (source: AsyncIterable<unknown>) => ({ source })),

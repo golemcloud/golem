@@ -6986,7 +6986,7 @@ impl KeyValueService for FailingKeyValueService {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         if self
             .remaining_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(anyhow!("transient test failure"))
@@ -7021,7 +7021,7 @@ impl KeyValueService for FailingKeyValueService {
     ) -> anyhow::Result<()> {
         if self
             .remaining_set_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(anyhow!("transient test failure"))
@@ -7202,7 +7202,7 @@ impl BlobStoreService for FailingBlobStoreService {
         }
         if self
             .remaining_delete_objects_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(BlobStoreError::TransientBackend(
@@ -7240,7 +7240,7 @@ impl BlobStoreService for FailingBlobStoreService {
     ) -> Result<Vec<u8>, BlobStoreError> {
         if self
             .remaining_get_data_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(BlobStoreError::TransientBackend(
@@ -7324,7 +7324,7 @@ impl BlobStoreService for FailingBlobStoreService {
         }
         if self
             .remaining_write_data_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(BlobStoreError::TransientBackend(
@@ -7517,7 +7517,7 @@ impl Rpc for FailingRpc {
     ) -> Result<SchemaValue, ServiceRpcError> {
         if self
             .remaining_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(ServiceRpcError::RemoteInternalError {

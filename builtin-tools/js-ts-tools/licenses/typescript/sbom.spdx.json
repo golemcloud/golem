@@ -1,0 +1,25 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "Golem bundled TypeScript tool source",
+  "documentNamespace": "https://golem.cloud/spdx/toolchain/typescript/67a3bc82e822b8f45f653a80fc3a9730d23214d36c83ba85dd7f5abebee82062",
+  "creationInfo": {
+    "created": "2026-09-30T00:00:00Z",
+    "creators": [
+      "Tool: golem-builtin-js-ts-tools-compliance"
+    ]
+  },
+  "packages": [
+    {
+      "name": "typescript",
+      "SPDXID": "SPDXRef-Package-1",
+      "versionInfo": "5.9.2",
+      "downloadLocation": "https://github.com/microsoft/TypeScript.git",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    }
+  ]
+}

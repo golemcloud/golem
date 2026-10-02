@@ -97,15 +97,17 @@ use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, tag_suite};
+use test_r::{inherit_test_dep, tag_suite, test};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -115,6 +117,92 @@ use url::Url;
 use uuid::Uuid;
 
 const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
+
+fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
+    static SOURCES: OnceLock<Vec<(PathBuf, String)>> = OnceLock::new();
+
+    SOURCES.get_or_init(|| {
+        let workspace = workspace_path();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(workspace.join("builtin-artifacts.lock.json"))
+                .expect("failed to read builtin-artifacts.lock.json"),
+        )
+        .expect("failed to parse builtin-artifacts.lock.json");
+        let artifacts = manifest["artifacts"]
+            .as_object()
+            .expect("builtin-artifacts.lock.json must contain an artifacts object");
+        let local_artifacts = [
+            ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
+            ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
+            ("otlp_exporter", "plugins/otlp-exporter.wasm"),
+            ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+        ];
+
+        local_artifacts
+            .into_iter()
+            .map(|(artifact_id, relative_path)| {
+                let source = workspace.join(relative_path);
+                let expected = artifacts[artifact_id]["sha256"]
+                    .as_str()
+                    .expect("default built-in artifacts must have a SHA-256")
+                    .to_string();
+                let bytes = std::fs::read(&source).unwrap_or_else(|error| {
+                    panic!(
+                        "failed to read built-in artifact '{}': {error}; run 'cargo make fetch-builtin-artifacts' first",
+                        source.display()
+                    )
+                });
+                let actual = format!("{:x}", Sha256::digest(bytes));
+                assert_eq!(
+                    actual,
+                    expected,
+                    "built-in artifact '{}' does not match builtin-artifacts.lock.json",
+                    source.display()
+                );
+                (source, expected)
+            })
+            .collect()
+    })
+}
+
+fn install_builtin_artifact_cache(data_dir: &Path) {
+    let cache_dir = data_dir.join("builtin-artifacts");
+    std::fs::create_dir_all(&cache_dir)
+        .expect("failed to create built-in artifact cache directory");
+
+    for (source, sha256) in builtin_artifact_sources() {
+        let destination = cache_dir.join(format!("{sha256}.wasm"));
+        if destination.is_file() {
+            continue;
+        }
+        if std::fs::hard_link(source, &destination).is_err() {
+            std::fs::copy(source, &destination).unwrap_or_else(|error| {
+                panic!(
+                    "failed to install built-in artifact '{}' as '{}': {error}",
+                    source.display(),
+                    destination.display()
+                )
+            });
+        }
+    }
+}
+
+#[test]
+fn builtin_artifacts_are_installed_under_checksum_names() {
+    let data_dir = TempDir::new().unwrap();
+
+    install_builtin_artifact_cache(data_dir.path());
+    install_builtin_artifact_cache(data_dir.path());
+
+    let cache_dir = data_dir.path().join("builtin-artifacts");
+    for (source, sha256) in builtin_artifact_sources() {
+        let cached = cache_dir.join(format!("{sha256}.wasm"));
+        assert_eq!(
+            cached.metadata().unwrap().len(),
+            source.metadata().unwrap().len()
+        );
+    }
+}
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
@@ -940,6 +1028,7 @@ impl TestContext {
 
     async fn start_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
+        install_builtin_artifact_cache(self.data_dir.path());
 
         println!("{}", "> starting golem server".bold());
         println!(
