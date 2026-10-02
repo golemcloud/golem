@@ -85,4 +85,12 @@ jobs:
       - name: Publish with provenance
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/golem-effect-v')
         working-directory: sdks/effect
-        run: npm publish --access public --provenance
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#golem-effect-v}"
+          case "$VERSION" in
+            *-*) DIST_TAG=next ;;
+            *) DIST_TAG=latest ;;
+          esac
+          npm publish --access public --provenance --tag "$DIST_TAG"
