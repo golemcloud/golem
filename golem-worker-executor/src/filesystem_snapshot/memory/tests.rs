@@ -52,6 +52,7 @@ async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() 
             &SnapshotName::new("p-ahead").unwrap(),
             tree.path(),
             None,
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await
         .unwrap();
@@ -65,6 +66,7 @@ async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() 
             &SnapshotName::new("p-next").unwrap(),
             tree.path(),
             None,
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await
         .unwrap();
@@ -106,8 +108,20 @@ async fn of_two_saves_of_one_name_at_the_same_time_one_wins() {
     let second_tree = tree_with("second tree");
 
     let (first_saved, second_saved) = futures::join!(
-        first.save(&scope, &name, first_tree.path(), None),
-        second.save(&scope, &name, second_tree.path(), None)
+        first.save(
+            &scope,
+            &name,
+            first_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled()
+        ),
+        second.save(
+            &scope,
+            &name,
+            second_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled()
+        )
     );
     let into = tempfile::tempdir().unwrap();
     first.restore(&scope, &name, into.path()).await.unwrap();
@@ -154,7 +168,15 @@ mod unix {
         let scope = new_scope();
         let name = SnapshotName::new("p-socket").unwrap();
 
-        let saved = store.save(&scope, &name, tree.path(), None).await;
+        let saved = store
+            .save(
+                &scope,
+                &name,
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+            )
+            .await;
         let listed = store.list(&scope).await.unwrap();
 
         assert!(

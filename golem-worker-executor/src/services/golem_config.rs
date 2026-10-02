@@ -2410,7 +2410,8 @@ pub struct FilesystemSnapshotStoreConfig {
 /// The settings of the uploads, the restores and the retention of filesystem snapshots.
 #[derive(Clone, Debug, Serialize)]
 pub struct FilesystemSnapshotUploadConfig {
-    /// The number of store operations that save or delete at the same time on one executor.
+    /// The number of runs of store operations that save, delete, copy or list for retention at the
+    /// same time on one executor. It is also the number of clean-ups that run at the same time.
     max_concurrent_uploads: NonZeroUsize,
     /// The number of restores that run at the same time on one executor.
     max_concurrent_restores: NonZeroUsize,
@@ -2430,6 +2431,10 @@ pub struct FilesystemSnapshotUploadConfig {
     retained_update_snapshots: NonZeroUsize,
     /// The retries of a failed store operation of an upload or a clean-up.
     upload_retry: RetryConfig,
+    /// The largest number of snapshot names of one agent that wait for deletion. When it is
+    /// reached, a new delete request of the agent is refused and counted as a leaked clean-up;
+    /// retention asks again at the next save.
+    max_pending_deletes_per_agent: NonZeroUsize,
 }
 
 /// The default of [`FilesystemSnapshotUploadConfig::max_concurrent_uploads`].
@@ -2448,6 +2453,8 @@ const MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR: f64 = 1.0;
 /// The default of [`FilesystemSnapshotUploadConfig::retained_periodic_snapshots`] and of
 /// [`FilesystemSnapshotUploadConfig::retained_update_snapshots`].
 const DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED: usize = 2;
+/// The default of [`FilesystemSnapshotUploadConfig::max_pending_deletes_per_agent`].
+const DEFAULT_MAX_PENDING_DELETES_PER_AGENT: usize = 1024;
 
 fn default_filesystem_snapshot_upload_retry() -> RetryConfig {
     RetryConfig {
@@ -2471,6 +2478,7 @@ pub struct FilesystemSnapshotUploadValues {
     pub retained_periodic_snapshots: usize,
     pub retained_update_snapshots: usize,
     pub upload_retry: RetryConfig,
+    pub max_pending_deletes_per_agent: usize,
 }
 
 impl Default for FilesystemSnapshotUploadValues {
@@ -2484,6 +2492,7 @@ impl Default for FilesystemSnapshotUploadValues {
             retained_periodic_snapshots: DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
             retained_update_snapshots: DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
             upload_retry: default_filesystem_snapshot_upload_retry(),
+            max_pending_deletes_per_agent: DEFAULT_MAX_PENDING_DELETES_PER_AGENT,
         }
     }
 }
@@ -2501,6 +2510,7 @@ impl FilesystemSnapshotUploadConfig {
             retained_periodic_snapshots,
             retained_update_snapshots,
             upload_retry,
+            max_pending_deletes_per_agent,
         } = values;
         let count = |value: usize, name: &str| {
             NonZeroUsize::new(value).ok_or_else(|| format!("{name} must be greater than zero"))
@@ -2545,6 +2555,10 @@ impl FilesystemSnapshotUploadConfig {
                 "retained_update_snapshots",
             )?,
             upload_retry,
+            max_pending_deletes_per_agent: count(
+                max_pending_deletes_per_agent,
+                "max_pending_deletes_per_agent",
+            )?,
         })
     }
 
@@ -2578,6 +2592,10 @@ impl FilesystemSnapshotUploadConfig {
 
     pub fn upload_retry(&self) -> &RetryConfig {
         &self.upload_retry
+    }
+
+    pub const fn max_pending_deletes_per_agent(&self) -> NonZeroUsize {
+        self.max_pending_deletes_per_agent
     }
 }
 
@@ -2628,6 +2646,11 @@ impl SafeDisplay for FilesystemSnapshotUploadConfig {
             "{}",
             self.upload_retry.to_safe_string_indented()
         );
+        let _ = writeln!(
+            &mut result,
+            "max pending deletes per agent: {}",
+            self.max_pending_deletes_per_agent
+        );
         result
     }
 }
@@ -2669,6 +2692,8 @@ struct RawFilesystemSnapshotStoreConfig {
     retained_update_snapshots: usize,
     #[serde(default = "default_filesystem_snapshot_upload_retry")]
     upload_retry: RetryConfig,
+    #[serde(default = "default_max_pending_deletes_per_agent")]
+    max_pending_deletes_per_agent: usize,
 }
 
 fn default_filesystem_snapshot_max_concurrent_uploads() -> usize {
@@ -2693,6 +2718,10 @@ fn default_filesystem_snapshot_capture_wait() -> Duration {
 
 fn default_filesystem_snapshot_retained() -> usize {
     DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED
+}
+
+fn default_max_pending_deletes_per_agent() -> usize {
+    DEFAULT_MAX_PENDING_DELETES_PER_AGENT
 }
 
 fn default_filesystem_snapshot_storage_call_deadline() -> Duration {
@@ -2772,6 +2801,7 @@ impl<'de> Deserialize<'de> for FilesystemSnapshotStoreConfig {
             retained_periodic_snapshots: raw.retained_periodic_snapshots,
             retained_update_snapshots: raw.retained_update_snapshots,
             upload_retry: raw.upload_retry,
+            max_pending_deletes_per_agent: raw.max_pending_deletes_per_agent,
         })
         .map_err(D::Error::custom)?;
         Self::new(
@@ -3384,6 +3414,7 @@ mod tests {
             "capture_wait": "2s",
             "retained_periodic_snapshots": 4,
             "retained_update_snapshots": 6,
+            "max_pending_deletes_per_agent": 9,
             "upload_retry": {
                 "max_attempts": 7,
                 "min_delay": "1s",
@@ -3403,6 +3434,7 @@ mod tests {
                 uploads.capture_wait(),
                 uploads.retained_periodic_snapshots().get(),
                 uploads.retained_update_snapshots().get(),
+                uploads.max_pending_deletes_per_agent().get(),
                 uploads.upload_retry().clone(),
             ),
             (
@@ -3413,6 +3445,7 @@ mod tests {
                 Duration::from_secs(2),
                 4,
                 6,
+                9,
                 RetryConfig {
                     max_attempts: 7,
                     min_delay: Duration::from_secs(1),
@@ -3438,6 +3471,7 @@ mod tests {
                 uploads.capture_wait(),
                 uploads.retained_periodic_snapshots().get(),
                 uploads.retained_update_snapshots().get(),
+                uploads.max_pending_deletes_per_agent().get(),
                 uploads.upload_retry().clone(),
             ),
             (
@@ -3448,6 +3482,7 @@ mod tests {
                 Duration::from_secs(5),
                 2,
                 2,
+                1024,
                 RetryConfig {
                     max_attempts: 5,
                     min_delay: Duration::from_secs(2),
@@ -3537,6 +3572,10 @@ mod tests {
             (
                 json!({ "repository_key": KEY, "retained_update_snapshots": 0 }),
                 "retained_update_snapshots must be greater than zero",
+            ),
+            (
+                json!({ "repository_key": KEY, "max_pending_deletes_per_agent": 0 }),
+                "max_pending_deletes_per_agent must be greater than zero",
             ),
             (
                 retry(0, "1s", "2s", 2.0),

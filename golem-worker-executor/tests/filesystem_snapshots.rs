@@ -80,6 +80,7 @@ fn uploads(confirmation_wait: Duration) -> FilesystemSnapshotUploadConfig {
             multiplier: 2.0,
             max_jitter_factor: None,
         },
+        max_pending_deletes_per_agent: 1024,
     })
     .expect("valid upload settings")
 }

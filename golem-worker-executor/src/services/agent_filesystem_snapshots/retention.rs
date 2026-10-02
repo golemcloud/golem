@@ -27,14 +27,15 @@ pub(super) const CLOCK_SKEW_MARGIN: Duration = Duration::from_secs(2 * 60);
 /// Gives the names of `listing` that retention deletes after the save of `own`, whose info is
 /// `own_info`. Of the kind of `own`, it keeps `own` and the `keep - 1` newest names whose time is
 /// more than [`CLOCK_SKEW_MARGIN`] before the time of `own`, and gives the older ones. It never
-/// gives `own`, `kept`, a name of another kind, or a name whose time is within the margin or
-/// later. `listing` is the listing of an agent, in any order.
+/// gives `own`, a name of `kept`, a name of another kind, or a name whose time is within the
+/// margin or later. A name of `kept` does not count either. `listing` is the listing of an agent,
+/// in any order.
 pub(super) fn victims(
     listing: &[(SnapshotName, SnapshotInfo)],
     own: &SnapshotName,
     own_info: &SnapshotInfo,
     keep: usize,
-    kept: Option<&SnapshotName>,
+    kept: &[SnapshotName],
 ) -> Box<[SnapshotName]> {
     let prefix = if own
         .as_str()
@@ -50,6 +51,7 @@ pub(super) fn victims(
         .iter()
         .filter(|(name, info)| {
             name != own
+                && !kept.contains(name)
                 && name.as_str().starts_with(prefix)
                 && info.created_at.to_millis() < older_than
         })
@@ -59,6 +61,5 @@ pub(super) fn victims(
         .into_iter()
         .skip(keep.saturating_sub(1))
         .map(|(name, _)| name.clone())
-        .filter(|name| Some(name) != kept)
         .collect()
 }

@@ -3070,6 +3070,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.owned_agent_id,
             self.parent.initial_worker_metadata.fingerprint,
         );
+        let mode = self.parent.agent_mode();
         let (snapshot, filesystem_snapshot, retention) = match update_snapshot(
             &mut UpdateHost {
                 invocation: self,
@@ -3077,6 +3078,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             },
             &snapshots,
             &agent_snapshots,
+            mode,
         )
         .await
         {
@@ -3398,7 +3400,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.owned_agent_id,
             self.parent.initial_worker_metadata.fingerprint,
         );
-        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots).await {
+        let mode = self.parent.agent_mode();
+        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots, mode).await {
             PeriodicResult::Continue => CommandOutcome::Continue,
             PeriodicResult::Guest(outcome) => outcome,
             PeriodicResult::NotWritten(failure) => periodic_failure_outcome(&failure),
@@ -3802,6 +3805,10 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
 
     fn lost_shard(&self) -> bool {
         self.invocation.parent.retired_for_lost_shard()
+    }
+
+    fn lost_shard_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.invocation.parent.lost_shard_signal()
     }
 
     async fn kept_baseline(&self) -> Option<FilesystemSnapshotName> {

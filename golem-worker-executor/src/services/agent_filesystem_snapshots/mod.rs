@@ -21,20 +21,23 @@
 //!
 //! The rules are pure functions in `rules`. The registry keeps the state of the agents and changes
 //! it only through them, and the jobs are straight-line mechanisms that call a rule at each
-//! decision.
+//! decision. Each call to the store goes through `store_calls`, which is the only owner of the
+//! store.
 
 mod cleanup;
 mod job;
 mod registry;
-mod restore;
 mod retention;
 mod rules;
+mod store_calls;
 #[cfg(test)]
 mod tests;
 
+#[cfg(any(test, feature = "test-utils"))]
+use crate::filesystem_snapshot::FilesystemSnapshotStore;
 use crate::filesystem_snapshot::{
-    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, InvalidSnapshotName, SnapshotInfo,
-    SnapshotName, SnapshotStoreError,
+    AgentSnapshots, ChangeDetection, InvalidSnapshotName, SnapshotInfo, SnapshotName,
+    SnapshotStoreError,
 };
 use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
@@ -42,16 +45,18 @@ use crate::services::golem_config::{
     FilesystemPressureConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
 };
 use futures::future::BoxFuture;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::FilesystemSnapshotName;
-use registry::{DeleteAllTicket, JobTicket, Registry, WaitTicket};
+use registry::{JobTicket, Registry, WaitTicket};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Semaphore, watch};
+use store_calls::{StoreCalls, StoreOf};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-pub(crate) use restore::StoreRestore;
+pub(crate) use store_calls::{StoreKey, StoreRestore};
 
 /// The kind of a filesystem snapshot. It gives the prefix of the name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,11 +148,59 @@ pub(crate) enum JobDecision {
     Stopped,
 }
 
+/// What a confirmation found.
+///
+/// `Confirmed` carries the filesystem snapshot names of the automatic snapshot records that a
+/// start of the agent can select, as `snapshot_selection::start_candidates` gives them from the
+/// status that the worker holds after the append of the confirmation record returned. Retention
+/// keeps these names whatever their age. An entry that the status folds between the append and
+/// that read, such as the `SuccessfulUpdate` of an automatic update, can change the names; count
+/// retention then still keeps the newest older names. While the job holds the admission of its
+/// agent:
+///
+/// * no other automatic snapshot record can be written for the agent: each such record needs an
+///   admission, and the admission answers `UploadInFlight`;
+/// * no manual-update record can be written: a manual update first stops the deletes of the job
+///   and waits for its end.
+///
+/// A revert can still make an older record a candidate. It stops the deletes that the job has not
+/// sent yet, but a delete already sent runs to its end and can remove that name. A start then
+/// falls back past it. A path that writes an automatic snapshot record without an admission
+/// breaks the first point.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Confirmation {
+    Confirmed {
+        selectable: Box<[FilesystemSnapshotName]>,
+    },
+    Superseded,
+    Deferred,
+}
+
+impl Confirmation {
+    /// The outcome of the confirmation, without the names.
+    pub(crate) fn outcome(&self) -> ConfirmOutcome {
+        match self {
+            Self::Confirmed { .. } => ConfirmOutcome::Confirmed,
+            Self::Superseded => ConfirmOutcome::Superseded,
+            Self::Deferred => ConfirmOutcome::Deferred,
+        }
+    }
+
+    /// The names that a start can select, which retention keeps. Only a confirmed snapshot has
+    /// them.
+    fn selectable(&self) -> &[FilesystemSnapshotName] {
+        match self {
+            Self::Confirmed { selectable } => selectable,
+            Self::Superseded | Self::Deferred => &[],
+        }
+    }
+}
+
 /// Writes the confirmation record of the snapshot with the name it gets, and gives what it
 /// found. The invocation loop makes it from a weak handle to the worker, so the service never
 /// holds a worker.
 pub(crate) type Confirm =
-    Box<dyn FnOnce(FilesystemSnapshotName) -> BoxFuture<'static, ConfirmOutcome> + Send>;
+    Box<dyn FnOnce(FilesystemSnapshotName) -> BoxFuture<'static, Confirmation> + Send>;
 
 /// Whether the store holds the snapshot that a start asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,11 +223,16 @@ pub(crate) enum UpdateRefusal {
 /// Why a manual-update upload did not save.
 #[derive(Debug)]
 pub(crate) enum UploadNowError {
-    /// A terminal interrupt, a shutdown, or a call of `delete_all_snapshots` for the agent stopped
-    /// the save.
+    /// A terminal interrupt, a lost shard, a caller that stopped waiting, a shutdown, or a call
+    /// of `delete_all_snapshots` for the agent stopped the save.
     Stopped,
     /// The save failed, after the retries when the error allows them.
     Store(SnapshotStoreError),
+    /// The deadline of the admission passed while the upload waited for a running save of the
+    /// agent.
+    SaveRunning,
+    /// The deadline of the admission passed while the upload waited for a slot of the uploads.
+    NoSlot,
 }
 
 impl std::fmt::Display for UploadNowError {
@@ -184,6 +242,11 @@ impl std::fmt::Display for UploadNowError {
                 formatter.write_str("the upload of the filesystem snapshot was stopped")
             }
             Self::Store(error) => write!(formatter, "{error}"),
+            Self::SaveRunning => formatter.write_str(
+                "an earlier save of a filesystem snapshot of the agent still runs after the wait",
+            ),
+            Self::NoSlot => formatter
+                .write_str("no slot of the uploads of filesystem snapshots was free in the wait"),
         }
     }
 }
@@ -308,23 +371,16 @@ pub struct AgentFilesystemSnapshots {
 
 /// What an enabled service holds.
 struct Core {
-    store: Arc<dyn FilesystemSnapshotStore>,
+    /// The calls to the store. Nothing else holds the store.
+    store: Arc<StoreCalls>,
     settings: FilesystemSnapshotUploadConfig,
-    /// The slots of the store operations that save or delete.
-    uploads: Arc<Semaphore>,
-    /// The slots of the restores.
-    restores: Arc<Semaphore>,
     registry: Arc<Registry>,
     room: VolumeRoom,
-    cleanup: cleanup::CleanupQueue,
     /// Cancelled when the executor shuts down. The stop of each job is a child of it.
     shutdown: CancellationToken,
-    /// The upload jobs, so that a shutdown can wait for them.
+    /// The jobs, the store calls and the workers of the clean-ups, so that a shutdown can wait
+    /// for them.
     jobs: TaskTracker,
-    /// The store attempts of the uploads of this service that hold a slot now: a count of the
-    /// same attempts as the gauge of the metrics, which all services of the process share.
-    #[cfg(test)]
-    upload_attempts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AgentFilesystemSnapshots {
@@ -343,7 +399,7 @@ impl AgentFilesystemSnapshots {
                 match rules::binding(config, managed_storage)? {
                     rules::Binding::Disabled => Self::disabled(),
                     rules::Binding::Managed(config) => Self::enabled(
-                        crate::filesystem_snapshot::managed_store(blob_storage, config),
+                        StoreOf::Managed(blob_storage, config),
                         config.uploads().clone(),
                         room,
                         shutdown.token(),
@@ -351,9 +407,12 @@ impl AgentFilesystemSnapshots {
                 }
             }
             #[cfg(feature = "test-utils")]
-            Source::Given(store, settings) => {
-                Self::enabled(store, settings, VolumeRoom::Unlimited, shutdown.token())
-            }
+            Source::Given(store, settings) => Self::enabled(
+                StoreOf::Given(store),
+                settings,
+                VolumeRoom::Unlimited,
+                shutdown.token(),
+            ),
         });
         let token = shutdown.token();
         let stopping = Arc::clone(&snapshots);
@@ -373,35 +432,39 @@ impl AgentFilesystemSnapshots {
         }
     }
 
-    /// Makes a service over `store` with `settings`.
+    /// Makes a service over `store` with `settings`, with the workers of its clean-ups.
     fn enabled(
-        store: Arc<dyn FilesystemSnapshotStore>,
+        store: StoreOf<'_>,
         settings: FilesystemSnapshotUploadConfig,
         room: VolumeRoom,
         shutdown: CancellationToken,
     ) -> Self {
-        let uploads = Arc::new(Semaphore::new(settings.max_concurrent_uploads().get()));
         let jobs = TaskTracker::new();
-        let cleanup = cleanup::CleanupQueue::start(
-            Arc::clone(&store),
-            Arc::clone(&uploads),
-            settings.upload_retry().clone(),
+        let registry = Arc::new(Registry::new(rules::Limits::new(
+            settings.max_pending_deletes_per_agent(),
+        )));
+        let store = Arc::new(StoreCalls::bind(
+            store,
+            &settings,
+            Arc::clone(&registry),
             shutdown.clone(),
+            jobs.clone(),
+        ));
+        cleanup::start(
+            &store,
+            &registry,
+            &shutdown,
             &jobs,
+            settings.max_concurrent_uploads().get(),
         );
         Self {
             core: Some(Arc::new(Core {
-                restores: Arc::new(Semaphore::new(settings.max_concurrent_restores().get())),
                 store,
                 settings,
-                uploads,
-                registry: Arc::default(),
+                registry,
                 room,
-                cleanup,
                 shutdown,
                 jobs,
-                #[cfg(test)]
-                upload_attempts: Arc::default(),
             })),
             #[cfg(any(test, feature = "test-utils"))]
             captures: std::sync::Mutex::default(),
@@ -441,37 +504,43 @@ impl AgentFilesystemSnapshots {
             .unwrap_or_default()
     }
 
-    /// Asks for an upload of a periodic snapshot of the agent `agent`, before the guest saves.
+    /// Asks for an upload of a periodic snapshot of the agent `agent` in `mode`, before the guest
+    /// saves.
     ///
     /// The admission holds a new name. While it exists, and while the upload that it starts
     /// runs, each other admission of the agent gives [`SnapshotSkip::UploadInFlight`]. A dropped
-    /// admission frees the agent and writes nothing durable.
+    /// admission frees the agent and writes nothing durable. An agent that keeps no files, such as
+    /// an ephemeral agent, gets [`SnapshotSkip::Disabled`], as a disabled service gives.
     pub(crate) async fn admit_periodic(
         &self,
         agent: &AgentSnapshots,
+        mode: AgentMode,
     ) -> Result<Admission, SnapshotSkip> {
-        let core = self.core.as_ref().ok_or(SnapshotSkip::Disabled)?;
-        Core::admit(core, agent, SnapshotKind::Periodic)
+        let core = self.enabled_for(mode).ok_or(SnapshotSkip::Disabled)?;
+        Core::admit(core, agent, SnapshotKind::Periodic, None)
             .await
             .map_err(|refusal| refusal.skip)
     }
 
-    /// Asks for an upload of a manual-update snapshot of the agent `agent`. When an upload of
-    /// the agent runs, the call stops the deletes that the running job makes after its save, waits
-    /// once for the end of the job, for at most `confirmation_wait`, and asks again. The running
-    /// job still ends its save and its confirmation. A shutdown ends the wait like its limit does,
-    /// and a terminal interrupt that `interrupt` reports ends it with
-    /// [`UpdateRefusal::Interrupted`].
+    /// Asks for an upload of a manual-update snapshot of the agent `agent` in `mode`. When an
+    /// upload of the agent runs, the call stops the deletes that the running job makes after its
+    /// save, waits once for the end of the job, and asks again. The running job still ends its
+    /// save and its confirmation. The whole wait of the update, here and in its upload, ends
+    /// `confirmation_wait` after this call started: that is the deadline of the admission. A
+    /// shutdown ends the wait like the deadline does, and a terminal interrupt that `interrupt`
+    /// reports ends it with [`UpdateRefusal::Interrupted`]. An agent that keeps no files gets
+    /// [`SnapshotSkip::Disabled`].
     pub(crate) async fn admit_update(
         &self,
         agent: &AgentSnapshots,
+        mode: AgentMode,
         interrupt: watch::Receiver<bool>,
     ) -> Result<Admission, UpdateRefusal> {
         let core = self
-            .core
-            .as_ref()
+            .enabled_for(mode)
             .ok_or(UpdateRefusal::Skip(SnapshotSkip::Disabled))?;
-        let refusal = match Core::admit(core, agent, SnapshotKind::Update).await {
+        let deadline = tokio::time::Instant::now() + core.settings.confirmation_wait();
+        let refusal = match Core::admit(core, agent, SnapshotKind::Update, Some(deadline)).await {
             Ok(admission) => return Ok(admission),
             Err(refusal) => refusal,
         };
@@ -483,13 +552,18 @@ impl AgentFilesystemSnapshots {
         running.retention_stop.cancel();
         tokio::select! {
             () = core.registry.until_job_gone(agent, running.id) => {}
-            () = tokio::time::sleep(core.settings.confirmation_wait()) => {}
+            () = tokio::time::sleep_until(deadline) => {}
             () = core.shutdown.cancelled() => {}
             () = job::interrupt_raised(interrupt) => return Err(UpdateRefusal::Interrupted),
         }
-        Core::admit(core, agent, SnapshotKind::Update)
+        Core::admit(core, agent, SnapshotKind::Update, Some(deadline))
             .await
             .map_err(|refusal| UpdateRefusal::Skip(refusal.skip))
+    }
+
+    /// The core of an enabled service, for an agent in `mode` that keeps files.
+    fn enabled_for(&self, mode: AgentMode) -> Option<&Arc<Core>> {
+        self.core.as_ref().filter(|_| rules::keeps_files(mode))
     }
 
     /// Tells whether the store holds the whole snapshot `name` of `agent`, before a start
@@ -541,10 +615,10 @@ impl AgentFilesystemSnapshots {
         tokio::select! {
             biased;
             () = job::interrupt_raised(interrupt) => StartCheck::NotStored,
-            stat = tokio::time::timeout(limit, core.store.stat(agent, &store_name)) => match stat {
-                Ok(Ok(Some(_))) => StartCheck::Stored,
-                Ok(Ok(None)) | Err(_) => StartCheck::NotStored,
-                Ok(Err(error)) => {
+            stat = core.store.stat(agent, &store_name, limit) => match stat {
+                Ok(Some(_)) => StartCheck::Stored,
+                Ok(None) => StartCheck::NotStored,
+                Err(error) => {
                     tracing::warn!(error = %error, "Failed to check a filesystem snapshot before a start");
                     StartCheck::NotStored
                 }
@@ -561,17 +635,15 @@ impl AgentFilesystemSnapshots {
         name: &FilesystemSnapshotName,
     ) -> Result<StoreRestore, SnapshotsDisabled> {
         let core = self.core.as_ref().ok_or(SnapshotsDisabled)?;
-        Ok(StoreRestore::new(
-            Arc::clone(&core.store),
-            agent.clone(),
-            name.clone(),
-            Arc::clone(&core.restores),
-        ))
+        Ok(core.store.restore(agent, name))
     }
 
-    /// Deletes the filesystem snapshots `names` of `agent` in the background. The call returns at
-    /// once and cannot fail. The clean-up retries, and after the retries it logs and counts the
-    /// names that stay.
+    /// Deletes the filesystem snapshots `names` of `agent` in the background, after every store
+    /// call of the agent ended. `names` comes newest first. When the name of the job of the agent
+    /// is one of them, the call stops that job. The call returns at once and cannot fail. The
+    /// request merges into the pending work of the agent, which is bounded; names past the bound
+    /// are refused and counted as leaked. The clean-up retries, and after the retries it logs and
+    /// counts the names that stay.
     #[allow(dead_code)]
     pub(crate) fn delete_snapshots(
         &self,
@@ -579,25 +651,46 @@ impl AgentFilesystemSnapshots {
         names: Box<[FilesystemSnapshotName]>,
     ) {
         if let Some(core) = &self.core {
-            core.cleanup.delete(agent.clone(), names);
+            let names = names
+                .into_iter()
+                .filter_map(|name| store_name(&name).ok())
+                .collect::<Box<[_]>>();
+            let requested = core
+                .registry
+                .apply(|state| rules::request_names(state, agent, &names));
+            Self::requested(agent, requested);
         }
     }
 
-    /// Deletes all filesystem snapshots of `agent` in the background, after the job of the agent
-    /// ended. The call stops
-    /// that job first, so it sends nothing more; a confirmation that it already sent can still be
-    /// appended. The call returns at once and cannot fail.
+    /// Deletes all filesystem snapshots of `agent` in the background, after every job and every
+    /// store call of the agent ended. The call stops the job of the agent first, so it sends
+    /// nothing more; a confirmation that it already sent can still be appended. The call returns
+    /// at once and cannot fail.
     ///
     /// Until the delete ends, with success or with an error, an admission of the agent gives
-    /// [`SnapshotSkip::DeletingAllSnapshots`].
+    /// [`SnapshotSkip::DeletingAllSnapshots`], unless the bound of the clean-ups drops the request,
+    /// which is counted as `overflow`.
     #[allow(dead_code)]
     pub(crate) fn delete_all_snapshots(&self, agent: &AgentSnapshots) {
         if let Some(core) = &self.core {
-            let (ticket, stop) = DeleteAllTicket::delete_all_snapshots(&core.registry, agent);
-            if let Some(stop) = stop {
-                stop.cancel();
-            }
-            core.cleanup.delete_all(agent.clone(), ticket);
+            let requested = core
+                .registry
+                .apply(|state| rules::request_all(state, agent));
+            Self::requested(agent, requested);
+        }
+    }
+
+    /// Stops the job that a request stops, and counts a request that the bound dropped.
+    fn requested(agent: &AgentSnapshots, requested: rules::Requested) {
+        if let Some(stop) = requested.stop {
+            stop.cancel();
+        }
+        if requested.overflow {
+            tracing::warn!(
+                agent = ?agent,
+                "The clean-up queue of filesystem snapshots is full; a clean-up is lost"
+            );
+            crate::metrics::filesystem_snapshots::record_leaked_cleanup("overflow");
         }
     }
 
@@ -609,29 +702,28 @@ impl AgentFilesystemSnapshots {
         to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         match &self.core {
-            Some(core) => core.store.copy_all(from, to).await,
+            Some(core) => core.store.copy(from, to).await,
             None => Ok(()),
         }
     }
 
-    /// Stops the jobs and the clean-up queue, and waits for them, then shuts the store down.
+    /// Stops the jobs, the store calls and the clean-ups in the order of
+    /// [`StoreCalls::shut_down`], and waits for them.
     async fn shut_down(&self) {
         if let Some(core) = &self.core {
-            core.shutdown.cancel();
-            core.jobs.close();
-            core.jobs.wait().await;
             core.store.shut_down().await;
         }
     }
 }
 
 impl Core {
-    /// Admits a job of `kind` for `agent` with a new name. The error carries the job that runs
-    /// for the agent.
+    /// Admits a job of `kind` for `agent` with a new name, whose waits end at `deadline`. The
+    /// error carries the job that runs for the agent.
     async fn admit(
         core: &Arc<Self>,
         agent: &AgentSnapshots,
         kind: SnapshotKind,
+        deadline: Option<tokio::time::Instant>,
     ) -> Result<Admission, rules::Refusal> {
         let room = core.room.has_room().await;
         let name = match kind {
@@ -650,6 +742,7 @@ impl Core {
             ticket,
             name,
             kind,
+            deadline,
         })
     }
 }
@@ -661,6 +754,8 @@ pub(crate) struct Admission {
     ticket: JobTicket,
     name: FilesystemSnapshotName,
     kind: SnapshotKind,
+    /// When the waits of the upload end. Only a manual update has one.
+    deadline: Option<tokio::time::Instant>,
 }
 
 impl Admission {
@@ -678,13 +773,14 @@ impl Admission {
     /// snapshots. It differs from [`Admission::upload_now`] only in who waits and in what
     /// follows: both go through the same upload.
     ///
-    /// The job uploads, discards the tree, and confirms. On `Confirmed` it deletes the older
-    /// snapshots of its kind. On `Superseded` it deletes its own snapshot and no older one. On
-    /// `Deferred` it keeps the snapshot and deletes nothing, because a later start can confirm
-    /// it. When the retries are used up, it confirms nothing. A shutdown, or a call of
-    /// `delete_all_snapshots` for the agent, stops the job at each step, also in its deletes: it
-    /// then sends nothing more and deletes nothing more. A confirmation that it already sent can
-    /// still be appended.
+    /// The job uploads and confirms. On `Confirmed` it deletes the older snapshots of its kind,
+    /// except the names that a start can select. On `Superseded` it deletes its own snapshot and
+    /// no older one. On `Deferred` it keeps the snapshot and deletes nothing, because a later
+    /// start can confirm it. When the retries are used up, it confirms nothing. A shutdown, a call
+    /// of `delete_all_snapshots` for the agent, or a call of `delete_snapshots` with its name stops
+    /// the job at each step, also in its deletes: it then sends nothing more and deletes nothing
+    /// more. A store call that it already sent runs to its end, and the tree is discarded after
+    /// its save returned. A confirmation that it already sent can still be appended.
     pub(crate) fn submit(
         self,
         tree: CapturedTree,
@@ -707,30 +803,29 @@ pub(crate) struct SavedUpdate {
 }
 
 impl SavedUpdate {
-    /// Applies retention in the background, under a slot of the uploads: it keeps the own snapshot
-    /// and the newest older update snapshots, with the rules of periodic retention, and it never
-    /// deletes `kept`, the snapshot of the last successful manual update, whose record a start
-    /// restores without a fallback. A shutdown, a call of `delete_all_snapshots` for the agent, or
-    /// a later manual update of the agent stops it.
+    /// Applies retention in the background: it keeps the own snapshot and the newest older update
+    /// snapshots, with the rules of periodic retention, and it never deletes `kept`, the snapshot
+    /// of the last successful manual update, whose record a start restores without a fallback. A
+    /// shutdown, a call of `delete_all_snapshots` for the agent, or a later manual update of the
+    /// agent stops it.
     pub(crate) fn delete_older_snapshots(self, kept: Option<&FilesystemSnapshotName>) {
-        let kept = kept.and_then(|name| store_name(name).ok());
+        let kept = kept
+            .and_then(|name| store_name(name).ok())
+            .into_iter()
+            .collect::<Box<[_]>>();
         let Self {
             core,
             ticket,
             name,
             info,
         } = self;
+        let Ok(own) = store_name(&name) else {
+            return;
+        };
         let jobs = core.jobs.clone();
         jobs.spawn(async move {
-            job::delete_older_snapshots(
-                &core,
-                &ticket,
-                &name,
-                SnapshotKind::Update,
-                &info,
-                kept.as_ref(),
-            )
-            .await;
+            job::delete_older_snapshots(&core, &ticket, &own, SnapshotKind::Update, &info, &kept)
+                .await;
         });
     }
 }

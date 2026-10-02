@@ -25,11 +25,12 @@ use crate::services::agent_filesystem::{
     RestoreTree, TreeMark, WholeCapture,
 };
 use crate::services::agent_filesystem_snapshots::{
-    Admission, AgentFilesystemSnapshots, Confirm, ConfirmOutcome, SavedUpdate, SnapshotSkip,
+    Admission, AgentFilesystemSnapshots, Confirm, Confirmation, SavedUpdate, SnapshotSkip,
     SnapshotsDisabled, StoreRestore, UpdateRefusal, UploadNowError,
 };
 use crate::services::oplog::OplogError;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     FilesystemSnapshotName, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
@@ -464,8 +465,9 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
     agent: &AgentSnapshots,
+    mode: AgentMode,
 ) -> PeriodicResult<Host::Stop> {
-    let admission = match snapshots.admit_periodic(agent).await {
+    let admission = match snapshots.admit_periodic(agent, mode).await {
         Ok(admission) => Some(admission),
         Err(SnapshotSkip::Disabled) => None,
         Err(skip) => {
@@ -542,6 +544,8 @@ pub(crate) trait UpdateSnapshotHost {
     fn terminal(&self) -> watch::Receiver<bool>;
     /// Whether the shard of the agent is lost.
     fn lost_shard(&self) -> bool;
+    /// A receiver of whether the shard of the agent is lost.
+    fn lost_shard_signal(&self) -> watch::Receiver<bool>;
     /// The filesystem snapshot of the last successful manual update, which the retention of the
     /// update snapshot keeps.
     fn kept_baseline(&self) -> impl Future<Output = Option<FilesystemSnapshotName>> + Send;
@@ -590,8 +594,9 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
     agent: &AgentSnapshots,
+    mode: AgentMode,
 ) -> UpdateSnapshot<Host::Stop> {
-    let admission = match snapshots.admit_update(agent, host.terminal()).await {
+    let admission = match snapshots.admit_update(agent, mode, host.terminal()).await {
         Ok(admission) => Some(admission),
         Err(UpdateRefusal::Skip(SnapshotSkip::Disabled)) => None,
         Err(UpdateRefusal::Interrupted) => {
@@ -630,11 +635,14 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
         Some(WholeCapture::Captured { capture, .. }) => capture,
     };
     let name = admission.name().clone();
-    // A terminal interrupt stops the save, and the capture is discarded. An interrupted save
-    // writes no record: a snapshot that its publish still leaves has no record, and nothing
-    // selects it.
+    // A terminal interrupt stops the upload, and the capture is discarded after the save returned.
+    // An interrupted save writes no record: a snapshot that its publish still leaves has no
+    // record, and nothing selects it. A lost shard also cancels the save before its publish.
     let terminal = host.terminal();
-    match admission.upload_now(tree.into(), terminal.clone()).await {
+    match admission
+        .upload_now(tree.into(), terminal.clone(), host.lost_shard_signal())
+        .await
+    {
         Ok(saved) => UpdateSnapshot::Saved {
             snapshot,
             name: Some(name),
@@ -961,7 +969,7 @@ pub(crate) fn confirm_by<Ctx: WorkerCtx>(worker: Weak<Worker<Ctx>>, mark: TreeMa
         Box::pin(async move {
             match worker.upgrade() {
                 Some(worker) => worker.confirm_as(name, Confirmer::Running(mark)).await,
-                None => ConfirmOutcome::Deferred,
+                None => Confirmation::Deferred,
             }
         })
     })
@@ -1608,7 +1616,7 @@ mod tests {
 
         fn confirm(&self, _mark: TreeMark) -> Confirm {
             self.call("confirm".to_string());
-            Box::new(|_| Box::pin(async { ConfirmOutcome::Deferred }))
+            Box::new(|_| Box::pin(async { Confirmation::Deferred }))
         }
 
         fn initial_files_written(&self, _mark: TreeMark) {
@@ -1634,6 +1642,10 @@ mod tests {
 
         fn lost_shard(&self) -> bool {
             self.lost_shard
+        }
+
+        fn lost_shard_signal(&self) -> watch::Receiver<bool> {
+            watch::channel(self.lost_shard).1
         }
 
         async fn kept_baseline(&self) -> Option<FilesystemSnapshotName> {
@@ -1706,7 +1718,8 @@ mod tests {
             let agent = &agent;
             async move {
                 let mut host = host;
-                let result = periodic_snapshot(&mut host, disabled, agent).await;
+                let result =
+                    periodic_snapshot(&mut host, disabled, agent, AgentMode::Durable).await;
                 (outcome(&result), host.calls())
             }
         };
@@ -1765,25 +1778,36 @@ mod tests {
         let agent = agent_snapshots("periodic-enabled");
         let since = confirmed(&FilesystemSnapshotName::periodic(), mark);
 
-        let held = snapshots.admit_periodic(&agent).await.unwrap();
+        let held = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .unwrap();
         let mut refused = ScriptedHost::new();
-        let while_held = outcome(&periodic_snapshot(&mut refused, &snapshots, &agent).await);
+        let while_held =
+            outcome(&periodic_snapshot(&mut refused, &snapshots, &agent, AgentMode::Durable).await);
         drop(held);
         let mut failed_capture = ScriptedHost::new();
-        let capture_failed =
-            outcome(&periodic_snapshot(&mut failed_capture, &snapshots, &agent).await);
+        let capture_failed = outcome(
+            &periodic_snapshot(&mut failed_capture, &snapshots, &agent, AgentMode::Durable).await,
+        );
         let mut initial = ScriptedHost {
             capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles { mark })),
             ..ScriptedHost::new()
         };
-        let initial_files = outcome(&periodic_snapshot(&mut initial, &snapshots, &agent).await);
+        let initial_files =
+            outcome(&periodic_snapshot(&mut initial, &snapshots, &agent, AgentMode::Durable).await);
         let mut unchanged = ScriptedHost {
             since: Some(since.clone()),
             capture: std::sync::Mutex::new(Some(CaptureOutcome::Unchanged)),
             ..ScriptedHost::new()
         };
-        let reused = outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
-        let free_after = snapshots.admit_periodic(&agent).await.is_ok();
+        let reused = outcome(
+            &periodic_snapshot(&mut unchanged, &snapshots, &agent, AgentMode::Durable).await,
+        );
+        let free_after = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .is_ok();
 
         let name = since.name.as_ref().unwrap().as_str().to_string();
         assert_eq!(
@@ -1853,22 +1877,27 @@ mod tests {
         let agent = agent_snapshots("update");
 
         let mut without = ScriptedHost::new();
-        let without_snapshots =
-            update_outcome(&update_snapshot(&mut without, &disabled, &agent).await);
+        let without_snapshots = update_outcome(
+            &update_snapshot(&mut without, &disabled, &agent, AgentMode::Durable).await,
+        );
         let mut stopped = ScriptedHost {
             guest: Some(Err("stop")),
             ..ScriptedHost::new()
         };
-        let guest_stop = update_outcome(&update_snapshot(&mut stopped, &snapshots, &agent).await);
+        let guest_stop = update_outcome(
+            &update_snapshot(&mut stopped, &snapshots, &agent, AgentMode::Durable).await,
+        );
         let mut failed = ScriptedHost::new();
-        let capture_failed =
-            update_outcome(&update_snapshot(&mut failed, &snapshots, &agent).await);
+        let capture_failed = update_outcome(
+            &update_snapshot(&mut failed, &snapshots, &agent, AgentMode::Durable).await,
+        );
         let mut initial = ScriptedHost {
             whole: std::sync::Mutex::new(Some(WholeCapture::InitialFiles)),
             ..ScriptedHost::new()
         };
-        let initial_files =
-            update_outcome(&update_snapshot(&mut initial, &snapshots, &agent).await);
+        let initial_files = update_outcome(
+            &update_snapshot(&mut initial, &snapshots, &agent, AgentMode::Durable).await,
+        );
 
         assert_eq!(
             (without_snapshots, without.calls()),
@@ -1886,14 +1915,22 @@ mod tests {
             )
         );
         assert_eq!(initial_files, "Saved(none, false)");
-        assert!(snapshots.admit_periodic(&agent).await.is_ok());
+        assert!(
+            snapshots
+                .admit_periodic(&agent, AgentMode::Durable)
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
     async fn an_interrupted_wait_of_a_manual_update_fails_it_or_writes_nothing_on_a_lost_shard() {
         let (snapshots, _shutdown) = enabled_service();
         let agent = agent_snapshots("update-interrupted");
-        let held = snapshots.admit_periodic(&agent).await.unwrap();
+        let held = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .unwrap();
         let run = |lost_shard| {
             let snapshots = &snapshots;
             let agent = &agent;
@@ -1903,7 +1940,7 @@ mod tests {
                     ..ScriptedHost::new()
                 };
                 host.terminal.send_replace(true);
-                let result = update_snapshot(&mut host, snapshots, agent).await;
+                let result = update_snapshot(&mut host, snapshots, agent, AgentMode::Durable).await;
                 (update_outcome(&result), host.calls())
             }
         };
@@ -2100,10 +2137,12 @@ mod tests {
             ..ScriptedHost::new()
         };
 
-        let unchanged_result =
-            outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
-        let not_written_result =
-            outcome(&periodic_snapshot(&mut not_written, &snapshots, &agent).await);
+        let unchanged_result = outcome(
+            &periodic_snapshot(&mut unchanged, &snapshots, &agent, AgentMode::Durable).await,
+        );
+        let not_written_result = outcome(
+            &periodic_snapshot(&mut not_written, &snapshots, &agent, AgentMode::Durable).await,
+        );
 
         assert_eq!(
             (unchanged_result, unchanged.calls()),
@@ -2152,7 +2191,8 @@ mod tests {
             ..ScriptedHost::new()
         };
 
-        let result = outcome(&periodic_snapshot(&mut host, &snapshots, &agent).await);
+        let result =
+            outcome(&periodic_snapshot(&mut host, &snapshots, &agent, AgentMode::Durable).await);
 
         assert_eq!(
             (result, host.calls().last().cloned()),
@@ -2181,11 +2221,12 @@ mod tests {
                 &crate::filesystem_snapshot::SnapshotName,
                 StoreChangeDetection,
             )>,
+            cancel: &tokio_util::sync::CancellationToken,
         ) -> Result<
             crate::filesystem_snapshot::SnapshotInfo,
             crate::filesystem_snapshot::SnapshotStoreError,
         > {
-            let info = self.memory.save(agent, name, tree, parent).await?;
+            let info = self.memory.save(agent, name, tree, parent, cancel).await?;
             Ok(self.times.timed(name, info))
         }
 
@@ -2290,6 +2331,7 @@ mod tests {
                 name,
                 tree.path(),
                 None,
+                crate::filesystem_snapshot::never_cancelled(),
             )
         });
         futures::TryStreamExt::try_collect::<Vec<_>>(saved)
@@ -2307,7 +2349,7 @@ mod tests {
         let UpdateSnapshot::Saved {
             retention: Some(retention),
             ..
-        } = update_snapshot(&mut host, &snapshots, &agent).await
+        } = update_snapshot(&mut host, &snapshots, &agent, AgentMode::Durable).await
         else {
             panic!("the manual update saves its snapshot with a retention");
         };

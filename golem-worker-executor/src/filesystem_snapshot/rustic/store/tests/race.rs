@@ -56,7 +56,16 @@ async fn case(held: Held, k: usize) -> Option<((String, String), Result<(), Stri
     let scope = new_scope();
     let tree = fixture_tree();
     let raced = name("p-raced");
-    store.save(&scope, &raced, tree.path(), None).await.unwrap();
+    store
+        .save(
+            &scope,
+            &raced,
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await
+        .unwrap();
     armed.store(true, Ordering::SeqCst);
 
     let restoring = {

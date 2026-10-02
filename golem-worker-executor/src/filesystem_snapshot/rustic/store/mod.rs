@@ -191,6 +191,16 @@ fn runtime() -> Result<Handle, SnapshotStoreError> {
         })
 }
 
+/// The error of a save whose cancel fired before its publish.
+fn cancelled_save_error() -> SnapshotStoreError {
+    SnapshotStoreError::Storage {
+        retryable: false,
+        source: anyhow::anyhow!(
+            "the save of the filesystem snapshot was cancelled before its publish"
+        ),
+    }
+}
+
 /// The error of an operation of a store that is shut down.
 fn shut_down_error() -> SnapshotStoreError {
     SnapshotStoreError::Storage {
@@ -417,8 +427,8 @@ impl RusticSnapshotStore {
         Ok(())
     }
 
-    /// Publishes the staged snapshot file of a save. The publish is the commit point, so no cancel
-    /// ends it. The tracker counts it from the call, so a `shut_down` that has not cancelled yet
+    /// Publishes the staged snapshot file of a save, unless `cancel`, the cancel of the save, fired
+    /// first. The publish is the commit point, so no cancel ends it once it started. The tracker counts it from the call, so a `shut_down` that has not cancelled yet
     /// waits for it, and the deadline limits that wait. The check of the cancel and the start of the
     /// write are in the first poll of the returned future. So a publish never starts after the
     /// cancel.
@@ -426,6 +436,7 @@ impl RusticSnapshotStore {
         &self,
         scope: &AgentSnapshots,
         staged: StagedSnapshot,
+        cancel: CancellationToken,
     ) -> impl Future<Output = Result<(), SnapshotStoreError>> + Send + 'static {
         let files = self.files(scope, &self.root).detached();
         let (root, tracker) = (self.root.clone(), self.tracker.clone());
@@ -433,6 +444,9 @@ impl RusticSnapshotStore {
             if root.is_cancelled() {
                 // No snapshot file is written. A later prune marks the packs of the save.
                 return Err(shut_down_error());
+            }
+            if cancel.is_cancelled() {
+                return Err(cancelled_save_error());
             }
             let spawner = Spawner {
                 tracker,
@@ -526,8 +540,20 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
+        cancel: &CancellationToken,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let (token, _guard) = self.start()?;
+        // A cancel of the save cancels its operation, so each later storage call of the save
+        // fails. The link ends with the operation, and the tracker counts it.
+        {
+            let (cancel, token) = (cancel.clone(), token.clone());
+            self.tracker.spawn(async move {
+                tokio::select! {
+                    () = cancel.cancelled() => token.cancel(),
+                    () = token.cancelled() => {}
+                }
+            });
+        }
         self.check_tree(tree).await?;
         let stage = Arc::new(SnapshotStage::default());
         let backend = Arc::new(self.scope_backend(scope, &token)?.staging_in(stage.clone()));
@@ -546,9 +572,14 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
                     )
                 })
             })
-            .await?;
-        let (staged, info) = staged.ok_or(SnapshotStoreError::AlreadyExists)?;
-        self.publish_staged(scope, staged).await?;
+            .await;
+        // The backup has returned, so the store reads the tree no more. A cancel before this
+        // point publishes nothing, whatever the backup gave.
+        if cancel.is_cancelled() {
+            return Err(cancelled_save_error());
+        }
+        let (staged, info) = staged?.ok_or(SnapshotStoreError::AlreadyExists)?;
+        self.publish_staged(scope, staged, cancel.clone()).await?;
         Ok(info)
     }
 

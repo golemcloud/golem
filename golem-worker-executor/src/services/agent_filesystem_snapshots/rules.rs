@@ -12,38 +12,115 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The rules of the service, as pure functions over plain values: the transitions of the jobs and
-//! the deletes of all snapshots, the decisions of a job, the plan of a start, and the admission of
-//! a manual update. Nothing here waits, reads a clock, draws a random number or calls the store.
+//! The rules of the service, as pure functions over plain values: the transitions of the jobs,
+//! the clean-ups and the store calls, the decisions of a job, the plan of a start, and the
+//! admission of a manual update. Nothing here waits, reads a clock, draws a random number or calls
+//! the store.
 
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
-use crate::filesystem_snapshot::{AgentSnapshots, SnapshotInfo, SnapshotStoreError};
+use crate::filesystem_snapshot::{AgentSnapshots, SnapshotInfo, SnapshotName, SnapshotStoreError};
 use crate::sandbox_filesystem::FilesystemSpace;
 use crate::services::golem_config::{
     FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
 };
-use golem_common::model::RetryConfig;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::FilesystemSnapshotName;
+use golem_common::model::{AgentId, RetryConfig};
 use golem_common::retries::get_delay;
-use std::collections::HashMap;
-use std::num::NonZeroU32;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 /// The number of a job. It is unique for the life of the process.
 pub(super) type JobId = u64;
 
-/// The jobs of the agents, the deletes of all snapshots, and the decisions of ended jobs that a
-/// start waits for.
+/// The largest number of agents with pending clean-up work.
+pub(super) const MAX_PENDING_CLEANUPS: usize = 65_536;
+
+/// The largest number of pending snapshot names over all agents.
+pub(super) const MAX_PENDING_NAMES: usize = 3 << 18;
+
+/// The bounds of the pending clean-up work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Limits {
+    /// The largest number of agents with pending work.
+    pub(super) pending_cleanups: usize,
+    /// The largest number of pending names over all agents.
+    pub(super) pending_names: usize,
+    /// The largest number of pending names of one agent.
+    pub(super) names_per_cleanup: usize,
+}
+
+impl Limits {
+    /// The limits of a service whose agents each have at most `names_per_cleanup` pending names.
+    pub(super) fn new(names_per_cleanup: NonZeroUsize) -> Self {
+        Self {
+            pending_cleanups: MAX_PENDING_CLEANUPS,
+            pending_names: MAX_PENDING_NAMES,
+            names_per_cleanup: names_per_cleanup.get(),
+        }
+    }
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            pending_cleanups: MAX_PENDING_CLEANUPS,
+            pending_names: MAX_PENDING_NAMES,
+            names_per_cleanup: MAX_PENDING_NAMES,
+        }
+    }
+}
+
+/// The fork attempt of one request: the target agent and the hash of the request.
+pub(super) type Flight = (AgentId, [u8; 32]);
+
+/// The jobs of the agents, the clean-ups, the store calls that have not ended, the fork attempts,
+/// and the decisions of ended jobs that a start waits for.
 #[derive(Debug, Default)]
 pub(super) struct State {
     jobs: HashMap<AgentSnapshots, Job>,
-    /// The number of queued or running deletes of each agent.
-    deleting: HashMap<AgentSnapshots, NonZeroU32>,
     /// The last ended job of each agent that a start still waits for.
     ended: HashMap<AgentSnapshots, Ended>,
     /// The number of the last admitted job.
     last_job: JobId,
+    /// The clean-up work of each agent that has some.
+    cleanups: HashMap<AgentSnapshots, Cleanup>,
+    /// The work of each agent that can write its snapshots and has not ended: store calls, also
+    /// those whose caller stopped waiting, and the source holds of forks.
+    busy: HashMap<AgentSnapshots, NonZeroU32>,
+    /// The agents whose save runs now.
+    save_running: HashSet<AgentSnapshots>,
+    /// The agents that a worker of the pool takes next, oldest first. An agent can be here when it
+    /// is no longer ready, and `take_ready` skips it.
+    ready: VecDeque<AgentSnapshots>,
+    /// The agents with pending names, in the order in which the names became pending, each with
+    /// the stamp of its pending names. An entry whose stamp is not the stamp of the pending names
+    /// of its agent is stale.
+    names_order: VecDeque<(AgentSnapshots, u64)>,
+    /// The stamp of the next pending names.
+    next_order: u64,
+    /// The number of agents with pending work.
+    pending_entries: usize,
+    /// The number of agents with pending names.
+    pending_names_entries: usize,
+    /// The number of pending names over all agents.
+    pending_names_total: usize,
+    /// The fork attempts that run on this executor.
+    #[cfg_attr(not(test), allow(dead_code))]
+    flights: HashMap<Flight, ForkPhase>,
+    limits: Limits,
+}
+
+impl State {
+    /// An empty state with `limits`.
+    pub(super) fn with_limits(limits: Limits) -> Self {
+        Self {
+            limits,
+            ..Self::default()
+        }
+    }
 }
 
 /// The job of one agent, from its admission to its end.
@@ -82,6 +159,79 @@ pub(super) enum JobPhase {
     Decided(JobDecision),
 }
 
+/// Clean-up work of one agent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Work {
+    /// Deletes these snapshots.
+    Names(HashSet<SnapshotName>),
+    /// Deletes every snapshot.
+    All,
+}
+
+/// The kind of the work that a worker of the pool runs for an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunningWork {
+    Names,
+    All,
+}
+
+/// The clean-up of one agent: the work that waits, and the work that a worker runs now.
+#[derive(Debug, Default)]
+struct Cleanup {
+    pending: Option<Work>,
+    running: Option<RunningWork>,
+    /// Whether the agent is in `ready` since it was last pushed there.
+    queued: bool,
+    /// The stamp of the pending names in `names_order`.
+    order: Option<u64>,
+}
+
+/// What a store call does, for the count of the work of its agents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum CallKind {
+    /// A save. Only one save of an agent runs at a time.
+    Save,
+    /// A copy into the agent `to`. It counts on both agents.
+    Copy { to: AgentSnapshots },
+    /// Any other call that writes.
+    Other,
+}
+
+/// Where a fork attempt is.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForkPhase {
+    /// The attempt copies, or has not reached its publication.
+    Copying,
+    /// The attempt publishes its target.
+    Publishing,
+}
+
+/// What the end of a fork attempt does to the snapshots of its stage.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ForkEnd {
+    /// The attempt never reached its publication, so nothing can publish its stage, and the
+    /// delete of all snapshots of the stage is requested. `overflow` tells whether the bound of
+    /// the clean-ups dropped that request or evicted other work.
+    StageDeleted { overflow: bool },
+    /// The attempt did not finish its publication. Its stage can be published, so its snapshots
+    /// stay.
+    StageLeaked,
+    /// The attempt published its stage.
+    Done,
+}
+
+/// What a request of clean-up work gave.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Requested {
+    /// The stop of the job of the agent, when the request stops it.
+    pub(super) stop: Option<CancellationToken>,
+    /// Whether the bound of the clean-ups dropped some of the request, or evicted other work for
+    /// it.
+    pub(super) overflow: bool,
+}
+
 /// A transition of [`State`]. The registry wakes its waiters after a transition when
 /// [`wakes`] says so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,21 +242,39 @@ enum Transition {
     End,
     StartWait,
     Unwatch,
-    DeleteAllSnapshots,
-    AllSnapshotsDeleted,
+    RequestNames,
+    RequestAll,
+    TakeReady,
+    CleanupEnded,
+    BeginCall,
+    StoreCallEnded,
+    #[cfg_attr(not(test), allow(dead_code))]
+    ForkBegan,
+    #[cfg_attr(not(test), allow(dead_code))]
+    ForkPublishing,
+    #[cfg_attr(not(test), allow(dead_code))]
+    ForkEnded,
 }
 
 /// Whether the waiters of the registry must see `transition`. A waiter waits for a decision, for
-/// the end of a job, or for the end of a delete of all snapshots.
+/// the end of a job, for the end of a save, for clean-up work, or for the end of a fork attempt.
 fn wakes(transition: Transition) -> bool {
     match transition {
         Transition::Decide
         | Transition::End
-        | Transition::DeleteAllSnapshots
-        | Transition::AllSnapshotsDeleted => true,
-        Transition::Admit | Transition::Saving | Transition::StartWait | Transition::Unwatch => {
-            false
-        }
+        | Transition::RequestNames
+        | Transition::RequestAll
+        | Transition::CleanupEnded
+        | Transition::StoreCallEnded
+        | Transition::ForkEnded => true,
+        Transition::Admit
+        | Transition::Saving
+        | Transition::StartWait
+        | Transition::Unwatch
+        | Transition::TakeReady
+        | Transition::BeginCall
+        | Transition::ForkBegan
+        | Transition::ForkPublishing => false,
     }
 }
 
@@ -155,6 +323,15 @@ pub(super) struct RunningJob {
     pub(super) retention_stop: CancellationToken,
 }
 
+/// Whether an agent in `mode` keeps filesystem snapshots. Only a durable agent does: nothing
+/// restores an ephemeral agent, and nothing deletes the snapshots of one.
+pub(super) fn keeps_files(mode: AgentMode) -> bool {
+    match mode {
+        AgentMode::Durable => true,
+        AgentMode::Ephemeral => false,
+    }
+}
+
 /// Admits a job with `name` for `agent`, in the order room, delete of all snapshots, running job.
 /// `stop` stops the job, `retention_stop` stops its deletes after its save, and `room` tells
 /// whether the volume has room for a capture. Gives the next state and the job, or the refusal.
@@ -172,7 +349,7 @@ pub(super) fn admit(
     });
     let skip = if !room {
         Some(SnapshotSkip::VolumeUnderPressure)
-    } else if state.deleting.contains_key(agent) {
+    } else if all_requested(&state, agent) {
         Some(SnapshotSkip::DeletingAllSnapshots)
     } else if running.is_some() {
         Some(SnapshotSkip::UploadInFlight)
@@ -223,40 +400,6 @@ pub(super) fn decide(
     Next::of(Transition::Decide, state, ())
 }
 
-/// A delete of all snapshots of `agent` is queued. Gives the next state and the stop of the job
-/// of the agent, when one runs.
-pub(super) fn delete_all_snapshots(
-    mut state: State,
-    agent: &AgentSnapshots,
-) -> Next<Option<CancellationToken>> {
-    let stop = state.jobs.get(agent).map(|job| job.stop.clone());
-    state
-        .deleting
-        .entry(agent.clone())
-        .and_modify(|count| *count = count.saturating_add(1))
-        .or_insert(NonZeroU32::MIN);
-    Next::of(Transition::DeleteAllSnapshots, state, stop)
-}
-
-/// A delete of all snapshots of `agent` ended. The last one frees the agent and the ended decision
-/// of the agent.
-pub(super) fn all_snapshots_deleted(mut state: State, agent: &AgentSnapshots) -> Next<()> {
-    let left = state
-        .deleting
-        .get(agent)
-        .and_then(|count| NonZeroU32::new(count.get() - 1));
-    match left {
-        Some(left) => {
-            state.deleting.insert(agent.clone(), left);
-        }
-        None => {
-            state.deleting.remove(agent);
-        }
-    }
-    state.ended.remove(agent);
-    Next::of(Transition::AllSnapshotsDeleted, state, ())
-}
-
 /// The live job `id` of `agent` in a state that a rule owns.
 fn live<'a>(state: &'a mut State, agent: &AgentSnapshots, id: JobId) -> Option<&'a mut Job> {
     state.jobs.get_mut(agent).filter(|job| job.id == id)
@@ -281,6 +424,7 @@ pub(super) fn end(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<(
             },
         );
     }
+    push_if_ready(&mut state, agent);
     Next::of(Transition::End, state, ())
 }
 
@@ -356,8 +500,435 @@ pub(super) fn has_ended(state: &State, agent: &AgentSnapshots, id: JobId) -> boo
 }
 
 /// Whether no job runs for `agent`.
+#[cfg(test)]
 pub(super) fn is_free(state: &State, agent: &AgentSnapshots) -> bool {
     !state.jobs.contains_key(agent)
+}
+
+/// Requests the delete of the snapshots `names` of `agent`. The request merges into the pending
+/// names of the agent, and is ignored while a delete of all snapshots of the agent is pending or
+/// runs. The pending names keep their place: the names of the request are added in their order
+/// while they fit under the limit of one agent and the limit of all agents, and the names that do
+/// not fit are refused. A request for an agent without pending work is refused when the limit of
+/// the agents with pending work is reached. An empty request changes nothing. The answer tells
+/// whether names were refused, and holds the stop of the job of the agent when `names` holds the
+/// name of the job, also when the bounds refuse the names.
+pub(super) fn request_names(
+    mut state: State,
+    agent: &AgentSnapshots,
+    names: &[SnapshotName],
+) -> Next<Requested> {
+    let stop = state
+        .jobs
+        .get(agent)
+        .filter(|job| names.iter().any(|name| name.as_str() == job.name.as_str()))
+        .map(|job| job.stop.clone());
+    let overflow = add_names(&mut state, agent, names);
+    push_if_ready(&mut state, agent);
+    Next::of(
+        Transition::RequestNames,
+        state,
+        Requested { stop, overflow },
+    )
+}
+
+/// Adds `names` to the pending names of `agent` within the limits, and tells whether some names
+/// were refused.
+fn add_names(state: &mut State, agent: &AgentSnapshots, names: &[SnapshotName]) -> bool {
+    if names.is_empty() || all_requested(state, agent) {
+        return false;
+    }
+    let exists = state.cleanups.contains_key(agent);
+    if !exists && state.pending_entries >= state.limits.pending_cleanups {
+        return true;
+    }
+    let limits = state.limits;
+    let total = state.pending_names_total;
+    let cleanup = state.cleanups.entry(agent.clone()).or_default();
+    let created = cleanup.pending.is_none();
+    let Work::Names(pending) = cleanup
+        .pending
+        .get_or_insert_with(|| Work::Names(HashSet::new()))
+    else {
+        return false;
+    };
+    let room = limits
+        .pending_names
+        .saturating_sub(total)
+        .min(limits.names_per_cleanup.saturating_sub(pending.len()));
+    let (added, overflow) = names
+        .iter()
+        .fold((0usize, false), |(added, overflow), name| {
+            if pending.contains(name) {
+                (added, overflow)
+            } else if added < room {
+                pending.insert(name.clone());
+                (added + 1, overflow)
+            } else {
+                (added, true)
+            }
+        });
+    if created && added == 0 {
+        cleanup.pending = None;
+        if cleanup.running.is_none() {
+            state.cleanups.remove(agent);
+        }
+        return overflow;
+    }
+    state.pending_names_total += added;
+    if created {
+        state.pending_entries += 1;
+        state.pending_names_entries += 1;
+        push_order(state, agent);
+    }
+    overflow
+}
+
+/// Requests the delete of all snapshots of `agent`. It replaces the pending names of the agent.
+/// When the limit of the agents with pending work is reached, it evicts the oldest pending names
+/// of another agent, and it is dropped only when no pending names are left to evict. The answer
+/// holds the stop of the job of the agent, also when the bound drops the request.
+pub(super) fn request_all(mut state: State, agent: &AgentSnapshots) -> Next<Requested> {
+    let stop = state.jobs.get(agent).map(|job| job.stop.clone());
+    let overflow = add_all(&mut state, agent);
+    push_if_ready(&mut state, agent);
+    Next::of(Transition::RequestAll, state, Requested { stop, overflow })
+}
+
+/// Makes the delete of all snapshots of `agent` pending, and tells whether the bound dropped it or
+/// evicted other work.
+fn add_all(state: &mut State, agent: &AgentSnapshots) -> bool {
+    let pending_names = match state.cleanups.get(agent).map(|cleanup| &cleanup.pending) {
+        Some(Some(Work::All)) => return false,
+        Some(Some(Work::Names(names))) => Some(names.len()),
+        Some(None) => None,
+        None => {
+            let evicted = state.pending_entries >= state.limits.pending_cleanups;
+            if evicted && !evict_oldest_names(state) {
+                return true;
+            }
+            state.pending_entries += 1;
+            state.cleanups.insert(
+                agent.clone(),
+                Cleanup {
+                    pending: Some(Work::All),
+                    ..Cleanup::default()
+                },
+            );
+            return evicted;
+        }
+    };
+    match pending_names {
+        Some(names) => {
+            state.pending_names_total = state.pending_names_total.saturating_sub(names);
+            state.pending_names_entries = state.pending_names_entries.saturating_sub(1);
+        }
+        None => state.pending_entries += 1,
+    }
+    if let Some(cleanup) = state.cleanups.get_mut(agent) {
+        cleanup.pending = Some(Work::All);
+        cleanup.order = None;
+    }
+    false
+}
+
+/// Drops the oldest pending names of an agent, and tells whether there were any. The work that
+/// the agent runs stays.
+fn evict_oldest_names(state: &mut State) -> bool {
+    let cleanups = &state.cleanups;
+    let Some((agent, _)) = std::iter::from_fn(|| state.names_order.pop_front())
+        .find(|(agent, stamp)| holds_names_of(cleanups, agent, *stamp))
+    else {
+        return false;
+    };
+    let Some(cleanup) = state.cleanups.get_mut(&agent) else {
+        return false;
+    };
+    let names = match cleanup.pending.take() {
+        Some(Work::Names(names)) => names.len(),
+        other => {
+            cleanup.pending = other;
+            return false;
+        }
+    };
+    cleanup.order = None;
+    if cleanup.running.is_none() {
+        state.cleanups.remove(&agent);
+    }
+    state.pending_names_total = state.pending_names_total.saturating_sub(names);
+    state.pending_names_entries = state.pending_names_entries.saturating_sub(1);
+    state.pending_entries = state.pending_entries.saturating_sub(1);
+    true
+}
+
+/// Whether the order entry of `agent` with `stamp` stands for the pending names of the agent.
+fn holds_names_of(
+    cleanups: &HashMap<AgentSnapshots, Cleanup>,
+    agent: &AgentSnapshots,
+    stamp: u64,
+) -> bool {
+    cleanups.get(agent).is_some_and(|cleanup| {
+        cleanup.order == Some(stamp) && matches!(cleanup.pending, Some(Work::Names(_)))
+    })
+}
+
+/// Puts the new pending names of `agent` at the back of the order. Stale entries at the front go
+/// first, and the order is compacted when it holds more than twice the entries that it needs, so
+/// each push costs O(1) amortized.
+fn push_order(state: &mut State, agent: &AgentSnapshots) {
+    let cleanups = &state.cleanups;
+    let stale = state
+        .names_order
+        .iter()
+        .take_while(|(agent, stamp)| !holds_names_of(cleanups, agent, *stamp))
+        .count();
+    state.names_order.drain(..stale);
+    let stamp = state.next_order;
+    state.next_order += 1;
+    if let Some(cleanup) = state.cleanups.get_mut(agent) {
+        cleanup.order = Some(stamp);
+    }
+    state.names_order.push_back((agent.clone(), stamp));
+    if state.names_order.len() > 2 * state.pending_names_entries + 16 {
+        let cleanups = &state.cleanups;
+        state
+            .names_order
+            .retain(|(agent, stamp)| holds_names_of(cleanups, agent, *stamp));
+    }
+}
+
+/// Whether a worker of the pool can run the pending work of `agent` now: no work of the agent
+/// runs, no store call or fork hold of the agent is open, and no job of the agent blocks the
+/// work. A job blocks a delete of all snapshots, and a delete of names that holds its name.
+pub(super) fn is_ready(state: &State, agent: &AgentSnapshots) -> bool {
+    ready_in(&state.cleanups, &state.busy, &state.jobs, agent)
+}
+
+fn ready_in(
+    cleanups: &HashMap<AgentSnapshots, Cleanup>,
+    busy: &HashMap<AgentSnapshots, NonZeroU32>,
+    jobs: &HashMap<AgentSnapshots, Job>,
+    agent: &AgentSnapshots,
+) -> bool {
+    cleanups.get(agent).is_some_and(|cleanup| {
+        cleanup.running.is_none()
+            && !busy.contains_key(agent)
+            && match &cleanup.pending {
+                Some(Work::All) => !jobs.contains_key(agent),
+                Some(Work::Names(names)) => jobs
+                    .get(agent)
+                    .is_none_or(|job| !names.contains(job.name.as_str())),
+                None => false,
+            }
+    })
+}
+
+/// Puts `agent` at the back of the ready queue when it is ready and not queued.
+fn push_if_ready(state: &mut State, agent: &AgentSnapshots) {
+    if !is_ready(state, agent) {
+        return;
+    }
+    if let Some(cleanup) = state.cleanups.get_mut(agent)
+        && !cleanup.queued
+    {
+        cleanup.queued = true;
+        state.ready.push_back(agent.clone());
+    }
+}
+
+/// Takes the first ready agent from the ready queue, and moves its pending work to the running
+/// work. A queued agent that is not ready is skipped, and the next transition that makes it ready
+/// queues it again. Gives `None` only when the queue is empty.
+pub(super) fn take_ready(mut state: State) -> Next<Option<(AgentSnapshots, Work)>> {
+    let (ready, cleanups, busy, jobs) = (
+        &mut state.ready,
+        &mut state.cleanups,
+        &state.busy,
+        &state.jobs,
+    );
+    let found = std::iter::from_fn(|| ready.pop_front()).find(|agent| {
+        let is_ready = ready_in(cleanups, busy, jobs, agent);
+        if let Some(cleanup) = cleanups.get_mut(agent) {
+            cleanup.queued = false;
+        }
+        is_ready
+    });
+    let taken = found.and_then(|agent| {
+        let cleanup = state.cleanups.get_mut(&agent)?;
+        let work = cleanup.pending.take()?;
+        cleanup.order = None;
+        cleanup.running = Some(match work {
+            Work::Names(_) => RunningWork::Names,
+            Work::All => RunningWork::All,
+        });
+        state.pending_entries = state.pending_entries.saturating_sub(1);
+        if let Work::Names(names) = &work {
+            state.pending_names_total = state.pending_names_total.saturating_sub(names.len());
+            state.pending_names_entries = state.pending_names_entries.saturating_sub(1);
+        }
+        Some((agent, work))
+    });
+    Next::of(Transition::TakeReady, state, taken)
+}
+
+/// The running clean-up work of `agent` ended. An agent without pending work leaves the
+/// clean-ups. The end of a delete of all snapshots also drops the ended decision of the agent.
+pub(super) fn cleanup_ended(mut state: State, agent: &AgentSnapshots) -> Next<()> {
+    if let Some(cleanup) = state.cleanups.get_mut(agent) {
+        if cleanup.running.take() == Some(RunningWork::All) {
+            state.ended.remove(agent);
+        }
+        if cleanup.pending.is_none() {
+            state.cleanups.remove(agent);
+        }
+    }
+    push_if_ready(&mut state, agent);
+    Next::of(Transition::CleanupEnded, state, ())
+}
+
+/// Whether a delete of all snapshots of `agent` is pending or runs.
+pub(super) fn all_requested(state: &State, agent: &AgentSnapshots) -> bool {
+    state.cleanups.get(agent).is_some_and(|cleanup| {
+        matches!(cleanup.pending, Some(Work::All)) || cleanup.running == Some(RunningWork::All)
+    })
+}
+
+/// Whether a save of `agent` runs now.
+pub(super) fn save_running(state: &State, agent: &AgentSnapshots) -> bool {
+    state.save_running.contains(agent)
+}
+
+/// The number of open store calls and fork holds of `agent`.
+#[cfg(test)]
+pub(super) fn busy(state: &State, agent: &AgentSnapshots) -> u32 {
+    state.busy.get(agent).map_or(0, |count| count.get())
+}
+
+/// The number of agents with pending clean-up work.
+pub(super) fn pending_cleanups(state: &State) -> usize {
+    state.pending_entries
+}
+
+/// Begins a store call of `kind` for `agent`. A save is refused while another save of the agent
+/// runs. The call counts on `agent`, and a copy also on the agent that it copies into.
+pub(super) fn begin_call(mut state: State, agent: &AgentSnapshots, kind: &CallKind) -> Next<bool> {
+    let begun = match kind {
+        CallKind::Save => state.save_running.insert(agent.clone()),
+        CallKind::Copy { .. } | CallKind::Other => true,
+    };
+    if begun {
+        state.busy = with_one_more(state.busy, agent);
+        if let CallKind::Copy { to } = kind {
+            state.busy = with_one_more(state.busy, to);
+        }
+    }
+    Next::of(Transition::BeginCall, state, begun)
+}
+
+/// A store call of `kind` for `agent` ended. Its counts end, and a save frees the agent for the
+/// next save.
+pub(super) fn store_call_ended(
+    mut state: State,
+    agent: &AgentSnapshots,
+    kind: &CallKind,
+) -> Next<()> {
+    state.busy = with_one_less(state.busy, agent);
+    match kind {
+        CallKind::Save => {
+            state.save_running.remove(agent);
+        }
+        CallKind::Copy { to } => {
+            state.busy = with_one_less(state.busy, to);
+            push_if_ready(&mut state, to);
+        }
+        CallKind::Other => {}
+    }
+    push_if_ready(&mut state, agent);
+    Next::of(Transition::StoreCallEnded, state, ())
+}
+
+/// The fork attempt `flight` holds the snapshots of its source `from` before it reads the oplog of
+/// the source. It is refused while a delete of all snapshots of the source is pending or runs, and
+/// while another attempt of the same flight runs.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn fork_began(mut state: State, from: &AgentSnapshots, flight: &Flight) -> Next<bool> {
+    let began = !all_requested(&state, from) && !state.flights.contains_key(flight);
+    if began {
+        state.busy = with_one_more(state.busy, from);
+        state.flights.insert(flight.clone(), ForkPhase::Copying);
+    }
+    Next::of(Transition::ForkBegan, state, began)
+}
+
+/// The fork attempt `flight` starts its publication.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn fork_publishing(mut state: State, flight: &Flight) -> Next<()> {
+    if let Some(phase) = state.flights.get_mut(flight) {
+        *phase = ForkPhase::Publishing;
+    }
+    Next::of(Transition::ForkPublishing, state, ())
+}
+
+/// The fork attempt `flight` of the source `from` into `stage` ended, after its publication when
+/// `published`. Its hold of the source ends. An attempt that never reached its publication can
+/// never publish `stage`, so the delete of all snapshots of `stage` is requested in the same
+/// transition.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn fork_ended(
+    mut state: State,
+    from: &AgentSnapshots,
+    flight: &Flight,
+    stage: &AgentSnapshots,
+    published: bool,
+) -> Next<ForkEnd> {
+    state.busy = with_one_less(state.busy, from);
+    let end = match state.flights.remove(flight) {
+        Some(ForkPhase::Copying) => {
+            let overflow = add_all(&mut state, stage);
+            push_if_ready(&mut state, stage);
+            ForkEnd::StageDeleted { overflow }
+        }
+        Some(ForkPhase::Publishing) if !published => ForkEnd::StageLeaked,
+        Some(ForkPhase::Publishing) | None => ForkEnd::Done,
+    };
+    push_if_ready(&mut state, from);
+    Next::of(Transition::ForkEnded, state, end)
+}
+
+/// `busy` with one more count for `agent`.
+fn with_one_more(
+    mut busy: HashMap<AgentSnapshots, NonZeroU32>,
+    agent: &AgentSnapshots,
+) -> HashMap<AgentSnapshots, NonZeroU32> {
+    busy.entry(agent.clone())
+        .and_modify(|count| *count = count.saturating_add(1))
+        .or_insert(NonZeroU32::MIN);
+    busy
+}
+
+/// `busy` with one count less for `agent`. The last count removes the agent. A missing count
+/// changes nothing.
+fn with_one_less(
+    mut busy: HashMap<AgentSnapshots, NonZeroU32>,
+    agent: &AgentSnapshots,
+) -> HashMap<AgentSnapshots, NonZeroU32> {
+    let left = busy
+        .get(agent)
+        .map(|count| NonZeroU32::new(count.get().saturating_sub(1)));
+    debug_assert!(
+        left.is_some(),
+        "a count of the work of an agent ended twice"
+    );
+    match left {
+        Some(Some(left)) => {
+            busy.insert(agent.clone(), left);
+        }
+        Some(None) => {
+            busy.remove(agent);
+        }
+        None => {}
+    }
+    busy
 }
 
 /// What one save attempt gave.
@@ -542,6 +1113,7 @@ mod tests {
     use golem_common::model::component::ComponentId;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::{AgentId, OwnedAgentId};
+    use std::collections::HashMap;
     use test_r::test;
 
     fn agent_snapshots(name: &str) -> AgentSnapshots {
@@ -577,11 +1149,57 @@ mod tests {
         state: &mut State,
         agent: &AgentSnapshots,
     ) -> Option<CancellationToken> {
-        step(state, |state| super::delete_all_snapshots(state, agent))
+        step(state, |state| super::request_all(state, agent)).stop
     }
 
-    fn all_snapshots_deleted(state: &mut State, agent: &AgentSnapshots) {
-        step(state, |state| super::all_snapshots_deleted(state, agent))
+    fn request_all(state: &mut State, agent: &AgentSnapshots) -> Requested {
+        step(state, |state| super::request_all(state, agent))
+    }
+
+    fn request_names(
+        state: &mut State,
+        agent: &AgentSnapshots,
+        names: &[SnapshotName],
+    ) -> Requested {
+        step(state, |state| super::request_names(state, agent, names))
+    }
+
+    fn take(state: &mut State) -> Option<(AgentSnapshots, Work)> {
+        step(state, take_ready)
+    }
+
+    fn ended_cleanup(state: &mut State, agent: &AgentSnapshots) {
+        step(state, |state| cleanup_ended(state, agent))
+    }
+
+    fn begin(state: &mut State, agent: &AgentSnapshots, kind: &CallKind) -> bool {
+        step(state, |state| begin_call(state, agent, kind))
+    }
+
+    fn ended_call(state: &mut State, agent: &AgentSnapshots, kind: &CallKind) {
+        step(state, |state| store_call_ended(state, agent, kind))
+    }
+
+    /// Takes each ready agent and ends its work at once, until none is ready.
+    fn drain(state: &mut State) {
+        if let Some((agent, _)) = take(state) {
+            ended_cleanup(state, &agent);
+            drain(state);
+        }
+    }
+
+    fn snapshot_names(texts: &[&str]) -> Vec<SnapshotName> {
+        texts
+            .iter()
+            .map(|text| SnapshotName::new(text).unwrap())
+            .collect()
+    }
+
+    fn work_names(work: &Work) -> std::collections::BTreeSet<String> {
+        match work {
+            Work::Names(names) => names.iter().map(|name| name.as_str().to_string()).collect(),
+            Work::All => std::collections::BTreeSet::from(["*".to_string()]),
+        }
     }
 
     fn unwatch(state: &mut State, agent: &AgentSnapshots, id: JobId) {
@@ -828,7 +1446,8 @@ mod tests {
     }
 
     #[test]
-    fn deletes_of_all_snapshots_count_and_the_last_end_frees_the_agent_and_its_ended_decision() {
+    fn a_delete_of_all_snapshots_refuses_admissions_until_its_work_ends_and_drops_the_ended_decision()
+     {
         let mut state = State::default();
         let agent = agent_snapshots("deletes");
         let name = FilesystemSnapshotName::periodic();
@@ -838,31 +1457,42 @@ mod tests {
         let stop = state.jobs.get(&agent).map(|job| job.stop.clone());
 
         let first = delete_all_snapshots(&mut state, &agent);
+        let while_the_job_runs = take(&mut state);
         end_job(&mut state, &agent, id);
         let second = delete_all_snapshots(&mut state, &agent);
-        all_snapshots_deleted(&mut state, &agent);
-        let after_one = (
+        let taken = take(&mut state);
+        let while_running = (
             refusal(try_admit(&mut state, &agent, &name, true)),
             state.ended.len(),
         );
-        all_snapshots_deleted(&mut state, &agent);
-        all_snapshots_deleted(&mut state, &agent);
-        let after_all = try_admit(&mut state, &agent, &name, true).is_ok();
+        ended_cleanup(&mut state, &agent);
+        let after = try_admit(&mut state, &agent, &name, true).is_ok();
 
         assert!(first.is_some_and(|token| Some(&token) == stop.as_ref()));
         assert!(second.is_none());
+        assert!(while_the_job_runs.is_none());
+        assert_eq!(taken.map(|(_, work)| work), Some(Work::All));
         assert_eq!(
-            after_one,
-            (Some((SnapshotSkip::DeletingAllSnapshots, None)), 0)
+            while_running,
+            (Some((SnapshotSkip::DeletingAllSnapshots, None)), 1)
         );
-        assert!(after_all);
-        assert!(state.deleting.is_empty());
+        assert!(after);
+        assert!(state.ended.is_empty());
+        assert!(state.cleanups.is_empty());
     }
 
     #[test]
-    fn only_decisions_ends_and_deletes_of_all_snapshots_wake_the_waiters() {
+    fn only_transitions_that_end_or_add_work_wake_the_waiters() {
         let agent = agent_snapshots("wakes");
         let name = FilesystemSnapshotName::periodic();
+        let names = snapshot_names(&["p-1"]);
+        let flight = (
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target".to_string(),
+            },
+            [0; 32],
+        );
         let fresh = State::default;
 
         assert_eq!(
@@ -881,11 +1511,655 @@ mod tests {
                 end(fresh(), &agent, 1).wakes(),
                 start_wait(fresh(), &agent, &name).wakes(),
                 super::unwatch(fresh(), &agent, 1).wakes(),
-                super::delete_all_snapshots(fresh(), &agent).wakes(),
-                super::all_snapshots_deleted(fresh(), &agent).wakes(),
+                super::request_names(fresh(), &agent, &names).wakes(),
+                super::request_all(fresh(), &agent).wakes(),
+                take_ready(fresh()).wakes(),
+                cleanup_ended(fresh(), &agent).wakes(),
+                begin_call(fresh(), &agent, &CallKind::Other).wakes(),
+                store_call_ended(
+                    begin_call(fresh(), &agent, &CallKind::Other).into_parts().0,
+                    &agent,
+                    &CallKind::Other
+                )
+                .wakes(),
+                fork_began(fresh(), &agent, &flight).wakes(),
+                fork_publishing(fresh(), &flight).wakes(),
+                fork_ended(
+                    fork_began(fresh(), &agent, &flight).into_parts().0,
+                    &agent,
+                    &flight,
+                    &agent,
+                    true
+                )
+                .wakes(),
             ],
-            [false, false, true, true, false, false, true, true]
+            [
+                false, false, true, true, false, false, true, true, false, true, false, true,
+                false, false, true
+            ]
         );
+    }
+
+    #[test]
+    fn only_a_durable_agent_keeps_files() {
+        assert_eq!(
+            [AgentMode::Durable, AgentMode::Ephemeral].map(keeps_files),
+            [true, false]
+        );
+    }
+
+    #[test]
+    fn a_burst_of_deletes_of_one_agent_merges_into_one_pending_clean_up() {
+        let mut state = State::default();
+        let agent = agent_snapshots("burst");
+
+        request_names(&mut state, &agent, &snapshot_names(&["p-1", "p-2"]));
+        request_names(&mut state, &agent, &snapshot_names(&["p-2", "p-3"]));
+        request_names(&mut state, &agent, &[]);
+        let entries = (state.pending_entries, state.pending_names_total);
+        let taken = take(&mut state);
+
+        assert_eq!(entries, (1, 3));
+        assert_eq!(
+            taken.map(|(_, work)| work_names(&work)),
+            Some(
+                ["p-1", "p-2", "p-3"]
+                    .map(String::from)
+                    .into_iter()
+                    .collect()
+            )
+        );
+        assert!(take(&mut state).is_none());
+        assert_eq!((state.pending_entries, state.pending_names_total), (0, 0));
+    }
+
+    #[test]
+    fn an_empty_delete_of_names_makes_no_entry() {
+        let mut state = State::default();
+        let agent = agent_snapshots("empty");
+
+        let requested = request_names(&mut state, &agent, &[]);
+
+        assert!(requested.stop.is_none() && !requested.overflow);
+        assert!(state.cleanups.is_empty() && state.ready.is_empty());
+    }
+
+    #[test]
+    fn a_delete_of_all_snapshots_replaces_the_pending_names_of_its_agent() {
+        let mut state = State::default();
+        let agent = agent_snapshots("replaced");
+
+        request_names(&mut state, &agent, &snapshot_names(&["p-1", "p-2"]));
+        request_all(&mut state, &agent);
+        let ignored = request_names(&mut state, &agent, &snapshot_names(&["p-3"]));
+        let counts = (
+            state.pending_entries,
+            state.pending_names_entries,
+            state.pending_names_total,
+        );
+
+        assert!(!ignored.overflow);
+        assert_eq!(counts, (1, 0, 0));
+        assert_eq!(take(&mut state).map(|(_, work)| work), Some(Work::All));
+    }
+
+    #[test]
+    fn a_delete_of_names_stops_only_the_job_whose_name_it_holds() {
+        let mut state = State::default();
+        let agent = agent_snapshots("stops");
+        let name = FilesystemSnapshotName::periodic();
+        let own = SnapshotName::new(name.as_str()).unwrap();
+        let id = admitted(&mut state, &agent, &name);
+
+        let other = request_names(&mut state, &agent, &snapshot_names(&["p-other"]));
+        let while_other_job = take(&mut state).map(|(_, work)| work_names(&work));
+        ended_cleanup(&mut state, &agent);
+        let own_name = request_names(&mut state, &agent, std::slice::from_ref(&own));
+        let while_own_job = take(&mut state);
+        end_job(&mut state, &agent, id);
+        let after_the_job = take(&mut state).map(|(_, work)| work_names(&work));
+
+        assert!(other.stop.is_none());
+        assert_eq!(
+            while_other_job,
+            Some(std::collections::BTreeSet::from(["p-other".to_string()]))
+        );
+        assert!(own_name.stop.is_some());
+        assert!(while_own_job.is_none());
+        assert_eq!(
+            after_the_job,
+            Some(std::collections::BTreeSet::from([own.as_str().to_string()]))
+        );
+    }
+
+    fn limited(pending_cleanups: usize, pending_names: usize, names_per_cleanup: usize) -> State {
+        State::with_limits(Limits {
+            pending_cleanups,
+            pending_names,
+            names_per_cleanup,
+        })
+    }
+
+    #[test]
+    fn a_delete_of_all_snapshots_past_the_limit_evicts_pending_names() {
+        let mut state = limited(2, 100, 10);
+        let (first, second, third, fourth) = (
+            agent_snapshots("first"),
+            agent_snapshots("second"),
+            agent_snapshots("third"),
+            agent_snapshots("fourth"),
+        );
+        request_names(&mut state, &first, &snapshot_names(&["p-1", "p-2"]));
+        request_names(&mut state, &second, &snapshot_names(&["p-3"]));
+
+        let all = request_all(&mut state, &third);
+        let names_past_the_limit = request_names(&mut state, &fourth, &snapshot_names(&["p-4"]));
+        let all_again = request_all(&mut state, &fourth);
+        let no_names_left = request_all(&mut state, &agent_snapshots("fifth"));
+
+        assert!(all.overflow && names_past_the_limit.overflow && all_again.overflow);
+        assert!(no_names_left.overflow);
+        assert_eq!(
+            [&first, &second, &third, &fourth].map(|agent| state.cleanups.contains_key(agent)),
+            [false, false, true, true]
+        );
+        assert_eq!(
+            (
+                state.pending_entries,
+                state.pending_names_entries,
+                state.pending_names_total
+            ),
+            (2, 0, 0)
+        );
+    }
+
+    #[test]
+    fn names_past_the_limit_of_one_entry_are_counted_as_leaked() {
+        let mut state = limited(10, 100, 2);
+        let agent = agent_snapshots("one-entry");
+
+        let first = request_names(&mut state, &agent, &snapshot_names(&["p-3", "p-2", "p-1"]));
+        let again = request_names(&mut state, &agent, &snapshot_names(&["p-3"]));
+
+        assert!(first.overflow);
+        assert!(!again.overflow);
+        assert_eq!(
+            take(&mut state).map(|(_, work)| work_names(&work)),
+            Some(["p-3", "p-2"].map(String::from).into_iter().collect())
+        );
+    }
+
+    #[test]
+    fn a_request_past_the_bound_of_one_agent_keeps_the_pending_names_and_refuses_the_new_ones() {
+        let bound = crate::services::golem_config::FilesystemSnapshotUploadConfig::default()
+            .max_pending_deletes_per_agent();
+        let mut state = State::with_limits(Limits::new(bound));
+        let agent = agent_snapshots("many-names");
+        let texts = (0..bound.get())
+            .map(|index| format!("p-{index}"))
+            .collect::<Vec<_>>();
+        let names = snapshot_names(&texts.iter().map(String::as_str).collect::<Vec<_>>());
+
+        let fits = request_names(&mut state, &agent, &names);
+        let past = request_names(&mut state, &agent, &snapshot_names(&["p-new"]));
+        let pending = take(&mut state).map(|(_, work)| work_names(&work));
+
+        assert_eq!(
+            (bound.get(), fits.overflow, past.overflow),
+            (1024, false, true)
+        );
+        assert_eq!(pending, Some(texts.into_iter().collect()));
+    }
+
+    #[test]
+    fn names_past_the_global_limit_are_counted_as_leaked() {
+        let mut state = limited(10, 3, 10);
+        let (first, second) = (agent_snapshots("first"), agent_snapshots("second"));
+
+        let fits = request_names(&mut state, &first, &snapshot_names(&["p-1", "p-2"]));
+        let past = request_names(&mut state, &second, &snapshot_names(&["p-3", "p-4"]));
+        let none_left = request_names(
+            &mut state,
+            &agent_snapshots("third"),
+            &snapshot_names(&["p-5"]),
+        );
+
+        assert!(!fits.overflow && past.overflow && none_left.overflow);
+        assert_eq!(state.pending_names_total, 3);
+        assert_eq!(state.pending_entries, 2);
+    }
+
+    #[test]
+    fn names_order_stays_below_twice_the_pending_names_entries() {
+        let mut state = limited(1000, 100_000, 10);
+        let agents = (0..50)
+            .map(|index| agent_snapshots(&format!("agent-{index}")))
+            .collect::<Vec<_>>();
+        let names = snapshot_names(&["p-1"]);
+
+        let within = (0..20)
+            .flat_map(|_| {
+                let pushed = agents
+                    .iter()
+                    .map(|agent| {
+                        request_names(&mut state, agent, &names);
+                        state.names_order.len() <= 2 * state.pending_names_entries + 16
+                    })
+                    .collect::<Vec<_>>();
+                agents.iter().skip(5).for_each(|agent| {
+                    request_all(&mut state, agent);
+                });
+                drain(&mut state);
+                pushed
+            })
+            .collect::<Vec<_>>();
+
+        assert!(within.iter().all(|within| *within));
+    }
+
+    #[test]
+    fn the_eviction_takes_the_oldest_pending_names_and_skips_an_older_entry_of_newer_names() {
+        // A busy agent keeps its entry at the front. The names of `again` are taken, so its first
+        // entry is stale behind the front; its new names come after the names of `newer`.
+        let mut state = limited(3, 100, 10);
+        let (front, again, newer) = (
+            agent_snapshots("front"),
+            agent_snapshots("again"),
+            agent_snapshots("newer"),
+        );
+        let names = snapshot_names(&["p-1"]);
+        request_names(&mut state, &front, &names);
+        begin(&mut state, &front, &CallKind::Other);
+        request_names(&mut state, &again, &names);
+        let taken = take(&mut state).map(|(agent, _)| agent);
+        request_names(&mut state, &newer, &names);
+        request_names(&mut state, &again, &names);
+
+        request_all(&mut state, &agent_snapshots("first-all"));
+        request_all(&mut state, &agent_snapshots("second-all"));
+
+        let holds_names = |agent: &AgentSnapshots| {
+            state
+                .cleanups
+                .get(agent)
+                .is_some_and(|cleanup| matches!(cleanup.pending, Some(Work::Names(_))))
+        };
+        assert_eq!(taken, Some(again.clone()));
+        assert_eq!(
+            [&front, &newer, &again].map(holds_names),
+            [false, false, true]
+        );
+    }
+
+    #[test]
+    fn names_order_stays_within_its_bound_when_the_live_entries_drop_before_a_push() {
+        // A busy agent keeps its entry at the front, so the entries of the names that are taken
+        // stay behind it while the live entries drop to one.
+        let mut state = limited(1000, 100_000, 10);
+        let front = agent_snapshots("front");
+        let names = snapshot_names(&["p-1"]);
+        request_names(&mut state, &front, &names);
+        begin(&mut state, &front, &CallKind::Other);
+        (0..30).for_each(|index| {
+            request_names(
+                &mut state,
+                &agent_snapshots(&format!("agent-{index}")),
+                &names,
+            );
+        });
+        drain(&mut state);
+        let before = (state.names_order.len(), state.pending_names_entries);
+
+        request_names(&mut state, &agent_snapshots("pushed"), &names);
+
+        assert_eq!(before, (31, 1));
+        assert!(
+            state.names_order.len() <= 2 * state.pending_names_entries + 16,
+            "{} entries for {} live ones",
+            state.names_order.len(),
+            state.pending_names_entries
+        );
+    }
+
+    #[test]
+    fn the_compaction_of_names_order_is_amortized() {
+        let mut state = limited(100_000, 1_000_000, 10);
+        let names = snapshot_names(&["p-1"]);
+        // A live entry at the front keeps the stale entries behind it until a compaction.
+        let front = agent_snapshots("front");
+        let job = FilesystemSnapshotName::periodic();
+        let blocked = SnapshotName::new(job.as_str()).unwrap();
+        admitted(&mut state, &front, &job);
+        request_names(&mut state, &front, std::slice::from_ref(&blocked));
+        // Many live entries make each compaction cost much, so a threshold that does not grow
+        // with twice the live entries compacts too often.
+        (0..1000).for_each(|index| {
+            request_names(
+                &mut state,
+                &agent_snapshots(&format!("live-{index}")),
+                &names,
+            );
+        });
+        let pushes = 10_000usize;
+
+        let compacted = (0..pushes)
+            .map(|index| {
+                let agent = agent_snapshots(&format!("agent-{index}"));
+                let before = state.names_order.len();
+                request_names(&mut state, &agent, &names);
+                let after = state.names_order.len();
+                request_all(&mut state, &agent);
+                // A push that left the order shorter than one more entry compacted it, at the
+                // cost of the order before the compaction.
+                if after <= before { before + 1 } else { 0 }
+            })
+            .sum::<usize>();
+
+        assert!(
+            compacted <= 3 * pushes,
+            "the compactions read {compacted} entries for {pushes} pushes"
+        );
+        assert!(compacted > 0);
+        assert!(state.names_order.len() <= 2 * state.pending_names_entries + 16);
+    }
+
+    #[test]
+    fn a_delete_of_all_snapshots_runs_when_the_tail_of_a_stopped_job_ends() {
+        let mut state = State::default();
+        let agent = agent_snapshots("tail");
+        let name = FilesystemSnapshotName::periodic();
+        let id = admitted(&mut state, &agent, &name);
+        assert!(begin(&mut state, &agent, &CallKind::Save));
+
+        let stop = delete_all_snapshots(&mut state, &agent);
+        end_job(&mut state, &agent, id);
+        let while_the_save_runs = take(&mut state);
+        let second_save = begin(&mut state, &agent, &CallKind::Save);
+        ended_call(&mut state, &agent, &CallKind::Save);
+        let after = take(&mut state).map(|(_, work)| work);
+
+        assert!(stop.is_some());
+        assert!(while_the_save_runs.is_none());
+        assert!(!second_save);
+        assert_eq!(after, Some(Work::All));
+    }
+
+    #[test]
+    fn a_delete_of_all_snapshots_starts_when_the_last_detached_call_of_its_agent_returns() {
+        let mut state = State::default();
+        let (agent, target) = (agent_snapshots("source"), agent_snapshots("target"));
+        let copy = CallKind::Copy { to: target.clone() };
+        assert!(begin(&mut state, &agent, &CallKind::Other));
+        assert!(begin(&mut state, &agent, &copy));
+
+        delete_all_snapshots(&mut state, &agent);
+        delete_all_snapshots(&mut state, &target);
+        ended_call(&mut state, &agent, &CallKind::Other);
+        let after_one = take(&mut state);
+        ended_call(&mut state, &agent, &copy);
+        let after_both = std::iter::from_fn(|| take(&mut state))
+            .map(|(agent, _)| agent)
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(after_one.is_none());
+        assert_eq!(
+            after_both,
+            std::collections::HashSet::from([agent.clone(), target.clone()])
+        );
+        assert!(state.busy.is_empty());
+    }
+
+    #[test]
+    fn a_second_save_of_an_agent_is_refused_while_the_first_runs() {
+        let mut state = State::default();
+        let agent = agent_snapshots("one-save");
+
+        let first = begin(&mut state, &agent, &CallKind::Save);
+        let second = begin(&mut state, &agent, &CallKind::Save);
+        let other = begin(&mut state, &agent, &CallKind::Other);
+        let running = save_running(&state, &agent);
+        ended_call(&mut state, &agent, &CallKind::Save);
+        let after = (save_running(&state, &agent), busy(&state, &agent));
+
+        assert_eq!((first, second, other, running), (true, false, true, true));
+        assert_eq!(after, (false, 1));
+    }
+
+    #[test]
+    fn fork_ended_gives_the_stage_scope_only_for_an_attempt_that_never_published() {
+        let source = agent_snapshots("source");
+        let flight = (
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target".to_string(),
+            },
+            [7; 32],
+        );
+        let end_of = |publishing: bool, published: bool| {
+            let mut state = State::default();
+            let stage = agent_snapshots("stage");
+            let began = step(&mut state, |state| fork_began(state, &source, &flight));
+            let again = step(&mut state, |state| fork_began(state, &source, &flight));
+            if publishing {
+                step(&mut state, |state| fork_publishing(state, &flight));
+            }
+            let end = step(&mut state, |state| {
+                fork_ended(state, &source, &flight, &stage, published)
+            });
+            (
+                began,
+                again,
+                end,
+                all_requested(&state, &stage),
+                busy(&state, &source),
+            )
+        };
+
+        assert_eq!(
+            [
+                end_of(false, false),
+                end_of(true, false),
+                end_of(true, true)
+            ],
+            [
+                (
+                    true,
+                    false,
+                    ForkEnd::StageDeleted { overflow: false },
+                    true,
+                    0
+                ),
+                (true, false, ForkEnd::StageLeaked, false, 0),
+                (true, false, ForkEnd::Done, false, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_fork_of_a_source_whose_snapshots_are_being_deleted_is_refused() {
+        let mut state = State::default();
+        let source = agent_snapshots("source");
+        let flight = (
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target".to_string(),
+            },
+            [1; 32],
+        );
+
+        delete_all_snapshots(&mut state, &source);
+        let began = step(&mut state, |state| fork_began(state, &source, &flight));
+
+        assert!(!began);
+    }
+
+    /// One transition of the rules, over agents and names chosen by index.
+    #[derive(Clone, Debug)]
+    enum Step {
+        Admit(usize, usize),
+        End(usize),
+        RequestNames(usize, Vec<usize>),
+        RequestAll(usize),
+        Take,
+        CleanupEnded(usize),
+        BeginCall(usize, Option<usize>, bool),
+        StoreCallEnded,
+        ForkBegan(usize, usize),
+        ForkPublishing,
+        ForkEnded(usize, bool),
+    }
+
+    fn step_strategy() -> impl proptest::strategy::Strategy<Value = Step> {
+        use proptest::prelude::*;
+        let agent = 0usize..3;
+        let name = 0usize..3;
+        prop_oneof![
+            (agent.clone(), name.clone()).prop_map(|(agent, name)| Step::Admit(agent, name)),
+            agent.clone().prop_map(Step::End),
+            (agent.clone(), proptest::collection::vec(name, 0..3))
+                .prop_map(|(agent, names)| Step::RequestNames(agent, names)),
+            agent.clone().prop_map(Step::RequestAll),
+            Just(Step::Take),
+            agent.clone().prop_map(Step::CleanupEnded),
+            (
+                agent.clone(),
+                proptest::option::of(agent.clone()),
+                any::<bool>()
+            )
+                .prop_map(|(agent, to, save)| Step::BeginCall(agent, to, save)),
+            Just(Step::StoreCallEnded),
+            (agent.clone(), agent.clone()).prop_map(|(from, stage)| Step::ForkBegan(from, stage)),
+            Just(Step::ForkPublishing),
+            (0usize..3, any::<bool>())
+                .prop_map(|(index, published)| Step::ForkEnded(index, published)),
+        ]
+    }
+
+    /// The agents that are ready, and the agents that are in the ready queue with `queued`.
+    fn ready_and_queued(
+        state: &State,
+        agents: &[AgentSnapshots],
+    ) -> (Vec<AgentSnapshots>, Vec<AgentSnapshots>) {
+        let ready = agents
+            .iter()
+            .filter(|agent| is_ready(state, agent))
+            .cloned()
+            .collect();
+        let queued = agents
+            .iter()
+            .filter(|agent| {
+                state.ready.contains(agent)
+                    && state
+                        .cleanups
+                        .get(agent)
+                        .is_some_and(|cleanup| cleanup.queued)
+            })
+            .cloned()
+            .collect();
+        (ready, queued)
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn every_ready_agent_is_queued_after_any_sequence_of_transitions(
+            steps in proptest::collection::vec(step_strategy(), 1..40),
+            pending_cleanups in 1usize..3,
+            names_per_cleanup in 1usize..4,
+        ) {
+            let agents = (0..3)
+                .map(|index| agent_snapshots(&format!("agent-{index}")))
+                .collect::<Vec<_>>();
+            let stages = (0..3)
+                .map(|index| agent_snapshots(&format!("stage-{index}")))
+                .collect::<Vec<_>>();
+            let job_names = (0..3)
+                .map(|_| FilesystemSnapshotName::periodic())
+                .collect::<Vec<_>>();
+            let names = job_names
+                .iter()
+                .map(|name| SnapshotName::new(name.as_str()).unwrap())
+                .collect::<Vec<_>>();
+            let mut state = limited(pending_cleanups, 4, names_per_cleanup);
+            let mut jobs: HashMap<usize, JobId> = HashMap::new();
+            let mut calls: Vec<(AgentSnapshots, CallKind)> = Vec::new();
+            let mut forks: Vec<(AgentSnapshots, Flight, AgentSnapshots, bool)> = Vec::new();
+            let mut fork_counter = 0u8;
+            let all = agents.iter().chain(stages.iter()).cloned().collect::<Vec<_>>();
+            steps.into_iter().for_each(|next| {
+                match next {
+                    Step::Admit(agent, name) => {
+                        let name = job_names[name].clone();
+                        if let Ok(id) = try_admit(&mut state, &agents[agent], &name, true) {
+                            jobs.insert(agent, id);
+                        }
+                    }
+                    Step::End(agent) => {
+                        if let Some(id) = jobs.remove(&agent) {
+                            end_job(&mut state, &agents[agent], id);
+                        }
+                    }
+                    Step::RequestNames(agent, chosen) => {
+                        let chosen = chosen.into_iter().map(|index| names[index].clone()).collect::<Vec<_>>();
+                        request_names(&mut state, &agents[agent], &chosen);
+                    }
+                    Step::RequestAll(agent) => {
+                        request_all(&mut state, &agents[agent]);
+                    }
+                    Step::Take => {
+                        take(&mut state);
+                    }
+                    Step::CleanupEnded(agent) => {
+                        ended_cleanup(&mut state, &agents[agent]);
+                    }
+                    Step::BeginCall(agent, to, save) => {
+                        let kind = match (to, save) {
+                            (Some(to), _) => CallKind::Copy { to: agents[to].clone() },
+                            (None, true) => CallKind::Save,
+                            (None, false) => CallKind::Other,
+                        };
+                        if begin(&mut state, &agents[agent], &kind) {
+                            calls.push((agents[agent].clone(), kind));
+                        }
+                    }
+                    Step::StoreCallEnded => {
+                        if let Some((agent, kind)) = calls.pop() {
+                            ended_call(&mut state, &agent, &kind);
+                        }
+                    }
+                    Step::ForkBegan(from, stage) => {
+                        fork_counter = fork_counter.wrapping_add(1);
+                        let flight = (AgentId { component_id: ComponentId::new(), agent_id: "target".to_string() }, [fork_counter; 32]);
+                        if step(&mut state, |state| fork_began(state, &agents[from], &flight)) {
+                            forks.push((agents[from].clone(), flight, stages[stage].clone(), false));
+                        }
+                    }
+                    Step::ForkPublishing => {
+                        if let Some((_, flight, _, publishing)) = forks.last_mut() {
+                            step(&mut state, |state| fork_publishing(state, flight));
+                            *publishing = true;
+                        }
+                    }
+                    Step::ForkEnded(index, published) => {
+                        if !forks.is_empty() {
+                            let (from, flight, stage, _) = forks.remove(index % forks.len());
+                            step(&mut state, |state| fork_ended(state, &from, &flight, &stage, published));
+                        }
+                    }
+                }
+                let (ready, queued) = ready_and_queued(&state, &all);
+                assert!(
+                    ready.iter().all(|agent| queued.contains(agent)),
+                    "ready {ready:?} queued {queued:?}"
+                );
+                assert!(state.pending_names_total <= 4);
+            });
+            // The queue gives `None` only when no agent is ready.
+            let (ready_before, _) = ready_and_queued(&state, &all);
+            let taken = take(&mut state);
+            proptest::prop_assert!(taken.is_some() || ready_before.is_empty());
+        }
     }
 
     fn storage(retryable: bool) -> SnapshotStoreError {

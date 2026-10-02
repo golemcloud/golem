@@ -18,22 +18,25 @@
 //! the memory of the process. The contract suite in `contract_tests` holds the behaviour that each
 //! store must have, and it compiles only for tests.
 
+use crate::services::agent_filesystem_snapshots::StoreKey;
 use async_trait::async_trait;
 use golem_common::model::{AgentFingerprint, OwnedAgentId, Timestamp};
 use golem_service_base::storage::blob::BlobStorageNamespace;
 use std::cmp::Reverse;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
+use tokio_util::sync::CancellationToken;
 
 mod clock;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(any(test, feature = "test-utils"))]
 mod memory;
 mod rustic;
 #[cfg(test)]
 mod time_zone_tests;
 
-#[allow(unused_imports)]
+#[cfg(any(test, feature = "test-utils"))]
 pub(crate) use memory::InMemorySnapshotStore;
 #[cfg(test)]
 pub(crate) use memory::SpacedTimes;
@@ -87,6 +90,14 @@ impl SnapshotName {
 
     /// Gives the text of the name.
     pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+// The hash and the order of a name are those of its text, so a set of names can be searched by
+// the text.
+impl std::borrow::Borrow<str> for SnapshotName {
+    fn borrow(&self) -> &str {
         &self.0
     }
 }
@@ -235,12 +246,17 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// changed can keep the content of the parent. A store can also read each file. With `Full`,
     /// the save reads every file. A parent that the agent does not have gives a save that reads
     /// every file.
+    ///
+    /// A cancel stops the save before its publish: a save whose `cancel` fires before the publish
+    /// begins publishes nothing, and gives `Storage` that allows no retry. The call still returns
+    /// only after the store stopped reading `tree`.
     async fn save(
         &self,
         agent: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
+        cancel: &CancellationToken,
     ) -> Result<SnapshotInfo, SnapshotStoreError>;
 
     /// Rebuilds a saved tree in the empty directory `into`.
@@ -324,11 +340,21 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     async fn shut_down(&self) {}
 }
 
+/// A cancel of a save that never fires.
+#[cfg(test)]
+pub(crate) fn never_cancelled() -> &'static CancellationToken {
+    static NEVER: std::sync::LazyLock<CancellationToken> =
+        std::sync::LazyLock::new(CancellationToken::new);
+    &NEVER
+}
+
 /// Gives the store of the filesystem snapshots over `storage`, with the key and the settings of
-/// `config`.
+/// `config`. Only the holder of the store calls of the service can make a [`StoreKey`], so only it
+/// makes the store.
 pub(crate) fn managed_store(
     storage: std::sync::Arc<dyn golem_service_base::storage::blob::BlobStorage>,
     config: &crate::services::golem_config::FilesystemSnapshotStoreConfig,
+    _key: StoreKey,
 ) -> std::sync::Arc<dyn FilesystemSnapshotStore> {
     std::sync::Arc::new(RusticSnapshotStore::new(storage, config))
 }

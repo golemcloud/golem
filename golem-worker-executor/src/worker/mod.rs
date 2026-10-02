@@ -718,6 +718,9 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     owner_retirement: Arc<std::sync::OnceLock<OwnerRetirement>>,
     owner_cleanup: Mutex<OwnerCleanupState>,
     owner_retirement_requested: CancellationToken,
+    /// Whether the shard of the worker is lost. It is set with the lost-shard reason of the
+    /// retirement, and an upload of a filesystem snapshot watches it.
+    lost_shard_signal: tokio::sync::watch::Sender<bool>,
     durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler,
     durable_topology_recovery: Arc<Mutex<DurableTopologyRecoveryCache>>,
 }
@@ -1392,11 +1395,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             lost_shard: std::sync::OnceLock::new(),
             stop: tokio::sync::OnceCell::new(),
         });
+        // The lost shard is known before any stop that the retirement causes, so an upload that
+        // a stop ends sees it and cancels its save.
+        let newly_lost = !matches!(reason, RetirementReason::Requested)
+            && retirement.lost_shard.set(reason.clone()).is_ok();
+        if retirement.lost_shard.get().is_some() {
+            self.lost_shard_signal.send_replace(true);
+        }
         self.owner_retirement_requested.cancel();
         self.durable_stream_producer.fence();
-        if !matches!(reason, RetirementReason::Requested)
-            && retirement.lost_shard.set(reason.clone()).is_ok()
-        {
+        if newly_lost {
             // Debug rather than warn: the oplog that latched a fence has already warned with
             // both epochs, and a revoke or reassignment is logged by the sweep.
             debug!(
@@ -1405,6 +1413,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 "Retiring the agent: this executor no longer owns its shard"
             );
         }
+    }
+
+    /// A receiver of whether the shard of this worker moved to another executor.
+    pub(crate) fn lost_shard_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.lost_shard_signal.subscribe()
     }
 
     /// Whether this worker is retired because its shard moved to another executor.
@@ -2549,6 +2562,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             owner_retirement,
             owner_cleanup: Mutex::new(OwnerCleanupState::PreRemoval),
             owner_retirement_requested: CancellationToken::new(),
+            lost_shard_signal: tokio::sync::watch::Sender::new(false),
             durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::new(
                 deps.shutdown_token(),
             ),
@@ -5350,14 +5364,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// takes the owned instance lock, applies the gate, and sends one status job that carries the
     /// guard. A confirmation of the running instance that gives `Confirmed` records the name in
     /// the slot of the instance under the same guard. So a stop waits for at most the status jobs
-    /// already queued plus one confirm transaction.
+    /// already queued plus one confirm transaction. A `Confirmed` answer carries the names of the
+    /// automatic snapshot records that a start can select, from the status that the worker holds
+    /// after the append returned. A status job that folds an entry after the append, such as the
+    /// `SuccessfulUpdate` of an automatic update, can change those names before the read.
     pub(crate) async fn confirm_as(
         self: &Arc<Self>,
         name: FilesystemSnapshotName,
         who: filesystem_snapshots::Confirmer,
-    ) -> agent_filesystem_snapshots::ConfirmOutcome {
+    ) -> agent_filesystem_snapshots::Confirmation {
         if self.last_known_status_detached.load(Ordering::Acquire) {
-            return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
+            return agent_filesystem_snapshots::Confirmation::Deferred;
         }
         let instance_guard = self.instance.clone().lock_owned().await;
         let instance = match (&*instance_guard, &who) {
@@ -5391,7 +5408,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .is_ok()
         });
         if !owner {
-            return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
+            return agent_filesystem_snapshots::Confirmation::Deferred;
         }
         let on_confirmed: state_actor::OnConfirmed = match who {
             filesystem_snapshots::Confirmer::Running(mark) => {
@@ -5404,9 +5421,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             filesystem_snapshots::Confirmer::Start(_) => Box::new(|_| {}),
         };
-        self.state_actor
+        match self
+            .state_actor
             .append_confirmation(name, instance_guard, on_confirmed)
             .await
+        {
+            agent_filesystem_snapshots::ConfirmOutcome::Confirmed => {
+                agent_filesystem_snapshots::Confirmation::Confirmed {
+                    selectable: snapshot_selection::start_candidates(
+                        &self.last_known_status.load(),
+                    )
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(_, name)| name.cloned())
+                    .collect(),
+                }
+            }
+            agent_filesystem_snapshots::ConfirmOutcome::Superseded => {
+                agent_filesystem_snapshots::Confirmation::Superseded
+            }
+            agent_filesystem_snapshots::ConfirmOutcome::Deferred => {
+                agent_filesystem_snapshots::Confirmation::Deferred
+            }
+        }
     }
 
     /// Gives the filesystem snapshot name of the last successful manual update, which the status
