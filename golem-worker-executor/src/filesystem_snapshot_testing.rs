@@ -256,6 +256,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         name: &SnapshotName,
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         self.faults.saves.fetch_add(1, Ordering::SeqCst);
         self.faults
@@ -293,7 +294,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
                 source: anyhow::anyhow!("an injected save failure"),
             });
         }
-        let info = self.inner.save(agent, name, tree, parent).await?;
+        let info = self.inner.save(agent, name, tree, parent, cancel).await?;
         let offset = *self
             .faults
             .clock_offset

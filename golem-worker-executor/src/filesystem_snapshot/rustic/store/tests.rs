@@ -348,7 +348,13 @@ async fn a_new_repository_uses_the_rabin_chunker_zstd_level_3_and_extra_verify()
     let tree = one_file_tree("settings");
 
     store
-        .save(&scope, &name("p-settings"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-settings"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let backend = backend_of(storage, &scope, LONG_DEADLINE);
@@ -396,7 +402,13 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
     let through_fd = format!("/proc/self/fd/{}", directory.as_raw_fd());
 
     store
-        .save(&scope, &name("p-fd"), Path::new(&through_fd), None)
+        .save(
+            &scope,
+            &name("p-fd"),
+            Path::new(&through_fd),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let backend = backend_of(storage, &scope, LONG_DEADLINE);
@@ -441,12 +453,28 @@ async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_fr
     let scope = new_scope();
     let tree = fixture_tree();
 
-    let failed = store.save(&scope, &name("p-1"), tree.path(), None).await;
+    let failed = store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let names = listed_names(&store, &scope).await;
     let restore = restored_listing(&store, &scope, &name("p-1")).await;
     refuse.store(false, Ordering::SeqCst);
-    let saved_again = store.save(&scope, &name("p-1"), tree.path(), None).await;
+    let saved_again = store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -490,11 +518,27 @@ async fn a_publish_that_reaches_the_deadline_and_lands_late_publishes_nothing() 
     let scope = new_scope();
     let tree = one_file_tree("late");
 
-    let failed = store.save(&scope, &name("p-late"), tree.path(), None).await;
+    let failed = store
+        .save(
+            &scope,
+            &name("p-late"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await;
     hang.store(false, Ordering::SeqCst);
     let stat = store.stat(&scope, &name("p-late")).await.unwrap();
     let names = listed_names(&store, &scope).await;
-    let saved_again = store.save(&scope, &name("p-late"), tree.path(), None).await;
+    let saved_again = store
+        .save(
+            &scope,
+            &name("p-late"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await;
 
     assert!(
         failed.as_ref().is_err_and(|error| is_storage(error, true)),
@@ -528,12 +572,24 @@ async fn a_second_save_of_an_unchanged_tree_writes_no_pack() {
     let tree = fixture_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let first = storage.calls().len();
     store
-        .save(&scope, &name("p-2"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let writes = storage.calls()[first..]
@@ -586,8 +642,20 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 
     let (first_name, second_name) = (name("p-first"), name("p-second"));
     let (first_saved, second_saved, both_waited) = tokio::join!(
-        first.save(&scope, &first_name, first_tree.path(), None),
-        second.save(&scope, &second_name, second_tree.path(), None),
+        first.save(
+            &scope,
+            &first_name,
+            first_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled()
+        ),
+        second.save(
+            &scope,
+            &second_name,
+            second_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled()
+        ),
         async {
             let both = eventually(|| config_writes() == 2).await;
             storage.open_gate();
@@ -649,7 +717,13 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     let scope = new_scope();
     let (old_tree, new_tree) = (one_file_tree("old"), fixture_tree());
     store
-        .save(&scope, &name("p-old"), old_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-old"),
+            old_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     hold_next_index.store(true, Ordering::SeqCst);
@@ -666,7 +740,17 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
         let store = store.clone();
         let scope = scope.clone();
         let path = new_tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-new"), &path, None).await }
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-new"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                )
+                .await
+        }
     });
     let held = polled_until(REACH_LIMIT, || index_writes() > before).await;
     assert!(held, "the save did not reach its index write");
@@ -710,7 +794,13 @@ async fn a_restore_whose_pack_reads_fail_gives_a_retryable_storage_error() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
@@ -748,7 +838,13 @@ async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_d
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
 
     let saved = store
-        .save(&scope, &name("p-locked"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-locked"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await;
 
     assert!(
@@ -796,7 +892,13 @@ async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
     );
     let scope = new_scope();
     store
-        .save(&scope, &name("p-xattr"), source.path(), None)
+        .save(
+            &scope,
+            &name("p-xattr"),
+            source.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
 
@@ -842,7 +944,13 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     storage
@@ -886,11 +994,23 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
@@ -1006,11 +1126,23 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), one_file_tree("second"));
     store
-        .save(&scope, &name("p-1"), first.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let now = golem_common::model::Timestamp::now_utc();
@@ -1059,7 +1191,13 @@ async fn a_batch_delete_lists_the_snapshots_once_and_deletes_each_name_of_the_ba
             let scope = &scope;
             async move {
                 store
-                    .save(scope, &name(snapshot), tree.path(), None)
+                    .save(
+                        scope,
+                        &name(snapshot),
+                        tree.path(),
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                    )
                     .await
                     .unwrap();
             }
@@ -1106,11 +1244,23 @@ async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), one_file_tree("kept"));
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
 
@@ -1140,7 +1290,13 @@ async fn save_each(store: &RusticSnapshotStore, scope: &AgentSnapshots, names: &
         .for_each(|text| async move {
             let tree = one_file_tree(text);
             store
-                .save(scope, &name(text), tree.path(), None)
+                .save(
+                    scope,
+                    &name(text),
+                    tree.path(),
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                )
                 .await
                 .unwrap();
         })
@@ -1896,7 +2052,13 @@ async fn a_save_and_a_prune_take_their_times_from_the_injected_clock() {
     let tree = one_file_tree("timed");
 
     let saved = store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     save_each(&store, &scope, &["p-2"]).await;
@@ -3616,11 +3778,23 @@ async fn a_delete_below_the_threshold_does_not_prune() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), one_file_tree("kept"));
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
@@ -3655,7 +3829,13 @@ async fn no_second_prune_runs_within_the_hold_after_a_prune() {
             let scope = scope.clone();
             async move {
                 store
-                    .save(&scope, &name(text), tree.path(), None)
+                    .save(
+                        &scope,
+                        &name(text),
+                        tree.path(),
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                    )
                     .await
                     .unwrap();
             }
@@ -3702,11 +3882,23 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
@@ -3748,11 +3940,23 @@ async fn a_deleted_scope_holds_no_blob() {
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), one_file_tree("second"));
     store
-        .save(&scope, &name("p-1"), first.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store.delete(&scope, &[name("p-1")]).await.unwrap();
@@ -3785,7 +3989,13 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
         counted.clone(),
         policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     )
-    .save(&new_scope(), &name("p-dropped"), tree.path(), None)
+    .save(
+        &new_scope(),
+        &name("p-dropped"),
+        tree.path(),
+        None,
+        crate::filesystem_snapshot::never_cancelled(),
+    )
     .await
     .unwrap();
     let calls = counted.calls().len();
@@ -3809,7 +4019,13 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                 let ended = drop_when(
                     &storage,
                     |calls| calls.len() >= held,
-                    dropping.save(&scope, &name("p-dropped"), &tree, None),
+                    dropping.save(
+                        &scope,
+                        &name("p-dropped"),
+                        &tree,
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                    ),
                 )
                 .await;
                 let stopped = tokio::time::timeout(LIMIT, dropping.shut_down())
@@ -3818,7 +4034,15 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                 let later = store(inner, policy);
                 let stat = later.stat(&scope, &name("p-dropped")).await.ok().flatten();
                 let names = listed_names(&later, &scope).await;
-                let saved_again = later.save(&scope, &name("p-dropped"), &other, None).await;
+                let saved_again = later
+                    .save(
+                        &scope,
+                        &name("p-dropped"),
+                        &other,
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                    )
+                    .await;
                 let restored = restored_listing(&later, &scope, &name("p-dropped"))
                     .await
                     .ok();
@@ -4098,7 +4322,13 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
     let (from, to) = (new_scope(), new_scope());
     let tree = one_file_tree("copied");
     store
-        .save(&from, &name("p-1"), tree.path(), None)
+        .save(
+            &from,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let mut copying = tokio::spawn({
@@ -4151,7 +4381,17 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
         let store = store.clone();
         let scope = scope.clone();
         let path = tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-held"), &path, None).await }
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-held"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                )
+                .await
+        }
     });
     let held = eventually(|| {
         storage
@@ -4287,12 +4527,28 @@ async fn a_save_that_loses_the_creation_of_the_repository_after_its_first_config
     let (won_tree, lost_tree) = (one_file_tree("winner"), one_file_tree("loser"));
     let losing_save = tokio::spawn({
         let (loser, scope, path) = (loser.clone(), scope.clone(), lost_tree.path().to_path_buf());
-        async move { loser.save(&scope, &name("p-loser"), &path, None).await }
+        async move {
+            loser
+                .save(
+                    &scope,
+                    &name("p-loser"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                )
+                .await
+        }
     });
     let held = eventually(|| checks.load(Ordering::SeqCst) >= 2).await;
 
     let won = winner
-        .save(&scope, &name("p-winner"), won_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-winner"),
+            won_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await;
     losing.open_gate();
     let lost = tokio::time::timeout(LIMIT, losing_save).await;
@@ -4408,11 +4664,23 @@ async fn scope_with_a_prune_to_come(
     let scope = new_scope();
     let (kept, deleted) = (fixture_tree(), one_file_tree("deleted"));
     pruning
-        .save(&scope, &name("p-1"), kept.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            kept.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     pruning
-        .save(&scope, &name("p-2"), deleted.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            deleted.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     (scope, pruning, kept)
@@ -4463,7 +4731,17 @@ async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryab
     hold.store(true, Ordering::SeqCst);
     let first = tokio::spawn({
         let (saving, scope, path) = (saving.clone(), scope.clone(), tree.path().to_path_buf());
-        async move { saving.save(&scope, &name("p-3"), &path, None).await }
+        async move {
+            saving
+                .save(
+                    &scope,
+                    &name("p-3"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                )
+                .await
+        }
     });
     let reached = eventually(|| held.load(Ordering::SeqCst) > 0).await;
 
@@ -4472,7 +4750,15 @@ async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryab
     hold.store(false, Ordering::SeqCst);
     storage.open_gate();
     let first = tokio::time::timeout(LIMIT, first).await;
-    let again = saving.save(&scope, &name("p-3"), tree.path(), None).await;
+    let again = saving
+        .save(
+            &scope,
+            &name("p-3"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await;
 
     assert!(
         matches!(&first, Ok(Ok(Err(error))) if is_storage(error, true)),
@@ -4512,7 +4798,17 @@ async fn a_save_dropped_during_the_delete_after_a_failed_publish_still_deletes_t
     let tree = one_file_tree("dropped");
     let saving = tokio::spawn({
         let (store, scope, path) = (store.clone(), scope.clone(), tree.path().to_path_buf());
-        async move { store.save(&scope, &name("p-dropped"), &path, None).await }
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-dropped"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                )
+                .await
+        }
     });
     let retracting = eventually(|| {
         storage
@@ -4572,7 +4868,7 @@ async fn a_publish_that_is_counted_before_shut_down_and_polled_after_its_cancel_
         policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
-    let publishing = store.publish_staged(&scope, staged_snapshot());
+    let publishing = store.publish_staged(&scope, staged_snapshot(), CancellationToken::new());
     let counted = store.work_in_flight();
 
     let shutting_down = tokio::spawn({
@@ -4611,7 +4907,9 @@ async fn a_publish_that_starts_after_shut_down_publishes_nothing() {
     let scope = new_scope();
 
     let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
-    let published = store.publish_staged(&scope, staged_snapshot()).await;
+    let published = store
+        .publish_staged(&scope, staged_snapshot(), CancellationToken::new())
+        .await;
 
     assert!(
         matches!(&published, Err(error) if is_storage(error, false)),
@@ -4635,7 +4933,13 @@ async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
     let (scope, other) = (new_scope(), new_scope());
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store.shut_down().await;
@@ -4683,7 +4987,17 @@ async fn shut_down_ends_running_operations_before_it_returns() {
         let store = store.clone();
         let scope = scope.clone();
         let path = tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-held"), &path, None).await }
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-held"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                )
+                .await
+        }
     });
     reached.cancelled().await;
 
@@ -4745,7 +5059,13 @@ async fn a_dropped_operation_stops_its_blocking_work() {
         let scope = new_scope();
         let tree = fixture_tree();
         store
-            .save(&scope, &name("p-1"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-1"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+            )
             .await
             .unwrap();
         hold.store(true, Ordering::SeqCst);
@@ -4859,7 +5179,13 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
     copy_flat_tree(tree.path(), copy.path());
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
@@ -4868,6 +5194,7 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
             &name("p-2"),
             copy.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await
         .unwrap();
@@ -4891,7 +5218,13 @@ async fn a_full_save_reads_each_file() {
     let tree = three_file_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
@@ -4900,6 +5233,7 @@ async fn a_full_save_reads_each_file() {
             &name("p-2"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::Full)),
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await
         .unwrap();
@@ -4920,11 +5254,23 @@ async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_e
     let tree = three_file_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
@@ -4933,6 +5279,7 @@ async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_e
             &name("p-3"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await
         .unwrap();
@@ -4959,11 +5306,23 @@ async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_r
     let tree = three_file_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
@@ -4972,6 +5331,7 @@ async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_r
             &name("p-3"),
             tree.path(),
             Some((&name("p-missing"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await
         .unwrap();
@@ -5006,7 +5366,13 @@ async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent
     let scope = new_scope();
     let tree = one_file_tree("parent");
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
@@ -5018,6 +5384,7 @@ async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent
             &name("p-2"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await;
     let publishes = storage.calls()[before..]
@@ -5055,7 +5422,13 @@ async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_s
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
@@ -5092,7 +5465,13 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     inner
@@ -5124,7 +5503,13 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
 
@@ -5158,7 +5543,13 @@ async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pa
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let unindexed = format!("data/ab/{}", "ab".repeat(32));
@@ -5229,7 +5620,13 @@ async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
     let scope = new_scope();
 
     let saved = store
-        .save(&scope, &name("p-relative"), relative, None)
+        .save(
+            &scope,
+            &name("p-relative"),
+            relative,
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await;
 
     assert!(
@@ -5252,7 +5649,13 @@ async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
     let scope = new_scope();
 
     let saved = store
-        .save(&scope, &name("p-file"), &tree.path().join("file.txt"), None)
+        .save(
+            &scope,
+            &name("p-file"),
+            &tree.path().join("file.txt"),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await;
 
     assert!(
@@ -5273,7 +5676,13 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-deleted"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let added = snapshot_files(storage.clone(), &scope)
@@ -5303,7 +5712,15 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
     let scope = new_scope();
     let tree = one_file_tree("never saved");
 
-    let saved = store.save(&scope, &name("p-1"), tree.path(), None).await;
+    let saved = store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await;
 
     assert!(
         matches!(
@@ -5328,11 +5745,23 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let packs = storage
@@ -5503,7 +5932,13 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     std::fs::write(tree.path().join("added.txt"), b"added").unwrap();
@@ -5515,6 +5950,7 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
             &name("p-2"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
         )
         .await
         .unwrap();
@@ -5541,11 +5977,23 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     taken_calls(&calls);
@@ -5596,7 +6044,13 @@ async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     std::mem::take(&mut *calls.lock().unwrap());
@@ -5636,11 +6090,23 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store.delete(&scope, &[name("p-deleted")]).await.unwrap();
@@ -5693,11 +6159,23 @@ async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_n
     let kept = Scratch::new();
     write_tree(kept.path(), &[("kept.txt", file(b"kept content"))]);
     store
-        .save(&scope, &name("p-both"), both.path(), None)
+        .save(
+            &scope,
+            &name("p-both"),
+            both.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     std::mem::take(&mut *calls.lock().unwrap());
@@ -5756,11 +6234,23 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), fixture_tree());
     store
-        .save(&scope, &name("p-1"), first.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
 
@@ -5964,7 +6454,13 @@ async fn a_restore_builds_its_pool_with_the_restore_reader_threads() {
     let scope = new_scope();
     let tree = one_file_tree("restored");
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
 
@@ -6012,7 +6508,13 @@ async fn a_delete_dropped_in_its_prune_while_a_save_of_the_same_agent_runs_keeps
     let (kept_tree, new_tree) = (one_file_tree("kept"), fixture_tree());
     save_each(&store, &scope, &["p-old"]).await;
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     hold_next_listing.store(true, Ordering::SeqCst);
@@ -6025,7 +6527,13 @@ async fn a_delete_dropped_in_its_prune_while_a_save_of_the_same_agent_runs_keeps
     deleting.abort();
     let dropped = deleting.await;
     let saved = store
-        .save(&scope, &name("p-new"), new_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-new"),
+            new_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await;
     storage.open_gate();
     let ended = eventually(|| store.work_in_flight() == 0).await;

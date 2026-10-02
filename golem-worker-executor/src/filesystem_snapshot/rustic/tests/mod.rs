@@ -330,7 +330,13 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
     let scope = new_scope();
     let tree = many_directories_tree(60);
     store(inner.clone(), STORAGE_CALL_DEADLINE)
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let tree_packs = tree_packs(&inner, &scope).await;
@@ -373,7 +379,13 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
     let tree = fixture_tree();
 
     store
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let config_after_the_first = stored_paths(&storage, &scope)
@@ -382,7 +394,13 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
         .filter(|path| path == "config")
         .count();
     store
-        .save(&scope, &name("p-second"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-second"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let paths = stored_paths(&storage, &scope).await;
@@ -415,12 +433,24 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
     let tree = Scratch::new();
     std::fs::write(tree.path().join("first.txt"), b"first").unwrap();
     store
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     std::fs::write(tree.path().join("second.txt"), b"second").unwrap();
     store
-        .save(&scope, &name("p-second"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-second"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let restore = async |reader_threads| {
@@ -721,7 +751,13 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
 
     let saved = tokio::time::timeout(
         LIMIT,
-        store.save(&scope, &name("p-first"), tree.path(), None),
+        store.save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        ),
     )
     .await;
     drop(store);
@@ -736,6 +772,73 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
         (failed_at_deadline(saved), snapshots, stopped),
         (Some(true), Vec::<String>::new(), true)
     );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_cancelled_before_its_publish_publishes_nothing() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let tree = fixture_tree();
+    store(inner.clone(), STORAGE_CALL_DEADLINE)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
+        .await
+        .unwrap();
+    // The second save of the same tree deduplicates all its content. The third call on the
+    // snapshot files is the listing after its backup, and it waits until the cancel ends it.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let held = Arc::new(Notify::new());
+    let (storage, _gate, _dropped) = holding_storage(inner.clone(), {
+        let (calls, held) = (calls.clone(), held.clone());
+        move |_, path| {
+            let selected =
+                path.starts_with("snapshots") && calls.fetch_add(1, Ordering::SeqCst) == 2;
+            if selected {
+                held.notify_one();
+            }
+            selected
+        }
+    });
+    let store = store(storage, STORAGE_CALL_DEADLINE);
+    let cancel = CancellationToken::new();
+
+    let second = name("p-second");
+    let saving = store.save(&scope, &second, tree.path(), None, &cancel);
+    let cancelling = async {
+        held.notified().await;
+        cancel.cancel();
+    };
+    let (saved, ()) = tokio::join!(saving, cancelling);
+    let listed = store
+        .list(&scope)
+        .await
+        .unwrap()
+        .iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect::<Vec<_>>();
+    let snapshot_files = stored_paths(&inner, &scope)
+        .await
+        .into_iter()
+        .filter(|path| path.starts_with("snapshots/"))
+        .count();
+
+    assert!(
+        matches!(
+            saved,
+            Err(SnapshotStoreError::Storage {
+                retryable: false,
+                ..
+            })
+        ),
+        "{saved:?}"
+    );
+    assert_eq!((listed, snapshot_files), (vec!["p-first".to_string()], 1));
 }
 
 #[test]
@@ -765,7 +868,13 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
 
     let saved = tokio::time::timeout(
         LIMIT,
-        store.save(&scope, &name("p-first"), tree.path(), None),
+        store.save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        ),
     )
     .await
     .map(|result| result.map(|_| ()).map_err(|error| format!("{error:#}")));
@@ -787,7 +896,13 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
     let scope = new_scope();
     let tree = fixture_tree();
     store(inner.clone(), STORAGE_CALL_DEADLINE)
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let data_packs = data_packs(&inner, &scope).await;
@@ -845,7 +960,13 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
     let scope = new_scope();
     let tree = fixture_tree();
     store(inner.clone(), STORAGE_CALL_DEADLINE)
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     // A prune reads the trees of the snapshots, and each tree read is a full read of a pack.
@@ -888,12 +1009,24 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
     let first_tree = one_file_tree("first.txt", "only in the first tree");
     let second_tree = one_file_tree("second.txt", "only in the second tree");
     store
-        .save(&scope, &name("p-first"), first_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            first_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let first_packs = pack_paths(&inner, &scope).await;
     store
-        .save(&scope, &name("p-second"), second_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-second"),
+            second_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+        )
         .await
         .unwrap();
     let second_packs = pack_paths(&inner, &scope)
@@ -1096,7 +1229,13 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
         let scope = new_scope();
         let store = store(storage.clone(), STORAGE_CALL_DEADLINE);
         store
-            .save(&scope, &name("p-first"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-first"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+            )
             .await
             .unwrap();
         rewrite(tree.path());
@@ -1106,6 +1245,7 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
                 &name("p-second"),
                 tree.path(),
                 Some((&name("p-first"), detection)),
+                crate::filesystem_snapshot::never_cancelled(),
             )
             .await
             .unwrap();
@@ -1171,13 +1311,25 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
         )
         .unwrap();
         store
-            .save(&scope, &name("p-first"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-first"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+            )
             .await
             .unwrap();
         let first_packs = data_packs(&storage, &scope).await;
         std::fs::write(tree.path().join("changed.txt"), b"in the second snapshot").unwrap();
         store
-            .save(&scope, &name("p-second"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-second"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+            )
             .await
             .unwrap();
         store.delete(&scope, &[name("p-first")]).await.unwrap();

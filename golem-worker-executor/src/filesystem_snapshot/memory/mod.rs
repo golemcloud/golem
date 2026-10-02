@@ -34,6 +34,7 @@ use golem_common::model::Timestamp;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use tokio_util::sync::CancellationToken;
 use tree::{TreeEntry, read_tree, tree_info, write_tree};
 
 /// A filesystem snapshot store that keeps each snapshot in the memory of the process.
@@ -138,6 +139,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         name: &SnapshotName,
         tree: &Path,
         _parent: Option<(&SnapshotName, ChangeDetection)>,
+        cancel: &CancellationToken,
     ) -> Result<SnapshotInfo, SnapshotStoreError> {
         let snapshots = self.snapshots_of(agent);
         if found(&snapshots, name).is_some() {
@@ -151,6 +153,15 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
             .map_err(SnapshotStoreError::Source)?;
         let info = tree_info(&tree, snapshot_time(self.clock.now(), newest));
 
+        // A cancel before the publish publishes nothing.
+        if cancel.is_cancelled() {
+            return Err(SnapshotStoreError::Storage {
+                retryable: false,
+                source: anyhow::anyhow!(
+                    "the save of the filesystem snapshot was cancelled before its publish"
+                ),
+            });
+        }
         // A save of the same name can finish during the read, so the check runs again in the
         // step that publishes the snapshot.
         let mut agents = self.agents();

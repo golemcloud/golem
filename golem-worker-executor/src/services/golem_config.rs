@@ -2410,7 +2410,8 @@ pub struct FilesystemSnapshotStoreConfig {
 /// The settings of the uploads, the restores and the retention of filesystem snapshots.
 #[derive(Clone, Debug, Serialize)]
 pub struct FilesystemSnapshotUploadConfig {
-    /// The number of store operations that save or delete at the same time on one executor.
+    /// The number of runs of store operations that save, delete, copy or list for retention at the
+    /// same time on one executor. It is also the number of clean-ups that run at the same time.
     max_concurrent_uploads: NonZeroUsize,
     /// The number of restores that run at the same time on one executor.
     max_concurrent_restores: NonZeroUsize,
