@@ -32,6 +32,7 @@ use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::invocation_request;
 use golem_api_grpc::proto::golem::worker::{
     ExternalToolInvocation, InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
@@ -220,6 +221,19 @@ fn public_invocation_graph(
         defs: graph.defs.clone(),
         root: SchemaType::tuple(roots),
     }
+}
+
+/// Checks a trusted resume request built from a public session against the invocation session
+/// protocol before it is dispatched, so a malformed request produced by the public adapter
+/// fails here with its protocol error instead of reaching the executor.
+fn validate_trusted_resume_request(request: &InvocationRequest) -> Result<(), WorkerServiceError> {
+    InvocationSessionState::default()
+        .validate_trusted_request(request)
+        .map_err(|error| {
+            WorkerServiceError::Internal(format!(
+                "public resume produced an invalid trusted request: {error}"
+            ))
+        })
 }
 
 fn validate_one_shot_invocation_is_stream_free(
@@ -2393,6 +2407,7 @@ impl WorkerService {
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
         };
+        validate_trusted_resume_request(&initial_request)?;
         let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
         let responses = self
             .worker_client
@@ -2645,6 +2660,7 @@ impl WorkerService {
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
         };
+        validate_trusted_resume_request(&initial_request)?;
         let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
         let responses = self
             .worker_client
