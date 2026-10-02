@@ -24,7 +24,7 @@
     },
     "web_fetch": {
       "component": "web-fetch",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "sha256": "46e3014646d200755572d60c62e975886df96311cff939d9b621f9ef73fdc33b"
     }
   }

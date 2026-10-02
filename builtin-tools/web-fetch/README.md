@@ -19,3 +19,10 @@ Build and copy all production built-in tool artifacts from the repository root:
 ```sh
 cargo make build-builtin-tools
 ```
+
+Regenerate the third-party license report after dependency changes:
+
+```sh
+cargo about generate about.hbs --target wasm32-wasip2 --locked \
+  --output-file licenses/THIRD_PARTY_LICENSES.html
+```

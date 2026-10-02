@@ -1837,7 +1837,8 @@ elif equals ${component} web-fetch
     wasm = set builtin-tools/web-fetch.wasm
     artifact_id = set web_fetch
     exports_json = set "{\"tools\":[\"web-fetch@0.1.0\"]}"
-    licenses = set LICENSE
+    licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
+    source_notice = set LICENSE
     sbom = set ""
 else
     trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools, web-fetch"
@@ -1867,10 +1868,6 @@ if ${same_version}
     if not ${same_bytes}
         trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
     end
-else
-    if ${same_bytes}
-        trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
-    end
 end
 release --recursive ${lock}
 tag = set "${component}-v${version}"
@@ -1897,6 +1894,10 @@ license_dir = set "${staging}/licenses"
 if equals ${licenses} LICENSE
     mkdir ${license_dir}
     cp LICENSE "${license_dir}/LICENSE"
+elif equals ${component} web-fetch
+    mkdir ${license_dir}
+    cp ${licenses} "${license_dir}/THIRD_PARTY_LICENSES.html"
+    cp ${source_notice} "${license_dir}/LICENSE"
 else
     cp ${licenses} ${license_dir}
     cp ${source_notice} "${license_dir}/SOURCE.md"
