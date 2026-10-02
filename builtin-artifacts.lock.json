@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "repository": "golemcloud/golem-builtins",
+  "artifacts": {
+    "filesystem_tools": {
+      "component": "filesystem-tools",
+      "version": "0.0.2",
+      "sha256": "b35ccdfcaf4e91f8075d85c96cb85a74ecb7a637e87865b1e76cf4add24414aa"
+    },
+    "javascript_tools": {
+      "component": "javascript-tools",
+      "version": "0.0.7",
+      "sha256": "9564cc7168fa385a3efc5e6e802ac5af8a3c56e5c6fc772b8c545da59298eb41"
+    },
+    "otlp_exporter": {
+      "component": "otlp-exporter",
+      "version": "0.0.3",
+      "sha256": "251a787e4d6f54814781181a3879c9187663ff91fbf1e3e4b724e89103fb0bf0"
+    },
+    "typescript_tools": {
+      "component": "typescript-tools",
+      "version": "0.0.6",
+      "sha256": "b079061e2ced69489b27f422c48a40a115714f4f8100de73f8b858f7f43b850f"
+    },
+    "web_fetch": {
+      "component": "web-fetch",
+      "version": "0.0.2",
+      "sha256": "46e3014646d200755572d60c62e975886df96311cff939d9b621f9ef73fdc33b"
+    }
+  }
+}

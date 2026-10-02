@@ -741,6 +741,145 @@ async fn http_resuming_response_body_inline_retry_on_body_read_failure(
 
 #[test]
 #[tracing::instrument]
+async fn http_body_resume_after_jump_counts_only_replacement_prefix(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for supports_range in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let overrides = TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.retry = RetryConfig {
+                    max_attempts: 3,
+                    min_delay: Duration::from_millis(1),
+                    max_delay: Duration::from_millis(5),
+                    multiplier: 1.0,
+                    max_jitter_factor: None,
+                };
+                config.max_in_function_retry_delay = Duration::from_secs(1);
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let (requests_tx, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let release_second = Arc::new(tokio::sync::Notify::new());
+        let server = spawn({
+            let release_second = release_second.clone();
+            async move {
+                for attempt in 0..3 {
+                    let (mut stream, _) = listener.accept().await?;
+                    let mut headers = Vec::new();
+                    let mut byte = [0];
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        stream.read_exact(&mut byte).await?;
+                        headers.push(byte[0]);
+                    }
+                    let headers = String::from_utf8(headers)?;
+                    let range = headers.lines().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("range")
+                            .then(|| value.trim().to_string())
+                    });
+                    requests_tx.send(range)?;
+                    if attempt < 2 {
+                        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nh").await?;
+                        if attempt == 0 {
+                            // The peer stays healthy until reconstruction closes its socket.
+                            assert_eq!(stream.read(&mut byte).await?, 0);
+                        } else {
+                            release_second.notified().await;
+                        }
+                    } else if supports_range {
+                        stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1-1/2\r\nContent-Length: 1\r\nConnection: close\r\n\r\ni").await?;
+                    } else {
+                        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi").await?;
+                    }
+                }
+                anyhow::Ok(())
+            }
+        });
+        let component = executor
+            .component_dep(&context.default_environment_id, http_tests)
+            .store()
+            .await?;
+        let agent_id = agent_id!("HttpClient4");
+        let worker_id = executor
+            .start_agent_with(
+                &component.id,
+                agent_id.clone(),
+                HashMap::from([("PORT".to_string(), port.to_string())]),
+                Vec::new(),
+            )
+            .await?;
+        let invocation = executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_read_body_p2",
+            data_value!(),
+        );
+        let control = async {
+            let expected_prefix = HostResponse::from(HostResponseStreamChunk {
+                result: Ok(b"h".to_vec()),
+            })
+            .into_typed_schema_value()?;
+            let mut read_ends = Vec::new();
+            for attempt in 0..2 {
+                assert_eq!(requests.recv().await, Some(None));
+                loop {
+                    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                    read_ends = oplog
+                        .iter()
+                        .filter_map(|entry| match &entry.entry {
+                            PublicOplogEntry::End(params)
+                                if params.response.as_ref() == Some(&expected_prefix) =>
+                            {
+                                Some(entry.oplog_index)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if read_ends.len() == attempt + 1 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                if attempt == 0 {
+                    executor.simulated_crash(&worker_id).await?;
+                }
+            }
+            assert!(executor.instance_load_count(&worker_id) >= 2);
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert!(oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Jump(params) if params.jump.contains(read_ends[0]) && !params.jump.contains(read_ends[1])
+            )));
+            release_second.notify_one();
+            assert_eq!(requests.recv().await, Some(Some("bytes=1-".to_string())));
+            anyhow::Ok(())
+        };
+        let ((), result) = timeout(Duration::from_secs(60), async {
+            tokio::try_join!(control, invocation)
+        })
+        .await
+        .context("body resume after reconstruction timed out")??;
+        assert_eq!(result.into_typed::<String>()?, "200 hi");
+        server.await??;
+        assert_eq!(
+            count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?,
+            1
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 async fn http_blocking_read_payload_outage_reconstructs_same_invocation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

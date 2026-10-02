@@ -22,7 +22,7 @@
  *
  * Naming: `IgniteHostClient` (with the `HostClient` suffix) is
  * deliberately distinct from the user-facing `IgniteClient` adapter
- * that implements `effect/unstable/sql/SqlClient`.
+ * that implements `effect/sql/SqlClient`.
  *
  * @internal — not re-exported from `src/index.ts`.
  */

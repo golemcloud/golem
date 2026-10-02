@@ -43,7 +43,7 @@ const RecursiveNode: Schema.Codec<RecursiveNode> = Schema.Struct({
 const RichChoice = GolemSchema.DiscriminatedUnion([
   {
     tag: "name",
-    schema: Schema.String.pipe(Schema.check(Schema.isStartsWith("name:"))),
+    schema: Schema.String.pipe(Schema.check(Schema.isStartingWith("name:"))),
     discriminator: { tag: "prefix", val: "name:" },
   },
   {

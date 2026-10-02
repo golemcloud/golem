@@ -241,6 +241,24 @@ test_component!(
     "golem:filesystem-tools"
 );
 test_component!(
+    javascript_tools,
+    "javascript_tools",
+    "../builtin-tools/javascript-tools",
+    "golem:javascript-tools"
+);
+test_component!(
+    typescript_tools,
+    "typescript_tools",
+    "../builtin-tools/typescript-tools",
+    "golem:typescript-tools"
+);
+test_component!(
+    web_fetch,
+    "web_fetch",
+    "../builtin-tools/web-fetch",
+    "golem:web-fetch"
+);
+test_component!(
     tool_streaming_ts_provider,
     "tool_streaming_ts_provider",
     "golem_it_tool_streaming_ts_provider",

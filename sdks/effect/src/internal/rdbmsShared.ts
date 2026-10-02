@@ -16,7 +16,7 @@ import {
   type SqlErrorReason,
   SqlSyntaxError,
   UnknownError,
-} from "effect/unstable/sql/SqlError"
+} from "effect/sql/SqlError"
 import type * as PostgresHost from "golem:rdbms/postgres@1.5.0"
 import type * as MysqlHost from "golem:rdbms/mysql@1.5.0"
 import type * as IgniteHost from "golem:rdbms/ignite2@1.5.0"

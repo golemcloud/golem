@@ -49,6 +49,7 @@ use golem_common::model::oplog::payload::HostPayloadPair;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestHttpRequest, HostResponse, OplogEntry, OplogIndex,
 };
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{NamedRetryPolicy, PredicateValue, RetryContext, RetryProperties};
 use golem_common::related_span;
 use golem_common::tracing::TraceOrigin;
@@ -502,6 +503,7 @@ async fn reconstruct_outgoing_body_chunks_after(
 pub async fn count_incoming_body_bytes(
     oplog: &Arc<dyn Oplog>,
     begin_index: OplogIndex,
+    skipped_regions: &DeletedRegions,
 ) -> Result<u64, HttpStreamResumeError> {
     let current_idx = oplog.current_oplog_index().await;
 
@@ -531,6 +533,10 @@ pub async fn count_incoming_body_bytes(
     > = HashMap::new();
 
     for (idx, entry) in &entries {
+        if skipped_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
         match entry {
             OplogEntry::Start {
                 function_name,
@@ -1625,7 +1631,14 @@ async fn try_resuming_response_body_inline_retry_impl<Ctx: crate::workerctx::Wor
 
     // 3. Count bytes already delivered to the guest from the oplog
     let oplog = ctx.public_state.oplog();
-    let consumed_len = count_incoming_body_bytes(&oplog, request_state.begin_index()).await?;
+    let skipped_regions = ctx
+        .state
+        .replay_state
+        .skipped_regions()
+        .await
+        .map_err(HttpStreamResumeError::corrupt)?;
+    let consumed_len =
+        count_incoming_body_bytes(&oplog, request_state.begin_index(), &skipped_regions).await?;
 
     // 4. Reconstruct the outgoing request body chunks from the oplog
     let body_chunks = reconstruct_outgoing_body_chunks(&oplog, request_state.begin_index()).await?;

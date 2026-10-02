@@ -5,7 +5,7 @@
  * with `connect / send / receive / receive-with-timeout / close /
  * subscribe`). This module bridges that resource to the canonical
  * Effect v4 {@link https://github.com/Effect-TS/effect | Socket}
- * abstraction (`effect/unstable/socket`), so user code can plug
+ * abstraction (`effect/socket`), so user code can plug
  * Golem-backed websockets into the same `Stream` / `Channel`
  * combinators used against the browser- / Node-backed adapters.
  *
@@ -33,7 +33,7 @@
  *
  * ```ts
  * import { Effect, Fiber } from "effect"
- * import { Socket } from "effect/unstable/socket"
+ * import { Socket } from "effect/socket"
  * import { Websocket } from "@golemcloud/effect-golem"
  *
  * const drain = Effect.scoped(
@@ -75,7 +75,7 @@ import * as Effect from "effect/Effect"
 import * as Latch from "effect/Latch"
 import * as Layer from "effect/Layer"
 import * as Scope from "effect/Scope"
-import { Socket } from "effect/unstable/socket"
+import { Socket } from "effect/socket"
 import type * as WsClient from "golem:websocket/client@1.5.0"
 import { WebsocketClient } from "./host/WebsocketClient.js"
 

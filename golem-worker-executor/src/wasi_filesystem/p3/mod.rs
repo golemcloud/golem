@@ -74,6 +74,24 @@ fn p3_descriptor_guest_path(
         .map_err(|_| types::ErrorCode::NotPermitted.into())
 }
 
+fn p3_is_immutable_initial_file(
+    generation_handle: &FilesystemGenerationHandle,
+    guest_path: &CanonicalGuestPath,
+) -> FilesystemResult<bool> {
+    let relative_path = guest_path.as_str().strip_prefix('/').unwrap_or_default();
+    agent_filesystem::is_immutable_initial_file(
+        generation_handle,
+        std::path::Path::new(relative_path),
+    )
+    .map_err(|error| p3_agent_error(AgentFilesystemError::Access(error)))
+}
+
+fn p3_stable_initial_file_stat(mut stat: types::DescriptorStat) -> types::DescriptorStat {
+    stat.data_access_timestamp = None;
+    stat.data_modification_timestamp = None;
+    stat
+}
+
 async fn authorize_paths<Ctx: WorkerCtx, U: 'static>(
     accessor: &Accessor<U, DurableP3<Ctx>>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
@@ -1921,11 +1939,34 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         fd: Resource<Descriptor>,
     ) -> FilesystemResult<types::DescriptorStat> {
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, "")?;
+        let generation_handle = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+        });
+        let immutable_initial_file = p3_is_immutable_initial_file(&generation_handle, &guest_path)?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let path =
             descriptor_path_from_accessor::<Ctx, U>(store, &fd).map_err(FilesystemError::trap)?;
         let fd_rep = fd.rep();
+
+        if immutable_initial_file {
+            let stat = run_local_stat::<Ctx, U>(store, Resource::new_borrow(fd_rep))
+                .await
+                .map_err(|error| {
+                    FilesystemError::trap(wasmtime::Error::msg(format!(
+                        "immutable initial-file stat failed: {error:?}"
+                    )))
+                })?;
+            store.with(|mut access| {
+                observe_function_call_store::<Ctx, U>(
+                    access.data_mut(),
+                    "filesystem::types::descriptor",
+                    "stat-async",
+                )
+            });
+            return Ok(p3_stable_initial_file_stat(stat));
+        }
+
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
 
@@ -1961,11 +2002,39 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
         path: String,
     ) -> FilesystemResult<types::DescriptorStat> {
         let guest_path = descriptor_guest_path_from_accessor::<Ctx, U>(store, &fd, &path)?;
+        let generation_handle = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).filesystem_generation_handle()
+        });
+        let immutable_initial_file = p3_is_immutable_initial_file(&generation_handle, &guest_path)?;
         let _authorization_permit =
             authorize_paths(store, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let full_path = descriptor_path_at_from_accessor::<Ctx, U>(store, &fd, &path)
             .map_err(FilesystemError::trap)?;
         let fd_rep = fd.rep();
+
+        if immutable_initial_file {
+            let stat = run_local_stat_at::<Ctx, U>(
+                store,
+                Resource::new_borrow(fd_rep),
+                path_flags,
+                path.clone(),
+            )
+            .await
+            .map_err(|error| {
+                FilesystemError::trap(wasmtime::Error::msg(format!(
+                    "immutable initial-file stat-at failed: {error:?}"
+                )))
+            })?;
+            store.with(|mut access| {
+                observe_function_call_store::<Ctx, U>(
+                    access.data_mut(),
+                    "filesystem::types::descriptor",
+                    "stat-at",
+                )
+            });
+            return Ok(p3_stable_initial_file_stat(stat));
+        }
+
         let live_stat = Arc::new(Mutex::new(None));
         let live_stat_for_call = Arc::clone(&live_stat);
         let live_path = path.clone();

@@ -936,7 +936,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         }
         if self
             .hidden_reads
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .is_ok()
         {
             return Ok(Vec::new());
@@ -1263,14 +1263,14 @@ impl BlobStorage for ReadCountingBlobStorage {
     ) -> Result<(), anyhow::Error> {
         if self
             .fail_delete_after
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                 remaining.checked_sub(1)
             })
             == Ok(1)
         {
             return Err(anyhow::anyhow!("injected blob delete failure"));
         }
-        let fail_after_commit = self.fail_delete_after_commit.fetch_update(
+        let fail_after_commit = self.fail_delete_after_commit.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |remaining| remaining.checked_sub(1),

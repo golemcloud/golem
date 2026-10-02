@@ -17,7 +17,7 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
 use axum::response::Response;
-use axum::routing::post;
+use axum::routing::{get, post};
 use futures::StreamExt;
 use golem_common::agent_id;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -47,10 +47,10 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
-use golem_common::schema::tool::{ToolMiddleware, ToolMiddlewareScope};
+use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue, build_input_record,
+    TypedSchemaValue, VariantValuePayload, build_input_record,
 };
 use golem_common::{
     data_value,
@@ -99,6 +99,18 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("filesystem_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("javascript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("typescript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("web_fetch")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -724,6 +736,13 @@ struct ClockedStreamEvidence {
     stream: StreamEvidence,
 }
 
+#[derive(Debug, FromSchema)]
+struct CliToolEvidence {
+    exit_code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
 #[derive(Debug, PartialEq, Eq, FromSchema)]
 struct TypedOutputEvidence {
     label: String,
@@ -959,7 +978,59 @@ async fn invoke_filesystem_tool(
         .command_index_by_path(&[])
         .expect("filesystem tool command exists");
     let input_schema = definition.canonical_input_record_schema(command_index)?;
-    let (_, input_value) = input.into_parts();
+    let (provided_schema, provided_value) = input.into_parts();
+    let SchemaType::Record {
+        fields: provided_fields,
+        ..
+    } = provided_schema.root
+    else {
+        anyhow::bail!("test tool input schema must be a record");
+    };
+    let SchemaValue::Record {
+        fields: provided_values,
+    } = provided_value
+    else {
+        anyhow::bail!("test tool input value must be a record");
+    };
+    anyhow::ensure!(
+        provided_fields.len() == provided_values.len(),
+        "test tool input schema/value field counts differ"
+    );
+    let mut values_by_name = BTreeMap::new();
+    for (field, value) in provided_fields.into_iter().zip(provided_values) {
+        anyhow::ensure!(
+            values_by_name.insert(field.name.clone(), value).is_none(),
+            "duplicate test tool input field '{}'",
+            field.name
+        );
+    }
+    let SchemaType::Record {
+        fields: canonical_fields,
+        ..
+    } = &input_schema.root
+    else {
+        anyhow::bail!("canonical tool input schema must be a record");
+    };
+    let mut canonical_values = Vec::with_capacity(canonical_fields.len());
+    for field in canonical_fields {
+        canonical_values.push(
+            values_by_name
+                .remove(&field.name)
+                .ok_or_else(|| anyhow::anyhow!("missing test tool input field '{}'", field.name))?,
+        );
+    }
+    anyhow::ensure!(
+        values_by_name.is_empty(),
+        "unexpected test tool input fields: {}",
+        values_by_name
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let input_value = SchemaValue::Record {
+        fields: canonical_values,
+    };
     let output = executor
         .invoke_external_tool(
             worker_id,
@@ -1005,6 +1076,90 @@ async fn invoke_filesystem_tool_success(
     }
 }
 
+async fn invoke_cli_tool_version(
+    executor: &TestWorkerExecutor,
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    environment_state: &TestEnvironmentStateService,
+    caller_component: &golem_common::model::component::ComponentDto,
+    provider: &PrecompiledComponent,
+    package_name: &str,
+    tool_name: &str,
+    expected_version: &str,
+    expected_stdout: &str,
+) -> anyhow::Result<()> {
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        package_name,
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let evidence: CliToolEvidence = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id!("ToolStreamingCaller", format!("{tool_name}-version")),
+            "builtin_cli",
+            data_value!(tool_name, "/workspace", vec!["--version"]),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(evidence.exit_code, 0);
+    assert!(evidence.stderr.is_empty());
+    let stdout = String::from_utf8(evidence.stdout)?;
+    if expected_version.is_empty() {
+        assert!(stdout.starts_with('v'));
+        assert!(stdout.ends_with('\n'));
+    } else {
+        assert_eq!(stdout, expected_stdout);
+    }
+    Ok(())
+}
+
+async fn invoke_cli_tool(
+    executor: &TestWorkerExecutor,
+    caller_component: &golem_common::model::component::ComponentDto,
+    agent_name: &str,
+    tool_name: &str,
+    cwd: &str,
+    args: Vec<&str>,
+) -> anyhow::Result<CliToolEvidence> {
+    executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id!("ToolStreamingCaller", agent_name),
+            "builtin_cli",
+            data_value!(tool_name, cwd, args),
+        )
+        .await?
+        .into_typed()
+}
+
 fn assert_filesystem_tool_error(
     result: Result<Option<SchemaValue>, SerializableToolRpcError>,
     expected_name: &str,
@@ -1017,6 +1172,146 @@ fn assert_filesystem_tool_error(
             }
         },
         other => anyhow::bail!("expected filesystem tool error '{expected_name}', got {other:?}"),
+    }
+}
+
+fn optional_u64(value: Option<u64>) -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::u64()),
+        SchemaValue::Option {
+            inner: value.map(|value| Box::new(SchemaValue::U64(value))),
+        },
+    )
+}
+
+fn optional_u32(value: Option<u32>) -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::u32()),
+        SchemaValue::Option {
+            inner: value.map(|value| Box::new(SchemaValue::U32(value))),
+        },
+    )
+}
+
+fn optional_bool(value: Option<bool>) -> (SchemaType, SchemaValue) {
+    (
+        SchemaType::option(SchemaType::bool()),
+        SchemaValue::Option {
+            inner: value.map(|value| Box::new(SchemaValue::Bool(value))),
+        },
+    )
+}
+
+fn web_fetch_input(
+    url: String,
+    timeout_ms: Option<u64>,
+    max_response_bytes: Option<u64>,
+    max_redirects: Option<u32>,
+    convert_html_to_text: Option<bool>,
+) -> TypedSchemaValue {
+    let timeout_ms = optional_u64(timeout_ms);
+    let max_response_bytes = optional_u64(max_response_bytes);
+    let max_redirects = optional_u32(max_redirects);
+    let convert_html_to_text = optional_bool(convert_html_to_text);
+    filesystem_tool_input(vec![
+        ("url", SchemaType::string(), SchemaValue::String(url)),
+        ("timeout-ms", timeout_ms.0, timeout_ms.1),
+        (
+            "max-response-bytes",
+            max_response_bytes.0,
+            max_response_bytes.1,
+        ),
+        ("max-redirects", max_redirects.0, max_redirects.1),
+        (
+            "convert-html-to-text",
+            convert_html_to_text.0,
+            convert_html_to_text.1,
+        ),
+    ])
+}
+
+async fn invoke_web_fetch(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    idempotency_key: IdempotencyKey,
+    input: TypedSchemaValue,
+) -> anyhow::Result<
+    Result<
+        Option<SchemaValue>,
+        golem_common::model::oplog::payload::types::SerializableToolRpcError,
+    >,
+> {
+    let command_index = definition
+        .command_index_by_path(&[])
+        .expect("web-fetch root command exists");
+    let input_schema = definition.canonical_input_record_schema(command_index)?;
+    let (_, input_value) = input.into_parts();
+    let output = executor
+        .invoke_external_tool(
+            worker_id,
+            fingerprint,
+            idempotency_key,
+            ToolName::try_from("web-fetch").unwrap(),
+            Vec::new(),
+            TypedSchemaValue::new(input_schema, input_value),
+            InvocationContextStack::fresh(),
+            principal,
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result } = output.result else {
+        anyhow::bail!("expected web-fetch external tool result, got {output:?}");
+    };
+    Ok(result.map(|result| result.result.map(|value| value.into_parts().1)))
+}
+
+fn expect_web_fetch_success(
+    result: Result<Option<SchemaValue>, SerializableToolRpcError>,
+) -> anyhow::Result<(String, u16, Option<String>, String, bool)> {
+    let Ok(Some(SchemaValue::Record { fields })) = result else {
+        anyhow::bail!("expected successful web-fetch record, got {result:?}");
+    };
+    let [
+        SchemaValue::String(final_url),
+        SchemaValue::U16(status),
+        SchemaValue::Option {
+            inner: content_type,
+        },
+        SchemaValue::String(content),
+        SchemaValue::Bool(truncated),
+    ] = fields.as_slice()
+    else {
+        anyhow::bail!("unexpected web-fetch result fields: {fields:?}");
+    };
+    let content_type = match content_type {
+        Some(value) => match value.as_ref() {
+            SchemaValue::String(value) => Some(value.clone()),
+            other => anyhow::bail!("unexpected web-fetch content type: {other:?}"),
+        },
+        None => None,
+    };
+    Ok((
+        final_url.clone(),
+        *status,
+        content_type,
+        content.clone(),
+        *truncated,
+    ))
+}
+
+fn assert_web_fetch_error(
+    result: Result<Option<SchemaValue>, SerializableToolRpcError>,
+    expected_name: &str,
+) -> anyhow::Result<()> {
+    match result {
+        Err(SerializableToolRpcError::RemoteToolError(error)) => match error.as_ref() {
+            SerializableToolError::CustomError(error) if error.name == expected_name => Ok(()),
+            other => anyhow::bail!("expected web-fetch error '{expected_name}', got {other:?}"),
+        },
+        other => anyhow::bail!("expected web-fetch error '{expected_name}', got {other:?}"),
     }
 }
 
@@ -1589,6 +1884,268 @@ async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, 
             .expect("serve native-order HTTP requests");
     });
     (port, task, requests)
+}
+
+struct WebFetchHttpServers {
+    source_port: u16,
+    target_port: u16,
+    source_server: tokio::task::JoinHandle<()>,
+    source_requests: Arc<AtomicUsize>,
+    target_requests: Arc<AtomicUsize>,
+    target_server: tokio::task::JoinHandle<()>,
+    bounded_body_gate: Arc<tokio::sync::Notify>,
+    timeout_started: tokio::sync::oneshot::Receiver<()>,
+    timeout_cancelled: tokio::sync::oneshot::Receiver<()>,
+    interrupted_started: tokio::sync::oneshot::Receiver<()>,
+    interrupted_requests: Arc<AtomicUsize>,
+}
+
+async fn start_web_fetch_http_servers() -> WebFetchHttpServers {
+    let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_port = target_listener.local_addr().unwrap().port();
+    let target_requests = Arc::new(AtomicUsize::new(0));
+    let target_requests_for_route = target_requests.clone();
+    let target_server = tokio::spawn(async move {
+        let app = Router::new().route(
+            "/cross-host-final",
+            get(move || async move {
+                target_requests_for_route.fetch_add(1, Ordering::SeqCst);
+                Response::builder()
+                    .header("content-type", "text/plain; charset=utf-8")
+                    .body(Body::from("cross-host target"))
+                    .unwrap()
+            }),
+        );
+        axum::serve(target_listener, app).await.unwrap();
+    });
+
+    let source_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let source_port = source_listener.local_addr().unwrap().port();
+    let cross_host_location = format!("http://127.0.0.1:{target_port}/cross-host-final");
+    let source_requests = Arc::new(AtomicUsize::new(0));
+    let source_requests_for_routes = source_requests.clone();
+    let bounded_body_gate = Arc::new(tokio::sync::Notify::new());
+    let bounded_body_gate_for_route = bounded_body_gate.clone();
+    let (timeout_started_tx, timeout_started) = tokio::sync::oneshot::channel();
+    let timeout_started_tx = Arc::new(tokio::sync::Mutex::new(Some(timeout_started_tx)));
+    let (timeout_cancelled_tx, timeout_cancelled) = tokio::sync::oneshot::channel();
+    let timeout_cancelled_tx = Arc::new(tokio::sync::Mutex::new(Some(timeout_cancelled_tx)));
+    let (interrupted_started_tx, interrupted_started) = tokio::sync::oneshot::channel();
+    let interrupted_started_tx = Arc::new(tokio::sync::Mutex::new(Some(interrupted_started_tx)));
+    let interrupted_requests = Arc::new(AtomicUsize::new(0));
+    let interrupted_requests_for_route = interrupted_requests.clone();
+    let source_server = tokio::spawn(async move {
+        let app = Router::new()
+            .route(
+                "/html",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "text/html; charset=utf-8")
+                        .body(Body::from(
+                            "<html><body><h1>Fetch title</h1><script>hidden()</script><p>Readable body.</p></body></html>",
+                        ))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/missing",
+                get(|| async {
+                    Response::builder()
+                        .status(axum::http::StatusCode::NOT_FOUND)
+                        .header("content-type", "text/plain")
+                        .body(Body::from("missing body"))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/relative",
+                get(|| async {
+                    Response::builder()
+                        .status(axum::http::StatusCode::FOUND)
+                        .header("location", "/relative-final")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/relative-final",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "text/plain")
+                        .body(Body::from("relative target"))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/cross-host",
+                get(move || {
+                    let location = cross_host_location.clone();
+                    async move {
+                        Response::builder()
+                            .status(axum::http::StatusCode::TEMPORARY_REDIRECT)
+                            .header("location", location)
+                            .body(Body::empty())
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/streaming",
+                get(move || {
+                    let gate = bounded_body_gate_for_route.clone();
+                    async move {
+                        let (body_tx, body_rx) = tokio::sync::mpsc::channel(3);
+                        tokio::spawn(async move {
+                            body_tx
+                                .send(Ok::<_, Infallible>(Bytes::from_static(b"abc")))
+                                .await
+                                .ok();
+                            // Reaching the configured limit must stop the fetch even if the peer
+                            // keeps the response stream open without sending another byte.
+                            body_tx
+                                .send(Ok(Bytes::from_static(b"de")))
+                                .await
+                                .ok();
+                            gate.notified().await;
+                            body_tx
+                                .send(Ok(Bytes::from_static(b"ghi")))
+                                .await
+                                .ok();
+                        });
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body(Body::from_stream(ReceiverStream::new(body_rx)))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/slow-stream",
+                get(move || {
+                    let started = timeout_started_tx.clone();
+                    let cancelled = timeout_cancelled_tx.clone();
+                    async move {
+                        let (body_tx, body_rx) = tokio::sync::mpsc::channel(1);
+                        tokio::spawn(async move {
+                            if body_tx
+                                .send(Ok::<_, Infallible>(Bytes::from_static(b"started")))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                            if let Some(started) = started.lock().await.take() {
+                                started.send(()).ok();
+                            }
+                            body_tx.closed().await;
+                            if let Some(cancelled) = cancelled.lock().await.take() {
+                                cancelled.send(()).ok();
+                            }
+                        });
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body(Body::from_stream(ReceiverStream::new(body_rx)))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/slow-headers",
+                get(|| async {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    Response::builder()
+                        .header("content-type", "text/plain")
+                        .body(Body::from("too late"))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/interrupted",
+                get(move || {
+                    let attempt = interrupted_requests_for_route.fetch_add(1, Ordering::SeqCst);
+                    let started = interrupted_started_tx.clone();
+                    async move {
+                        if attempt > 0 {
+                            return Response::builder()
+                                .header("content-type", "text/plain")
+                                .body(Body::from("retried after interruption"))
+                                .unwrap();
+                        }
+
+                        let (body_tx, body_rx) = tokio::sync::mpsc::channel(1);
+                        tokio::spawn(async move {
+                            if body_tx
+                                .send(Ok::<_, Infallible>(Bytes::from_static(b"started")))
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                            if let Some(started) = started.lock().await.take() {
+                                started.send(()).ok();
+                            }
+                            body_tx.closed().await;
+                        });
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body(Body::from_stream(ReceiverStream::new(body_rx)))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/invalid-utf8",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "text/plain; charset=utf-8")
+                        .body(Body::from(Bytes::from_static(&[0xff])))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/binary",
+                get(|| async {
+                    Response::builder()
+                        .header("content-type", "application/octet-stream")
+                        .body(Body::from(Bytes::from_static(&[0, 1, 2, 3])))
+                        .unwrap()
+                }),
+            )
+            .route(
+                "/cycle",
+                get(|| async {
+                    Response::builder()
+                        .status(axum::http::StatusCode::MOVED_PERMANENTLY)
+                        .header("location", "/cycle#again")
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+            )
+            .layer(axum::middleware::from_fn(
+                move |request: Request, next: axum::middleware::Next| {
+                let requests = source_requests_for_routes.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    next.run(request).await
+                }
+                },
+            ));
+        axum::serve(source_listener, app).await.unwrap();
+    });
+
+    WebFetchHttpServers {
+        source_port,
+        target_port,
+        source_server,
+        source_requests,
+        target_requests,
+        target_server,
+        bounded_body_gate,
+        timeout_started,
+        timeout_cancelled,
+        interrupted_started,
+        interrupted_requests,
+    }
 }
 async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>) {
     use tokio::io::AsyncWriteExt;
@@ -9952,6 +10509,7 @@ async fn exercise_filesystem_tools(
         .tools
         .iter()
         .map(|definition| {
+            assert!(definition.requires_filesystem);
             let name = definition
                 .name()
                 .expect("filesystem tool has a root command");
@@ -9969,6 +10527,12 @@ async fn exercise_filesystem_tools(
     for bindings in deployment.tool_bindings.values_mut() {
         for binding in bindings.values_mut() {
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    let mut denied_deployment = deployment.clone();
+    for bindings in denied_deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Denied;
         }
     }
     environment_state.set_tool_deployment(
@@ -10146,6 +10710,303 @@ async fn exercise_filesystem_tools(
         }
     );
 
+    let root = "workspace/filesystem-tools".to_string();
+    let ls = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(root.clone()),
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "glob",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("*.txt".to_string()))),
+                },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        ls,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::List {
+                    elements: vec![SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String(path.clone()),
+                            SchemaValue::Variant(VariantValuePayload {
+                                case: 0,
+                                payload: Some(Box::new(SchemaValue::U64(15))),
+                            }),
+                        ],
+                    }],
+                },
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+                SchemaValue::Option { inner: None },
+            ],
+        }
+    );
+
+    let grep = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "grep",
+        filesystem_tool_input(vec![
+            ("path", SchemaType::string(), SchemaValue::String(root)),
+            (
+                "pattern",
+                SchemaType::string(),
+                SchemaValue::String("T.O".to_string()),
+            ),
+            (
+                "mode",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::Enum { case: 1 })),
+                },
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "include-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: vec![SchemaValue::String("*.txt".to_string())],
+                },
+            ),
+            (
+                "exclude-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+            ),
+            (
+                "case-insensitive",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        grep,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::List {
+                    elements: vec![SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String(path.clone()),
+                            SchemaValue::U64(2),
+                            SchemaValue::String("TWO".to_string()),
+                            SchemaValue::Bool(false),
+                        ],
+                    }],
+                },
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+                SchemaValue::Option { inner: None },
+            ],
+        }
+    );
+
+    let bounded_stream_probe: Vec<u64> = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id,
+            "probe_bounded_wasi_stream",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(bounded_stream_probe, vec![4, 0, 4]);
+
+    executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id,
+            "prepare_filesystem_limit_fixtures",
+            data_value!(),
+        )
+        .await?;
+    let oversized_directory = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/filesystem-tools/oversized-directory".to_string()),
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "glob",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+        ]),
+    )
+    .await?;
+    let SchemaValue::Record { fields } = oversized_directory else {
+        anyhow::bail!("oversized-directory ls returned a non-record result");
+    };
+    let [
+        SchemaValue::List { elements: entries },
+        SchemaValue::List {
+            elements: diagnostics,
+        },
+        _,
+    ] = fields.as_slice()
+    else {
+        anyhow::bail!("oversized-directory ls returned an unexpected result shape");
+    };
+    assert!(entries.is_empty());
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [SchemaValue::Record { fields }]
+            if matches!(fields.get(1), Some(SchemaValue::Enum { case: 4 }))
+    ));
+
+    let bounded_read = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "grep",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/filesystem-tools/bounded-read.txt".to_string()),
+            ),
+            (
+                "pattern",
+                SchemaType::string(),
+                SchemaValue::String("not-present".to_string()),
+            ),
+            (
+                "mode",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "include-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+            ),
+            (
+                "exclude-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+            ),
+            (
+                "case-insensitive",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    assert!(matches!(
+        bounded_read,
+        SchemaValue::Record { fields }
+            if matches!(fields.as_slice(), [
+                SchemaValue::List { elements: matches },
+                SchemaValue::List { elements: diagnostics },
+                SchemaValue::Option { inner: Some(_) },
+            ] if matches.is_empty() && diagnostics.is_empty())
+    ));
+    let bounded_grep_pages: Vec<u64> = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id,
+            "filesystem_limit_roundtrip",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(bounded_grep_pages, vec![262_144, 4_097, 4, 0]);
+
     let stale = invoke_filesystem_tool(
         executor,
         &worker_id,
@@ -10292,7 +11153,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal,
+        principal.clone(),
         &definitions,
         "read-file",
         filesystem_tool_input(vec![
@@ -10317,6 +11178,121 @@ async fn exercise_filesystem_tools(
     )
     .await?;
     assert_filesystem_tool_error(traversal, "unsafe-path")?;
+
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(denied_deployment),
+    );
+    let denied_worker = executor
+        .start_agent(
+            &caller_component.id,
+            agent_id!("ToolStreamingCaller", "filesystem-tools-denied"),
+        )
+        .await?;
+    let denied_fingerprint = executor
+        .get_worker_metadata(&denied_worker)
+        .await?
+        .fingerprint;
+    for tool_name in ["ls", "grep"] {
+        let input = if tool_name == "ls" {
+            filesystem_tool_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String("workspace".to_string()),
+                ),
+                (
+                    "max-depth",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "glob",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "limit",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "cursor",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+            ])
+        } else {
+            filesystem_tool_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String("workspace".to_string()),
+                ),
+                (
+                    "pattern",
+                    SchemaType::string(),
+                    SchemaValue::String("text".to_string()),
+                ),
+                (
+                    "mode",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "max-depth",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "limit",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "cursor",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "include-globs",
+                    SchemaType::list(SchemaType::string()),
+                    SchemaValue::List {
+                        elements: Vec::new(),
+                    },
+                ),
+                (
+                    "exclude-globs",
+                    SchemaType::list(SchemaType::string()),
+                    SchemaValue::List {
+                        elements: Vec::new(),
+                    },
+                ),
+                (
+                    "case-insensitive",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(false),
+                ),
+            ])
+        };
+        let denied = invoke_filesystem_tool(
+            executor,
+            &denied_worker,
+            denied_fingerprint,
+            principal.clone(),
+            &definitions,
+            tool_name,
+            input,
+        )
+        .await
+        .expect_err("filesystem-disabled tool activation must fail");
+        assert!(
+            denied.to_string().contains("filesystemAccess is denied"),
+            "filesystem-disabled '{tool_name}' failed for the wrong reason: {denied:?}"
+        );
+    }
     Ok(())
 }
 
@@ -10381,6 +11357,8 @@ async fn exercise_guest_invoked_filesystem_tools(
             "1",
             "14",
             "15",
+            "workspace/guest-filesystem-tools/notes.txt:file:15:pages=5",
+            "workspace/guest-filesystem-tools/notes.txt:2:TWO:matches=2:diagnostics=1:pages=3",
         ]
     );
     Ok(())
@@ -10426,6 +11404,344 @@ async fn builtin_filesystem_tools_have_expected_behavior(
 
 #[test]
 #[tracing::instrument]
+#[timeout("10m")]
+async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    exercise_javascript_and_typescript_tools(
+        last_unique_id,
+        deps,
+        caller,
+        javascript_tools,
+        typescript_tools,
+        false,
+    )
+    .await
+}
+
+#[test]
+#[ignore = "GOL-714: completed JavaScript tool calls do not reconstruct deterministically"]
+#[tracing::instrument]
+#[timeout("10m")]
+async fn builtin_javascript_and_typescript_tools_reconstruct_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    exercise_javascript_and_typescript_tools(
+        last_unique_id,
+        deps,
+        caller,
+        javascript_tools,
+        typescript_tools,
+        true,
+    )
+    .await
+}
+
+async fn exercise_javascript_and_typescript_tools(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    javascript_tools: &PrecompiledComponent,
+    typescript_tools: &PrecompiledComponent,
+    verify_reconstruction: bool,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+
+    for (provider, package, tool, version, stdout) in [
+        (javascript_tools, "golem:javascript-tools", "node", "", ""),
+        (
+            javascript_tools,
+            "golem:javascript-tools",
+            "npm",
+            "10.9.9",
+            "10.9.9\n",
+        ),
+        (
+            javascript_tools,
+            "golem:javascript-tools",
+            "npx",
+            "10.9.9",
+            "10.9.9\n",
+        ),
+        (
+            typescript_tools,
+            "golem:typescript-tools",
+            "tsc",
+            "5.9.2",
+            "Version 5.9.2\n",
+        ),
+    ] {
+        invoke_cli_tool_version(
+            &executor,
+            deps,
+            &context,
+            &environment_state,
+            &caller_component,
+            provider,
+            package,
+            tool,
+            version,
+            stdout,
+        )
+        .await?;
+    }
+
+    let javascript_component = executor
+        .component_dep(&context.default_environment_id, javascript_tools)
+        .store()
+        .await?;
+    let javascript_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", javascript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let typescript_component = executor
+        .component_dep(&context.default_environment_id, typescript_tools)
+        .store()
+        .await?;
+    let typescript_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", typescript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        javascript_component.id,
+        javascript_component.revision,
+        "golem:javascript-tools",
+        "ToolStreamingCaller",
+        javascript_metadata.tools,
+    );
+    let typescript_deployment = deployment_state(
+        context.account_id,
+        typescript_component.id,
+        typescript_component.revision,
+        "golem:typescript-tools",
+        "ToolStreamingCaller",
+        typescript_metadata.tools,
+    );
+    deployment
+        .registered_tools
+        .extend(typescript_deployment.registered_tools);
+    for (owner, bindings) in typescript_deployment.tool_bindings {
+        deployment
+            .tool_bindings
+            .entry(owner)
+            .or_default()
+            .extend(bindings);
+    }
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let delayed_output = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "node-delayed-output",
+        "node",
+        "/workspace",
+        vec!["-e", "setTimeout(() => console.log('late'), 20)"],
+    )
+    .await?;
+    assert_eq!(delayed_output.exit_code, 0);
+    assert_eq!(delayed_output.stdout, b"late\n");
+    assert!(delayed_output.stderr.is_empty());
+
+    let immediate_exit = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        "node-immediate-exit",
+        "node",
+        "/workspace",
+        vec!["-e", "process.exit(7); console.log('unexpected')"],
+    )
+    .await?;
+    assert_eq!(immediate_exit.exit_code, 7);
+    assert!(immediate_exit.stdout.is_empty());
+    assert!(immediate_exit.stderr.is_empty());
+
+    let behavior_agent = "js-ts-behavior";
+    let fixture_source = r##"
+const fs = require('node:fs');
+fs.mkdirSync('local-pkg', { recursive: true });
+fs.writeFileSync('package.json', JSON.stringify({
+  name: 'builtin-tools-fixture',
+  version: '1.0.0',
+  private: true,
+  scripts: { probe: "node -e \"console.log('npm-script-ok')\"" }
+}));
+fs.writeFileSync('local-pkg/package.json', JSON.stringify({
+  name: 'local-tool',
+  version: '1.0.0',
+  bin: { 'local-tool': 'cli.js' }
+}));
+fs.writeFileSync(
+  'local-pkg/cli.js',
+  "#!/usr/bin/env node\nconsole.log('npx:' + process.argv.slice(2).join(','));\n",
+  { mode: 0o755 }
+);
+fs.writeFileSync('valid.ts', 'const value: number = 42;\nconsole.log(value);\n');
+fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
+"##;
+    let fixture = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "node",
+        "/workspace",
+        vec!["-e", fixture_source],
+    )
+    .await?;
+    assert_eq!(
+        fixture.exit_code,
+        0,
+        "fixture stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&fixture.stdout),
+        String::from_utf8_lossy(&fixture.stderr)
+    );
+    assert!(fixture.stdout.is_empty());
+    assert!(fixture.stderr.is_empty());
+
+    let npm_install = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec![
+            "install",
+            "./local-pkg",
+            "--offline",
+            "--ignore-scripts",
+            "--no-package-lock",
+            "--no-audit",
+            "--no-fund",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        npm_install.exit_code,
+        0,
+        "npm install stderr: {}",
+        String::from_utf8_lossy(&npm_install.stderr)
+    );
+
+    let npm_script = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npm",
+        "/workspace",
+        vec!["run", "probe"],
+    )
+    .await?;
+    assert_eq!(npm_script.exit_code, 0);
+    assert!(String::from_utf8(npm_script.stdout)?.contains("npm-script-ok"));
+    assert!(npm_script.stderr.is_empty());
+
+    let npx = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "npx",
+        "/workspace",
+        vec!["--no-install", "local-tool", "one", "two"],
+    )
+    .await?;
+    assert_eq!(npx.exit_code, 0);
+    assert_eq!(npx.stdout, b"npx:one,two\n");
+    assert!(npx.stderr.is_empty());
+
+    let tsc_success = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec![
+            "--pretty", "false", "--target", "es2022", "--module", "commonjs", "--outDir", "dist",
+            "valid.ts",
+        ],
+    )
+    .await?;
+    assert_eq!(
+        tsc_success.exit_code,
+        0,
+        "tsc stderr: {}",
+        String::from_utf8_lossy(&tsc_success.stderr)
+    );
+    assert!(tsc_success.stdout.is_empty());
+
+    let tsc_failure = invoke_cli_tool(
+        &executor,
+        &caller_component,
+        behavior_agent,
+        "tsc",
+        "/workspace",
+        vec!["--pretty", "false", "--noEmit", "invalid.ts"],
+    )
+    .await?;
+    assert_ne!(tsc_failure.exit_code, 0);
+    assert!(String::from_utf8(tsc_failure.stdout)?.contains("error TS2322"));
+
+    if verify_reconstruction {
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let reconstructed = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            behavior_agent,
+            "node",
+            "/workspace",
+            vec![
+                "-e",
+                "const fs = require('node:fs'); console.log(fs.readFileSync('dist/valid.js', 'utf8').includes('const value = 42'))",
+            ],
+        )
+        .await?;
+        assert_eq!(reconstructed.exit_code, 0);
+        assert_eq!(reconstructed.stdout, b"true\n");
+        assert!(reconstructed.stderr.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout("5m")]
 async fn filesystem_tools_work_through_guest_invocation(
     last_unique_id: &LastUniqueId,
@@ -10459,6 +11775,444 @@ async fn filesystem_tools_work_through_guest_invocation(
         filesystem_tools,
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_web_fetch_has_expected_behavior_and_replays_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("web_fetch")] web_fetch: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, web_fetch)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", web_fetch.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let definition = metadata
+        .tools
+        .iter()
+        .find(|definition| definition.name() == Some("web-fetch"))
+        .cloned()
+        .expect("web-fetch metadata is present");
+    assert!(!definition.requires_filesystem);
+    for command in &definition.commands.nodes {
+        if let Some(body) = &command.body {
+            assert!(
+                body.annotations
+                    .as_ref()
+                    .expect("web-fetch command body has annotations")
+                    .open_world
+            );
+        }
+    }
+    let command_index = definition
+        .command_index_by_path(&[])
+        .expect("web-fetch root command is present");
+    let command_body = definition.commands.nodes[command_index]
+        .body
+        .as_ref()
+        .expect("web-fetch root command has a body");
+    let conversion_option = command_body
+        .options
+        .iter()
+        .find(|option| option.long == "convert-html-to-text")
+        .expect("web-fetch exports the convert-html-to-text option");
+    assert!(!conversion_option.required);
+    assert!(matches!(
+        conversion_option.shape,
+        OptionShape::Scalar(SchemaType::Bool { .. })
+    ));
+    let input_schema = definition.canonical_input_record_schema(command_index)?;
+    let SchemaType::Record { fields, .. } = &input_schema.root else {
+        anyhow::bail!("web-fetch canonical input is not a record")
+    };
+    let conversion_field = fields
+        .iter()
+        .find(|field| field.name == "convert-html-to-text")
+        .expect("web-fetch canonical input contains convert-html-to-text");
+    assert_eq!(
+        conversion_field.body,
+        SchemaType::option(SchemaType::bool())
+    );
+    let deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem:web-fetch",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "web-fetch");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let WebFetchHttpServers {
+        source_port,
+        target_port,
+        source_server,
+        source_requests,
+        target_requests,
+        target_server,
+        bounded_body_gate,
+        timeout_started,
+        timeout_cancelled,
+        interrupted_started,
+        interrupted_requests,
+    } = start_web_fetch_http_servers().await;
+    let source_url = |path: &str| format!("http://127.0.0.1:{source_port}{path}");
+
+    let html = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/html"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(html.0, source_url("/html"));
+    assert_eq!(html.1, 200);
+    assert_eq!(html.2.as_deref(), Some("text/html; charset=utf-8"));
+    assert_eq!(
+        html.3,
+        "<html><body><h1>Fetch title</h1><script>hidden()</script><p>Readable body.</p></body></html>"
+    );
+    assert!(!html.4);
+
+    let converted_html = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/html"), None, None, None, Some(true)),
+        )
+        .await?,
+    )?;
+    assert!(
+        converted_html.3.contains("Fetch title"),
+        "{}",
+        converted_html.3
+    );
+    assert!(
+        converted_html.3.contains("Readable body."),
+        "{}",
+        converted_html.3
+    );
+    assert!(!converted_html.3.contains("hidden"), "{}", converted_html.3);
+    assert!(!converted_html.3.contains("<h1>"), "{}", converted_html.3);
+    assert!(!converted_html.3.contains("<p>"), "{}", converted_html.3);
+    assert!(!converted_html.4);
+
+    let missing = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/missing"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(missing.1, 404);
+    assert_eq!(missing.3, "missing body");
+
+    let relative = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/relative"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(relative.0, source_url("/relative-final"));
+    assert_eq!(relative.3, "relative target");
+
+    let cross_host = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/cross-host"), None, None, None, None),
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        cross_host.0,
+        format!("http://127.0.0.1:{target_port}/cross-host-final")
+    );
+    assert_eq!(cross_host.3, "cross-host target");
+    assert_eq!(target_requests.load(Ordering::SeqCst), 1);
+
+    let streaming = expect_web_fetch_success(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            invoke_web_fetch(
+                &executor,
+                &worker_id,
+                fingerprint,
+                principal.clone(),
+                &definition,
+                IdempotencyKey::fresh(),
+                web_fetch_input(source_url("/streaming"), None, Some(5), None, None),
+            ),
+        )
+        .await
+        .expect("bounded fetch must return before the server finishes the body")?,
+    )?;
+    bounded_body_gate.notify_waiters();
+    assert_eq!(streaming.3, "abcde");
+    assert!(streaming.4);
+
+    for (path, expected) in [
+        ("/invalid-utf8", "invalid-text-encoding"),
+        ("/binary", "unsupported-content-type"),
+        ("/cycle", "unsafe-redirect"),
+    ] {
+        let result = invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url(path), None, None, None, None),
+        )
+        .await?;
+        assert_web_fetch_error(result, expected)?;
+    }
+
+    let no_redirects = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        IdempotencyKey::fresh(),
+        web_fetch_input(source_url("/relative"), None, None, Some(0), None),
+    )
+    .await?;
+    assert_web_fetch_error(no_redirects, "redirect-limit")?;
+
+    let invalid_limit = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        IdempotencyKey::fresh(),
+        web_fetch_input(
+            source_url("/html"),
+            None,
+            Some(5 * 1024 * 1024 + 1),
+            None,
+            None,
+        ),
+    )
+    .await?;
+    assert_web_fetch_error(invalid_limit, "invalid-safety-limit")?;
+
+    let timed_out = {
+        let timed_out = invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            IdempotencyKey::fresh(),
+            web_fetch_input(source_url("/slow-stream"), Some(500), None, None, None),
+        );
+        let (started, result) = tokio::join!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), timeout_started),
+            tokio::time::timeout(std::time::Duration::from_secs(2), timed_out),
+        );
+        started
+            .expect("slow response body did not start")
+            .map_err(|_| anyhow::anyhow!("slow response producer stopped before starting"))?;
+        result.expect("web-fetch total deadline did not stop an active response stream")?
+    };
+    assert_web_fetch_error(timed_out, "timeout")?;
+    tokio::time::timeout(std::time::Duration::from_secs(2), timeout_cancelled)
+        .await
+        .expect("timed-out web-fetch did not cancel the response body")
+        .map_err(|_| anyhow::anyhow!("slow response producer stopped without cancellation"))?;
+
+    let header_timeout = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        IdempotencyKey::fresh(),
+        web_fetch_input(source_url("/slow-headers"), Some(300), None, None, None),
+    )
+    .await?;
+    assert_web_fetch_error(header_timeout, "timeout")?;
+
+    let replay_key = IdempotencyKey::fresh();
+    let replay_input = web_fetch_input(source_url("/cross-host"), None, None, None, None);
+    let first = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            replay_key.clone(),
+            replay_input.clone(),
+        )
+        .await?,
+    )?;
+    let target_requests_before_restart = target_requests.load(Ordering::SeqCst);
+    assert_eq!(target_requests_before_restart, 2);
+
+    let interrupted_key = IdempotencyKey::fresh();
+    let interrupted_input =
+        web_fetch_input(source_url("/interrupted"), Some(10_000), None, None, None);
+    let interrupted = invoke_web_fetch(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definition,
+        interrupted_key.clone(),
+        interrupted_input.clone(),
+    );
+    tokio::pin!(interrupted);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::select! {
+            started = interrupted_started => started
+                .map_err(|_| anyhow::anyhow!("interrupted response producer stopped before starting")),
+            result = &mut interrupted => anyhow::bail!(
+                "web-fetch completed before the worker interruption: {result:?}"
+            ),
+        }
+    })
+    .await
+    .expect("interrupted response body did not start")?;
+    assert_eq!(interrupted_requests.load(Ordering::SeqCst), 1);
+    let source_requests_before_restart = source_requests.load(Ordering::SeqCst);
+
+    executor.simulated_crash(&worker_id).await?;
+    let interrupted_result = expect_web_fetch_success(
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut interrupted)
+            .await
+            .expect("interrupted web-fetch did not recover after the simulated crash")?,
+    )?;
+    assert_eq!(interrupted_result.3, "retried after interruption");
+    assert_eq!(
+        interrupted_requests.load(Ordering::SeqCst),
+        2,
+        "an interrupted incomplete fetch must retry its GET during recovery"
+    );
+    assert_eq!(
+        source_requests.load(Ordering::SeqCst),
+        source_requests_before_restart + 1,
+        "component reconstruction must replay completed source requests without repeating HTTP"
+    );
+    assert_eq!(
+        target_requests.load(Ordering::SeqCst),
+        target_requests_before_restart,
+        "component reconstruction must replay completed redirected requests without repeating HTTP"
+    );
+    let replayed_interrupted = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &definition,
+            interrupted_key,
+            interrupted_input,
+        )
+        .await?,
+    )?;
+    assert_eq!(replayed_interrupted, interrupted_result);
+
+    let replayed = expect_web_fetch_success(
+        invoke_web_fetch(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal,
+            &definition,
+            replay_key,
+            replay_input,
+        )
+        .await?,
+    )?;
+    assert_eq!(replayed, first);
+    assert_eq!(
+        target_requests.load(Ordering::SeqCst),
+        target_requests_before_restart,
+        "completed fetch must replay after worker restart without repeating HTTP"
+    );
+    assert_eq!(
+        interrupted_requests.load(Ordering::SeqCst),
+        2,
+        "retrying a recovered incomplete fetch must not repeat its GET"
+    );
+    assert_eq!(
+        source_requests.load(Ordering::SeqCst),
+        source_requests_before_restart + 1,
+        "retrying recovered and completed fetches must not repeat HTTP"
+    );
+
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    source_server.abort();
+    target_server.abort();
     Ok(())
 }
 
