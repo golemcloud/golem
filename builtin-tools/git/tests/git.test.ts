@@ -72,6 +72,10 @@ test("author syntax is strict", () => {
     email: "a@example.com",
   });
   assert.throws(() => parseIdentity("A User"), /Name <email>/);
+  assert.throws(
+    () => parseIdentity("Alice\0Injected <alice@example.com>"),
+    /Name <email>/,
+  );
 });
 
 test("commit messages use paragraphs and reject only an empty message", () => {

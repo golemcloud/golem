@@ -496,6 +496,8 @@ export async function stage(
 }
 
 export function parseIdentity(value: string): { name: string; email: string } {
+  if (value.includes("\0"))
+    throw new Error("author must have the form 'Name <email>'");
   const match = /^(.*\S)\s+<([^<>\s]+)>$/.exec(value);
   if (!match?.[1] || !match[2])
     throw new Error("author must have the form 'Name <email>'");
