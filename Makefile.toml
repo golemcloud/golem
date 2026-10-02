@@ -1656,6 +1656,28 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.build-git-tool]
+dependencies = ["wit"]
+description = "Builds the built-in Git tool component"
+script_runner = "@duckscript"
+script = '''
+cd sdks/ts
+exec --fail-on-error npx pnpm install --frozen-lockfile
+exec --fail-on-error npx pnpm --filter @golemcloud/golem-ts-sdk run build
+exec --fail-on-error npx pnpm run build-agent-template
+cd ../..
+exec --fail-on-error cargo build -p golem --bin golem
+golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
+cd builtin-tools/git
+exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
+exec --fail-on-error npm run verify:release
+exec --fail-on-error npm test
+exec --fail-on-error npm run typecheck
+exec --fail-on-error ${golem} build -P optimized --force-build --yes
+exec --fail-on-error ${golem} exec -P optimized copy
+cd ../..
+'''
+
 [tasks.build-web-fetch]
 dependencies = ["wit"]
 description = "Builds the built-in web fetch tool component"
@@ -1701,7 +1723,7 @@ dependencies = ["build-javascript-typescript-tools"]
 description = "Builds the built-in TypeScript tool component"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-javascript-typescript-tools", "build-web-fetch"]
+dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch"]
 description = "Builds all built-in tool components"
 
 [tasks.fetch-builtin-artifacts]
@@ -1720,7 +1742,7 @@ if not is_path_exists ${cache_dir}
     mkdir ${cache_dir}
 end
 
-artifact_ids = array filesystem_tools javascript_tools otlp_exporter typescript_tools web_fetch
+artifact_ids = array filesystem_tools git_tool javascript_tools otlp_exporter typescript_tools web_fetch
 for artifact_id in ${artifact_ids}
     entry = map_get ${artifacts} ${artifact_id}
     component = map_get ${entry} component
@@ -1732,6 +1754,8 @@ for artifact_id in ${artifact_ids}
 
     if equals ${artifact_id} filesystem_tools
         destination = set builtin-tools/filesystem-tools.wasm
+    elif equals ${artifact_id} git_tool
+        destination = set builtin-tools/git-tool.wasm
     elif equals ${artifact_id} javascript_tools
         destination = set builtin-tools/javascript-tools.wasm
     elif equals ${artifact_id} otlp_exporter
@@ -1832,6 +1856,14 @@ elif equals ${component} typescript-tools
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
+elif equals ${component} git-tool
+    build_task = set build-git-tool
+    wasm = set builtin-tools/git-tool.wasm
+    artifact_id = set git_tool
+    exports_json = set "{\"tools\":[\"git@0.1.7\"]}"
+    licenses = set builtin-tools/git/licenses/git
+    source_notice = set builtin-tools/git/licenses/SOURCE.md
+    sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
 elif equals ${component} web-fetch
     build_task = set build-web-fetch
     wasm = set builtin-tools/web-fetch.wasm
@@ -1841,7 +1873,7 @@ elif equals ${component} web-fetch
     source_notice = set LICENSE
     sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools, web-fetch"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD

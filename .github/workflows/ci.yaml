@@ -186,6 +186,7 @@ jobs:
         run: |
           mkdir -p tmp/builtin-artifacts
           cp builtin-tools/filesystem-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/git-tool.wasm tmp/builtin-artifacts/
           cp builtin-tools/javascript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
