@@ -50,7 +50,7 @@ use golem_common::model::tool_middleware::{
 use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
-    TypedSchemaValue, build_input_record,
+    TypedSchemaValue, VariantValuePayload, build_input_record,
 };
 use golem_common::{
     data_value,
@@ -10529,6 +10529,12 @@ async fn exercise_filesystem_tools(
             binding.filesystem_access = ToolFilesystemAccess::Allowed;
         }
     }
+    let mut denied_deployment = deployment.clone();
+    for bindings in denied_deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Denied;
+        }
+    }
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
@@ -10704,6 +10710,303 @@ async fn exercise_filesystem_tools(
         }
     );
 
+    let root = "workspace/filesystem-tools".to_string();
+    let ls = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String(root.clone()),
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "glob",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::String("*.txt".to_string()))),
+                },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        ls,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::List {
+                    elements: vec![SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String(path.clone()),
+                            SchemaValue::Variant(VariantValuePayload {
+                                case: 0,
+                                payload: Some(Box::new(SchemaValue::U64(15))),
+                            }),
+                        ],
+                    }],
+                },
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+                SchemaValue::Option { inner: None },
+            ],
+        }
+    );
+
+    let grep = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "grep",
+        filesystem_tool_input(vec![
+            ("path", SchemaType::string(), SchemaValue::String(root)),
+            (
+                "pattern",
+                SchemaType::string(),
+                SchemaValue::String("T.O".to_string()),
+            ),
+            (
+                "mode",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::Enum { case: 1 })),
+                },
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "include-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: vec![SchemaValue::String("*.txt".to_string())],
+                },
+            ),
+            (
+                "exclude-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+            ),
+            (
+                "case-insensitive",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    assert_eq!(
+        grep,
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::List {
+                    elements: vec![SchemaValue::Record {
+                        fields: vec![
+                            SchemaValue::String(path.clone()),
+                            SchemaValue::U64(2),
+                            SchemaValue::String("TWO".to_string()),
+                            SchemaValue::Bool(false),
+                        ],
+                    }],
+                },
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+                SchemaValue::Option { inner: None },
+            ],
+        }
+    );
+
+    let bounded_stream_probe: Vec<u64> = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id,
+            "probe_bounded_wasi_stream",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(bounded_stream_probe, vec![4, 0, 4]);
+
+    executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id,
+            "prepare_filesystem_limit_fixtures",
+            data_value!(),
+        )
+        .await?;
+    let oversized_directory = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "ls",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/filesystem-tools/oversized-directory".to_string()),
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "glob",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+        ]),
+    )
+    .await?;
+    let SchemaValue::Record { fields } = oversized_directory else {
+        anyhow::bail!("oversized-directory ls returned a non-record result");
+    };
+    let [
+        SchemaValue::List { elements: entries },
+        SchemaValue::List {
+            elements: diagnostics,
+        },
+        _,
+    ] = fields.as_slice()
+    else {
+        anyhow::bail!("oversized-directory ls returned an unexpected result shape");
+    };
+    assert!(entries.is_empty());
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [SchemaValue::Record { fields }]
+            if matches!(fields.get(1), Some(SchemaValue::Enum { case: 4 }))
+    ));
+
+    let bounded_read = invoke_filesystem_tool_success(
+        executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &definitions,
+        "grep",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/filesystem-tools/bounded-read.txt".to_string()),
+            ),
+            (
+                "pattern",
+                SchemaType::string(),
+                SchemaValue::String("not-present".to_string()),
+            ),
+            (
+                "mode",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "max-depth",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "limit",
+                SchemaType::option(SchemaType::u32()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "cursor",
+                SchemaType::option(SchemaType::string()),
+                SchemaValue::Option { inner: None },
+            ),
+            (
+                "include-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+            ),
+            (
+                "exclude-globs",
+                SchemaType::list(SchemaType::string()),
+                SchemaValue::List {
+                    elements: Vec::new(),
+                },
+            ),
+            (
+                "case-insensitive",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    assert!(matches!(
+        bounded_read,
+        SchemaValue::Record { fields }
+            if matches!(fields.as_slice(), [
+                SchemaValue::List { elements: matches },
+                SchemaValue::List { elements: diagnostics },
+                SchemaValue::Option { inner: Some(_) },
+            ] if matches.is_empty() && diagnostics.is_empty())
+    ));
+    let bounded_grep_pages: Vec<u64> = executor
+        .invoke_and_await_agent(
+            caller_component,
+            &agent_id,
+            "filesystem_limit_roundtrip",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(bounded_grep_pages, vec![262_144, 4_097, 4, 0]);
+
     let stale = invoke_filesystem_tool(
         executor,
         &worker_id,
@@ -10850,7 +11153,7 @@ async fn exercise_filesystem_tools(
         executor,
         &worker_id,
         fingerprint,
-        principal,
+        principal.clone(),
         &definitions,
         "read-file",
         filesystem_tool_input(vec![
@@ -10875,6 +11178,121 @@ async fn exercise_filesystem_tools(
     )
     .await?;
     assert_filesystem_tool_error(traversal, "unsafe-path")?;
+
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(denied_deployment),
+    );
+    let denied_worker = executor
+        .start_agent(
+            &caller_component.id,
+            agent_id!("ToolStreamingCaller", "filesystem-tools-denied"),
+        )
+        .await?;
+    let denied_fingerprint = executor
+        .get_worker_metadata(&denied_worker)
+        .await?
+        .fingerprint;
+    for tool_name in ["ls", "grep"] {
+        let input = if tool_name == "ls" {
+            filesystem_tool_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String("workspace".to_string()),
+                ),
+                (
+                    "max-depth",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "glob",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "limit",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "cursor",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+            ])
+        } else {
+            filesystem_tool_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String("workspace".to_string()),
+                ),
+                (
+                    "pattern",
+                    SchemaType::string(),
+                    SchemaValue::String("text".to_string()),
+                ),
+                (
+                    "mode",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "max-depth",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "limit",
+                    SchemaType::option(SchemaType::u32()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "cursor",
+                    SchemaType::option(SchemaType::string()),
+                    SchemaValue::Option { inner: None },
+                ),
+                (
+                    "include-globs",
+                    SchemaType::list(SchemaType::string()),
+                    SchemaValue::List {
+                        elements: Vec::new(),
+                    },
+                ),
+                (
+                    "exclude-globs",
+                    SchemaType::list(SchemaType::string()),
+                    SchemaValue::List {
+                        elements: Vec::new(),
+                    },
+                ),
+                (
+                    "case-insensitive",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(false),
+                ),
+            ])
+        };
+        let denied = invoke_filesystem_tool(
+            executor,
+            &denied_worker,
+            denied_fingerprint,
+            principal.clone(),
+            &definitions,
+            tool_name,
+            input,
+        )
+        .await
+        .expect_err("filesystem-disabled tool activation must fail");
+        assert!(
+            denied.to_string().contains("filesystemAccess is denied"),
+            "filesystem-disabled '{tool_name}' failed for the wrong reason: {denied:?}"
+        );
+    }
     Ok(())
 }
 
@@ -10939,6 +11357,8 @@ async fn exercise_guest_invoked_filesystem_tools(
             "1",
             "14",
             "15",
+            "workspace/guest-filesystem-tools/notes.txt:file:15:pages=5",
+            "workspace/guest-filesystem-tools/notes.txt:2:TWO:matches=2:diagnostics=1:pages=3",
         ]
     );
     Ok(())

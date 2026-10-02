@@ -1813,7 +1813,7 @@ elif equals ${component} filesystem-tools
     build_task = set build-filesystem-tools
     wasm = set builtin-tools/filesystem-tools.wasm
     artifact_id = set filesystem_tools
-    exports_json = set "{\"tools\":[\"read-file@0.3.0\",\"write-file@0.3.0\",\"edit-file@0.3.0\"]}"
+    exports_json = set "{\"tools\":[\"read-file@0.4.0\",\"write-file@0.4.0\",\"edit-file@0.4.0\",\"ls@0.1.0\",\"grep@0.1.0\"],\"middlewares\":[\"path-policy@0.1.0\"]}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} javascript-tools
