@@ -108,6 +108,23 @@ class CorpusTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "names no case"):
                 HARNESS.load_cases(root)
 
+    def test_an_oracle_race_keeps_its_reason(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = corpus(directory, "a", 'CASES = [("a1", "true"), ("a2", "true")]\nORACLE_RACES = {"a1": "why"}\n')
+            cases = HARNESS.load_cases(root)
+            self.assertEqual("why", cases[0].oracle_race)
+            self.assertIsNone(cases[1].oracle_race)
+
+    def test_an_oracle_race_needs_a_reason_and_a_case(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = corpus(directory, "a", 'CASES = [("a1", "true")]\nORACLE_RACES = {"a1": ""}\n')
+            with self.assertRaisesRegex(ValueError, "needs a reason"):
+                HARNESS.load_cases(root)
+        with tempfile.TemporaryDirectory() as directory:
+            root = corpus(directory, "a", 'CASES = [("a1", "true")]\nORACLE_RACES = {"typo": "r"}\n')
+            with self.assertRaisesRegex(ValueError, "names no case"):
+                HARNESS.load_cases(root)
+
     def test_duplicate_names_across_corpora_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             corpus(directory, "a", 'CASES = [("same", "true")]\n')

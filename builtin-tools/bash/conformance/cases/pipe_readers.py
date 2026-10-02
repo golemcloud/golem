@@ -1,6 +1,6 @@
 """Pipelines whose reader exits early. A short writer finishes before the reader exits, as bash's
-does into a pipe with room for its output, so `set -o pipefail` sees no SIGPIPE; a writer that
-fills the pipe gets SIGPIPE, as in bash.
+usually does into a pipe with room for its output, so `set -o pipefail` sees no SIGPIPE; a writer
+that fills the pipe gets SIGPIPE, as in bash.
 
 Each case name starts with `pipe readers: `.
 """
@@ -36,3 +36,12 @@ CASES = [
         "r=; for k in $(seq 70); do for i in 1 2 3; do echo $i; done | head -n 1 >/dev/null; r=$r$?; :; done; echo \"$r\"",
     ),
 ]
+
+# In bash a short writer races `head`: one still writing when `head` exits gets SIGPIPE, and the
+# pipeline's status is then 141. The goldens hold bash's usual answer, which is the tool's.
+WRITER_RACE = "a writer still writing when `head` exits gets SIGPIPE (141) in bash"
+ORACLE_RACES = {
+    "pipe readers: pipefail and errexit with head after a short loop": WRITER_RACE,
+    "pipe readers: short writers are not cut off": WRITER_RACE,
+    "pipe readers: a short writer is not cut off after other commands": WRITER_RACE,
+}

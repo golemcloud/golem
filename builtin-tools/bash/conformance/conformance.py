@@ -73,6 +73,7 @@ class Case:
         self.tier = tier  # "pr", or "sweep" for corpora only the slow job checks
         self.deliberate = None  # (status, stdout, stderr, reason)
         self.deliberate_stderr = None  # (stderr, reason)
+        self.oracle_race = None  # why bash's own answer varies between runs, if it does
 
     @property
     def script_hash(self):
@@ -139,6 +140,13 @@ def load_cases(corpora=CORPORA):
             if name not in local:
                 raise ValueError(f"{where} names no case in this corpus")
             local[name].deliberate_stderr = _stderr_entry(value, reason, where)
+        for name, reason in getattr(module, "ORACLE_RACES", {}).items():
+            where = f"{path.name}: ORACLE_RACES[{name!r}]"
+            if name not in local:
+                raise ValueError(f"{where} names no case in this corpus")
+            if not reason:
+                raise ValueError(f"{where}: an oracle race needs a reason")
+            local[name].oracle_race = reason
         unknown = set(options) - set(local)
         if unknown:
             raise ValueError(f"{path.name}: OPTIONS names no case: {sorted(unknown)}")
@@ -631,7 +639,10 @@ def command_stale(args, cases):
     # is ever judged by. Re-running the oracle for one anyway makes `stale` flag real machines
     # diverging on their own real-world state (a live filesystem's block/inode counts, the current
     # date) as if the case itself had gone stale, when nothing about what it tests has changed.
-    needed = [case for case in cases if case.deliberate is None]
+    #
+    # A case under `ORACLE_RACES` is left out too: bash's own answer to it varies with timing, so
+    # a different answer from one more run says nothing about its golden.
+    needed = [case for case in cases if case.deliberate is None and case.oracle_race is None]
     run_oracle(needed, args.oracle_image, args.jobs, report)
     print(f"{len(stale)} stale of {len(needed)} goldens", flush=True)
     return not stale

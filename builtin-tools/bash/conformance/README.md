@@ -61,7 +61,10 @@ them out.
 Each corpus is a module in `cases/` that defines `CASES` as `(name, script)` or
 `(name, script, tags)`. Where the tool deliberately differs from bash, a corpus adds a fixture
 with its reason: `EXPECTED` (status, stdout, stderr, reason) or `EXPECTED_STDERR` (stderr only);
-`check` flags a fixture that has come to match bash, so fixtures cannot outlive their reason. A
+`check` flags a fixture that has come to match bash, so fixtures cannot outlive their reason. Where
+bash's own answer varies with timing and the tool gives the usual one, a corpus names the case in
+`ORACLE_RACES` with the reason: `check` still compares it with its golden, and `stale` leaves it
+out. A
 script with `#--call--` lines runs as separate calls, each a fresh shell as each `run` of the tool
 is: our side starts every call in the directory the previous one ended in, as a caller passing back
 the returned `cwd` does, and the oracle runs each call as its own `bash -c` in the directory the
