@@ -2425,7 +2425,9 @@ pub struct FilesystemSnapshotUploadConfig {
     /// How long a capture waits for open file calls before it gives up.
     #[serde(with = "humantime_serde")]
     capture_wait: Duration,
-    /// The number of periodic snapshots that retention keeps for each agent.
+    /// The number of periodic snapshots that retention keeps for each agent, the newest first.
+    /// A revert restores exactly only from a periodic snapshot that the store still holds, so this
+    /// number sets how far back a revert can go without a full replay.
     retained_periodic_snapshots: NonZeroUsize,
     /// The number of manual-update snapshots that retention keeps for each agent.
     retained_update_snapshots: NonZeroUsize,
@@ -2450,9 +2452,11 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT: Duration = Duration::from_s
 const DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT: Duration = Duration::from_secs(5);
 /// The largest jitter factor of the retries of the uploads: a jitter at most doubles a delay.
 const MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR: f64 = 1.0;
-/// The default of [`FilesystemSnapshotUploadConfig::retained_periodic_snapshots`] and of
-/// [`FilesystemSnapshotUploadConfig::retained_update_snapshots`].
-const DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED: usize = 2;
+/// The default of [`FilesystemSnapshotUploadConfig::retained_periodic_snapshots`]: about 20 min
+/// of exact reverts at one upload every 10 s.
+const DEFAULT_RETAINED_PERIODIC_SNAPSHOTS: usize = 128;
+/// The default of [`FilesystemSnapshotUploadConfig::retained_update_snapshots`].
+const DEFAULT_RETAINED_UPDATE_SNAPSHOTS: usize = 2;
 /// The default of [`FilesystemSnapshotUploadConfig::max_pending_deletes_per_agent`].
 const DEFAULT_MAX_PENDING_DELETES_PER_AGENT: usize = 1024;
 
@@ -2489,8 +2493,8 @@ impl Default for FilesystemSnapshotUploadValues {
             confirmation_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT,
             store_check_limit: DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT,
             capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
-            retained_periodic_snapshots: DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
-            retained_update_snapshots: DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED,
+            retained_periodic_snapshots: DEFAULT_RETAINED_PERIODIC_SNAPSHOTS,
+            retained_update_snapshots: DEFAULT_RETAINED_UPDATE_SNAPSHOTS,
             upload_retry: default_filesystem_snapshot_upload_retry(),
             max_pending_deletes_per_agent: DEFAULT_MAX_PENDING_DELETES_PER_AGENT,
         }
@@ -2686,9 +2690,9 @@ struct RawFilesystemSnapshotStoreConfig {
         default = "default_filesystem_snapshot_capture_wait"
     )]
     capture_wait: Duration,
-    #[serde(default = "default_filesystem_snapshot_retained")]
+    #[serde(default = "default_retained_periodic_snapshots")]
     retained_periodic_snapshots: usize,
-    #[serde(default = "default_filesystem_snapshot_retained")]
+    #[serde(default = "default_retained_update_snapshots")]
     retained_update_snapshots: usize,
     #[serde(default = "default_filesystem_snapshot_upload_retry")]
     upload_retry: RetryConfig,
@@ -2716,8 +2720,12 @@ fn default_filesystem_snapshot_capture_wait() -> Duration {
     DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT
 }
 
-fn default_filesystem_snapshot_retained() -> usize {
-    DEFAULT_FILESYSTEM_SNAPSHOT_RETAINED
+fn default_retained_periodic_snapshots() -> usize {
+    DEFAULT_RETAINED_PERIODIC_SNAPSHOTS
+}
+
+fn default_retained_update_snapshots() -> usize {
+    DEFAULT_RETAINED_UPDATE_SNAPSHOTS
 }
 
 fn default_max_pending_deletes_per_agent() -> usize {
@@ -3480,7 +3488,7 @@ mod tests {
                 Duration::from_secs(60),
                 Duration::from_secs(5),
                 Duration::from_secs(5),
-                2,
+                128,
                 2,
                 1024,
                 RetryConfig {

@@ -23,14 +23,16 @@ use super::fault::{BlobCallFailed, ConfigExists, FileMissing};
 use super::files::SnapshotFiles;
 use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
+use futures::StreamExt as _;
 use golem_service_base::storage::blob::{BlobRangeError, PutIfAbsent};
 use kept::KeptPacks;
 use rustic_core::{
     BytesList, ErrorKind, FileType, Id, ReadBackend, RusticError, RusticResult, WriteBackend,
 };
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::runtime::Handle;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
@@ -40,6 +42,18 @@ pub(super) const CONFIG_PATH: &str = "config";
 /// The largest number of bytes of tree packs that the backend of one operation of the store keeps
 /// in memory.
 pub(super) const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;
+
+/// The largest number of reads ahead of one call of [`BlobBackend::read_ahead`] that run at the
+/// same time.
+pub(super) const SNAPSHOT_FILE_READS: usize = 32;
+
+/// The largest number of reads ahead of the process that run at the same time, over all
+/// operations of all stores. It bounds the reads of a recovery that starts many agents at once.
+const MAX_SNAPSHOT_FILE_READS: usize = 128;
+
+/// The slots of the reads ahead of the process.
+static SNAPSHOT_FILE_READ_SLOTS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(MAX_SNAPSHOT_FILE_READS);
 
 /// A call that the backend makes on the blob storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,6 +109,8 @@ pub(super) struct BlobBackend {
     _tracked: Option<TaskTrackerToken>,
     /// The packs of tree blobs that the operation of the backend read.
     kept: KeptPacks,
+    /// The files that [`BlobBackend::read_ahead`] read and no read of rustic took yet, by path.
+    read_ahead: Mutex<HashMap<Box<Path>, Bytes>>,
 }
 
 impl BlobBackend {
@@ -107,7 +123,38 @@ impl BlobBackend {
             stage: None,
             _tracked: None,
             kept: KeptPacks::new(kept_limit),
+            read_ahead: Mutex::default(),
         }
+    }
+
+    /// Reads the files of the type `tpe` with `ids` ahead, at most [`SNAPSHOT_FILE_READS`] at a
+    /// time and at most [`MAX_SNAPSHOT_FILE_READS`] in the process, and keeps them until a read of
+    /// rustic takes each one. It returns when every read has ended. A read that fails or finds no
+    /// file keeps nothing, so the read of rustic asks the storage again and gives its own answer.
+    pub(super) fn read_ahead(&self, tpe: FileType, ids: impl IntoIterator<Item = Id>) {
+        let paths = ids
+            .into_iter()
+            .filter_map(|id| file_path(tpe, &id).ok())
+            .collect::<Vec<_>>();
+        let read = self.runtime.block_on(
+            futures::stream::iter(paths)
+                .map(|path| async move {
+                    let _slot = SNAPSHOT_FILE_READ_SLOTS.acquire().await.ok()?;
+                    let content = self
+                        .files
+                        .get(StorageCall::Read.label(), &path)
+                        .await
+                        .ok()??;
+                    Some((path, Bytes::from(content)))
+                })
+                .buffer_unordered(SNAPSHOT_FILE_READS)
+                .filter_map(std::future::ready)
+                .collect::<Vec<_>>(),
+        );
+        self.read_ahead
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(read);
     }
 
     /// Gives the backend with a stage for the snapshot file of a save.
@@ -192,6 +239,14 @@ impl ReadBackend for BlobBackend {
 
     fn read_full(&self, tpe: FileType, id: &Id) -> RusticResult<Bytes> {
         let path = file_path(tpe, id)?;
+        let read_ahead = self
+            .read_ahead
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&path);
+        if let Some(content) = read_ahead {
+            return Ok(content);
+        }
         self.request(
             StorageCall::Read,
             &path,
