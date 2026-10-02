@@ -676,13 +676,17 @@ describe('snapshot — database plan', () => {
 describe('snapshot — restore plan', () => {
   it('reads every page only of a database that fits in its page cache', async () => {
     const { fitsInPageCache } = await import('../src/internal/databaseSnapshot');
-    // The default cache_size of -2000 is 2000 KiB: 500 pages of 4096 bytes.
-    expect(fitsInPageCache({ pageCount: 500, pageSize: 4096, cacheSize: -2000 })).toBe(true);
-    expect(fitsInPageCache({ pageCount: 501, pageSize: 4096, cacheSize: -2000 })).toBe(false);
-    expect(fitsInPageCache({ pageCount: 2000, pageSize: 1024, cacheSize: -2000 })).toBe(true);
-    // A positive cache_size is a number of pages.
-    expect(fitsInPageCache({ pageCount: 100, pageSize: 4096, cacheSize: 100 })).toBe(true);
-    expect(fitsInPageCache({ pageCount: 101, pageSize: 4096, cacheSize: 100 })).toBe(false);
+    // The default cache_size of -2000 is 2000 KiB. With 88 bytes of extra space per page, that
+    // is a limit of floor(2048000 / 4184) = 489 pages of 4096 bytes, and SQLite keeps at most 488.
+    expect(fitsInPageCache({ pageCount: 488, pageSize: 4096, cacheSize: -2000 })).toBe(true);
+    expect(fitsInPageCache({ pageCount: 489, pageSize: 4096, cacheSize: -2000 })).toBe(false);
+    expect(fitsInPageCache({ pageCount: 500, pageSize: 4096, cacheSize: -2000 })).toBe(false);
+    // 1024-byte pages: floor(2048000 / 1112) = 1841 pages, so at most 1840.
+    expect(fitsInPageCache({ pageCount: 1840, pageSize: 1024, cacheSize: -2000 })).toBe(true);
+    expect(fitsInPageCache({ pageCount: 1841, pageSize: 1024, cacheSize: -2000 })).toBe(false);
+    // A positive cache_size is a limit in pages, so at most that many pages minus one stay.
+    expect(fitsInPageCache({ pageCount: 99, pageSize: 4096, cacheSize: 100 })).toBe(true);
+    expect(fitsInPageCache({ pageCount: 100, pageSize: 4096, cacheSize: 100 })).toBe(false);
     expect(fitsInPageCache({ pageCount: 1, pageSize: 4096, cacheSize: 0 })).toBe(false);
     expect(fitsInPageCache({ pageCount: NaN, pageSize: 4096, cacheSize: -2000 })).toBe(false);
   });
@@ -1265,7 +1269,7 @@ describe('snapshot — in-memory and file-backed databases', () => {
         snapshot: {
           load() {
             const fileDb = new env.FakeDatabaseSync('/data/app.db');
-            fileDb.pragmas = { page_count: 501, page_size: 4096, cache_size: -2000 };
+            fileDb.pragmas = { page_count: 489, page_size: 4096, cache_size: -2000 };
             const smallDb = new env.FakeDatabaseSync('/data/other.db');
             return { count: 8, fileDb, smallDb };
           },

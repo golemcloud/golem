@@ -132,8 +132,7 @@ export function planDatabases(
  * `db:<field>` multipart part for each in-memory database, and the location of each file-backed
  * database. Throws a string when a field holds a `StatementSync`, `Session` or `SQLTagStore`,
  * when two fields hold the same database, when a database is closed, or as `planDatabases`
- * decides. Of a
- * file-backed database it reads only the transaction state and the location.
+ * decides. Of a file-backed database it reads only the transaction state and the location.
  */
 export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>): {
   ordinary: Record<string, unknown>;
@@ -234,7 +233,7 @@ type RestorePlan = {
  * database keeps it. An empty field gets a new database: in memory for an in-memory entry, at
  * its location for a file entry, whose file must exist. A field that holds any other value fails
  * the load. Each open database is then warmed once: it reads its schema, and a file-backed one
- * (`allPages`) also reads every page when the database fits in its page cache.
+ * (`allPages`) also reads every page when all its pages stay in its page cache.
  */
 export function planRestore(
   fields: ReadonlyArray<readonly [string, LoadedField]>,
@@ -287,7 +286,7 @@ export function missingDatabaseFile(
  * Puts the snapshot databases into `state` as `planRestore` decides, and fails the load as
  * `missingDatabaseFile` decides. Restores the bytes of each in-memory entry into its database,
  * then warms the databases of the plan. A database to read in full reads every page only when
- * `fitsInPageCache` says that its pages fit in the page cache of its connection; a larger one
+ * `fitsInPageCache` says that all its pages stay in the page cache of its connection; a larger one
  * reads its schema only, because the cache cannot hold its pages. The warm-up makes the first
  * recorded statements after the load match a live connection that holds its pages in cache;
  * otherwise snapshot recovery falls back to an older snapshot or a full replay.
@@ -341,10 +340,26 @@ type PageCache = {
   cacheSize: number;
 };
 
-/** Whether every page of a database fits in the page cache of its connection. */
+/**
+ * The bytes that SQLite's page cache keeps with each page besides the page itself, in the
+ * wasm32 build of the `node:sqlite` builtin: `ROUND8(sizeof(MemPage))` from `btree.c`. The
+ * `MemPage` struct has 36 bytes of integer fields and 12 pointers, 84 bytes on a target with
+ * 4-byte pointers, rounded up to 88. A 64-bit build keeps 136 bytes.
+ */
+const SQLITE_PAGE_CACHE_EXTRA_BYTES = 88;
+
+/**
+ * Whether every page of a database stays in the page cache of its connection after one read of
+ * all pages. SQLite turns a negative `cache_size` of N KiB into a limit of
+ * `floor(N * 1024 / (page_size + extra))` pages and a positive one into that many pages, and it
+ * recycles a page before the cache reaches the limit, so it holds at most the limit minus one.
+ */
 export function fitsInPageCache({ pageCount, pageSize, cacheSize }: PageCache): boolean {
-  const cachePages = cacheSize < 0 ? Math.floor((-cacheSize * 1024) / pageSize) : cacheSize;
-  return pageCount <= cachePages;
+  const limit =
+    cacheSize < 0
+      ? Math.floor((-cacheSize * 1024) / (pageSize + SQLITE_PAGE_CACHE_EXTRA_BYTES))
+      : cacheSize;
+  return pageCount <= limit - 1;
 }
 
 function pageCacheOf(database: DatabaseSync): PageCache {
