@@ -212,8 +212,37 @@ test("untracked status uses Git porcelain codes and NUL termination", async (t) 
       code: "??",
     },
   ]);
-  assert.equal(formatStatus(entries, false), "?? new file.txt\n");
+  assert.equal(formatStatus(entries, false), '?? "new file.txt"\n');
   assert.equal(formatStatus(entries, true), "?? new file.txt\0");
+});
+
+test("staged deletion followed by recreation uses separate porcelain records", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, "file.txt"), "old\n");
+  const repo = await repository([dir]);
+  await stage(repo, ["file.txt"], false, false);
+  await createCommit(repo, ["initial"], undefined, false);
+  await rm(path.join(dir, "file.txt"));
+  await stage(repo, ["file.txt"], false, false);
+  await writeFile(path.join(dir, "file.txt"), "new\n");
+
+  const entries = await statusEntries(repo, []);
+  assert.deepEqual(entries, [
+    {
+      path: "file.txt",
+      index: "deleted",
+      worktree: "unmodified",
+      code: "D ",
+    },
+    {
+      path: "file.txt",
+      index: "unmodified",
+      worktree: "untracked",
+      code: "??",
+    },
+  ]);
+  assert.equal(formatStatus(entries, false), "D  file.txt\n?? file.txt\n");
 });
 
 test("porcelain-v1 status quotes unusual paths unless NUL-terminated", () => {
@@ -834,6 +863,23 @@ test("ordinary checkout resolves a same-named local branch before its tag", asyn
     await fs.promises.readFile(path.join(dir, "victim.txt"), "utf8"),
     "untracked\n",
   );
+});
+
+test("checkout HEAD keeps the current branch attached", async (t) => {
+  const dir = await fixture();
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(path.join(dir, "file.txt"), "base\n");
+  const repo = await repository([dir]);
+  await stage(repo, ["file.txt"], false, false);
+  await createCommit(repo, ["base"], undefined, false);
+
+  await checkoutCommand(repo, undefined, false, "HEAD", []);
+  assert.equal(await git.currentBranch({ fs, dir, fullname: false }), "main");
+
+  await writeFile(path.join(dir, "file.txt"), "next\n");
+  await stage(repo, ["file.txt"], false, false);
+  const next = await createCommit(repo, ["next"], undefined, false);
+  assert.equal(await git.resolveRef({ fs, dir, ref: "refs/heads/main" }), next);
 });
 
 test("checkout never writes through a preserved leaf symlink", async (t) => {

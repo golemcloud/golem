@@ -106,7 +106,7 @@ export async function statusEntries(
       : new Map<string, Snapshot>(),
     indexSnapshotMap(repo),
   ]);
-  const entries = await Promise.all(
+  const rowsWithEntries = await Promise.all(
     rows.map(async ([filepath, head, worktree, stage]) => {
       const headSnapshot = head ? (headSnapshots.get(filepath) ?? {}) : {};
       const index = stage ? (indexSnapshots.get(filepath) ?? {}) : {};
@@ -120,18 +120,37 @@ export async function statusEntries(
       ]);
       const indexChanged = !sameSnapshot(headSnapshot, index);
       const worktreeChanged = !sameSnapshot(index, worktreeSnapshotValue);
+      if (head !== 0 && stage === 0 && worktree !== 0) {
+        return [
+          {
+            path: filepath,
+            index: "deleted",
+            worktree: "unmodified",
+            code: "D ",
+          },
+          {
+            path: filepath,
+            index: "unmodified",
+            worktree: "untracked",
+            code: "??",
+          },
+        ];
+      }
       const code =
         head === 0 && stage === 0 && worktree !== 0
           ? "??"
           : `${indexCode(head, stage, indexChanged)}${worktreeCode(stage, worktree, worktreeChanged)}`;
-      return {
-        path: filepath,
-        index: indexState(head, stage, indexChanged),
-        worktree: worktreeState(stage, worktree, worktreeChanged),
-        code,
-      };
+      return [
+        {
+          path: filepath,
+          index: indexState(head, stage, indexChanged),
+          worktree: worktreeState(stage, worktree, worktreeChanged),
+          code,
+        },
+      ];
     }),
   );
+  const entries = rowsWithEntries.flat();
   return entries
     .filter((entry) => entry.code !== "  ")
     .sort((left, right) => left.path.localeCompare(right.path));
@@ -190,7 +209,7 @@ function quoteGitPath(filepath: string): string {
   const bytes = new TextEncoder().encode(filepath);
   if (
     bytes.every(
-      (byte) => byte >= 0x20 && byte <= 0x7e && byte !== 0x22 && byte !== 0x5c,
+      (byte) => byte >= 0x21 && byte <= 0x7e && byte !== 0x22 && byte !== 0x5c,
     )
   ) {
     return filepath;
@@ -946,6 +965,16 @@ async function localBranchForRef(
   repo: Repository,
   ref: string,
 ): Promise<string | undefined> {
+  if (ref === "HEAD") {
+    return (
+      (await git.currentBranch({
+        fs,
+        dir: repo.dir,
+        gitdir: repo.gitdir,
+        fullname: false,
+      })) ?? undefined
+    );
+  }
   const names = await git.listBranches({
     fs,
     dir: repo.dir,
