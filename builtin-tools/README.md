@@ -31,7 +31,7 @@ deployment configuration. HTML is returned as decoded source unless the invocati
 conversion to readable text.
 
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
-`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.5` supports local
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.6` supports local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
 workflows. It exposes no remote commands. The runtime provides WASI HTTP, and a separate integration
 probe verifies that explicitly injecting `isomorphic-git/http/web` uses durable WASI HTTP calls
@@ -165,7 +165,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: git
-      version: 0.1.5
+      version: 0.1.6
 
 agents:
   CodingAgent:
