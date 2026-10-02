@@ -2434,16 +2434,14 @@ impl NativeTestTool for NativeTestToolImpl {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
 
-        if is_live {
-            if let Some(expected) = wait_for_count {
-                tokio::time::timeout(Duration::from_secs(10), async {
-                    while self.0.load(Ordering::SeqCst) < expected {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                    }
-                })
-                .await
-                .map_err(|_| anyhow!("native effect counter did not reach {expected}"))?;
-            }
+        if is_live && let Some(expected) = wait_for_count {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while self.0.load(Ordering::SeqCst) < expected {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow!("native effect counter did not reach {expected}"))?;
         }
 
         if mode == "wait-cancel" {
