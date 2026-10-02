@@ -520,6 +520,20 @@ describe('snapshot — multipart databases', () => {
 });
 
 describe('snapshot — database plan', () => {
+  it('records a field named __proto__ as an own field', async () => {
+    const { planDatabases, takeDatabases } = await import('../src/internal/databaseSnapshot');
+    const plan = planDatabases([{ name: '__proto__', autocommit: true, location: '/data/app.db' }]);
+    if (plan.tag !== 'ok') throw new Error(plan.val);
+    expect(Object.hasOwn(plan.val.fileDatabases, '__proto__')).toBe(true);
+    expect(JSON.parse(JSON.stringify(plan.val.fileDatabases))).toEqual(
+      JSON.parse('{"__proto__":"/data/app.db"}'),
+    );
+
+    const { ordinary } = takeDatabases([['__proto__', 5]]);
+    expect(Object.hasOwn(ordinary, '__proto__')).toBe(true);
+    expect(JSON.stringify(ordinary)).toBe('{"__proto__":5}');
+  });
+
   it('serializes databases without a location and records the location of the others', async () => {
     const { planDatabases } = await import('../src/internal/databaseSnapshot');
     expect(
@@ -805,6 +819,77 @@ describe('snapshot — in-memory and file-backed databases', () => {
     const parts = env.multipart.decodeMultipart(saved.data, env.boundaryOf(saved.mimeType));
     expect(parts.map((part) => part.name)).toEqual(['state', 'db:tempDb']);
     expect(saved.fileDatabases).toEqual({});
+  });
+
+  it.each([
+    ['file-backed', '/data/app.db'],
+    ['in-memory', ':memory:'],
+  ])('round-trips a database in a field named __proto__ (%s)', async (_description, location) => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'ProtoNamedDatabase',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => {
+          const db = new env.FakeDatabaseSync(location);
+          db.bytes = new Uint8Array([4, 2]);
+          return { count: 1, ['__proto__']: db };
+        },
+        methods: {},
+      });
+
+    const first = await env.initiateIsolated('ProtoNamedDatabase');
+    const saved = typed(await first.saveSnapshot());
+    const fileDatabases = location === ':memory:' ? {} : JSON.parse(`{"__proto__":"${location}"}`);
+    expect(JSON.stringify(saved.fileDatabases)).toBe(JSON.stringify(fileDatabases));
+    const parts =
+      saved.mimeType === 'application/json'
+        ? []
+        : env.multipart.decodeMultipart(saved.data, env.boundaryOf(saved.mimeType));
+    expect(parts.map((part) => part.name)).toEqual(
+      location === ':memory:' ? ['state', 'db:__proto__'] : [],
+    );
+
+    const envelope = JSON.stringify({
+      version: 1,
+      principal: { tag: 'anonymous' },
+      state: { count: 1 },
+      fileDatabases: saved.fileDatabases,
+    });
+    env.select('ProtoNamedDatabase');
+    await env.isolatedGuest.loadSnapshot.load(
+      location === ':memory:'
+        ? (() => {
+            const encoded = env.multipart.encodeMultipart([
+              {
+                name: 'state',
+                contentType: 'application/json',
+                body: new TextEncoder().encode(envelope),
+              },
+              parts[1],
+            ]);
+            return {
+              payload: encoded.data,
+              mimeType: `multipart/mixed; boundary=${encoded.boundary}`,
+            };
+          })()
+        : { payload: new TextEncoder().encode(envelope), mimeType: 'application/json' },
+    );
+    expect(env.constructed.at(-1)?.path).toBe(location);
+
+    const resaved = await env.isolatedGuest.saveSnapshot.save();
+    const resavedEnvelope =
+      location === ':memory:'
+        ? new TextDecoder().decode(
+            env.multipart.decodeMultipart(resaved.payload, env.boundaryOf(resaved.mimeType))[0]
+              .body,
+          )
+        : new TextDecoder().decode(resaved.payload);
+    expect(resavedEnvelope).toBe(envelope);
   });
 
   it('fails the save when a file-backed database has an open transaction', async () => {

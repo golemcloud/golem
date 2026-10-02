@@ -100,7 +100,8 @@ function isInstance(val: unknown, Ctor: Function): boolean {
 export function planDatabases(
   fields: readonly DatabaseField[],
 ): { tag: 'ok'; val: DatabasePlan } | { tag: 'err'; val: string } {
-  const plan: DatabasePlan = { inMemory: [], fileDatabases: {} };
+  const inMemory: string[] = [];
+  const fileDatabases: Array<[string, string]> = [];
   for (const field of fields) {
     if (!field.autocommit) {
       return {
@@ -109,12 +110,12 @@ export function planDatabases(
       };
     }
     if (field.location === null) {
-      plan.inMemory.push(field.name);
+      inMemory.push(field.name);
     } else {
-      plan.fileDatabases[field.name] = field.location;
+      fileDatabases.push([field.name, field.location]);
     }
   }
-  return { tag: 'ok', val: plan };
+  return { tag: 'ok', val: { inMemory, fileDatabases: Object.fromEntries(fileDatabases) } };
 }
 
 /**
@@ -129,7 +130,7 @@ export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>)
   databaseParts: MultipartPart[];
   fileDatabases: Record<string, string>;
 } {
-  const ordinary: Record<string, unknown> = {};
+  const ordinary: Array<[string, unknown]> = [];
   const databases: Array<[string, DatabaseSync]> = [];
   const seen = new Set<DatabaseSync>();
   for (const [name, val] of fields) {
@@ -142,7 +143,7 @@ export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>)
     } else if (isSqliteResource(val)) {
       throw `Cannot automatically snapshot resource field "${name}"; use custom save/load functions.`;
     } else {
-      ordinary[name] = val;
+      ordinary.push([name, val]);
     }
   }
   const plan = planDatabases(
@@ -157,7 +158,7 @@ export function takeDatabases(fields: ReadonlyArray<readonly [string, unknown]>)
   }
   const byName = new Map(databases);
   return {
-    ordinary,
+    ordinary: Object.fromEntries(ordinary),
     databaseParts: plan.val.inMemory.map((name) => ({
       name: `${DATABASE_PART_PREFIX}${name}`,
       contentType: DATABASE_PART_CONTENT_TYPE,
@@ -294,7 +295,11 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
     throw new Error(missing);
   }
   for (const { name, location } of plan.val.open) {
-    state[name] = new DatabaseSync(location ?? IN_MEMORY_LOCATION, REOPENED_DATABASE_OPTIONS);
+    setField(
+      state,
+      name,
+      new DatabaseSync(location ?? IN_MEMORY_LOCATION, REOPENED_DATABASE_OPTIONS),
+    );
   }
   for (const { name, bytes } of databases.inMemory) {
     restoreDatabaseSync(state[name] as DatabaseSync, bytes);
@@ -306,6 +311,19 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
       serializeDatabaseSync(database);
     }
   }
+}
+
+/**
+ * Sets the own field `name` of `state`, also for a name such as `__proto__`, which an assignment
+ * would take as the prototype.
+ */
+function setField(state: Record<string, unknown>, name: string, value: unknown) {
+  Object.defineProperty(state, name, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 function loadedField(value: unknown, instances: Map<DatabaseSync, number>): LoadedField {
