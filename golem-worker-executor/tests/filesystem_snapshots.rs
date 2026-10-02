@@ -1025,22 +1025,35 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
 
 /// The shape of the invocation entries of an oplog after a restart.
 #[derive(Debug, PartialEq, Eq)]
-struct InvocationShape {
+pub(crate) struct InvocationShape {
     /// Each idempotency key whose invocation has no `AgentInvocationFinished`, or more than one.
-    not_finished_once: Box<[Box<str>]>,
+    pub(crate) not_finished_once: Box<[Box<str>]>,
     /// The index of each durable-call `Start` without an `End` or a `Cancelled`.
-    starts_without_terminal: Box<[u64]>,
+    pub(crate) starts_without_terminal: Box<[u64]>,
     /// The index of each durable-call `Start`, `End` or `Cancelled` in a gap between
     /// invocations: after an `AgentInvocationFinished` and before the next
     /// `AgentInvocationStarted`, or the end.
-    durable_calls_between_invocations: Box<[u64]>,
+    pub(crate) durable_calls_between_invocations: Box<[u64]>,
     /// The number of finished `apply` invocations.
-    applied: usize,
+    pub(crate) applied: usize,
+}
+
+impl InvocationShape {
+    /// The shape of a settled oplog without `apply` invocations: each invocation finished once,
+    /// each durable call ended, and no durable call between invocations.
+    pub(crate) fn settled() -> Self {
+        Self {
+            not_finished_once: Box::default(),
+            starts_without_terminal: Box::default(),
+            durable_calls_between_invocations: Box::default(),
+            applied: 0,
+        }
+    }
 }
 
 /// Reads the shape of the invocation entries of `oplog`, whose first entry is at index 1. An
 /// `AgentInvocationFinished` belongs to the `AgentInvocationStarted` before it.
-fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
+pub(crate) fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
     let (finished, _) = oplog.iter().fold(
         (std::collections::BTreeMap::<String, usize>::new(), None),
         |(mut finished, current), entry| match entry {
@@ -3081,6 +3094,10 @@ async fn ts_sqlite_snapshot_keeps_in_memory_databases_and_restores_file_database
         })
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        InvocationShape::settled()
+    );
     Ok(())
 }
 
@@ -3154,5 +3171,9 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
         })
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        InvocationShape::settled()
+    );
     Ok(())
 }

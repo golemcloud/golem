@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::filesystem_snapshots::{InvocationShape, invocation_shape};
 use axum::Router;
 use axum::extract::Query;
 use axum::routing::{any, get};
@@ -1954,6 +1955,10 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        InvocationShape::settled()
+    );
     drop(executor);
     Ok(())
 }
