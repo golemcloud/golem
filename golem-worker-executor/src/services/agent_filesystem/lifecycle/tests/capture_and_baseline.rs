@@ -16,7 +16,6 @@ use super::*;
 use futures::StreamExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
-use std::ffi::OsStr;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use test_r::{test, timeout};
 
@@ -1503,16 +1502,14 @@ struct UnmanagedAgents {
 impl UnmanagedAgents {
     async fn new() -> Self {
         let parent = tempfile::tempdir().unwrap();
-        let provisioning = sandbox_provisioning(&FilesystemStorageConfig {
-            deterministic_root_dir: Some(parent.path().to_path_buf()),
-            ..FilesystemStorageConfig::default()
-        })
+        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+            Some(parent.path().to_path_buf()),
+            None,
+            golem_common::model::RetryConfig::default(),
+        )
+        .await
         .unwrap();
-        let scratch = Arc::new(
-            HostDirectory::create_at_root(&provisioning, OsStr::new(".scratch"))
-                .await
-                .unwrap(),
-        );
+        let scratch = Arc::new(directories.scratch);
         Self {
             parent,
             provisioning,
