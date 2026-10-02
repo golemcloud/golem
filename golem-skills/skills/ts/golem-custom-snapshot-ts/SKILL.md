@@ -71,7 +71,7 @@ A bare enabled policy without a `state` schema (e.g. `snapshotting: 'default'` o
 Typed state snapshotting handles each top-level `DatabaseSync` field of the agent (from `node:sqlite`). Do not declare these fields in the `state` schema.
 
 - **In-memory database** (`new DatabaseSync(':memory:')`) or **temporary database** (`new DatabaseSync('')`): the snapshot holds the contents of the database. The snapshot then uses the `multipart/mixed` format.
-- **File-backed database** (`new DatabaseSync('/app.db')`): the snapshot holds only the location of the file. The executor's filesystem snapshot restores the file before the snapshot is loaded, and the load opens the database again at that location. A load reads each file-backed database once in full, so it costs time and memory in proportion to the size of the database.
+- **File-backed database** (`new DatabaseSync('/app.db')`): the snapshot holds only the location of the file. The executor's filesystem snapshot restores the file before the snapshot is loaded, and the load opens the database again at that location. A load reads every page of a file-backed database that fits in SQLite's page cache (about 2 MB by default), so it costs time and memory up to that size; a larger database reads only its schema.
 - A database with an open transaction makes the save fail, also when the database is file-backed. Commit or roll back before the invocation ends.
 
 ```typescript
@@ -96,7 +96,7 @@ Limits:
 - The load opens a database again with the default options of `node:sqlite` (for example `readOnly: false`, `timeout: 0`). To use other options, open the database in a custom `load`. The SDK keeps a `DatabaseSync` that `load` returns in a field and does not open that field again.
 - A `DatabaseSync` inside a nested object, and `StatementSync`, `Session` and `SQLTagStore` fields, make the save fail. Keep them out of the state, or use custom `save` and `load` functions.
 - The field name of an in-memory database must not contain a double quote, a carriage return or a line feed; such a name makes the save fail. The field name of a file-backed database has no such limit.
-- A file-backed database that is larger than SQLite's page cache (about 2 MB by default), or one whose pages the agent did not all read, can make a start from a snapshot fall back to an older snapshot or a full replay: this happens when an invocation that is replayed after the snapshot reads pages that are not in the cache.
+- The load reads every page only of a file-backed database that fits in the page cache. A larger database, or one whose pages the agent did not all read, can make a start from a snapshot fall back to an older snapshot or a full replay: this happens when an invocation that is replayed after the snapshot reads pages that are not in the cache.
 - A reopened connection does not keep connection state: functions from `db.function()` and `db.aggregate()`, an authorizer, and per-connection PRAGMAs. An agent that needs them sets them again in a custom `load`.
 
 ## Custom Snapshotting

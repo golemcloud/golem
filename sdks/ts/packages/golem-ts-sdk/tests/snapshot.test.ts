@@ -374,6 +374,7 @@ async function isolate() {
     bytes = new Uint8Array();
     inTransaction = false;
     isOpen = true;
+    pragmas: Record<string, number> = { page_count: 1, page_size: 4096, cache_size: -2000 };
     constructor(
       readonly path: string,
       options?: unknown,
@@ -384,9 +385,14 @@ async function isolate() {
       return this.path === ':memory:' || this.path === '' ? null : this.path;
     }
     prepare(sql: string) {
+      const pragma = sql.match(/^PRAGMA (\w+)$/)?.[1];
       return {
         get: () => {
+          if (pragma !== undefined) {
+            return { [pragma]: this.pragmas[pragma] };
+          }
           warmed.push(`${this.path}: ${sql}`);
+          return undefined;
         },
       };
     }
@@ -642,6 +648,19 @@ describe('snapshot — database plan', () => {
 });
 
 describe('snapshot — restore plan', () => {
+  it('reads every page only of a database that fits in its page cache', async () => {
+    const { fitsInPageCache } = await import('../src/internal/databaseSnapshot');
+    // The default cache_size of -2000 is 2000 KiB: 500 pages of 4096 bytes.
+    expect(fitsInPageCache({ pageCount: 500, pageSize: 4096, cacheSize: -2000 })).toBe(true);
+    expect(fitsInPageCache({ pageCount: 501, pageSize: 4096, cacheSize: -2000 })).toBe(false);
+    expect(fitsInPageCache({ pageCount: 2000, pageSize: 1024, cacheSize: -2000 })).toBe(true);
+    // A positive cache_size is a number of pages.
+    expect(fitsInPageCache({ pageCount: 100, pageSize: 4096, cacheSize: 100 })).toBe(true);
+    expect(fitsInPageCache({ pageCount: 101, pageSize: 4096, cacheSize: 100 })).toBe(false);
+    expect(fitsInPageCache({ pageCount: 1, pageSize: 4096, cacheSize: 0 })).toBe(false);
+    expect(fitsInPageCache({ pageCount: NaN, pageSize: 4096, cacheSize: -2000 })).toBe(false);
+  });
+
   const bytes = new Uint8Array([1, 2, 3]);
 
   it('opens a new database for each empty field and warms every new database once', async () => {
@@ -1181,6 +1200,48 @@ describe('snapshot — in-memory and file-backed databases', () => {
       expect(env.constructed).toEqual([]);
     },
   );
+
+  it('reads only the schema of a database that does not fit in its page cache', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'LargeFileDatabase',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => ({ count: 0 }),
+        methods: {},
+        snapshot: {
+          load() {
+            const fileDb = new env.FakeDatabaseSync('/data/app.db');
+            fileDb.pragmas = { page_count: 501, page_size: 4096, cache_size: -2000 };
+            const smallDb = new env.FakeDatabaseSync('/data/other.db');
+            return { count: 8, fileDb, smallDb };
+          },
+        },
+      });
+    env.select('LargeFileDatabase');
+
+    await env.isolatedGuest.loadSnapshot.load({
+      payload: new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          principal: { tag: 'anonymous' },
+          state: { count: 8 },
+          fileDatabases: {},
+        }),
+      ),
+      mimeType: 'application/json',
+    });
+
+    expect(env.warmed).toEqual([
+      '/data/app.db: SELECT count(*) FROM sqlite_master',
+      '/data/other.db: SELECT count(*) FROM sqlite_master',
+    ]);
+    expect(env.serializeDatabaseSync.mock.calls.map(([db]) => db.path)).toEqual(['/data/other.db']);
+  });
 
   it('warms a database once when a custom load puts it in two fields', async () => {
     const env = await isolate();

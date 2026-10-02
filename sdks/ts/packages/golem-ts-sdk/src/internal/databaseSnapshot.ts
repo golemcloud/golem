@@ -226,8 +226,8 @@ type RestorePlan = {
  * Decides how a load puts the snapshot databases into the restored state. A field that holds a
  * database keeps it. An empty field gets a new database: in memory for an in-memory entry, at
  * its location for a file entry, whose file must exist. A field that holds any other value fails
- * the load. Each open database is then warmed once: it reads its schema and, when file-backed,
- * every page.
+ * the load. Each open database is then warmed once: it reads its schema, and a file-backed one
+ * (`allPages`) also reads every page when the database fits in its page cache.
  */
 export function planRestore(
   fields: ReadonlyArray<readonly [string, LoadedField]>,
@@ -279,7 +279,9 @@ export function missingDatabaseFile(
 /**
  * Puts the snapshot databases into `state` as `planRestore` decides, and fails the load as
  * `missingDatabaseFile` decides. Restores the bytes of each in-memory entry into its database,
- * then warms the databases of the plan. The warm-up makes the first
+ * then warms the databases of the plan. A database to read in full reads every page only when
+ * `fitsInPageCache` says that its pages fit in the page cache of its connection; a larger one
+ * reads its schema only, because the cache cannot hold its pages. The warm-up makes the first
  * recorded statements after the load match a live connection that holds its pages in cache;
  * otherwise snapshot recovery falls back to an older snapshot or a full replay.
  */
@@ -316,10 +318,39 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
   for (const { name, allPages } of plan.val.warm) {
     const database = state[name] as DatabaseSync;
     database.prepare('SELECT count(*) FROM sqlite_master').get();
-    if (allPages) {
+    if (allPages && fitsInPageCache(pageCacheOf(database))) {
       serializeDatabaseSync(database);
     }
   }
+}
+
+/** The page cache of a connection, as its `PRAGMA`s report it. */
+type PageCache = {
+  /** `PRAGMA page_count`: the number of pages of the database. */
+  pageCount: number;
+  /** `PRAGMA page_size`: the size of a page in bytes. */
+  pageSize: number;
+  /** `PRAGMA cache_size`: a limit in KiB when negative, a number of pages when positive. */
+  cacheSize: number;
+};
+
+/** Whether every page of a database fits in the page cache of its connection. */
+export function fitsInPageCache({ pageCount, pageSize, cacheSize }: PageCache): boolean {
+  const cachePages = cacheSize < 0 ? Math.floor((-cacheSize * 1024) / pageSize) : cacheSize;
+  return pageCount <= cachePages;
+}
+
+function pageCacheOf(database: DatabaseSync): PageCache {
+  return {
+    pageCount: pragmaNumber(database, 'page_count'),
+    pageSize: pragmaNumber(database, 'page_size'),
+    cacheSize: pragmaNumber(database, 'cache_size'),
+  };
+}
+
+function pragmaNumber(database: DatabaseSync, name: string): number {
+  const row = database.prepare(`PRAGMA ${name}`).get() as Record<string, unknown> | undefined;
+  return Number(row?.[name]);
 }
 
 /**
