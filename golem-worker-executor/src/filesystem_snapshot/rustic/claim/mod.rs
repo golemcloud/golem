@@ -240,6 +240,8 @@ pub(super) struct Claim {
     span: Duration,
     /// The time between two markers while the prune runs.
     refresh: Duration,
+    /// The start of the write of the first marker.
+    marked: std::time::Instant,
     state: Arc<Mutex<ClaimState>>,
     /// The blobs of the scope, with a token that nothing cancels and no lease, so a release and a
     /// final marker also run after a cancel or a drop.
@@ -284,6 +286,7 @@ impl Claim {
             lease: Arc::new(Lease::until(started + span)),
             span,
             refresh: refresh_period(policy.grace, policy.deadline),
+            marked: started,
             state: Arc::new(Mutex::new(ClaimState::Marking {
                 markers: Markers {
                     first: first.clone(),
@@ -333,6 +336,7 @@ impl Claim {
         keep_claim_fresh(
             files,
             &self.name,
+            self.marked,
             self.refresh,
             &self.lease,
             self.span,

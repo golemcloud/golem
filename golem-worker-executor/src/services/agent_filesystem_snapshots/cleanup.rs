@@ -14,8 +14,8 @@
 
 //! The workers of the clean-ups of `delete_snapshots` and `delete_all_snapshots`. The pending work
 //! of each agent is in the state of the registry, and a fixed pool of workers takes the agents
-//! whose work is ready. Nothing here can stop the executor: a failure after the retries is logged
-//! and counted.
+//! whose work is ready. Nothing here can stop the executor: a failure of the store is logged and
+//! counted.
 
 use super::registry::Registry;
 use super::rules::{self, Work};
@@ -74,18 +74,19 @@ async fn worker(calls: Arc<StoreCalls>, registry: Arc<Registry>, shutdown: Cance
 
 /// Runs the clean-up `work` of `agent`. A delete of names ends when a delete of all snapshots of
 /// the agent is requested.
-async fn run(calls: &StoreCalls, registry: &Registry, agent: &AgentSnapshots, work: Work) {
+async fn run(calls: &StoreCalls, registry: &Arc<Registry>, agent: &AgentSnapshots, work: Work) {
     let (operation, deleted) = match work {
-        Work::Names(names) => (
-            "delete",
-            calls
-                .delete(
-                    agent,
-                    names.into_iter().collect(),
-                    registry.until_all_requested(agent),
-                )
-                .await,
-        ),
+        Work::Names(names) => {
+            let (registry, requested) = (Arc::clone(registry), agent.clone());
+            (
+                "delete",
+                calls
+                    .delete(agent, names.into_iter().collect(), async move {
+                        registry.until_all_requested(&requested).await
+                    })
+                    .await,
+            )
+        }
         Work::All => ("delete_all", calls.delete_all(agent).await),
     };
     if let Deleted::Leaked(error) = deleted {
@@ -93,7 +94,7 @@ async fn run(calls: &StoreCalls, registry: &Registry, agent: &AgentSnapshots, wo
             error = %error,
             agent = ?agent,
             operation,
-            "Failed to delete filesystem snapshots after the retries"
+            "Failed to delete filesystem snapshots"
         );
         crate::metrics::filesystem_snapshots::record_leaked_cleanup(operation);
     }

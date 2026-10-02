@@ -15,9 +15,7 @@
 use super::InMemorySnapshotStore;
 use crate::filesystem_snapshot::contract_tests::clock::TestClock;
 use crate::filesystem_snapshot::contract_tests::{self, OpenStore, new_scope};
-use crate::filesystem_snapshot::{
-    FilesystemSnapshotStore, SnapshotInfo, SnapshotName, SnapshotStoreError,
-};
+use crate::filesystem_snapshot::{FilesystemSnapshotStore, SaveError, SnapshotInfo, SnapshotName};
 use golem_common::model::Timestamp;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -53,6 +51,7 @@ async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() 
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -67,10 +66,14 @@ async fn a_save_after_a_snapshot_from_a_clock_that_is_ahead_gets_a_later_time() 
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
-    let listed = store.list(&scope).await.unwrap();
+    let listed = store
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -113,23 +116,33 @@ async fn of_two_saves_of_one_name_at_the_same_time_one_wins() {
             &name,
             first_tree.path(),
             None,
-            crate::filesystem_snapshot::never_cancelled()
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
         ),
         second.save(
             &scope,
             &name,
             second_tree.path(),
             None,
-            crate::filesystem_snapshot::never_cancelled()
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
         )
     );
     let into = tempfile::tempdir().unwrap();
-    first.restore(&scope, &name, into.path()).await.unwrap();
+    first
+        .restore(
+            &scope,
+            &name,
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let restored = std::fs::read_to_string(into.path().join("file.txt")).unwrap();
 
-    let outcome = |saved: &Result<SnapshotInfo, SnapshotStoreError>| match saved {
+    let outcome = |saved: &Result<SnapshotInfo, SaveError>| match saved {
         Ok(_) => "saved",
-        Err(SnapshotStoreError::AlreadyExists) => "already exists",
+        Err(SaveError::NameInUse) => "already exists",
         Err(_) => "another error",
     };
     let winner = if first_saved.is_ok() {
@@ -149,7 +162,7 @@ async fn of_two_saves_of_one_name_at_the_same_time_one_wins() {
 mod unix {
     use crate::filesystem_snapshot::contract_tests::new_scope;
     use crate::filesystem_snapshot::{
-        FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotName, SnapshotStoreError,
+        FilesystemSnapshotStore, InMemorySnapshotStore, SaveError, SnapshotName,
     };
     use std::io::ErrorKind;
     use std::os::unix::net::UnixListener;
@@ -175,14 +188,18 @@ mod unix {
                 tree.path(),
                 None,
                 crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
             .await;
-        let listed = store.list(&scope).await.unwrap();
+        let listed = store
+            .list(&scope, &crate::filesystem_snapshot::Unlimited)
+            .await
+            .unwrap();
 
         assert!(
             matches!(
                 &saved,
-                Err(SnapshotStoreError::Source(error)) if error.kind() == ErrorKind::InvalidInput
+                Err(SaveError::Source(error)) if error.kind() == ErrorKind::InvalidInput
             ),
             "{saved:?}"
         );

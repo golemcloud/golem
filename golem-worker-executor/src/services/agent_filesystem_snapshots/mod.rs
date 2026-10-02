@@ -36,8 +36,8 @@ mod tests;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::filesystem_snapshot::FilesystemSnapshotStore;
 use crate::filesystem_snapshot::{
-    AgentSnapshots, ChangeDetection, InvalidSnapshotName, SnapshotInfo, SnapshotName,
-    SnapshotStoreError,
+    AgentSnapshots, CallError, ChangeDetection, InvalidSnapshotName, SaveError, SnapshotInfo,
+    SnapshotName,
 };
 use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
@@ -60,7 +60,7 @@ pub(crate) use store_calls::{StoreKey, StoreRestore};
 
 /// The kind of a filesystem snapshot. It gives the prefix of the name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SnapshotKind {
+enum SnapshotKind {
     /// A snapshot of a periodic snapshot record, named `p-<uuid>`.
     Periodic,
     /// A snapshot of a manual update, named `u-<uuid>`.
@@ -138,14 +138,17 @@ impl ConfirmOutcome {
 
 /// How an upload job ended its work on the snapshot, before retention or a delete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum JobDecision {
+enum JobDecision {
     /// The confirmation gave this outcome.
     Confirmed(ConfirmOutcome),
-    /// The save failed after its retries. The store does not hold the snapshot.
+    /// The save failed after its runs. The store does not hold the snapshot.
     SaveFailed,
     /// A shutdown, or a call of `delete_all_snapshots` for the agent, stopped the job, or the
     /// admission ended without an upload.
     Stopped,
+    /// A newer admission replaced the job while it waited for its next run after a failed run.
+    /// The job never confirms its snapshot.
+    Replaced,
 }
 
 /// What a confirmation found.
@@ -226,8 +229,8 @@ pub(crate) enum UploadNowError {
     /// A terminal interrupt, a lost shard, a caller that stopped waiting, a shutdown, or a call
     /// of `delete_all_snapshots` for the agent stopped the save.
     Stopped,
-    /// The save failed, after the retries when the error allows them.
-    Store(SnapshotStoreError),
+    /// The save failed.
+    Store(SaveError),
     /// The deadline of the admission passed while the upload waited for a running save of the
     /// agent.
     SaveRunning,
@@ -312,9 +315,7 @@ impl From<FilesystemCapture> for CapturedTree {
 
 /// Makes the name of the store from a name of a record. A name of a record is always a valid
 /// name of the store, and the error only guards against a change of either rule.
-pub(crate) fn store_name(
-    name: &FilesystemSnapshotName,
-) -> Result<SnapshotName, InvalidSnapshotName> {
+fn store_name(name: &FilesystemSnapshotName) -> Result<SnapshotName, InvalidSnapshotName> {
     SnapshotName::new(name.as_str())
 }
 
@@ -508,9 +509,12 @@ impl AgentFilesystemSnapshots {
     /// saves.
     ///
     /// The admission holds a new name. While it exists, and while the upload that it starts
-    /// runs, each other admission of the agent gives [`SnapshotSkip::UploadInFlight`]. A dropped
-    /// admission frees the agent and writes nothing durable. An agent that keeps no files, such as
-    /// an ephemeral agent, gets [`SnapshotSkip::Disabled`], as a disabled service gives.
+    /// runs, each other admission of the agent gives [`SnapshotSkip::UploadInFlight`] at once,
+    /// unless the upload is a periodic one that waits for its next run after a failed run: a new
+    /// admission replaces such an upload, which then ends at once, never confirms its snapshot,
+    /// and discards its capture. A dropped admission frees the agent and writes nothing durable.
+    /// An agent that keeps no files, such as an ephemeral agent, gets [`SnapshotSkip::Disabled`],
+    /// as a disabled service gives.
     pub(crate) async fn admit_periodic(
         &self,
         agent: &AgentSnapshots,
@@ -522,11 +526,15 @@ impl AgentFilesystemSnapshots {
             .map_err(|refusal| refusal.skip)
     }
 
-    /// Asks for an upload of a manual-update snapshot of the agent `agent` in `mode`. When an
-    /// upload of the agent runs, the call stops the deletes that the running job makes after its
-    /// save, waits once for the end of the job, and asks again. The running job still ends its
-    /// save and its confirmation. The whole wait of the update, here and in its upload, ends
-    /// `confirmation_wait` after this call started: that is the deadline of the admission. A
+    /// Asks for an upload of a manual-update snapshot of the agent `agent` in `mode`. When a job of
+    /// the agent runs, a periodic upload or an update job, the call stops the deletes that the
+    /// running job makes after its save, and waits until the job is gone or an admission can
+    /// replace it: a periodic job that waits for its next run after a failed run and has not
+    /// decided. Then it asks again, and an admission replaces such a job. So the update waits for
+    /// at most the one run in flight, a write of that run that can still land, and the
+    /// confirmation of the running job. The whole wait of
+    /// the update, here and in its upload, ends `confirmation_wait` after this call started: that
+    /// is the deadline of the admission, and the admission at the deadline gives its refusal. A
     /// shutdown ends the wait like the deadline does, and a terminal interrupt that `interrupt`
     /// reports ends it with [`UpdateRefusal::Interrupted`]. An agent that keeps no files gets
     /// [`SnapshotSkip::Disabled`].
@@ -540,25 +548,49 @@ impl AgentFilesystemSnapshots {
             .enabled_for(mode)
             .ok_or(UpdateRefusal::Skip(SnapshotSkip::Disabled))?;
         let deadline = tokio::time::Instant::now() + core.settings.confirmation_wait();
-        let refusal = match Core::admit(core, agent, SnapshotKind::Update, Some(deadline)).await {
-            Ok(admission) => return Ok(admission),
-            Err(refusal) => refusal,
-        };
-        let skip = refusal.skip;
-        let rules::UpdateAdmit::WaitForEnd(running) = rules::update_admission(refusal) else {
-            return Err(UpdateRefusal::Skip(skip));
-        };
-        // The running job ends its save and its confirmation, and deletes nothing more.
-        running.retention_stop.cancel();
-        tokio::select! {
-            () = core.registry.until_job_gone(agent, running.id) => {}
-            () = tokio::time::sleep_until(deadline) => {}
-            () = core.shutdown.cancelled() => {}
-            () = job::interrupt_raised(interrupt) => return Err(UpdateRefusal::Interrupted),
-        }
-        Core::admit(core, agent, SnapshotKind::Update, Some(deadline))
-            .await
-            .map_err(|refusal| UpdateRefusal::Skip(refusal.skip))
+        let asks = futures::stream::unfold(Some(None), |stopped| {
+            let interrupt = interrupt.clone();
+            async move {
+                let stopped: Option<rules::JobId> = stopped?;
+                let refusal =
+                    match Core::admit(core, agent, SnapshotKind::Update, Some(deadline)).await {
+                        Ok(admission) => return Some((Some(Ok(admission)), None)),
+                        Err(refusal) => refusal,
+                    };
+                let skip = refusal.skip;
+                let rules::UpdateAdmit::WaitForEndOrFailure {
+                    running,
+                    stop_deletes,
+                } = rules::update_admission(
+                    refusal,
+                    tokio::time::Instant::now() >= deadline,
+                    core.shutdown.is_cancelled(),
+                    stopped,
+                )
+                else {
+                    return Some((Some(Err(UpdateRefusal::Skip(skip))), None));
+                };
+                // The running job ends its save and its confirmation, and deletes nothing more.
+                if stop_deletes {
+                    running.retention_stop.cancel();
+                }
+                tokio::select! {
+                    () = core.registry.until_job_gone_or_replaceable(agent, running.id) => {}
+                    () = tokio::time::sleep_until(deadline) => {}
+                    () = core.shutdown.cancelled() => {}
+                    () = job::interrupt_raised(interrupt) => {
+                        return Some((Some(Err(UpdateRefusal::Interrupted)), None));
+                    }
+                }
+                Some((None, Some(Some(running.id))))
+            }
+        });
+        futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter_map(
+            asks,
+            |answer| async move { answer }
+        )))
+        .await
+        .unwrap_or(Err(UpdateRefusal::Skip(SnapshotSkip::UploadInFlight)))
     }
 
     /// The core of an enabled service, for an agent in `mode` that keeps files.
@@ -700,7 +732,7 @@ impl AgentFilesystemSnapshots {
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,
-    ) -> Result<(), SnapshotStoreError> {
+    ) -> Result<(), CallError> {
         match &self.core {
             Some(core) => core.calls.copy(from, to).await,
             None => Ok(()),
@@ -718,7 +750,8 @@ impl AgentFilesystemSnapshots {
 
 impl Core {
     /// Admits a job of `kind` for `agent` with a new name, whose waits end at `deadline`. The
-    /// error carries the job that runs for the agent.
+    /// error carries the job that runs for the agent. A replaced job is stopped after the
+    /// transition that replaced it.
     async fn admit(
         core: &Arc<Self>,
         agent: &AgentSnapshots,
@@ -730,13 +763,17 @@ impl Core {
             SnapshotKind::Periodic => FilesystemSnapshotName::periodic(),
             SnapshotKind::Update => FilesystemSnapshotName::update(),
         };
-        let ticket = JobTicket::admit(
+        let (ticket, replaced) = JobTicket::admit(
             &core.registry,
             agent,
             &name,
+            kind,
             core.shutdown.child_token(),
             room,
         )?;
+        if let Some(replaced) = replaced {
+            replaced.cancel();
+        }
         Ok(Admission {
             core: Arc::clone(core),
             ticket,
@@ -776,7 +813,7 @@ impl Admission {
     /// The job uploads and confirms. On `Confirmed` it deletes the older snapshots of its kind,
     /// except the names that a start can select. On `Superseded` it deletes its own snapshot and
     /// no older one. On `Deferred` it keeps the snapshot and deletes nothing, because a later
-    /// start can confirm it. When the retries are used up, it confirms nothing. A shutdown, a call
+    /// start can confirm it. When the save failed, it confirms nothing. A shutdown, a call
     /// of `delete_all_snapshots` for the agent, or a call of `delete_snapshots` with its name stops
     /// the job at each step, also in its deletes: it then sends nothing more and deletes nothing
     /// more. A store call that it already sent runs to its end, and the tree is discarded after

@@ -18,8 +18,8 @@
 //! [`rules`], each with its own answer. Each ticket makes its transition in its constructor, and
 //! its `Drop` only reports the end of what it holds.
 
-use super::JobDecision;
 use super::rules::{self, JobId, Limits, Next, Refusal, State};
+use super::{JobDecision, SnapshotKind};
 use crate::filesystem_snapshot::AgentSnapshots;
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -102,9 +102,10 @@ impl Registry {
         read(&self.state.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Waits until the job `id` of `agent` is gone. Gives at once when the registry is gone.
-    pub(super) async fn until_job_gone(&self, agent: &AgentSnapshots, id: JobId) {
-        self.until(|state| rules::has_ended(state, agent, id).then_some(()))
+    /// Waits until the job `id` of `agent` is gone, or an admission replaces it. Gives at once when
+    /// the registry is gone.
+    pub(super) async fn until_job_gone_or_replaceable(&self, agent: &AgentSnapshots, id: JobId) {
+        self.until(|state| rules::update_may_ask_again(state, agent, id).then_some(()))
             .await;
     }
 
@@ -145,40 +146,60 @@ pub(super) struct JobTicket {
 }
 
 impl JobTicket {
-    /// Admits a job with `name` for `agent`. `stop` stops the job, and `room` tells whether the
-    /// volume has room for a capture. This is the only place that makes the stop of the deletes
-    /// of a job: a child of `stop`, which the state of the job holds too.
+    /// Admits a job of `kind` with `name` for `agent`. `stop` stops the job, and `room` tells
+    /// whether the volume has room for a capture. This is the only place that makes the stop of
+    /// the deletes of a job: a child of `stop`, which the state of the job holds too. Gives the
+    /// ticket and the stop of the job that the admission replaced, which the caller cancels.
     pub(super) fn admit(
         registry: &Arc<Registry>,
         agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
+        kind: SnapshotKind,
         stop: CancellationToken,
         room: bool,
-    ) -> Result<Self, Refusal> {
+    ) -> Result<(Self, Option<CancellationToken>), Refusal> {
         let retention_stop = stop.child_token();
-        let id = registry.apply(|state| {
+        let admitted = registry.apply(|state| {
             rules::admit(
                 state,
                 agent,
                 name,
+                kind,
                 stop.clone(),
                 retention_stop.clone(),
                 room,
             )
         })?;
-        Ok(Self {
-            registry: Arc::clone(registry),
-            agent: agent.clone(),
-            id,
-            stop,
-            retention_stop,
-        })
+        Ok((
+            Self {
+                registry: Arc::clone(registry),
+                agent: agent.clone(),
+                id: admitted.id,
+                stop,
+                retention_stop,
+            },
+            admitted.replaced,
+        ))
     }
 
-    /// The job has started saving: it got a slot of the uploads.
-    pub(super) fn saving(&self) {
+    /// The reports of the runs of the upload of the job, which its limiter makes.
+    pub(super) fn runs(&self) -> JobRuns {
+        JobRuns {
+            registry: Arc::clone(&self.registry),
+            agent: self.agent.clone(),
+            id: self.id,
+        }
+    }
+
+    /// Whether an admission replaced the job: the job left the state while its ticket lives.
+    pub(super) fn replaced(&self) -> bool {
         self.registry
-            .apply(|state| rules::saving(state, &self.agent, self.id));
+            .read(|state| rules::has_ended(state, &self.agent, self.id))
+    }
+
+    /// The stop of the job, as a token that the limiter of its upload holds.
+    pub(super) fn stop_token(&self) -> CancellationToken {
+        self.stop.clone()
     }
 
     /// Records the decision of the job. The first decision stays.
@@ -200,8 +221,8 @@ impl JobTicket {
 
     /// Completes when the deletes of the job after its save are stopped. The stop of the job
     /// stops them too, and so does a manual update of the agent that finds the job running.
-    pub(super) fn until_deletes_stopped(&self) -> WaitForCancellationFuture<'_> {
-        self.retention_stop.cancelled()
+    pub(super) fn deletes_stopped(&self) -> impl Future<Output = ()> + Send + 'static {
+        self.retention_stop.clone().cancelled_owned()
     }
 
     /// The agent of the job.
@@ -214,6 +235,28 @@ impl Drop for JobTicket {
     fn drop(&mut self) {
         self.registry
             .apply(|state| rules::end(state, &self.agent, self.id));
+    }
+}
+
+/// The reports of the runs of the upload of one job.
+pub(super) struct JobRuns {
+    registry: Arc<Registry>,
+    agent: AgentSnapshots,
+    id: JobId,
+}
+
+impl JobRuns {
+    /// A run got a slot. Gives false when the job is no longer live, and then the run does not
+    /// start.
+    pub(super) fn granted(&self) -> bool {
+        self.registry
+            .apply(|state| rules::run_granted(state, &self.agent, self.id))
+    }
+
+    /// The upload waits for its next run after a failed run.
+    pub(super) fn failed(&self) {
+        self.registry
+            .apply(|state| rules::run_failed(state, &self.agent, self.id));
     }
 }
 
@@ -281,9 +324,16 @@ mod tests {
             golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
         );
         let name = FilesystemSnapshotName::periodic();
-        let job = JobTicket::admit(&registry, &agent, &name, CancellationToken::new(), true)
-            .expect("admitted");
-        job.saving();
+        let (job, _) = JobTicket::admit(
+            &registry,
+            &agent,
+            &name,
+            SnapshotKind::Periodic,
+            CancellationToken::new(),
+            true,
+        )
+        .expect("admitted");
+        assert!(job.runs().granted());
         let wait = WaitTicket::start_wait(&registry, &agent, &name).expect("waits");
         let id = wait.id;
         job.decide(JobDecision::Confirmed(ConfirmOutcome::Confirmed));
@@ -319,14 +369,29 @@ mod tests {
         );
         let name = FilesystemSnapshotName::periodic();
         let stop = CancellationToken::new();
-        let job = JobTicket::admit(&registry, &agent, &name, stop.clone(), true).expect("admitted");
-        let refused = JobTicket::admit(&registry, &agent, &name, CancellationToken::new(), true)
-            .err()
-            .and_then(|refusal| refusal.running);
+        let (job, _) = JobTicket::admit(
+            &registry,
+            &agent,
+            &name,
+            SnapshotKind::Periodic,
+            stop.clone(),
+            true,
+        )
+        .expect("admitted");
+        let refused = JobTicket::admit(
+            &registry,
+            &agent,
+            &name,
+            SnapshotKind::Periodic,
+            CancellationToken::new(),
+            true,
+        )
+        .err()
+        .and_then(|refusal| refusal.running);
 
         stop.cancel();
 
-        assert!(job.until_deletes_stopped().now_or_never().is_some());
+        assert!(job.deletes_stopped().now_or_never().is_some());
         assert!(refused.is_some_and(|running| running.retention_stop.is_cancelled()));
     }
 }

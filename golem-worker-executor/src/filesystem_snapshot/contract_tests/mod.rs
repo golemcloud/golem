@@ -41,8 +41,8 @@ pub(super) mod clock;
 pub(super) mod fixture;
 
 use super::{
-    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
-    SnapshotStoreError,
+    AgentSnapshots, CallError, ChangeDetection, FilesystemSnapshotStore, RestoreFailure, RunSlots,
+    SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
 };
 use fixture::{
     Listed, Scratch, Spec, files_and_bytes, fixture, listing, one_file, pattern, write_tree,
@@ -64,10 +64,6 @@ pub(crate) type OpenStore = Arc<dyn Fn() -> Arc<dyn FilesystemSnapshotStore> + S
 
 type Case = fn(OpenStore) -> BoxFuture<'static, ()>;
 
-/// The number of saves that the dropped-save case starts to find one that does not end in its
-/// first poll.
-const DROP_ATTEMPTS: usize = 20;
-
 /// Each case of the contract, with its name.
 const CASES: &[(&str, Case)] = &[
     ("a_saved_tree_comes_back_the_same", |open| {
@@ -84,8 +80,8 @@ const CASES: &[(&str, Case)] = &[
         a_save_leaves_the_tree_as_it_was(open).boxed()
     }),
     (
-        "a_name_in_use_gives_already_exists_and_changes_nothing",
-        |open| a_name_in_use_gives_already_exists_and_changes_nothing(open).boxed(),
+        "a_name_in_use_gives_name_in_use_and_changes_nothing",
+        |open| a_name_in_use_gives_name_in_use_and_changes_nothing(open).boxed(),
     ),
     (
         "a_tree_that_cannot_be_read_gives_source_and_publishes_nothing",
@@ -168,9 +164,26 @@ const CASES: &[(&str, Case)] = &[
         |open| two_stores_save_into_a_new_scope_at_the_same_time(open).boxed(),
     ),
     (
-        "a_dropped_save_publishes_nothing_and_leaves_the_name_free",
-        |open| a_dropped_save_publishes_nothing_and_leaves_the_name_free(open).boxed(),
+        "a_save_cancelled_before_its_publish_publishes_nothing_and_leaves_the_name_free",
+        |open| {
+            a_save_cancelled_before_its_publish_publishes_nothing_and_leaves_the_name_free(open)
+                .boxed()
+        },
     ),
+    (
+        "a_run_holds_one_slot_and_none_after_the_call_returns",
+        |open| a_run_holds_one_slot_and_none_after_the_call_returns(open).boxed(),
+    ),
+    (
+        "a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes_nothing",
+        |open| {
+            a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes_nothing(open)
+                .boxed()
+        },
+    ),
+    ("a_store_that_is_shut_down_gives_stopped", |open| {
+        a_store_that_is_shut_down_gives_stopped(open).boxed()
+    }),
     (
         "a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_one",
         |open| {
@@ -229,9 +242,9 @@ async fn restored(
     store: &dyn FilesystemSnapshotStore,
     scope: &AgentSnapshots,
     name: &SnapshotName,
-) -> Result<(Vec<Listed>, SnapshotInfo), SnapshotStoreError> {
+) -> Result<(Vec<Listed>, SnapshotInfo), RestoreFailure> {
     let into = Scratch::new();
-    let info = store.restore(scope, name, into.path()).await?;
+    let info = store.restore(scope, name, into.path(), &slots()).await?;
     Ok((listing(into.path()), info))
 }
 
@@ -247,7 +260,7 @@ async fn restored_listing(
 /// Gives the names of the listing of a scope, in the order of the listing.
 async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
     store
-        .list(scope)
+        .list(scope, &slots())
         .await
         .unwrap()
         .iter()
@@ -255,8 +268,8 @@ async fn listed_names(store: &dyn FilesystemSnapshotStore, scope: &AgentSnapshot
         .collect()
 }
 
-fn is_not_found<T>(result: &Result<T, SnapshotStoreError>) -> bool {
-    matches!(result, Err(SnapshotStoreError::NotFound))
+fn is_not_found<T>(result: &Result<T, RestoreFailure>) -> bool {
+    matches!(result, Err(RestoreFailure::NotFound))
 }
 
 async fn a_saved_tree_comes_back_the_same(open: OpenStore) {
@@ -271,6 +284,7 @@ async fn a_saved_tree_comes_back_the_same(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -302,6 +316,7 @@ async fn a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -321,6 +336,7 @@ async fn a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -331,6 +347,7 @@ async fn a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_
             tree.path(),
             Some((&parent, ChangeDetection::SizeMtime)),
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -341,6 +358,7 @@ async fn a_save_with_a_truthful_parent_restores_the_same_tree_as_a_save_without_
             tree.path(),
             Some((&parent, ChangeDetection::Full)),
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -372,11 +390,12 @@ async fn each_name_of_a_hard_linked_file_comes_back_as_its_own_file(open: OpenSt
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
     store
-        .restore(&scope, &name("p-linked"), into.path())
+        .restore(&scope, &name("p-linked"), into.path(), &slots())
         .await
         .unwrap();
 
@@ -409,12 +428,13 @@ async fn save_stat_list_and_restore_give_the_same_info(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
     let after = Timestamp::now_utc();
     let stat = store.stat(&scope, &name("p-info")).await.unwrap();
-    let list = store.list(&scope).await.unwrap();
+    let list = store.list(&scope, &slots()).await.unwrap();
     let (_, restored) = restored(&*store, &scope, &name("p-info")).await.unwrap();
 
     assert_eq!(
@@ -448,6 +468,7 @@ async fn a_save_leaves_the_tree_as_it_was(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -455,7 +476,7 @@ async fn a_save_leaves_the_tree_as_it_was(open: OpenStore) {
     assert_eq!(listing(tree.path()), before);
 }
 
-async fn a_name_in_use_gives_already_exists_and_changes_nothing(open: OpenStore) {
+async fn a_name_in_use_gives_name_in_use_and_changes_nothing(open: OpenStore) {
     let store = open();
     let scope = new_scope();
     let first = new_tree(&one_file("first"));
@@ -467,6 +488,7 @@ async fn a_name_in_use_gives_already_exists_and_changes_nothing(open: OpenStore)
             first.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -478,17 +500,15 @@ async fn a_name_in_use_gives_already_exists_and_changes_nothing(open: OpenStore)
             second.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await;
 
-    assert!(
-        matches!(again, Err(SnapshotStoreError::AlreadyExists)),
-        "{again:?}"
-    );
+    assert!(matches!(again, Err(SaveError::NameInUse)), "{again:?}");
     assert_eq!(
         (
             store.stat(&scope, &name("p-taken")).await.unwrap(),
-            store.list(&scope).await.unwrap().into_vec(),
+            store.list(&scope, &slots()).await.unwrap().into_vec(),
             restored_listing(&*store, &scope, &name("p-taken")).await
         ),
         (
@@ -517,6 +537,7 @@ async fn a_tree_that_cannot_be_read_gives_source_and_publishes_nothing(open: Ope
             &missing,
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await;
     let from_file = store
@@ -526,6 +547,7 @@ async fn a_tree_that_cannot_be_read_gives_source_and_publishes_nothing(open: Ope
             &file,
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await;
     let stat = store.stat(&scope, &name("p-unread")).await.unwrap();
@@ -538,15 +560,16 @@ async fn a_tree_that_cannot_be_read_gives_source_and_publishes_nothing(open: Ope
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await;
 
     assert!(
-        matches!(from_missing, Err(SnapshotStoreError::Source(_))),
+        matches!(from_missing, Err(SaveError::Source(_))),
         "{from_missing:?}"
     );
     assert!(
-        matches!(from_file, Err(SnapshotStoreError::Source(_))),
+        matches!(from_file, Err(SaveError::Source(_))),
         "{from_file:?}"
     );
     assert!(is_not_found(&restore), "{restore:?}");
@@ -580,15 +603,13 @@ async fn an_entry_that_cannot_be_read_gives_source_and_publishes_nothing(open: O
                 tree.path(),
                 None,
                 crate::filesystem_snapshot::never_cancelled(),
+                &slots(),
             )
             .await;
         let stat = store.stat(&scope, &name("p-locked")).await.unwrap();
         let names = listed_names(&*store, &scope).await;
 
-        assert!(
-            matches!(saved, Err(SnapshotStoreError::Source(_))),
-            "{saved:?}"
-        );
+        assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
         assert_eq!((stat, names), (None, Vec::<String>::new()));
     }
     #[cfg(not(unix))]
@@ -616,6 +637,7 @@ async fn sequential_saves_get_later_times_and_list_newest_first(open: OpenStore)
                         &tree,
                         None,
                         crate::filesystem_snapshot::never_cancelled(),
+                        &slots(),
                     )
                     .await
                     .unwrap()
@@ -623,7 +645,7 @@ async fn sequential_saves_get_later_times_and_list_newest_first(open: OpenStore)
         })
         .collect::<Vec<_>>()
         .await;
-    let listed = store.list(&scope).await.unwrap();
+    let listed = store.list(&scope, &slots()).await.unwrap();
 
     assert!(
         saved
@@ -655,6 +677,7 @@ async fn an_unknown_name_gives_not_found_every_time(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -688,6 +711,7 @@ async fn a_restore_into_a_directory_that_is_not_empty_writes_nothing(open: OpenS
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -700,10 +724,12 @@ async fn a_restore_into_a_directory_that_is_not_empty_writes_nothing(open: OpenS
     )]);
     let before = listing(into.path());
 
-    let result = store.restore(&scope, &name("p-busy"), into.path()).await;
+    let result = store
+        .restore(&scope, &name("p-busy"), into.path(), &slots())
+        .await;
 
     assert!(
-        matches!(result, Err(SnapshotStoreError::Destination(_))),
+        matches!(result, Err(RestoreFailure::Destination(_))),
         "{result:?}"
     );
     assert_eq!(listing(into.path()), before);
@@ -721,6 +747,7 @@ async fn a_restore_into_a_path_that_is_not_a_directory_writes_nothing(open: Open
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -729,15 +756,19 @@ async fn a_restore_into_a_path_that_is_not_a_directory_writes_nothing(open: Open
     let file = parent.path().join("file");
     std::fs::write(&file, b"a file").unwrap();
 
-    let into_missing = store.restore(&scope, &name("p-nowhere"), &missing).await;
-    let into_file = store.restore(&scope, &name("p-nowhere"), &file).await;
+    let into_missing = store
+        .restore(&scope, &name("p-nowhere"), &missing, &slots())
+        .await;
+    let into_file = store
+        .restore(&scope, &name("p-nowhere"), &file, &slots())
+        .await;
 
     assert!(
-        matches!(into_missing, Err(SnapshotStoreError::Destination(_))),
+        matches!(into_missing, Err(RestoreFailure::Destination(_))),
         "{into_missing:?}"
     );
     assert!(
-        matches!(into_file, Err(SnapshotStoreError::Destination(_))),
+        matches!(into_file, Err(RestoreFailure::Destination(_))),
         "{into_file:?}"
     );
     assert_eq!(
@@ -757,6 +788,7 @@ async fn a_deleted_name_stops_resolving_at_once(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -767,11 +799,15 @@ async fn a_deleted_name_stops_resolving_at_once(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
 
-    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
+    store
+        .delete(&scope, &[name("p-deleted")], &slots())
+        .await
+        .unwrap();
     let stat = store.stat(&scope, &name("p-deleted")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-deleted")).await;
     let names = listed_names(&*store, &scope).await;
@@ -794,15 +830,28 @@ async fn delete_is_idempotent(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
 
     let results = [
-        store.delete(&unused, &[name("p-twice")]).await.is_ok(),
-        store.delete(&scope, &[name("p-never")]).await.is_ok(),
-        store.delete(&scope, &[name("p-twice")]).await.is_ok(),
-        store.delete(&scope, &[name("p-twice")]).await.is_ok(),
+        store
+            .delete(&unused, &[name("p-twice")], &slots())
+            .await
+            .is_ok(),
+        store
+            .delete(&scope, &[name("p-never")], &slots())
+            .await
+            .is_ok(),
+        store
+            .delete(&scope, &[name("p-twice")], &slots())
+            .await
+            .is_ok(),
+        store
+            .delete(&scope, &[name("p-twice")], &slots())
+            .await
+            .is_ok(),
     ];
 
     assert_eq!(
@@ -824,6 +873,7 @@ async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: O
             shared.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -834,6 +884,7 @@ async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: O
             other.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -844,6 +895,7 @@ async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: O
             shared.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -854,6 +906,7 @@ async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: O
             other.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -862,10 +915,11 @@ async fn a_batch_delete_removes_its_names_and_keeps_every_other_snapshot(open: O
         .delete(
             &scope,
             &[name("p-batch-1"), name("p-unknown"), name("p-batch-2")],
+            &slots(),
         )
         .await;
     let again = store
-        .delete(&scope, &[name("p-batch-1"), name("p-batch-2")])
+        .delete(&scope, &[name("p-batch-1"), name("p-batch-2")], &slots())
         .await;
     let mut names = listed_names(&*store, &scope).await;
     names.sort();
@@ -903,6 +957,7 @@ async fn a_delete_keeps_every_other_snapshot(open: OpenStore) {
             shared.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -913,6 +968,7 @@ async fn a_delete_keeps_every_other_snapshot(open: OpenStore) {
             shared.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -923,11 +979,15 @@ async fn a_delete_keeps_every_other_snapshot(open: OpenStore) {
             other.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
 
-    store.delete(&scope, &[name("p-twin-1")]).await.unwrap();
+    store
+        .delete(&scope, &[name("p-twin-1")], &slots())
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -954,6 +1014,7 @@ async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -961,7 +1022,11 @@ async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing
     let raced = name("p-raced");
     let (restore, deleted) = futures::join!(
         restored(&*store, &scope, &raced),
-        store.delete(&scope, std::slice::from_ref(&raced))
+        store.delete(
+            &scope,
+            std::slice::from_ref(&raced),
+            &crate::filesystem_snapshot::Unlimited
+        )
     );
 
     let restore = restore.map(|(restored, _)| restored);
@@ -972,11 +1037,10 @@ async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing
 }
 
 /// Tells whether a restore that raced a delete of its name kept the contract: the delete succeeds,
-/// and the restore gives the whole saved tree, `NotFound`, `Corrupt` or a retryable `Storage`. The
-/// error says what broke.
+/// and the restore gives the whole saved tree or `NotFound`. The error says what broke.
 pub(in crate::filesystem_snapshot) fn raced_restore_kept_the_contract(
-    deleted: &Result<(), SnapshotStoreError>,
-    restore: &Result<Vec<Listed>, SnapshotStoreError>,
+    deleted: &Result<(), CallError>,
+    restore: &Result<Vec<Listed>, RestoreFailure>,
     saved: &[Listed],
 ) -> Result<(), String> {
     if let Err(error) = deleted {
@@ -987,13 +1051,7 @@ pub(in crate::filesystem_snapshot) fn raced_restore_kept_the_contract(
         Ok(restored) => Err(format!(
             "the restore gave another tree: {restored:?}, not {saved:?}"
         )),
-        Err(SnapshotStoreError::NotFound | SnapshotStoreError::Corrupt(_)) => Ok(()),
-        // The prune of the delete can remove an index file that the restore listed. The restore
-        // then gives a retryable `Storage`, and a new try gives `NotFound`, because the delete
-        // removed the name.
-        Err(SnapshotStoreError::Storage {
-            retryable: true, ..
-        }) => Ok(()),
+        Err(RestoreFailure::NotFound) => Ok(()),
         Err(error) => Err(format!("the restore gave {error:?}")),
     }
 }
@@ -1010,6 +1068,7 @@ async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: Op
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1020,6 +1079,7 @@ async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: Op
             other.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1027,7 +1087,11 @@ async fn a_restore_during_a_delete_of_another_name_gives_the_whole_tree(open: Op
     let (restored_name, deleted_name) = (name("p-restored"), name("p-deleted"));
     let (restore, deleted) = futures::join!(
         restored(&*store, &scope, &restored_name),
-        store.delete(&scope, std::slice::from_ref(&deleted_name))
+        store.delete(
+            &scope,
+            std::slice::from_ref(&deleted_name),
+            &crate::filesystem_snapshot::Unlimited
+        )
     );
 
     deleted.unwrap();
@@ -1050,6 +1114,7 @@ async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: O
             first.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1060,6 +1125,7 @@ async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: O
             second.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1070,10 +1136,15 @@ async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: O
             &third_name,
             third.path(),
             None,
-            crate::filesystem_snapshot::never_cancelled()
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
         ),
         restored(&*store, &scope, &first_name),
-        store.delete(&scope, std::slice::from_ref(&second_name))
+        store.delete(
+            &scope,
+            std::slice::from_ref(&second_name),
+            &crate::filesystem_snapshot::Unlimited
+        )
     );
 
     saved.unwrap();
@@ -1104,6 +1175,7 @@ async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) 
             old.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1114,11 +1186,12 @@ async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) 
             old.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
 
-    store.delete_all(&scope).await.unwrap();
+    store.delete_all(&scope, &slots()).await.unwrap();
     let names = listed_names(&*store, &scope).await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-2")).await;
@@ -1129,6 +1202,7 @@ async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) 
             new.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1156,6 +1230,7 @@ async fn delete_scope_is_idempotent_and_keeps_other_scopes(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1166,14 +1241,15 @@ async fn delete_scope_is_idempotent_and_keeps_other_scopes(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
 
     let results = [
-        store.delete_all(&new_scope()).await.is_ok(),
-        store.delete_all(&deleted).await.is_ok(),
-        store.delete_all(&deleted).await.is_ok(),
+        store.delete_all(&new_scope(), &slots()).await.is_ok(),
+        store.delete_all(&deleted, &slots()).await.is_ok(),
+        store.delete_all(&deleted, &slots()).await.is_ok(),
     ];
 
     assert_eq!(
@@ -1205,6 +1281,7 @@ async fn a_copied_scope_has_the_same_names_infos_and_trees(open: OpenStore) {
             first.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1215,17 +1292,18 @@ async fn a_copied_scope_has_the_same_names_infos_and_trees(open: OpenStore) {
             second.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
-    let source = store.list(&from).await.unwrap();
+    let source = store.list(&from, &slots()).await.unwrap();
 
-    store.copy_all(&from, &to).await.unwrap();
+    store.copy_all(&from, &to, &slots()).await.unwrap();
 
     assert_eq!(
         (
-            store.list(&to).await.unwrap(),
-            store.list(&from).await.unwrap(),
+            store.list(&to, &slots()).await.unwrap(),
+            store.list(&from, &slots()).await.unwrap(),
             restored(&*store, &to, &name("p-1")).await.unwrap(),
             restored(&*store, &to, &name("u-2")).await.unwrap(),
             restored_listing(&*store, &from, &name("p-1")).await
@@ -1255,6 +1333,7 @@ async fn copied_scopes_are_independent(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1265,12 +1344,13 @@ async fn copied_scopes_are_independent(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
-    store.copy_all(&from, &to).await.unwrap();
+    store.copy_all(&from, &to, &slots()).await.unwrap();
 
-    store.delete(&from, &[name("p-1")]).await.unwrap();
+    store.delete(&from, &[name("p-1")], &slots()).await.unwrap();
     store
         .save(
             &to,
@@ -1278,12 +1358,13 @@ async fn copied_scopes_are_independent(open: OpenStore) {
             later.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
     let target_after_source_delete = restored_listing(&*store, &to, &name("p-1")).await;
     let source_names = listed_names(&*store, &from).await;
-    store.delete_all(&to).await.unwrap();
+    store.delete_all(&to, &slots()).await.unwrap();
 
     assert_eq!(
         (
@@ -1314,11 +1395,12 @@ async fn a_copy_of_an_unused_scope_leaves_the_target_unused(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
 
-    store.copy_all(&new_scope(), &to).await.unwrap();
+    store.copy_all(&new_scope(), &to, &slots()).await.unwrap();
 
     assert_eq!(listed_names(&*store, &to).await, Vec::<String>::new());
 }
@@ -1336,6 +1418,7 @@ async fn one_name_in_two_scopes_gives_two_snapshots(open: OpenStore) {
             first.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1346,13 +1429,17 @@ async fn one_name_in_two_scopes_gives_two_snapshots(open: OpenStore) {
             second.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
     let first_restored = restored_listing(&*store, &first_scope, &name("p-same")).await;
     let second_restored = restored_listing(&*store, &second_scope, &name("p-same")).await;
 
-    store.delete(&first_scope, &[name("p-same")]).await.unwrap();
+    store
+        .delete(&first_scope, &[name("p-same")], &slots())
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -1381,6 +1468,7 @@ async fn a_save_through_one_store_resolves_through_another(open: OpenStore) {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await
         .unwrap();
@@ -1388,7 +1476,7 @@ async fn a_save_through_one_store_resolves_through_another(open: OpenStore) {
     assert_eq!(
         (
             reader.stat(&scope, &name("p-shared")).await.unwrap(),
-            reader.list(&scope).await.unwrap().into_vec(),
+            reader.list(&scope, &slots()).await.unwrap().into_vec(),
             restored(&*reader, &scope, &name("p-shared")).await.unwrap()
         ),
         (
@@ -1415,14 +1503,16 @@ async fn two_stores_save_into_a_new_scope_at_the_same_time(open: OpenStore) {
             &first_name,
             first_tree.path(),
             None,
-            crate::filesystem_snapshot::never_cancelled()
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
         ),
         second.save(
             &scope,
             &second_name,
             second_tree.path(),
             None,
-            crate::filesystem_snapshot::never_cancelled()
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
         )
     );
     let mut names = listed_names(&*first, &scope).await;
@@ -1446,58 +1536,300 @@ async fn two_stores_save_into_a_new_scope_at_the_same_time(open: OpenStore) {
     );
 }
 
-async fn a_dropped_save_publishes_nothing_and_leaves_the_name_free(open: OpenStore) {
-    // The save is polled one time and then dropped before it returns. A dropped save is an
-    // interrupted save, so it publishes nothing and leaves the name free. This case checks at
-    // once after the drop, and it cannot see a publish that comes much later. So an adapter that
-    // runs its save in the background also proves in its own tests that a dropped save stops.
-    // A save can end in its first poll when a busy host runs its read before that poll, so the
-    // case tries saves in new scopes until one does not end in its first poll.
+async fn a_save_cancelled_before_its_publish_publishes_nothing_and_leaves_the_name_free(
+    open: OpenStore,
+) {
     let store = open();
-    let dropped_name = name("p-dropped");
+    let scope = new_scope();
+    let cancelled_name = name("p-cancelled");
     let tree = new_tree(&fixture());
     let other = new_tree(&one_file("other tree"));
+    let cancel = tokio_util::sync::CancellationToken::new();
+    cancel.cancel();
 
-    let scope = futures::stream::iter(0..DROP_ATTEMPTS)
-        .filter_map(|_| {
-            let scope = new_scope();
-            let dropped = store.save(&scope, &dropped_name, tree.path(), None, crate::filesystem_snapshot::never_cancelled())
-                .now_or_never();
-            std::future::ready(dropped.is_none().then_some(scope))
-        })
-        .next()
-        .await
-        .unwrap_or_else(|| {
-            panic!("each of {DROP_ATTEMPTS} saves returned in one poll, so the case cannot drop one before it returns")
-        });
-    let stat = store.stat(&scope, &dropped_name).await.unwrap();
-    let restore = restored(&*store, &scope, &dropped_name).await;
-    let names_after_the_drop = listed_names(&*store, &scope).await;
+    let cancelled = store
+        .save(
+            &scope,
+            &cancelled_name,
+            tree.path(),
+            None,
+            &cancel,
+            &slots(),
+        )
+        .await;
+    let stat = store.stat(&scope, &cancelled_name).await.unwrap();
+    let restore = restored(&*store, &scope, &cancelled_name).await;
+    let names_after_the_cancel = listed_names(&*store, &scope).await;
     let saved_again = store
         .save(
             &scope,
-            &dropped_name,
+            &cancelled_name,
             other.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
         )
         .await;
 
+    assert!(
+        matches!(cancelled, Err(SaveError::Stopped(Withdrawal::Stopped))),
+        "{cancelled:?}"
+    );
     assert!(is_not_found(&restore), "{restore:?}");
     assert!(saved_again.is_ok(), "{saved_again:?}");
     assert_eq!(
         (
             stat,
-            names_after_the_drop,
-            restored_listing(&*store, &scope, &dropped_name).await,
+            names_after_the_cancel,
+            restored_listing(&*store, &scope, &cancelled_name).await,
             listed_names(&*store, &scope).await
         ),
         (
             None,
             Vec::<String>::new(),
             listing(other.path()),
-            vec!["p-dropped".to_string()]
+            vec!["p-cancelled".to_string()]
         )
+    );
+}
+
+/// A limiter that counts its takes and the slots that live, and keeps the most slots that lived at
+/// once. With a withdrawal, each take gives it.
+#[derive(Default)]
+pub(crate) struct CountingSlots {
+    takes: AtomicU64,
+    live: Arc<AtomicU64>,
+    most: Arc<AtomicU64>,
+    withdraw: Option<Withdrawal>,
+}
+
+impl CountingSlots {
+    /// A limiter that withdraws each take with `cause`.
+    fn withdrawing(cause: Withdrawal) -> Self {
+        Self {
+            withdraw: Some(cause),
+            ..Self::default()
+        }
+    }
+
+    /// The takes, the slots that live now, and the most slots that lived at once.
+    fn counts(&self) -> (u64, u64, u64) {
+        (
+            self.takes.load(Ordering::SeqCst),
+            self.live.load(Ordering::SeqCst),
+            self.most.load(Ordering::SeqCst),
+        )
+    }
+}
+
+/// A slot of a [`CountingSlots`]: it counts as live until it drops.
+struct CountedSlot(Arc<AtomicU64>);
+
+impl Drop for CountedSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl RunSlots for CountingSlots {
+    fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
+        self.takes.fetch_add(1, Ordering::SeqCst);
+        let taken = match self.withdraw {
+            Some(cause) => Err(cause),
+            None => {
+                let live = self.live.fetch_add(1, Ordering::SeqCst) + 1;
+                self.most.fetch_max(live, Ordering::SeqCst);
+                Ok(Slot::new(CountedSlot(Arc::clone(&self.live))))
+            }
+        };
+        std::future::ready(taken).boxed()
+    }
+
+    fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
+        match self.withdraw {
+            Some(cause) => std::future::ready(cause).boxed(),
+            None => std::future::pending().boxed(),
+        }
+    }
+}
+
+/// The limiter of a call of a case: a counting limiter that withdraws nothing.
+pub(crate) fn slots() -> CountingSlots {
+    CountingSlots::default()
+}
+
+async fn a_run_holds_one_slot_and_none_after_the_call_returns(open: OpenStore) {
+    let store = open();
+    let (scope, copy) = (new_scope(), new_scope());
+    let tree = new_tree(&fixture());
+    let counted = |slots: &CountingSlots| {
+        let (takes, live, most) = slots.counts();
+        takes >= 1 && live == 0 && most == 1
+    };
+    let (save, restore, list, delete, copied, delete_all) =
+        (slots(), slots(), slots(), slots(), slots(), slots());
+
+    store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &save,
+        )
+        .await
+        .unwrap();
+    let into = Scratch::new();
+    store
+        .restore(&scope, &name("p-1"), into.path(), &restore)
+        .await
+        .unwrap();
+    store.list(&scope, &list).await.unwrap();
+    store.copy_all(&scope, &copy, &copied).await.unwrap();
+    store.delete(&scope, &[name("p-1")], &delete).await.unwrap();
+    store.delete_all(&copy, &delete_all).await.unwrap();
+
+    assert_eq!(
+        [&save, &restore, &list, &delete, &copied, &delete_all].map(counted),
+        [true; 6]
+    );
+}
+
+async fn a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes_nothing(
+    open: OpenStore,
+) {
+    let store = open();
+    let (scope, copy) = (new_scope(), new_scope());
+    let tree = new_tree(&fixture());
+    store
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    let stopped = || CountingSlots::withdrawing(Withdrawal::Stopped);
+    let deadline = || CountingSlots::withdrawing(Withdrawal::Deadline);
+    let into = Scratch::new();
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-new"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &deadline(),
+        )
+        .await;
+    let restored = store
+        .restore(&scope, &name("p-kept"), into.path(), &stopped())
+        .await;
+    let listed = store.list(&scope, &deadline()).await;
+    let deleted = store.delete(&scope, &[name("p-kept")], &stopped()).await;
+    let all_deleted = store.delete_all(&scope, &deadline()).await;
+    let copied = store.copy_all(&scope, &copy, &stopped()).await;
+
+    assert!(
+        matches!(saved, Err(SaveError::Stopped(Withdrawal::Deadline))),
+        "{saved:?}"
+    );
+    assert!(
+        matches!(restored, Err(RestoreFailure::Stopped(Withdrawal::Stopped))),
+        "{restored:?}"
+    );
+    assert!(
+        matches!(listed, Err(CallError::Stopped(Withdrawal::Deadline))),
+        "{listed:?}"
+    );
+    assert!(
+        matches!(deleted, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{deleted:?}"
+    );
+    assert!(
+        matches!(all_deleted, Err(CallError::Stopped(Withdrawal::Deadline))),
+        "{all_deleted:?}"
+    );
+    assert!(
+        matches!(copied, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{copied:?}"
+    );
+    assert_eq!(
+        (
+            listed_names(&*store, &scope).await,
+            listed_names(&*store, &copy).await,
+            listing(into.path()),
+        ),
+        (vec!["p-kept".to_string()], Vec::<String>::new(), Vec::new())
+    );
+}
+
+async fn a_store_that_is_shut_down_gives_stopped(open: OpenStore) {
+    let store = open();
+    let (scope, copy) = (new_scope(), new_scope());
+    let tree = new_tree(&fixture());
+    store
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await
+        .unwrap();
+    store.shut_down().await;
+    let into = Scratch::new();
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-new"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &slots(),
+        )
+        .await;
+    let restored = store
+        .restore(&scope, &name("p-kept"), into.path(), &slots())
+        .await;
+    let stat = store.stat(&scope, &name("p-kept")).await;
+    let listed = store.list(&scope, &slots()).await;
+    let deleted = store.delete(&scope, &[name("p-kept")], &slots()).await;
+    let all_deleted = store.delete_all(&scope, &slots()).await;
+    let copied = store.copy_all(&scope, &copy, &slots()).await;
+
+    assert!(
+        matches!(saved, Err(SaveError::Stopped(Withdrawal::Stopped))),
+        "{saved:?}"
+    );
+    assert!(
+        matches!(restored, Err(RestoreFailure::Stopped(Withdrawal::Stopped))),
+        "{restored:?}"
+    );
+    assert!(matches!(stat, Err(super::ReadError::Stopped)), "{stat:?}");
+    assert!(
+        matches!(listed, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{listed:?}"
+    );
+    assert!(
+        matches!(deleted, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{deleted:?}"
+    );
+    assert!(
+        matches!(all_deleted, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{all_deleted:?}"
+    );
+    assert!(
+        matches!(copied, Err(CallError::Stopped(Withdrawal::Stopped))),
+        "{copied:?}"
     );
 }
 
@@ -1609,6 +1941,7 @@ async fn no_method_blocks_the_runtime(open: OpenStore) {
                     &tree_path,
                     None,
                     crate::filesystem_snapshot::never_cancelled(),
+                    &slots(),
                 )
                 .await
                 .unwrap();
@@ -1616,7 +1949,7 @@ async fn no_method_blocks_the_runtime(open: OpenStore) {
             let before = opened_by_ticker.load(Ordering::SeqCst);
             let gate = close();
             store
-                .restore(&scope, &name("p-large"), &into_path)
+                .restore(&scope, &name("p-large"), &into_path, &slots())
                 .await
                 .unwrap();
             let opened_by_restore = opened_during(gate, before);

@@ -651,7 +651,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
                 kept: host.kept_baseline().await,
             }),
         },
-        Err(error) => failed_update_upload(&error, *terminal.borrow(), host.lost_shard()),
+        Err(error) => failed_update_upload(&error, host.lost_shard()),
     }
 }
 
@@ -687,19 +687,17 @@ fn interrupted_update<Stop>(
     )
 }
 
-/// How a manual update whose upload failed with `error` ends. A failure while a terminal
-/// interrupt waits counts as interrupted, because the interrupt stops the save.
-fn failed_update_upload<Stop>(
-    error: &UploadNowError,
-    terminal_pending: bool,
-    lost_shard: bool,
-) -> UpdateSnapshot<Stop> {
-    if terminal_pending {
-        return interrupted_update(UpdateInterruption::Upload, lost_shard);
+/// How a manual update whose upload failed with `error` ends. An upload that a stop ended gives
+/// `Stopped`, also when its save failed after the stop, and counts as interrupted.
+fn failed_update_upload<Stop>(error: &UploadNowError, lost_shard: bool) -> UpdateSnapshot<Stop> {
+    match error {
+        UploadNowError::Stopped => interrupted_update(UpdateInterruption::Upload, lost_shard),
+        UploadNowError::Store(_) | UploadNowError::SaveRunning | UploadNowError::NoSlot => {
+            UpdateSnapshot::Fail(format!(
+                "failed to upload the filesystem snapshot for the update: {error}"
+            ))
+        }
     }
-    UpdateSnapshot::Fail(format!(
-        "failed to upload the filesystem snapshot for the update: {error}"
-    ))
 }
 
 /// The baseline that a start selected, with its restore.
@@ -1962,27 +1960,28 @@ mod tests {
     }
 
     #[test]
-    async fn a_failed_update_upload_is_interrupted_while_a_terminal_interrupt_waits() {
-        let store = UploadNowError::Store(crate::filesystem_snapshot::SnapshotStoreError::NotFound);
-        let uploaded = |error: &UploadNowError, terminal: bool, lost_shard: bool| {
-            update_outcome(&failed_update_upload(error, terminal, lost_shard))
+    async fn an_upload_that_a_stop_ended_is_interrupted_and_a_failed_one_fails() {
+        let store = UploadNowError::Store(crate::filesystem_snapshot::SaveError::NameInUse);
+        let uploaded = |error: &UploadNowError, lost_shard: bool| {
+            update_outcome(&failed_update_upload(error, lost_shard))
         };
         assert_eq!(
             [
-                uploaded(&UploadNowError::Stopped, true, false),
-                uploaded(&store, true, false),
-                uploaded(&store, true, true),
-                uploaded(&UploadNowError::Stopped, false, false),
-                uploaded(&store, false, true),
+                uploaded(&UploadNowError::Stopped, false),
+                uploaded(&UploadNowError::Stopped, true),
+                uploaded(&store, false),
+                uploaded(&store, true),
+                uploaded(&UploadNowError::NoSlot, false),
             ],
             [
                 "Fail(the update was interrupted while it uploaded the filesystem snapshot)",
-                "Fail(the update was interrupted while it uploaded the filesystem snapshot)",
                 "WriteNothing",
-                "Fail(failed to upload the filesystem snapshot for the update: the upload of the \
-                 filesystem snapshot was stopped)",
-                "Fail(failed to upload the filesystem snapshot for the update: no complete \
-                 filesystem snapshot has the name)",
+                "Fail(failed to upload the filesystem snapshot for the update: a filesystem \
+                 snapshot already has the name)",
+                "Fail(failed to upload the filesystem snapshot for the update: a filesystem \
+                 snapshot already has the name)",
+                "Fail(failed to upload the filesystem snapshot for the update: no slot of the \
+                 uploads of filesystem snapshots was free in the wait)",
             ]
             .map(String::from)
         );
@@ -2222,11 +2221,13 @@ mod tests {
                 StoreChangeDetection,
             )>,
             cancel: &tokio_util::sync::CancellationToken,
-        ) -> Result<
-            crate::filesystem_snapshot::SnapshotInfo,
-            crate::filesystem_snapshot::SnapshotStoreError,
-        > {
-            let info = self.memory.save(agent, name, tree, parent, cancel).await?;
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<crate::filesystem_snapshot::SnapshotInfo, crate::filesystem_snapshot::SaveError>
+        {
+            let info = self
+                .memory
+                .save(agent, name, tree, parent, cancel, slots)
+                .await?;
             Ok(self.times.timed(name, info))
         }
 
@@ -2235,11 +2236,12 @@ mod tests {
             agent: &AgentSnapshots,
             name: &crate::filesystem_snapshot::SnapshotName,
             into: &Path,
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
         ) -> Result<
             crate::filesystem_snapshot::SnapshotInfo,
-            crate::filesystem_snapshot::SnapshotStoreError,
+            crate::filesystem_snapshot::RestoreFailure,
         > {
-            self.memory.restore(agent, name, into).await
+            self.memory.restore(agent, name, into, slots).await
         }
 
         async fn stat(
@@ -2248,7 +2250,7 @@ mod tests {
             name: &crate::filesystem_snapshot::SnapshotName,
         ) -> Result<
             Option<crate::filesystem_snapshot::SnapshotInfo>,
-            crate::filesystem_snapshot::SnapshotStoreError,
+            crate::filesystem_snapshot::ReadError,
         > {
             self.memory.stat(agent, name).await
         }
@@ -2256,6 +2258,7 @@ mod tests {
         async fn list(
             &self,
             agent: &AgentSnapshots,
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
         ) -> Result<
             Box<
                 [(
@@ -2263,11 +2266,11 @@ mod tests {
                     crate::filesystem_snapshot::SnapshotInfo,
                 )],
             >,
-            crate::filesystem_snapshot::SnapshotStoreError,
+            crate::filesystem_snapshot::CallError,
         > {
             Ok(self
                 .memory
-                .list(agent)
+                .list(agent, slots)
                 .await?
                 .iter()
                 .map(|(name, info)| (name.clone(), self.times.timed(name, *info)))
@@ -2278,8 +2281,9 @@ mod tests {
             &self,
             agent: &AgentSnapshots,
             names: &[crate::filesystem_snapshot::SnapshotName],
-        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete(agent, names).await?;
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<(), crate::filesystem_snapshot::CallError> {
+            self.memory.delete(agent, names, slots).await?;
             self.deleted.send_modify(|deleted| {
                 deleted.extend(names.iter().map(|name| Box::from(name.as_str())))
             });
@@ -2289,16 +2293,18 @@ mod tests {
         async fn delete_all(
             &self,
             agent: &AgentSnapshots,
-        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete_all(agent).await
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<(), crate::filesystem_snapshot::CallError> {
+            self.memory.delete_all(agent, slots).await
         }
 
         async fn copy_all(
             &self,
             from: &AgentSnapshots,
             to: &AgentSnapshots,
-        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.copy_all(from, to).await
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<(), crate::filesystem_snapshot::CallError> {
+            self.memory.copy_all(from, to, slots).await
         }
     }
 
@@ -2332,6 +2338,7 @@ mod tests {
                 tree.path(),
                 None,
                 crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
         });
         futures::TryStreamExt::try_collect::<Vec<_>>(saved)

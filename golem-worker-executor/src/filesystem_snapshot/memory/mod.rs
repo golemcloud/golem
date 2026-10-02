@@ -14,7 +14,8 @@
 
 //! A filesystem snapshot store that keeps each snapshot in the memory of the process.
 //!
-//! The snapshots of an agent are one immutable slice. Each change makes a new slice from the old
+//! Each call is one run under one slot of its limiter, because the memory does not fail. The
+//! snapshots of an agent are one immutable slice. Each change makes a new slice from the old
 //! one with a pure function. The store puts the new slice in place under a lock that no await
 //! holds. A restore keeps the tree that it read under the lock, so a delete at the same time
 //! cannot change it. Two agents whose snapshots a copy made share trees that never change.
@@ -26,25 +27,39 @@ mod tests;
 
 use super::clock::{Clock, SystemClock};
 use super::{
-    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
-    SnapshotStoreError, newest_first, snapshot_time,
+    AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
+    RestoreFailure, RunSlots, SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
+    newest_first, snapshot_time,
 };
 use async_trait::async_trait;
 use golem_common::model::Timestamp;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio_util::sync::CancellationToken;
 use tree::{TreeEntry, read_tree, tree_info, write_tree};
 
 /// A filesystem snapshot store that keeps each snapshot in the memory of the process.
 ///
-/// A clone of the store is one more store over the same snapshots, as another executor has. On a
-/// platform other than unix, a save of a tree with a symlink gives `Source` and publishes nothing.
-#[derive(Clone)]
+/// A clone of the store is one more store over the same snapshots, as another executor has: it
+/// shares the snapshots and not the shutdown. On a platform other than unix, a save of a tree with
+/// a symlink gives `Source` and publishes nothing.
 pub(crate) struct InMemorySnapshotStore {
     agents: Arc<Mutex<HashMap<AgentSnapshots, Arc<[Stored]>>>>,
     clock: Arc<dyn Clock>,
+    /// True after the store shut down.
+    shut_down: AtomicBool,
+}
+
+impl Clone for InMemorySnapshotStore {
+    fn clone(&self) -> Self {
+        Self {
+            agents: Arc::clone(&self.agents),
+            clock: Arc::clone(&self.clock),
+            shut_down: AtomicBool::new(false),
+        }
+    }
 }
 
 impl Default for InMemorySnapshotStore {
@@ -73,7 +88,16 @@ impl InMemorySnapshotStore {
         Self {
             agents: Arc::default(),
             clock,
+            shut_down: AtomicBool::new(false),
         }
+    }
+
+    /// Takes the one slot of a call, or gives why the call stops.
+    pub(crate) async fn slot(&self, slots: &dyn RunSlots) -> Result<Slot, Withdrawal> {
+        if self.shut_down.load(Ordering::SeqCst) {
+            return Err(Withdrawal::Stopped);
+        }
+        slots.take(true).await
     }
 
     /// Gives the snapshots of each agent. No lock is held across an await, so a panic cannot
@@ -98,10 +122,10 @@ fn newest(snapshots: &[Stored]) -> Option<Timestamp> {
     snapshots.iter().map(|stored| stored.info.created_at).max()
 }
 
-/// Gives the snapshots with `snapshot` added, or `AlreadyExists` when a snapshot has its name.
-fn with_saved(snapshots: &[Stored], snapshot: Stored) -> Result<Arc<[Stored]>, SnapshotStoreError> {
+/// Gives the snapshots with `snapshot` added, or `NameInUse` when a snapshot has its name.
+fn with_saved(snapshots: &[Stored], snapshot: Stored) -> Result<Arc<[Stored]>, SaveError> {
     match found(snapshots, &snapshot.name) {
-        Some(_) => Err(SnapshotStoreError::AlreadyExists),
+        Some(_) => Err(SaveError::NameInUse),
         None => Ok(snapshots
             .iter()
             .cloned()
@@ -122,13 +146,10 @@ fn without(snapshots: &[Stored], names: &[SnapshotName]) -> Arc<[Stored]> {
 /// Runs blocking work on a thread of the blocking pool, so the async runtime is not blocked.
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
-) -> Result<T, SnapshotStoreError> {
+) -> Result<T, Failed> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|error| SnapshotStoreError::Storage {
-            retryable: false,
-            source: anyhow::Error::new(error),
-        })
+        .map_err(|error| Failed::new(anyhow::Error::new(error)))
 }
 
 #[async_trait]
@@ -140,27 +161,25 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         tree: &Path,
         _parent: Option<(&SnapshotName, ChangeDetection)>,
         cancel: &CancellationToken,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<SnapshotInfo, SaveError> {
+        let _slot = self.slot(slots).await.map_err(SaveError::Stopped)?;
         let snapshots = self.snapshots_of(agent);
         if found(&snapshots, name).is_some() {
-            return Err(SnapshotStoreError::AlreadyExists);
+            return Err(SaveError::NameInUse);
         }
         let newest = newest(&snapshots);
 
         let root = tree.to_path_buf();
         let tree = blocking(move || read_tree(&root))
-            .await?
-            .map_err(SnapshotStoreError::Source)?;
+            .await
+            .map_err(SaveError::Failed)?
+            .map_err(SaveError::Source)?;
         let info = tree_info(&tree, snapshot_time(self.clock.now(), newest));
 
         // A cancel before the publish publishes nothing.
         if cancel.is_cancelled() {
-            return Err(SnapshotStoreError::Storage {
-                retryable: false,
-                source: anyhow::anyhow!(
-                    "the save of the filesystem snapshot was cancelled before its publish"
-                ),
-            });
+            return Err(SaveError::Stopped(Withdrawal::Stopped));
         }
         // A save of the same name can finish during the read, so the check runs again in the
         // step that publishes the snapshot.
@@ -183,17 +202,20 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         agent: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<SnapshotInfo, RestoreFailure> {
+        let _slot = self.slot(slots).await.map_err(RestoreFailure::Stopped)?;
         let snapshots = self.snapshots_of(agent);
         let stored = found(&snapshots, name)
             .cloned()
-            .ok_or(SnapshotStoreError::NotFound)?;
+            .ok_or(RestoreFailure::NotFound)?;
 
         let into = into.to_path_buf();
         let tree = stored.tree;
         blocking(move || write_tree(&tree, &into))
-            .await?
-            .map_err(SnapshotStoreError::Destination)?;
+            .await
+            .map_err(RestoreFailure::Failed)?
+            .map_err(RestoreFailure::Destination)?;
         Ok(stored.info)
     }
 
@@ -201,14 +223,19 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         &self,
         agent: &AgentSnapshots,
         name: &SnapshotName,
-    ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
+    ) -> Result<Option<SnapshotInfo>, ReadError> {
+        if self.shut_down.load(Ordering::SeqCst) {
+            return Err(ReadError::Stopped);
+        }
         Ok(found(&self.snapshots_of(agent), name).map(|stored| stored.info))
     }
 
     async fn list(
         &self,
         agent: &AgentSnapshots,
-    ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
+        let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         Ok(newest_first(
             self.snapshots_of(agent)
                 .iter()
@@ -220,7 +247,9 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         &self,
         agent: &AgentSnapshots,
         names: &[SnapshotName],
-    ) -> Result<(), SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         let mut agents = self.agents();
         if let Some(snapshots) = agents.get(agent) {
             let kept = without(snapshots, names);
@@ -229,7 +258,12 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         Ok(())
     }
 
-    async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
+    async fn delete_all(
+        &self,
+        agent: &AgentSnapshots,
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         self.agents().remove(agent);
         Ok(())
     }
@@ -238,14 +272,26 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,
-    ) -> Result<(), SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         // The snapshots never change, so the two agents can hold the same slice and stay
-        // independent. A change for one agent puts a new slice in place for that agent only.
+        // independent. A change for one agent puts a new slice in place for that agent only. When
+        // `from` has no snapshots, `to` has none either.
         let mut agents = self.agents();
-        if let Some(snapshots) = agents.get(from).cloned() {
-            agents.insert(to.clone(), snapshots);
+        match agents.get(from).cloned() {
+            Some(snapshots) => {
+                agents.insert(to.clone(), snapshots);
+            }
+            None => {
+                agents.remove(to);
+            }
         }
         Ok(())
+    }
+
+    async fn shut_down(&self) {
+        self.shut_down.store(true, Ordering::SeqCst);
     }
 }
 

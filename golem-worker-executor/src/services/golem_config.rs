@@ -2402,6 +2402,8 @@ pub struct FilesystemSnapshotStoreConfig {
     restore_reader_threads: NonZeroUsize,
     /// The number of threads of each parallel stage of a save.
     save_threads: NonZeroUsize,
+    /// The runs of one store call after a run whose storage call failed.
+    storage_retry: RetryConfig,
     /// The settings of the uploads, the restores and the retention of the snapshots.
     #[serde(flatten)]
     uploads: FilesystemSnapshotUploadConfig,
@@ -2431,8 +2433,6 @@ pub struct FilesystemSnapshotUploadConfig {
     retained_periodic_snapshots: NonZeroUsize,
     /// The number of manual-update snapshots that retention keeps for each agent.
     retained_update_snapshots: NonZeroUsize,
-    /// The retries of a failed store operation of an upload or a clean-up.
-    upload_retry: RetryConfig,
 }
 
 /// The default of [`FilesystemSnapshotUploadConfig::max_concurrent_uploads`].
@@ -2446,7 +2446,7 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT: Duration = Duration::from_s
 const DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT: Duration = Duration::from_secs(5);
 /// The default of [`FilesystemSnapshotUploadConfig::capture_wait`].
 const DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT: Duration = Duration::from_secs(5);
-/// The largest jitter factor of the retries of the uploads: a jitter at most doubles a delay.
+/// The largest jitter factor of the runs of a store call: a jitter at most doubles a wait.
 const MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR: f64 = 1.0;
 /// The default of [`FilesystemSnapshotUploadConfig::retained_periodic_snapshots`]: about 20 min
 /// of exact reverts at one upload every 10 s.
@@ -2454,14 +2454,18 @@ const DEFAULT_RETAINED_PERIODIC_SNAPSHOTS: usize = 128;
 /// The default of [`FilesystemSnapshotUploadConfig::retained_update_snapshots`].
 const DEFAULT_RETAINED_UPDATE_SNAPSHOTS: usize = 2;
 
-fn default_filesystem_snapshot_upload_retry() -> RetryConfig {
-    RetryConfig {
-        max_attempts: 5,
-        min_delay: Duration::from_secs(2),
-        max_delay: Duration::from_secs(120),
-        multiplier: 4.0,
-        max_jitter_factor: None,
-    }
+/// The default of [`FilesystemSnapshotStoreConfig::storage_retry`]: 5 runs of one store call, with
+/// waits of 2 s, 8 s, 32 s and 120 s between them.
+const DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_RETRY: RetryConfig = RetryConfig {
+    max_attempts: 5,
+    min_delay: Duration::from_secs(2),
+    max_delay: Duration::from_secs(120),
+    multiplier: 4.0,
+    max_jitter_factor: None,
+};
+
+fn default_filesystem_snapshot_storage_retry() -> RetryConfig {
+    DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_RETRY
 }
 
 /// The values of a [`FilesystemSnapshotUploadConfig`] before [`FilesystemSnapshotUploadConfig::new`]
@@ -2475,7 +2479,6 @@ pub struct FilesystemSnapshotUploadValues {
     pub capture_wait: Duration,
     pub retained_periodic_snapshots: usize,
     pub retained_update_snapshots: usize,
-    pub upload_retry: RetryConfig,
 }
 
 impl Default for FilesystemSnapshotUploadValues {
@@ -2488,14 +2491,12 @@ impl Default for FilesystemSnapshotUploadValues {
             capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
             retained_periodic_snapshots: DEFAULT_RETAINED_PERIODIC_SNAPSHOTS,
             retained_update_snapshots: DEFAULT_RETAINED_UPDATE_SNAPSHOTS,
-            upload_retry: default_filesystem_snapshot_upload_retry(),
         }
     }
 }
 
 impl FilesystemSnapshotUploadConfig {
-    /// Checks `values`: each count and each wait must be greater than zero, and the retry must
-    /// make an attempt with a growing delay.
+    /// Checks `values`: each count and each wait must be greater than zero.
     pub fn new(values: FilesystemSnapshotUploadValues) -> Result<Self, String> {
         let FilesystemSnapshotUploadValues {
             max_concurrent_uploads,
@@ -2505,7 +2506,6 @@ impl FilesystemSnapshotUploadConfig {
             capture_wait,
             retained_periodic_snapshots,
             retained_update_snapshots,
-            upload_retry,
         } = values;
         let count = |value: usize, name: &str| {
             NonZeroUsize::new(value).ok_or_else(|| format!("{name} must be greater than zero"))
@@ -2517,24 +2517,6 @@ impl FilesystemSnapshotUploadConfig {
                 Ok(value)
             }
         };
-        if upload_retry.max_attempts == 0 {
-            return Err("upload_retry.max_attempts must be greater than zero".to_string());
-        }
-        if upload_retry.min_delay > upload_retry.max_delay {
-            return Err("upload_retry.min_delay must not be greater than max_delay".to_string());
-        }
-        if !upload_retry.multiplier.is_finite() || upload_retry.multiplier < 1.0 {
-            return Err("upload_retry.multiplier must be at least 1".to_string());
-        }
-        if upload_retry
-            .max_jitter_factor
-            .is_some_and(|factor| !(0.0..=MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR).contains(&factor))
-        {
-            return Err(format!(
-                "upload_retry.max_jitter_factor must be between 0 and \
-                 {MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR}"
-            ));
-        }
         Ok(Self {
             max_concurrent_uploads: count(max_concurrent_uploads, "max_concurrent_uploads")?,
             max_concurrent_restores: count(max_concurrent_restores, "max_concurrent_restores")?,
@@ -2549,7 +2531,6 @@ impl FilesystemSnapshotUploadConfig {
                 retained_update_snapshots,
                 "retained_update_snapshots",
             )?,
-            upload_retry,
         })
     }
 
@@ -2579,10 +2560,6 @@ impl FilesystemSnapshotUploadConfig {
 
     pub const fn retained_update_snapshots(&self) -> NonZeroUsize {
         self.retained_update_snapshots
-    }
-
-    pub fn upload_retry(&self) -> &RetryConfig {
-        &self.upload_retry
     }
 }
 
@@ -2627,12 +2604,6 @@ impl SafeDisplay for FilesystemSnapshotUploadConfig {
             "retained update snapshots: {}",
             self.retained_update_snapshots
         );
-        let _ = writeln!(&mut result, "upload retry:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.upload_retry.to_safe_string_indented()
-        );
         result
     }
 }
@@ -2649,6 +2620,8 @@ struct RawFilesystemSnapshotStoreConfig {
     restore_reader_threads: usize,
     #[serde(default = "default_filesystem_snapshot_save_threads")]
     save_threads: usize,
+    #[serde(default = "default_filesystem_snapshot_storage_retry")]
+    storage_retry: RetryConfig,
     #[serde(default = "default_filesystem_snapshot_max_concurrent_uploads")]
     max_concurrent_uploads: usize,
     #[serde(default = "default_filesystem_snapshot_max_concurrent_restores")]
@@ -2672,8 +2645,6 @@ struct RawFilesystemSnapshotStoreConfig {
     retained_periodic_snapshots: usize,
     #[serde(default = "default_retained_update_snapshots")]
     retained_update_snapshots: usize,
-    #[serde(default = "default_filesystem_snapshot_upload_retry")]
-    upload_retry: RetryConfig,
 }
 
 fn default_filesystem_snapshot_max_concurrent_uploads() -> usize {
@@ -2717,6 +2688,9 @@ fn default_filesystem_snapshot_save_threads() -> usize {
 }
 
 impl FilesystemSnapshotStoreConfig {
+    /// Checks the values: the deadline must be in the range that the store accepts, and each count
+    /// must be greater than zero. The runs after a failed call are the default ones, and
+    /// [`Self::with_storage_retry`] changes them.
     pub fn new(
         repository_key: &str,
         storage_call_deadline: Duration,
@@ -2724,8 +2698,13 @@ impl FilesystemSnapshotStoreConfig {
         save_threads: usize,
     ) -> Result<Self, String> {
         let repository_key = FilesystemSnapshotRepositoryKey::parse(repository_key)?;
-        if storage_call_deadline.is_zero() {
-            return Err("storage_call_deadline must be greater than zero".to_string());
+        let deadlines = crate::filesystem_snapshot::storage_call_deadlines();
+        if !deadlines.contains(&storage_call_deadline) {
+            return Err(format!(
+                "storage_call_deadline must be from {:?} to {:?}",
+                deadlines.start(),
+                deadlines.end()
+            ));
         }
         let restore_reader_threads = NonZeroUsize::new(restore_reader_threads)
             .ok_or_else(|| "restore_reader_threads must be greater than zero".to_string())?;
@@ -2736,8 +2715,41 @@ impl FilesystemSnapshotStoreConfig {
             storage_call_deadline,
             restore_reader_threads,
             save_threads,
+            storage_retry: DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_RETRY,
             uploads: FilesystemSnapshotUploadConfig::default(),
         })
+    }
+
+    /// Gives this configuration with the runs after a failed call `storage_retry`, which must make
+    /// a run with a growing wait.
+    pub fn with_storage_retry(self, storage_retry: RetryConfig) -> Result<Self, String> {
+        if storage_retry.max_attempts == 0 {
+            return Err("storage_retry.max_attempts must be greater than zero".to_string());
+        }
+        if storage_retry.min_delay > storage_retry.max_delay {
+            return Err("storage_retry.min_delay must not be greater than max_delay".to_string());
+        }
+        if !storage_retry.multiplier.is_finite() || storage_retry.multiplier < 1.0 {
+            return Err("storage_retry.multiplier must be at least 1".to_string());
+        }
+        if storage_retry
+            .max_jitter_factor
+            .is_some_and(|factor| !(0.0..=MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR).contains(&factor))
+        {
+            return Err(format!(
+                "storage_retry.max_jitter_factor must be between 0 and \
+                 {MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR}"
+            ));
+        }
+        Ok(Self {
+            storage_retry,
+            ..self
+        })
+    }
+
+    /// The runs of one store call after a run whose storage call failed.
+    pub fn storage_retry(&self) -> &RetryConfig {
+        &self.storage_retry
     }
 
     /// Gives this configuration with the upload settings `uploads`.
@@ -2780,7 +2792,6 @@ impl<'de> Deserialize<'de> for FilesystemSnapshotStoreConfig {
             capture_wait: raw.capture_wait,
             retained_periodic_snapshots: raw.retained_periodic_snapshots,
             retained_update_snapshots: raw.retained_update_snapshots,
-            upload_retry: raw.upload_retry,
         })
         .map_err(D::Error::custom)?;
         Self::new(
@@ -2789,6 +2800,7 @@ impl<'de> Deserialize<'de> for FilesystemSnapshotStoreConfig {
             raw.restore_reader_threads,
             raw.save_threads,
         )
+        .and_then(|config| config.with_storage_retry(raw.storage_retry))
         .map(|config| config.with_uploads(uploads))
         .map_err(D::Error::custom)
     }
@@ -2809,6 +2821,12 @@ impl SafeDisplay for FilesystemSnapshotStoreConfig {
             self.restore_reader_threads
         );
         let _ = writeln!(&mut result, "save threads: {}", self.save_threads);
+        let _ = writeln!(&mut result, "storage retry:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.storage_retry.to_safe_string_indented()
+        );
         let _ = write!(&mut result, "{}", self.uploads.to_safe_string());
         result
     }
@@ -3185,9 +3203,8 @@ pub fn make_config_loader() -> ConfigLoader<GolemConfig> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig,
-        FilesystemSnapshotUploadValues, FilesystemSnapshotsConfig, GolemConfig,
-        InvocationResultsConfig, Limits, RetryConfig, default_filesystem_snapshot_upload_retry,
+        DurableStreamConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig, GolemConfig,
+        InvocationResultsConfig, Limits, RetryConfig, default_filesystem_snapshot_storage_retry,
     };
     use golem_common::SafeDisplay;
     use serde_json::{Value, json};
@@ -3393,7 +3410,7 @@ mod tests {
             "capture_wait": "2s",
             "retained_periodic_snapshots": 4,
             "retained_update_snapshots": 6,
-            "upload_retry": {
+            "storage_retry": {
                 "max_attempts": 7,
                 "min_delay": "1s",
                 "max_delay": "30s",
@@ -3412,7 +3429,7 @@ mod tests {
                 uploads.capture_wait(),
                 uploads.retained_periodic_snapshots().get(),
                 uploads.retained_update_snapshots().get(),
-                uploads.upload_retry().clone(),
+                store.storage_retry().clone(),
             ),
             (
                 3,
@@ -3447,7 +3464,7 @@ mod tests {
                 uploads.capture_wait(),
                 uploads.retained_periodic_snapshots().get(),
                 uploads.retained_update_snapshots().get(),
-                uploads.upload_retry().clone(),
+                store.storage_retry().clone(),
             ),
             (
                 4,
@@ -3469,18 +3486,18 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_upload_settings_refuse_a_jitter_factor_that_is_not_a_number() {
+    fn filesystem_snapshots_store_settings_refuse_a_jitter_factor_that_is_not_a_number() {
         let with_jitter = |factor: f64| {
-            FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
-                upload_retry: RetryConfig {
-                    max_jitter_factor: Some(factor),
-                    ..default_filesystem_snapshot_upload_retry()
-                },
-                ..FilesystemSnapshotUploadValues::default()
-            })
-            .err()
+            FilesystemSnapshotStoreConfig::new(KEY, Duration::from_secs(60), 1, 1)
+                .and_then(|config| {
+                    config.with_storage_retry(RetryConfig {
+                        max_jitter_factor: Some(factor),
+                        ..default_filesystem_snapshot_storage_retry()
+                    })
+                })
+                .err()
         };
-        let refused = "upload_retry.max_jitter_factor must be between 0 and 1".to_string();
+        let refused = "storage_retry.max_jitter_factor must be between 0 and 1".to_string();
 
         assert_eq!(
             [
@@ -3498,7 +3515,7 @@ mod tests {
         let retry = |max_attempts: u32, min_delay: &str, max_delay: &str, multiplier: f64| {
             json!({
                 "repository_key": KEY,
-                "upload_retry": {
+                "storage_retry": {
                     "max_attempts": max_attempts,
                     "min_delay": min_delay,
                     "max_delay": max_delay,
@@ -3509,7 +3526,7 @@ mod tests {
         let jitter = |factor: f64| {
             json!({
                 "repository_key": KEY,
-                "upload_retry": {
+                "storage_retry": {
                     "max_attempts": 3,
                     "min_delay": "1s",
                     "max_delay": "2s",
@@ -3549,23 +3566,23 @@ mod tests {
             ),
             (
                 retry(0, "1s", "2s", 2.0),
-                "upload_retry.max_attempts must be greater than zero",
+                "storage_retry.max_attempts must be greater than zero",
             ),
             (
                 retry(3, "3s", "2s", 2.0),
-                "upload_retry.min_delay must not be greater than max_delay",
+                "storage_retry.min_delay must not be greater than max_delay",
             ),
             (
                 retry(3, "1s", "2s", 0.5),
-                "upload_retry.multiplier must be at least 1",
+                "storage_retry.multiplier must be at least 1",
             ),
             (
                 jitter(-0.5),
-                "upload_retry.max_jitter_factor must be between 0 and 1",
+                "storage_retry.max_jitter_factor must be between 0 and 1",
             ),
             (
                 jitter(1e20),
-                "upload_retry.max_jitter_factor must be between 0 and 1",
+                "storage_retry.max_jitter_factor must be between 0 and 1",
             ),
         ];
 
@@ -3579,10 +3596,31 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_snapshots_managed_config_refuses_a_zero_deadline() {
-        assert!(
-            refusal(json!({ "repository_key": KEY, "storage_call_deadline": "0s" }))
-                .contains("storage_call_deadline must be greater than zero")
+    fn filesystem_snapshots_managed_config_accepts_a_deadline_from_one_second_to_an_eighth_of_the_grace()
+     {
+        let deadline = |text: &str| {
+            managed(json!({ "repository_key": KEY, "storage_call_deadline": text }))
+                .map(|store| store.storage_call_deadline())
+                .map_err(|error| error.contains("storage_call_deadline must be from 1s to 112.5s"))
+        };
+
+        assert_eq!(
+            [
+                deadline("0s"),
+                deadline("999ms"),
+                deadline("1s"),
+                deadline("60s"),
+                deadline("112500ms"),
+                deadline("112501ms"),
+            ],
+            [
+                Err(true),
+                Err(true),
+                Ok(Duration::from_secs(1)),
+                Ok(Duration::from_secs(60)),
+                Ok(Duration::from_millis(112_500)),
+                Err(true),
+            ]
         );
     }
 

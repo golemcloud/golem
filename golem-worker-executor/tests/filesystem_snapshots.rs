@@ -62,8 +62,8 @@ inherit_test_dep!(Tracing);
 /// The agent type of the test component that takes snapshots.
 const AGENT_TYPE: &str = "SnapshotTree";
 
-/// The upload settings of the tests: one attempt for each save, so an injected failure ends the
-/// upload at once, and a short wait of a start for an upload.
+/// The upload settings of the tests: a short wait of a start for an upload. The test store answers
+/// an injected failure of a save at once.
 fn uploads(confirmation_wait: Duration) -> FilesystemSnapshotUploadConfig {
     FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
         max_concurrent_uploads: 4,
@@ -73,13 +73,6 @@ fn uploads(confirmation_wait: Duration) -> FilesystemSnapshotUploadConfig {
         capture_wait: Duration::from_secs(5),
         retained_periodic_snapshots: 2,
         retained_update_snapshots: 2,
-        upload_retry: golem_common::model::RetryConfig {
-            max_attempts: 1,
-            min_delay: Duration::from_millis(10),
-            max_delay: Duration::from_millis(10),
-            multiplier: 2.0,
-            max_jitter_factor: None,
-        },
     })
     .expect("valid upload settings")
 }

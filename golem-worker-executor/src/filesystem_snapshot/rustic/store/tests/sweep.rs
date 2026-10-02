@@ -22,6 +22,7 @@
 //! run, and the log of a case gives the call that took each step.
 
 use super::*;
+use crate::filesystem_snapshot::CallError;
 use futures::TryStreamExt;
 use tokio::task::JoinHandle;
 
@@ -115,7 +116,7 @@ struct Step {
 struct Delete {
     store: Arc<RusticSnapshotStore>,
     storage: Arc<ScriptedBlobStorage>,
-    task: JoinHandle<Result<(), SnapshotStoreError>>,
+    task: JoinHandle<Result<(), CallError>>,
     /// The steps that the delete took, other than the writes of new markers.
     taken: usize,
     /// Whether the case dropped the delete. A dropped delete makes a call only for the release of
@@ -356,7 +357,7 @@ pub(super) async fn run_case(
 ) -> Result<(), String> {
     let scope = new_scope();
     store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO))
-        .copy_all(prepared, &scope)
+        .copy_all(prepared, &scope, &crate::filesystem_snapshot::Unlimited)
         .await
         .map_err(|error| format!("the copy of the prepared scope failed: {error}"))?;
     let deletes = [0, 1].map(|who| {
@@ -385,7 +386,15 @@ pub(super) async fn run_case(
         let scope = scope.clone();
         let task = tokio::spawn({
             let deleting = deleting.clone();
-            async move { deleting.delete(&scope, &[name(["p-1", "p-2"][who])]).await }
+            async move {
+                deleting
+                    .delete(
+                        &scope,
+                        &[name(["p-1", "p-2"][who])],
+                        &crate::filesystem_snapshot::Unlimited,
+                    )
+                    .await
+            }
         });
         Delete {
             store: deleting,
@@ -597,7 +606,7 @@ async fn check(
     scope: &AgentSnapshots,
     schedule: &Schedule,
     log: &[Step],
-    results: Vec<Result<Result<(), SnapshotStoreError>, tokio::task::JoinError>>,
+    results: Vec<Result<Result<(), CallError>, tokio::task::JoinError>>,
 ) -> Result<(), String> {
     let failed = log.iter().any(|step| step.failed);
     let prune_starts = log

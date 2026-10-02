@@ -28,10 +28,11 @@ use self::scripted::{Script, ScriptedBlobStorage};
 use super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
 use super::files::SnapshotFiles;
 use super::prune::Percent;
+use super::publish::PublishBound;
 use super::store::{RusticSnapshotStore, StorePolicy, named};
 use super::{
     PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
-    prune_options, repository_options, restore_snapshot, run_blocking,
+    prune_options, repository_options, run_blocking,
 };
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::contract_tests::fixture::{
@@ -39,8 +40,8 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
 };
 use crate::filesystem_snapshot::contract_tests::new_scope;
 use crate::filesystem_snapshot::{
-    AgentSnapshots, ChangeDetection as StoreChangeDetection, FilesystemSnapshotStore, SnapshotName,
-    SnapshotStoreError,
+    AgentSnapshots, ChangeDetection as StoreChangeDetection, FailureOf, FilesystemSnapshotStore,
+    SaveError, SnapshotName, Withdrawal,
 };
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::Context;
@@ -73,15 +74,27 @@ const SHORT_DEADLINE: Duration = Duration::from_millis(200);
 /// stop.
 const LIMIT: Duration = Duration::from_secs(10);
 
-/// Gives the blobs of the namespace of the storage, with a tracker of their own. Their calls wait
-/// for at most the deadline, and they stop when the token is cancelled.
+/// Gives the blobs of the namespace of the storage, with a tracker of their own. Their calls make
+/// one try, wait for at most the deadline, and stop when the token is cancelled.
 pub(super) fn files_of(
     storage: Arc<dyn BlobStorage>,
     namespace: BlobStorageNamespace,
     deadline: Duration,
     cancel: CancellationToken,
 ) -> SnapshotFiles {
-    SnapshotFiles::new(storage, namespace, deadline, cancel, TaskTracker::new())
+    SnapshotFiles::new(storage, namespace, deadline, cancel, TaskTracker::new()).once()
+}
+
+/// The runs of a call in the tests that do not test them: one run, so a failed call answers at
+/// once.
+pub(super) fn one_run() -> golem_common::model::RetryConfig {
+    golem_common::model::RetryConfig {
+        max_attempts: 1,
+        min_delay: Duration::from_secs(2),
+        max_delay: Duration::from_secs(120),
+        multiplier: 4.0,
+        max_jitter_factor: None,
+    }
 }
 
 fn name(text: &str) -> SnapshotName {
@@ -90,6 +103,17 @@ fn name(text: &str) -> SnapshotName {
 
 fn key() -> RepositoryKey {
     RepositoryKey::new(std::array::from_fn(|index| index as u8))
+}
+
+/// Gives the publish bound of a test store: on when the configuration would allow the deadline and
+/// the grace period, that is a deadline of at least the shortest publish try and at most an eighth
+/// of the grace period, and off otherwise.
+pub(super) fn publish_bound_for(deadline: Duration, grace: Duration) -> PublishBound {
+    if deadline >= super::publish::MIN_PUBLISH_TRY && deadline.saturating_mul(8) <= grace {
+        PublishBound::On
+    } else {
+        PublishBound::Off
+    }
 }
 
 /// Gives a store over the storage whose calls wait for at most `deadline`. A delete never prunes.
@@ -106,6 +130,9 @@ fn store(storage: Arc<dyn BlobStorage>, deadline: Duration) -> RusticSnapshotSto
                 keep_delete: Duration::from_secs(15 * 60),
             },
             prune_threshold: Percent(u16::MAX),
+            retry: one_run(),
+            publish_bound: publish_bound_for(deadline, Duration::from_secs(15 * 60)),
+            in_call_tries: 1,
         },
         Arc::new(SystemClock),
     )
@@ -312,9 +339,16 @@ async fn with_existing_repository<R: Send + 'static>(
 /// Tells whether an operation of the store ended within the limit with the storage error of a
 /// call that got no answer within its deadline. `None` means that the operation did not end within
 /// the limit.
-fn failed_at_deadline<T>(outcome: Result<Result<T, SnapshotStoreError>, Elapsed>) -> Option<bool> {
+fn failed_at_deadline<T, E: FailureOf>(outcome: Result<Result<T, E>, Elapsed>) -> Option<bool> {
     outcome.ok().map(|result| {
-        matches!(result, Err(SnapshotStoreError::Storage { source, .. }) if reached_deadline(source.as_ref()))
+        result
+            .err()
+            .and_then(|error| {
+                error
+                    .failure()
+                    .map(|failure| reached_deadline(failure.as_ref()))
+            })
+            .unwrap_or(false)
     })
 }
 
@@ -337,6 +371,7 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -345,7 +380,12 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
     let into = Scratch::new();
 
     store(storage.clone(), STORAGE_CALL_DEADLINE)
-        .restore(&scope, &name("p-first"), into.path())
+        .restore(
+            &scope,
+            &name("p-first"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let calls_on_tree_packs = |op: &str| {
@@ -386,6 +426,7 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -401,6 +442,7 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -440,6 +482,7 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -451,6 +494,7 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -779,6 +823,7 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         ),
     )
     .await;
@@ -809,6 +854,7 @@ async fn a_save_cancelled_before_its_publish_publishes_nothing() {
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -831,14 +877,21 @@ async fn a_save_cancelled_before_its_publish_publishes_nothing() {
     let cancel = CancellationToken::new();
 
     let second = name("p-second");
-    let saving = store.save(&scope, &second, tree.path(), None, &cancel);
+    let saving = store.save(
+        &scope,
+        &second,
+        tree.path(),
+        None,
+        &cancel,
+        &crate::filesystem_snapshot::Unlimited,
+    );
     let cancelling = async {
         held.notified().await;
         cancel.cancel();
     };
     let (saved, ()) = tokio::join!(saving, cancelling);
     let listed = store
-        .list(&scope)
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
         .await
         .unwrap()
         .iter()
@@ -851,13 +904,7 @@ async fn a_save_cancelled_before_its_publish_publishes_nothing() {
         .count();
 
     assert!(
-        matches!(
-            saved,
-            Err(SnapshotStoreError::Storage {
-                retryable: false,
-                ..
-            })
-        ),
+        matches!(saved, Err(SaveError::Stopped(Withdrawal::Stopped))),
         "{saved:?}"
     );
     assert_eq!((listed, snapshot_files), (vec!["p-first".to_string()], 1));
@@ -896,6 +943,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         ),
     )
     .await
@@ -903,7 +951,14 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
     let opened = tokio::time::timeout(LIMIT, opener)
         .await
         .is_ok_and(|joined| joined.is_ok());
-    let restored = store.restore(&scope, &name("p-first"), into.path()).await;
+    let restored = store
+        .restore(
+            &scope,
+            &name("p-first"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert_eq!(
         (saved, opened, restored.is_ok(), listing(into.path())),
@@ -924,6 +979,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -944,11 +1000,20 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
 
-    let restored =
-        tokio::time::timeout(LIMIT, store.restore(&scope, &name("p-first"), into.path())).await;
+    let restored = tokio::time::timeout(
+        LIMIT,
+        store.restore(
+            &scope,
+            &name("p-first"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        ),
+    )
+    .await;
     drop(store);
     let stopped = dropped_within_limit(dropped).await;
-    // The plan phase of a restore makes each directory before the content phase reads data.
+    // The plan phase of a restore makes each directory before the content phase reads data. A
+    // run that fails after its first write removes what it wrote.
     let made = directories
         .iter()
         .map(|path| (*path, into.path().join(path).is_dir()))
@@ -969,7 +1034,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
             false,
             directories
                 .iter()
-                .map(|path| (*path, true))
+                .map(|path| (*path, false))
                 .collect::<Vec<_>>()
         )
     );
@@ -988,6 +1053,7 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -1037,6 +1103,7 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
             first_tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -1048,6 +1115,7 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
             second_tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -1060,7 +1128,14 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
 
     // The first prune marks the packs that only the deleted name used, and the second prune
     // deletes them, because they stay marked for no time.
-    store.delete(&scope, &[name("p-first")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-first")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let settings = PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
@@ -1071,7 +1146,14 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
     prune_with(inner.clone(), &scope, STORAGE_CALL_DEADLINE, settings)
         .await
         .unwrap();
-    let restored = store.restore(&scope, &name("p-second"), into.path()).await;
+    let restored = store
+        .restore(
+            &scope,
+            &name("p-second"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert_eq!(
         (
@@ -1257,6 +1339,7 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
                 tree.path(),
                 None,
                 crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
             .await
             .unwrap();
@@ -1268,12 +1351,18 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
                 tree.path(),
                 Some((&name("p-first"), detection)),
                 crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
             .await
             .unwrap();
         let into = Scratch::new();
         store
-            .restore(&scope, &name("p-second"), into.path())
+            .restore(
+                &scope,
+                &name("p-second"),
+                into.path(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
         let counts = with_existing_repository(
@@ -1339,6 +1428,7 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
                 tree.path(),
                 None,
                 crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
             .await
             .unwrap();
@@ -1351,10 +1441,18 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
                 tree.path(),
                 None,
                 crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
             .await
             .unwrap();
-        store.delete(&scope, &[name("p-first")]).await.unwrap();
+        store
+            .delete(
+                &scope,
+                &[name("p-first")],
+                &crate::filesystem_snapshot::Unlimited,
+            )
+            .await
+            .unwrap();
         let settings = PruneSettings {
             fast_repack,
             keep_delete: Duration::ZERO,
@@ -1379,7 +1477,12 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
         let after_delete = stored(pack_paths(&storage, &scope).await);
         let into = Scratch::new();
         store
-            .restore(&scope, &name("p-second"), into.path())
+            .restore(
+                &scope,
+                &name("p-second"),
+                into.path(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
         (
@@ -1445,6 +1548,7 @@ async fn save_numbered(
                     tree.path(),
                     None,
                     crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
                 )
                 .await
                 .unwrap();
@@ -1465,7 +1569,7 @@ async fn scope_snapshots_reads_the_snapshot_files_concurrently_and_in_order() {
     let store = store(counting.clone(), STORAGE_CALL_DEADLINE);
 
     let listed = store
-        .list(&scope)
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
         .await
         .unwrap()
         .iter()
@@ -1484,6 +1588,34 @@ async fn scope_snapshots_reads_the_snapshot_files_concurrently_and_in_order() {
     assert!(
         (2..=super::backend::SNAPSHOT_FILE_READS).contains(&at_once),
         "{at_once} reads of snapshot files ran at once"
+    );
+}
+
+#[test]
+#[timeout("120s")]
+async fn the_reads_ahead_of_a_store_take_the_read_slots_that_the_store_got() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    save_numbered(&store(inner.clone(), STORAGE_CALL_DEADLINE), &scope, 0..12).await;
+    let counting = Arc::new(self::counting::CountingBlobStorage::new(
+        inner,
+        Duration::from_millis(20),
+    ));
+    let store = store(counting.clone(), STORAGE_CALL_DEADLINE)
+        .reading_under(Arc::new(tokio::sync::Semaphore::new(2)));
+
+    let listed = store
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            listed.len(),
+            counting.count("read", "snapshots"),
+            counting.most_snapshot_reads_at_once() <= 2
+        ),
+        (12, 12, true)
     );
 }
 
@@ -1585,18 +1717,18 @@ async fn a_repository_with_many_snapshots_stays_usable() {
                         &own,
                         tree.path(),
                         None,
-                        crate::filesystem_snapshot::never_cancelled(),
+                        crate::filesystem_snapshot::never_cancelled(), &crate::filesystem_snapshot::Unlimited,
                     ),
                 )
                 .await;
                 let into = Scratch::new();
                 let (restored, restore) =
-                    measured(counting, "restore", store.restore(scope, &own, into.path())).await;
+                    measured(counting, "restore", store.restore(scope, &own, into.path(), &crate::filesystem_snapshot::Unlimited)).await;
                 let (stated, stat) = measured(counting, "stat", store.stat(scope, &own)).await;
-                let (listed, list) = measured(counting, "list", store.list(scope)).await;
+                let (listed, list) = measured(counting, "list", store.list(scope, &crate::filesystem_snapshot::Unlimited)).await;
                 let target = new_scope();
                 let (copied, copy) =
-                    measured(counting, "copy_all", store.copy_all(scope, &target)).await;
+                    measured(counting, "copy_all", store.copy_all(scope, &target, &crate::filesystem_snapshot::Unlimited)).await;
                 let copy_counts = (
                     counting.count_of("copy_read"),
                     counting.count_of("copy_write"),
@@ -1608,7 +1740,7 @@ async fn a_repository_with_many_snapshots_stays_usable() {
                     .filter(|path| path.starts_with("index/"))
                     .count();
                 let (deleted, delete) =
-                    measured(counting, "delete", store.delete(scope, std::slice::from_ref(&own))).await;
+                    measured(counting, "delete", store.delete(scope, std::slice::from_ref(&own), &crate::filesystem_snapshot::Unlimited)).await;
                 let resave = changed_tree(&format!("content {next}"));
                 store
                     .save(
@@ -1616,7 +1748,7 @@ async fn a_repository_with_many_snapshots_stays_usable() {
                         &own,
                         resave.path(),
                         None,
-                        crate::filesystem_snapshot::never_cancelled(),
+                        crate::filesystem_snapshot::never_cancelled(), &crate::filesystem_snapshot::Unlimited,
                     )
                     .await
                     .unwrap();
@@ -1648,4 +1780,24 @@ async fn a_repository_with_many_snapshots_stays_usable() {
             }
         })
         .await;
+}
+
+/// Writes the tree of the snapshot into the empty directory `into`.
+fn restore_snapshot(
+    repository: rustic_core::Repository<rustic_core::OpenStatus>,
+    snapshot: &rustic_core::repofile::SnapshotFile,
+    into: &std::path::Path,
+    options: &rustic_core::RestoreOptions,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let repository = repository.to_indexed()?;
+    let into = into
+        .to_str()
+        .context("the directory of a restore must have a UTF-8 path")?;
+    let destination = rustic_core::LocalDestination::new(into, false, false)?;
+    let node = repository.node_from_snapshot_and_path(snapshot, "")?;
+    let entries = repository.ls(&node, &rustic_core::LsOptions::default())?;
+    let plan = repository.prepare_restore(options, entries.clone(), &destination, false)?;
+    repository.restore(plan, options, entries, &destination)?;
+    Ok(())
 }

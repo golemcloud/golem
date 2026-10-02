@@ -14,12 +14,14 @@
 
 use super::store_calls::StoreOf;
 use super::*;
-use crate::filesystem_snapshot::{FilesystemSnapshotStore, InMemorySnapshotStore, SpacedTimes};
+use crate::filesystem_snapshot::{
+    Failed, FilesystemSnapshotStore, InMemorySnapshotStore, ReadError, RestoreFailure, RunSlots,
+    SpacedTimes, Unlimited, Withdrawal,
+};
 use crate::services::agent_filesystem::RestoreTree;
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use golem_common::model::RetryConfig;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, OwnedAgentId};
@@ -34,17 +36,36 @@ type SavedTree = (Box<str>, Box<[u8]>);
 /// The parent of one save, by name, with its change detection.
 type SavedParent = Option<(Box<str>, ChangeDetection)>;
 
-/// A store over the in-memory store that a test can make fail, hold and count.
+/// A store over the in-memory store that a test can make fail, hold and count. Each call runs as
+/// the rustic store runs it: each scripted run takes a slot of the limiter of the call, and a run
+/// that fails is followed by a wait of [`scripted_wait`] that a withdrawal ends, until the call has
+/// made `runs` runs.
 #[derive(Default)]
 struct ScriptedStore {
     memory: InMemorySnapshotStore,
-    /// The number of saves that still fail with a retryable storage error.
+    /// The runs of one call after a run that failed. No value is one run.
+    runs: AtomicUsize,
+    /// The runs that started, over all calls.
+    runs_started: AtomicUsize,
+    /// The number of save runs that still fail.
     failing_saves: AtomicUsize,
-    /// Whether a failing save publishes the tree before it fails, as a late PUT does.
+    /// Whether a failing save run publishes the tree after its error, as a PUT that ended without
+    /// an answer and lands later does. The call then waits for the late publish without a slot,
+    /// checks its own name, and answers with the info of the published tree.
     publish_before_failing: std::sync::atomic::AtomicBool,
-    /// Whether each save fails with an error that allows no retry.
+    /// Whether a failing save run ends with a publish that ended without an answer and never
+    /// lands: the call waits for it without a slot, finds no own file, and goes on as after a
+    /// failed run.
+    late_publish_never_lands: std::sync::atomic::AtomicBool,
+    /// When set, the wait of a call for a late publish waits for it.
+    late_gate: Mutex<Option<Arc<Gate>>>,
+    /// The number of calls that wait for a late publish now.
+    late_waits: AtomicUsize,
+    /// Whether the store was shut down.
+    shut_down: std::sync::atomic::AtomicBool,
+    /// Whether each save fails with an error that no run can fix.
     saves_fail_for_good: std::sync::atomic::AtomicBool,
-    /// Whether each delete of all snapshots fails with a retryable storage error.
+    /// Whether each run of a delete of all snapshots fails.
     all_deletes_fail: std::sync::atomic::AtomicBool,
     /// When set, each save waits for it before it runs.
     save_gate: Mutex<Option<Arc<Gate>>>,
@@ -55,8 +76,10 @@ struct ScriptedStore {
     detached_saves: Mutex<Vec<(AgentSnapshots, Arc<Gate>)>>,
     /// The number of detached saves that ended.
     detached_saves_ended: Arc<AtomicUsize>,
-    /// The number of deletes of a name that still fail with a retryable storage error.
+    /// The number of runs of deletes of names that still fail.
     failing_deletes: AtomicUsize,
+    /// The number of runs of restores that still fail.
+    failing_restores: AtomicUsize,
     /// The number of deletes of a name that failed.
     failed_deletes: AtomicUsize,
     /// The number of listings.
@@ -182,12 +205,8 @@ impl ScriptedStore {
     }
 
     /// Checks that the work of each of `agents` is counted, as each write of the service must be.
-    /// A write that is not counted fails and is recorded.
-    fn check_busy(
-        &self,
-        operation: &'static str,
-        agents: &[&AgentSnapshots],
-    ) -> Result<(), SnapshotStoreError> {
+    /// A write that is not counted is recorded.
+    fn check_busy(&self, operation: &'static str, agents: &[&AgentSnapshots]) -> bool {
         let registry = self.registry.lock().unwrap().clone();
         let unbusy = registry.is_some_and(|registry| {
             agents
@@ -196,12 +215,84 @@ impl ScriptedStore {
         });
         if unbusy {
             self.unbusy_writes.lock().unwrap().push(operation);
-            return Err(SnapshotStoreError::Storage {
-                retryable: false,
-                source: anyhow::anyhow!("a {operation} arrived while its agent was not busy"),
-            });
         }
-        Ok(())
+        !unbusy
+    }
+
+    /// Runs `run` as the runs of one call with the limiter `slots`: each run takes a slot first, a
+    /// run that fails is followed by a wait of [`scripted_wait`] with no slot, and a withdrawal at
+    /// a take or in a wait ends the call with `Stopped`, or with the last failure when the cause is
+    /// the deadline and a run failed. The call answers the last failure after its runs. A run whose
+    /// write lands late is followed by the wait for that write with no slot, which tells the
+    /// limiter nothing; then the call answers what the check of its own name found, or goes on as
+    /// after a failed run. After a shutdown, a call gives `Stopped`.
+    async fn runs<T, E, F, R>(
+        &self,
+        slots: &dyn RunSlots,
+        failed: fn(Failed) -> E,
+        stopped: fn(Withdrawal) -> E,
+        mut run: impl FnMut() -> F,
+    ) -> Result<T, E>
+    where
+        F: Future<Output = R>,
+        R: Into<ScriptedRun<T, E>>,
+    {
+        if self.shut_down.load(Ordering::SeqCst) {
+            return Err(stopped(Withdrawal::Stopped));
+        }
+        let most = self.runs.load(Ordering::SeqCst).max(1);
+        let ended = futures::stream::unfold(
+            Some((1usize, None::<anyhow::Error>, &mut run)),
+            |state| async move {
+                let (number, last, run) = state?;
+                let immediate = number == 1;
+                let slot = match slots.take(immediate).await {
+                    Ok(slot) => slot,
+                    Err(cause) => {
+                        return Some((Some(withdrawn(cause, last, failed, stopped)), None));
+                    }
+                };
+                self.runs_started.fetch_add(1, Ordering::SeqCst);
+                let ran = run().await.into();
+                drop(slot);
+                let ran = match ran {
+                    ScriptedRun::Answered(answer) => Ok(answer),
+                    ScriptedRun::Failed(failure) => Err(failure),
+                    ScriptedRun::Late { failure, landed } => {
+                        self.late_waits.fetch_add(1, Ordering::SeqCst);
+                        let gate = self.late_gate.lock().unwrap().clone();
+                        if let Some(gate) = gate {
+                            gate.pass().await;
+                        }
+                        self.late_waits.fetch_sub(1, Ordering::SeqCst);
+                        landed.ok_or(failure)
+                    }
+                };
+                match ran {
+                    Ok(answer) => Some((Some(answer), None)),
+                    Err(failure) if number >= most => {
+                        Some((Some(Err(failed(Failed::new(failure)))), None))
+                    }
+                    Err(failure) => {
+                        slots.waiting_after_failure();
+                        tokio::select! {
+                            biased;
+                            cause = slots.withdrawn() => Some((
+                                Some(withdrawn(cause, Some(failure), failed, stopped)),
+                                None,
+                            )),
+                            () = tokio::time::sleep(scripted_wait(number)) => {
+                                Some((None, Some((number + 1, Some(failure), run))))
+                            }
+                        }
+                    }
+                }
+            },
+        );
+        std::pin::pin!(ended.filter_map(|ended| async move { ended }))
+            .next()
+            .await
+            .unwrap_or_else(|| Err(stopped(Withdrawal::Stopped)))
     }
 
     fn enter(&self) -> CallCount<'_> {
@@ -209,6 +300,28 @@ impl ScriptedStore {
         self.most_store_calls_at_once
             .fetch_max(now, Ordering::SeqCst);
         CallCount(&self.store_calls_now)
+    }
+}
+
+/// What one scripted run gave.
+enum ScriptedRun<T, E> {
+    Answered(Result<T, E>),
+    /// The run failed, and a new run can succeed.
+    Failed(anyhow::Error),
+    /// The run failed with a write that lands late. `landed` is what the check of the own name
+    /// finds after the wait: the answer when the write landed.
+    Late {
+        failure: anyhow::Error,
+        landed: Option<Result<T, E>>,
+    },
+}
+
+impl<T, E> From<Result<Result<T, E>, anyhow::Error>> for ScriptedRun<T, E> {
+    fn from(ran: Result<Result<T, E>, anyhow::Error>) -> Self {
+        match ran {
+            Ok(answer) => Self::Answered(answer),
+            Err(failure) => Self::Failed(failure),
+        }
     }
 }
 
@@ -221,11 +334,33 @@ impl Drop for CallCount<'_> {
     }
 }
 
-fn retryable(text: &str) -> SnapshotStoreError {
-    SnapshotStoreError::Storage {
-        retryable: true,
-        source: anyhow::anyhow!(text.to_string()),
+/// The wait of a scripted call after its run number `failed_run` failed: 2 s, then four times the
+/// wait before, at most 120 s, as the runs of the store wait.
+fn scripted_wait(failed_run: usize) -> Duration {
+    (Duration::from_secs(2)
+        * 4u32.saturating_pow(u32::try_from(failed_run).unwrap_or(u32::MAX) - 1))
+    .min(Duration::from_secs(120))
+}
+
+/// The answer of a scripted call that a withdrawal ended after `last`, the failure of its last
+/// run.
+fn withdrawn<T, E>(
+    cause: Withdrawal,
+    last: Option<anyhow::Error>,
+    failed: fn(Failed) -> E,
+    stopped: fn(Withdrawal) -> E,
+) -> Result<T, E> {
+    match (cause, last) {
+        (Withdrawal::Deadline, Some(last)) => Err(failed(Failed::new(last))),
+        (cause, _) => Err(stopped(cause)),
     }
+}
+
+/// The failure of a scripted write that arrived while its agent was not busy.
+fn unbusy(operation: &str) -> Failed {
+    Failed::new(anyhow::anyhow!(
+        "a {operation} arrived while its agent was not busy"
+    ))
 }
 
 #[async_trait]
@@ -237,8 +372,173 @@ impl FilesystemSnapshotStore for ScriptedStore {
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
         cancel: &CancellationToken,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
-        self.check_busy("save", &[agent])?;
+        slots: &dyn RunSlots,
+    ) -> Result<SnapshotInfo, SaveError> {
+        self.runs(slots, SaveError::Failed, SaveError::Stopped, || {
+            self.save_run(agent, name, tree, parent, cancel)
+        })
+        .await
+    }
+
+    async fn restore(
+        &self,
+        agent: &AgentSnapshots,
+        name: &SnapshotName,
+        into: &Path,
+        slots: &dyn RunSlots,
+    ) -> Result<SnapshotInfo, RestoreFailure> {
+        self.runs(
+            slots,
+            RestoreFailure::Failed,
+            RestoreFailure::Stopped,
+            || async {
+                let now = self.restores_now.fetch_add(1, Ordering::SeqCst) + 1;
+                self.most_restores_at_once.fetch_max(now, Ordering::SeqCst);
+                let gate = self.restore_gate.lock().unwrap().clone();
+                if let Some(gate) = gate {
+                    gate.pass().await;
+                }
+                let failing = self
+                    .failing_restores
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok();
+                let result = if failing {
+                    Err(anyhow::anyhow!("the restore failed"))
+                } else if self.restores_fail.load(Ordering::SeqCst) {
+                    Ok(Err(RestoreFailure::Corrupt(anyhow::anyhow!("corrupt"))))
+                } else {
+                    Ok(self.memory.restore(agent, name, into, &Unlimited).await)
+                };
+                self.restores_now.fetch_sub(1, Ordering::SeqCst);
+                result
+            },
+        )
+        .await
+    }
+
+    async fn stat(
+        &self,
+        agent: &AgentSnapshots,
+        name: &SnapshotName,
+    ) -> Result<Option<SnapshotInfo>, ReadError> {
+        self.memory.stat(agent, name).await
+    }
+
+    async fn list(
+        &self,
+        agent: &AgentSnapshots,
+        slots: &dyn RunSlots,
+    ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
+        self.runs(slots, CallError::Failed, CallError::Stopped, || async {
+            self.lists.fetch_add(1, Ordering::SeqCst);
+            Ok(self.memory.list(agent, &Unlimited).await.map(|listed| {
+                listed
+                    .iter()
+                    .map(|(name, info)| (name.clone(), self.times.known(name, *info)))
+                    .collect()
+            }))
+        })
+        .await
+    }
+
+    async fn delete(
+        &self,
+        agent: &AgentSnapshots,
+        names: &[SnapshotName],
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        self.runs(slots, CallError::Failed, CallError::Stopped, || async {
+            if !self.check_busy("delete", &[agent]) {
+                return Ok(Err(CallError::Failed(unbusy("delete"))));
+            }
+            let gate = self.delete_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.pass().await;
+            }
+            let _count = self.enter();
+            tokio::task::yield_now().await;
+            if self
+                .failing_deletes
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+            {
+                self.failed_deletes.fetch_add(1, Ordering::SeqCst);
+                return Err(anyhow::anyhow!("the delete failed"));
+            }
+            self.deletes
+                .lock()
+                .unwrap()
+                .extend(names.iter().map(|name| Box::from(name.as_str())));
+            Ok(self.memory.delete(agent, names, &Unlimited).await)
+        })
+        .await
+    }
+
+    async fn delete_all(
+        &self,
+        agent: &AgentSnapshots,
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        self.runs(slots, CallError::Failed, CallError::Stopped, || async {
+            if !self.check_busy("delete_all", &[agent]) {
+                return Ok(Err(CallError::Failed(unbusy("delete_all"))));
+            }
+            let _count = self.enter();
+            self.all_deletes.fetch_add(1, Ordering::SeqCst);
+            if self.all_deletes_fail.load(Ordering::SeqCst) {
+                return Err(anyhow::anyhow!("the agent delete failed"));
+            }
+            Ok(self.memory.delete_all(agent, &Unlimited).await)
+        })
+        .await
+    }
+
+    async fn copy_all(
+        &self,
+        from: &AgentSnapshots,
+        to: &AgentSnapshots,
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        self.runs(slots, CallError::Failed, CallError::Stopped, || async {
+            if !self.check_busy("copy_all", &[from, to]) {
+                return Ok(Err(CallError::Failed(unbusy("copy_all"))));
+            }
+            let gate = self.copy_gate.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.pass().await;
+            }
+            Ok(self.memory.copy_all(from, to, &Unlimited).await)
+        })
+        .await
+    }
+
+    async fn shut_down(&self) {
+        let gate = self.shutdown_gate.lock().unwrap().clone();
+        if let Some(gate) = gate {
+            gate.pass().await;
+        }
+        self.shut_down.store(true, Ordering::SeqCst);
+        self.memory.shut_down().await;
+    }
+}
+
+impl ScriptedStore {
+    /// One run of a save. A failure that a new run can fix is the error of the outer result.
+    async fn save_run(
+        &self,
+        agent: &AgentSnapshots,
+        name: &SnapshotName,
+        tree: &Path,
+        parent: Option<(&SnapshotName, ChangeDetection)>,
+        cancel: &CancellationToken,
+    ) -> ScriptedRun<SnapshotInfo, SaveError> {
+        if !self.check_busy("save", &[agent]) {
+            return ScriptedRun::Answered(Err(SaveError::Failed(unbusy("save"))));
+        }
         let detached = self
             .detached_saves
             .lock()
@@ -253,12 +553,15 @@ impl FilesystemSnapshotStore for ScriptedStore {
             let (tree, cancel) = (tree.to_path_buf(), cancel.clone());
             return tokio::spawn(async move {
                 gate.pass().await;
-                let saved = memory.save(&agent, &name, &tree, None, &cancel).await;
+                let saved = memory
+                    .save(&agent, &name, &tree, None, &cancel, &Unlimited)
+                    .await;
                 ended.fetch_add(1, Ordering::SeqCst);
                 saved
             })
             .await
-            .unwrap_or_else(|error| Err(retryable(&error.to_string())));
+            .map_err(anyhow::Error::new)
+            .into();
         }
         let gate = self.save_gate.lock().unwrap().clone();
         if let Some(gate) = gate {
@@ -285,9 +588,9 @@ impl FilesystemSnapshotStore for ScriptedStore {
             .unwrap()
             .push(parent.map(|(name, detection)| (Box::from(name.as_str()), detection)));
         if self.saves_fail_for_good.load(Ordering::SeqCst) {
-            return Err(SnapshotStoreError::Source(std::io::Error::other(
+            return ScriptedRun::Answered(Err(SaveError::Source(std::io::Error::other(
                 "the tree cannot be read",
-            )));
+            ))));
         }
         let failing = self
             .failing_saves
@@ -296,115 +599,32 @@ impl FilesystemSnapshotStore for ScriptedStore {
             })
             .is_ok();
         if failing {
-            if self.publish_before_failing.load(Ordering::SeqCst) {
-                let _ = self.memory.save(agent, name, tree, parent, cancel).await;
+            let failure = anyhow::anyhow!("the publish failed");
+            if self.late_publish_never_lands.load(Ordering::SeqCst) {
+                return ScriptedRun::Late {
+                    failure,
+                    landed: None,
+                };
             }
-            return Err(retryable("the publish failed"));
+            if !self.publish_before_failing.load(Ordering::SeqCst) {
+                return ScriptedRun::Failed(failure);
+            }
+            // The own file of the call is the one that this run published. A name that another
+            // writer holds is not the own file, and the check finds no own file then.
+            let landed = self
+                .memory
+                .save(agent, name, tree, parent, cancel, &Unlimited)
+                .await
+                .ok()
+                .map(|info| Ok(self.times.timed(name, info)));
+            return ScriptedRun::Late { failure, landed };
         }
-        let info = self.memory.save(agent, name, tree, parent, cancel).await?;
-        Ok(self.times.timed(name, info))
-    }
-
-    async fn restore(
-        &self,
-        agent: &AgentSnapshots,
-        name: &SnapshotName,
-        into: &Path,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
-        let now = self.restores_now.fetch_add(1, Ordering::SeqCst) + 1;
-        self.most_restores_at_once.fetch_max(now, Ordering::SeqCst);
-        let gate = self.restore_gate.lock().unwrap().clone();
-        if let Some(gate) = gate {
-            gate.pass().await;
-        }
-        let result = if self.restores_fail.load(Ordering::SeqCst) {
-            Err(SnapshotStoreError::Corrupt(anyhow::anyhow!("corrupt")))
-        } else {
-            self.memory.restore(agent, name, into).await
-        };
-        self.restores_now.fetch_sub(1, Ordering::SeqCst);
-        result
-    }
-
-    async fn stat(
-        &self,
-        agent: &AgentSnapshots,
-        name: &SnapshotName,
-    ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
-        self.memory.stat(agent, name).await
-    }
-
-    async fn list(
-        &self,
-        agent: &AgentSnapshots,
-    ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
-        self.lists.fetch_add(1, Ordering::SeqCst);
-        Ok(self
-            .memory
-            .list(agent)
-            .await?
-            .iter()
-            .map(|(name, info)| (name.clone(), self.times.known(name, *info)))
-            .collect())
-    }
-
-    async fn delete(
-        &self,
-        agent: &AgentSnapshots,
-        names: &[SnapshotName],
-    ) -> Result<(), SnapshotStoreError> {
-        self.check_busy("delete", &[agent])?;
-        let gate = self.delete_gate.lock().unwrap().clone();
-        if let Some(gate) = gate {
-            gate.pass().await;
-        }
-        let _count = self.enter();
-        tokio::task::yield_now().await;
-        if self
-            .failing_deletes
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                left.checked_sub(1)
-            })
-            .is_ok()
-        {
-            self.failed_deletes.fetch_add(1, Ordering::SeqCst);
-            return Err(retryable("the delete failed"));
-        }
-        self.deletes
-            .lock()
-            .unwrap()
-            .extend(names.iter().map(|name| Box::from(name.as_str())));
-        self.memory.delete(agent, names).await
-    }
-
-    async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
-        self.check_busy("delete_all", &[agent])?;
-        let _count = self.enter();
-        self.all_deletes.fetch_add(1, Ordering::SeqCst);
-        if self.all_deletes_fail.load(Ordering::SeqCst) {
-            return Err(retryable("the agent delete failed"));
-        }
-        self.memory.delete_all(agent).await
-    }
-
-    async fn copy_all(
-        &self,
-        from: &AgentSnapshots,
-        to: &AgentSnapshots,
-    ) -> Result<(), SnapshotStoreError> {
-        self.check_busy("copy_all", &[from, to])?;
-        let gate = self.copy_gate.lock().unwrap().clone();
-        if let Some(gate) = gate {
-            gate.pass().await;
-        }
-        self.memory.copy_all(from, to).await
-    }
-
-    async fn shut_down(&self) {
-        let gate = self.shutdown_gate.lock().unwrap().clone();
-        if let Some(gate) = gate {
-            gate.pass().await;
-        }
+        ScriptedRun::Answered(
+            self.memory
+                .save(agent, name, tree, parent, cancel, &Unlimited)
+                .await
+                .map(|info| self.times.timed(name, info)),
+        )
     }
 }
 
@@ -530,21 +750,7 @@ fn no_lost_shard() -> watch::Receiver<bool> {
     watch::channel(false).1
 }
 
-fn retry(max_attempts: u32) -> RetryConfig {
-    RetryConfig {
-        max_attempts,
-        min_delay: Duration::from_secs(2),
-        max_delay: Duration::from_secs(120),
-        multiplier: 4.0,
-        max_jitter_factor: None,
-    }
-}
-
-fn values(
-    max_uploads: usize,
-    max_restores: usize,
-    max_attempts: u32,
-) -> FilesystemSnapshotUploadValues {
+fn values(max_uploads: usize, max_restores: usize) -> FilesystemSnapshotUploadValues {
     FilesystemSnapshotUploadValues {
         max_concurrent_uploads: max_uploads,
         max_concurrent_restores: max_restores,
@@ -553,16 +759,18 @@ fn values(
         capture_wait: Duration::from_secs(5),
         retained_periodic_snapshots: 2,
         retained_update_snapshots: 2,
-        upload_retry: retry(max_attempts),
     }
 }
 
-fn settings(
-    max_uploads: usize,
-    max_restores: usize,
-    max_attempts: u32,
-) -> FilesystemSnapshotUploadConfig {
-    FilesystemSnapshotUploadConfig::new(values(max_uploads, max_restores, max_attempts)).unwrap()
+fn settings(max_uploads: usize, max_restores: usize) -> FilesystemSnapshotUploadConfig {
+    FilesystemSnapshotUploadConfig::new(values(max_uploads, max_restores)).unwrap()
+}
+
+/// A scripted store whose calls make up to `runs` runs.
+fn store_with_runs(runs: usize) -> Arc<ScriptedStore> {
+    let store = ScriptedStore::default();
+    store.runs.store(runs, Ordering::SeqCst);
+    Arc::new(store)
 }
 
 /// A service over `store` with `settings`, and room on the volume.
@@ -639,7 +847,7 @@ async fn ended(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) {
 fn each_admission_makes_a_new_name_with_the_prefix_of_its_kind() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("names");
 
         let names = futures::stream::iter([
@@ -672,7 +880,7 @@ fn a_second_admission_of_an_agent_gets_upload_in_flight_until_the_first_ends() {
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("in-flight");
         let other = agent_snapshots("other");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -719,7 +927,7 @@ fn a_second_admission_of_an_agent_gets_upload_in_flight_until_the_first_ends() {
 fn a_dropped_admission_frees_its_agent_and_writes_nothing() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("dropped");
 
         drop(
@@ -763,7 +971,7 @@ fn a_disabled_service_admits_nothing_and_restores_nothing() {
 fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("confirmed");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -778,7 +986,7 @@ fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
 
         let listed = store
             .memory
-            .list(&agent)
+            .list(&agent, &crate::filesystem_snapshot::Unlimited)
             .await
             .unwrap()
             .iter()
@@ -793,9 +1001,9 @@ fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
 #[test]
 fn after_the_retry_budget_the_job_discards_the_capture_and_calls_no_confirmer() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = store_with_runs(3);
         store.failing_saves.store(usize::MAX, Ordering::SeqCst);
-        let snapshots = service(&store, settings(4, 4, 3));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("budget");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -821,9 +1029,9 @@ fn after_the_retry_budget_the_job_discards_the_capture_and_calls_no_confirmer() 
 #[test]
 fn an_error_that_allows_no_retry_ends_the_job_after_one_attempt() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = store_with_runs(5);
         store.saves_fail_for_good.store(true, Ordering::SeqCst);
-        let snapshots = service(&store, settings(4, 4, 5));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("for-good");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -848,7 +1056,7 @@ async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, b
     let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
         retained_periodic_snapshots: 3,
         retained_update_snapshots: 2,
-        ..values(4, 4, 1)
+        ..values(4, 4)
     })
     .unwrap();
     let snapshots = service(&store, settings);
@@ -955,7 +1163,7 @@ fn confirmed_runs_retention_after_the_confirmation() {
 fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("retention");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -1002,7 +1210,7 @@ fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
 
         let kept = store
             .memory
-            .list(&agent)
+            .list(&agent, &crate::filesystem_snapshot::Unlimited)
             .await
             .unwrap()
             .iter()
@@ -1157,7 +1365,7 @@ fn the_labels_and_the_messages_of_the_service_name_what_they_count_and_report() 
 fn an_admission_waits_for_the_open_file_calls_as_long_as_the_settings_say() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let settings = settings(4, 4, 1);
+        let settings = settings(4, 4);
         let snapshots = service(&store, settings.clone());
         let agent = agent_snapshots("capture-wait");
 
@@ -1175,7 +1383,7 @@ fn an_admission_waits_for_the_open_file_calls_as_long_as_the_settings_say() {
 fn a_copy_of_all_snapshots_holds_each_snapshot_of_the_agent() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let from = agent_snapshots("copied-from");
         let to = agent_snapshots("copied-to");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -1191,7 +1399,7 @@ fn a_copy_of_all_snapshots_holds_each_snapshot_of_the_agent() {
         snapshots.copy_all_snapshots(&from, &to).await.unwrap();
         let listed = store
             .memory
-            .list(&to)
+            .list(&to, &crate::filesystem_snapshot::Unlimited)
             .await
             .unwrap()
             .iter()
@@ -1206,9 +1414,9 @@ fn a_copy_of_all_snapshots_holds_each_snapshot_of_the_agent() {
 fn an_admission_during_a_delete_of_all_snapshots_gets_deleting_all_snapshots_until_the_delete_ends()
 {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = store_with_runs(2);
         store.all_deletes_fail.store(true, Ordering::SeqCst);
-        let snapshots = service(&store, settings(4, 4, 2));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("deleting");
 
         snapshots.delete_all_snapshots(&agent);
@@ -1245,7 +1453,7 @@ fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let core = snapshots.core.as_ref().unwrap();
         let agent = agent_snapshots("decided");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -1294,7 +1502,7 @@ async fn with_a_save_held(
     let store = Arc::new(ScriptedStore::default());
     let gate = Arc::new(Gate::default());
     *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-    let snapshots = service(&store, settings(4, 4, 1));
+    let snapshots = service(&store, settings(4, 4));
     let discarded = Arc::new(AtomicUsize::new(0));
     let admission = snapshots
         .admit_periodic(agent, AgentMode::Durable)
@@ -1388,7 +1596,7 @@ fn a_terminal_interrupt_ends_the_wait_of_a_manual_update() {
 fn a_start_without_a_running_upload_asks_the_store_at_once() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("start-without-upload");
         let discarded = Arc::new(AtomicUsize::new(0));
         let admission = snapshots
@@ -1529,7 +1737,7 @@ fn delete_all_snapshots_cancels_the_job_and_deletes_them_after_its_save_returned
         let store = Arc::new(ScriptedStore::default());
         let save_gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&save_gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("delete-all");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -1554,7 +1762,14 @@ fn delete_all_snapshots_cancels_the_job_and_deletes_them_after_its_save_returned
         assert!(confirm.names().is_empty());
         assert!(store.deletes.lock().unwrap().is_empty());
         assert_eq!(discarded.load(Ordering::SeqCst), 1);
-        assert!(store.memory.list(&agent).await.unwrap().is_empty());
+        assert!(
+            store
+                .memory
+                .list(&agent, &crate::filesystem_snapshot::Unlimited)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     })
 }
 
@@ -1569,7 +1784,7 @@ fn a_cancelled_confirmation_deletes_nothing() {
             names: Mutex::default(),
             gate: Some(Arc::clone(&gate)),
         });
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("cancelled-confirmation");
         let discarded = Arc::new(AtomicUsize::new(0));
         let admission = snapshots
@@ -1591,16 +1806,23 @@ fn a_cancelled_confirmation_deletes_nothing() {
                 .unwrap()
                 .contains(&Box::from(name.as_str()))
         );
-        assert!(store.memory.list(&agent).await.unwrap().is_empty());
+        assert!(
+            store
+                .memory
+                .list(&agent, &crate::filesystem_snapshot::Unlimited)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     })
 }
 
 #[test]
 fn a_store_that_fails_every_delete_of_all_snapshots_leaves_the_service_running() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = store_with_runs(3);
         store.all_deletes_fail.store(true, Ordering::SeqCst);
-        let snapshots = service(&store, settings(4, 4, 3));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("failing-delete");
 
         snapshots.delete_all_snapshots(&agent);
@@ -1628,7 +1850,7 @@ fn each_delete_holds_a_slot_of_the_uploads() {
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(1, 4, 1));
+        let snapshots = service(&store, settings(1, 4));
         let uploading = agent_snapshots("uploading");
         let deleted_names = agent_snapshots("deleted-names");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -1670,7 +1892,7 @@ fn each_delete_holds_a_slot_of_the_uploads() {
 fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 2, 1));
+        let snapshots = service(&store, settings(4, 2));
         let agent = agent_snapshots("restores");
         let discarded = Arc::new(AtomicUsize::new(0));
         let name = {
@@ -1726,7 +1948,7 @@ fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
 fn a_restore_gives_the_saved_tree() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 2, 1));
+        let snapshots = service(&store, settings(4, 2));
         let agent = agent_snapshots("restore");
         let discarded = Arc::new(AtomicUsize::new(0));
         let admission = snapshots
@@ -1763,11 +1985,11 @@ fn a_restore_gives_the_saved_tree() {
 #[test]
 fn a_name_whose_save_failed_is_never_given_to_another_capture() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = store_with_runs(3);
         // The first save publishes its tree and then fails, as a PUT that lands after its error does.
         store.failing_saves.store(1, Ordering::SeqCst);
         store.publish_before_failing.store(true, Ordering::SeqCst);
-        let snapshots = service(&store, settings(4, 4, 3));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("names-of-failed-saves");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -1811,12 +2033,11 @@ fn a_name_whose_save_failed_is_never_given_to_another_capture() {
         );
         assert_ne!(first_name, second_name);
         assert!(second_saved);
-        // The retry of the first job used its own name, and the store gave `AlreadyExists` for the
-        // tree that the failed attempt published.
+        // The first job made one run: the call waited for its late publish and found its own
+        // file. The second job ran again with its own name after its failed run.
         assert_eq!(
             store.saved_names(),
             vec![
-                first_name.as_str().to_string(),
                 first_name.as_str().to_string(),
                 second_name.as_str().to_string(),
                 second_name.as_str().to_string(),
@@ -1834,7 +2055,7 @@ fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let shutdown = CancellationToken::new();
-        let snapshots = service_until(&store, settings(4, 4, 1), shutdown.clone());
+        let snapshots = service_until(&store, settings(4, 4), shutdown.clone());
         let agent = agent_snapshots("shutdown");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -1869,7 +2090,7 @@ fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_
 fn a_parent_reaches_the_store_with_its_detection() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("parent");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -1943,14 +2164,14 @@ async fn update_uploads_with_retention(
 fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("update-retention");
 
         let (periodic, updates) = update_uploads_with_retention(&snapshots, &agent).await;
 
         let kept = store
             .memory
-            .list(&agent)
+            .list(&agent, &crate::filesystem_snapshot::Unlimited)
             .await
             .unwrap()
             .iter()
@@ -1971,7 +2192,7 @@ fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
 fn a_dropped_update_retention_deletes_nothing_and_frees_the_agent() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("dropped-update-retention");
         let discarded = Arc::new(AtomicUsize::new(0));
 
@@ -2034,7 +2255,7 @@ async fn with_a_delete_held(
     let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
         retained_periodic_snapshots: 1,
         retained_update_snapshots: 1,
-        ..values(4, 4, 1)
+        ..values(4, 4)
     })
     .unwrap();
     let snapshots = service(&store, settings);
@@ -2098,7 +2319,7 @@ fn upload_answers_stopped_at_once_and_discards_the_capture_after_the_save_return
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let core = snapshots.core.as_ref().unwrap();
         let agent = agent_snapshots("stopped-upload-now");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -2159,7 +2380,7 @@ fn a_manual_update_cuts_the_deletes_of_a_running_job_and_never_its_save() {
         let store = Arc::new(ScriptedStore::default());
         let agent = agent_snapshots("update-during-save");
         let gate = store.hold_saves_of(&agent);
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         submit(&snapshots, &agent, b"tree", confirmer(&confirm)).await;
         gate.wait_reached(1).await;
@@ -2184,7 +2405,7 @@ fn an_upload_whose_slots_are_gone_stops_and_frees_the_agent() {
         let store = Arc::new(ScriptedStore::default());
         let holder = agent_snapshots("slot-holder");
         let gate = store.hold_saves_of(&holder);
-        let snapshots = service(&store, settings(1, 4, 1));
+        let snapshots = service(&store, settings(1, 4));
         let held = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         submit(&snapshots, &holder, b"held", confirmer(&held)).await;
         gate.wait_reached(1).await;
@@ -2206,7 +2427,7 @@ fn an_upload_whose_slots_are_gone_stops_and_frees_the_agent() {
 fn the_delete_of_a_superseded_snapshot_waits_for_a_slot_of_the_uploads() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(1, 4, 1));
+        let snapshots = service(&store, settings(1, 4));
         let agent = agent_snapshots("superseded-waits");
         let confirm_gate = Arc::new(Gate::default());
         let superseded =
@@ -2264,10 +2485,10 @@ fn one_slot_with_a_held_agent() -> (
     AgentSnapshots,
     Arc<Gate>,
 ) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = store_with_runs(3);
     let holder = agent_snapshots("slot-holder");
     let gate = store.hold_saves_of(&holder);
-    let snapshots = service(&store, settings(1, 4, 3));
+    let snapshots = service(&store, settings(1, 4));
     (store, snapshots, holder, gate)
 }
 
@@ -2397,9 +2618,9 @@ fn a_manual_update_ends_a_delete_that_waits_between_two_attempts() {
 #[test]
 fn a_save_of_another_agent_runs_while_an_upload_waits_between_two_attempts() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = store_with_runs(2);
         store.failing_saves.store(1, Ordering::SeqCst);
-        let snapshots = service(&store, settings(1, 4, 2));
+        let snapshots = service(&store, settings(1, 4));
         let retrying_agent = agent_snapshots("retrying");
         let other = agent_snapshots("other");
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
@@ -2422,7 +2643,7 @@ fn delete_all_snapshots_starts_only_after_the_held_save_ended_and_leaves_no_snap
         let store = Arc::new(ScriptedStore::default());
         let agent = agent_snapshots("held-detached-save");
         let gate = store.detach_saves_of(&agent);
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         submit(&snapshots, &agent, b"tree", confirmer(&confirm)).await;
         gate.wait_reached(1).await;
@@ -2438,7 +2659,14 @@ fn delete_all_snapshots_starts_only_after_the_held_save_ended_and_leaves_no_snap
         .await;
 
         assert_eq!(while_the_save_runs, 0);
-        assert!(store.memory.list(&agent).await.unwrap().is_empty());
+        assert!(
+            store
+                .memory
+                .list(&agent, &crate::filesystem_snapshot::Unlimited)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert!(confirm.names().is_empty());
     })
 }
@@ -2556,7 +2784,7 @@ fn a_manual_update_after_a_revert_stop_is_admitted_while_the_old_save_still_runs
         let store = Arc::new(ScriptedStore::default());
         let agent = agent_snapshots("update-after-revert");
         let gate = store.hold_saves_of(&agent);
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let periodic = submit(&snapshots, &agent, b"periodic", confirmer(&confirm)).await;
         gate.wait_reached(1).await;
@@ -2601,7 +2829,7 @@ fn a_manual_update_gets_save_running_or_no_slot_by_its_cause() {
         let store = Arc::new(ScriptedStore::default());
         let agent = agent_snapshots("update-behind-a-save");
         let gate = store.hold_saves_of(&agent);
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let periodic = submit(&snapshots, &agent, b"periodic", confirmer(&confirm)).await;
         gate.wait_reached(1).await;
@@ -2660,7 +2888,7 @@ fn a_manual_update_waits_for_a_running_save_at_most_the_rest_of_confirmation_wai
         let store = Arc::new(ScriptedStore::default());
         let agent = agent_snapshots("update-deadline");
         let gate = store.hold_saves_of(&agent);
-        let snapshots = Arc::new(service(&store, settings(4, 4, 1)));
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let periodic = submit(&snapshots, &agent, b"periodic", confirmer(&confirm)).await;
         gate.wait_reached(1).await;
@@ -2705,7 +2933,7 @@ fn a_dropped_upload_now_caller_ends_the_admission_and_the_save_runs_to_its_end()
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("dropped-caller");
         let discarded = Arc::new(AtomicUsize::new(0));
         let admission = snapshots
@@ -2750,7 +2978,7 @@ fn a_cancelled_save_is_discarded_after_the_call_returned_and_never_published() {
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let core = snapshots.core.as_ref().unwrap();
         let agent = agent_snapshots("lost-shard");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -2774,7 +3002,14 @@ fn a_cancelled_save_is_discarded_after_the_call_returned_and_never_published() {
         assert!(matches!(uploaded, Err(UploadNowError::Stopped)));
         assert_eq!(while_the_save_runs, (0, 3));
         assert_eq!(core.calls.free_slots(), 4);
-        assert!(store.memory.list(&agent).await.unwrap().is_empty());
+        assert!(
+            store
+                .memory
+                .list(&agent, &crate::filesystem_snapshot::Unlimited)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     })
 }
 
@@ -2786,7 +3021,7 @@ fn a_shutdown_discards_a_dropped_save_only_after_the_store_stopped() {
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&save_gate));
         let shutdown_gate = Arc::new(Gate::default());
         *store.shutdown_gate.lock().unwrap() = Some(Arc::clone(&shutdown_gate));
-        let snapshots = Arc::new(service(&store, settings(4, 4, 1)));
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
         let agent = agent_snapshots("shutdown-discard");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
@@ -2815,7 +3050,7 @@ fn a_delete_of_all_snapshots_waits_for_a_running_delete_of_names_of_its_agent() 
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.delete_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("names-then-all");
 
         snapshots.delete_snapshots(&agent, Box::new([FilesystemSnapshotName::periodic()]));
@@ -2834,9 +3069,9 @@ fn a_delete_of_all_snapshots_waits_for_a_running_delete_of_names_of_its_agent() 
 #[test]
 fn an_all_ends_the_retry_sleep_of_a_names_of_its_agent() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = store_with_runs(3);
         store.failing_deletes.store(1, Ordering::SeqCst);
-        let snapshots = service(&store, settings(4, 4, 3));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("retry-then-all");
 
         snapshots.delete_snapshots(&agent, Box::new([FilesystemSnapshotName::periodic()]));
@@ -2858,7 +3093,7 @@ fn a_delete_of_names_stops_the_upload_of_one_of_them_and_runs_after_its_store_ca
         let store = Arc::new(ScriptedStore::default());
         let agent = agent_snapshots("revert-of-a-held-save");
         let gate = store.detach_saves_of(&agent);
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let name = submit(&snapshots, &agent, b"tree", confirmer(&confirm)).await;
         gate.wait_reached(1).await;
@@ -2875,7 +3110,14 @@ fn a_delete_of_names_stops_the_upload_of_one_of_them_and_runs_after_its_store_ca
             *store.deletes.lock().unwrap(),
             vec![Box::from(name.as_str())]
         );
-        assert!(store.memory.list(&agent).await.unwrap().is_empty());
+        assert!(
+            store
+                .memory
+                .list(&agent, &crate::filesystem_snapshot::Unlimited)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         assert!(confirm.names().is_empty());
     })
 }
@@ -2902,7 +3144,7 @@ fn a_confirmed_upload_keeps_the_names_of_its_confirmation_whatever_their_age() {
         let store = Arc::new(ScriptedStore::default());
         let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
             retained_periodic_snapshots: 1,
-            ..values(4, 4, 1)
+            ..values(4, 4)
         })
         .unwrap();
         let snapshots = service(&store, settings);
@@ -2920,7 +3162,7 @@ fn a_confirmed_upload_keeps_the_names_of_its_confirmation_whatever_their_age() {
 
         let kept = store
             .memory
-            .list(&agent)
+            .list(&agent, &crate::filesystem_snapshot::Unlimited)
             .await
             .unwrap()
             .iter()
@@ -2944,7 +3186,7 @@ fn a_confirmed_upload_keeps_the_names_of_its_confirmation_whatever_their_age() {
 fn an_ephemeral_admission_is_disabled_and_makes_no_store_call() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("ephemeral");
 
         let periodic = snapshots
@@ -2972,7 +3214,7 @@ fn an_ephemeral_admission_is_disabled_and_makes_no_store_call() {
 fn every_store_write_arrives_while_its_agent_is_busy() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let (agent, target) = (agent_snapshots("writes"), agent_snapshots("copied"));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let name = submit(&snapshots, &agent, b"tree", confirmer(&confirm)).await;
@@ -2996,6 +3238,7 @@ fn every_store_write_arrives_while_its_agent_is_busy() {
                 tree.path(),
                 None,
                 &CancellationToken::new(),
+                &crate::filesystem_snapshot::Unlimited,
             )
             .await
             .is_err();
@@ -3013,7 +3256,7 @@ fn a_dropped_fork_keeps_both_incarnations_busy_until_its_copy_returns() {
         let store = Arc::new(ScriptedStore::default());
         let gate = Arc::new(Gate::default());
         *store.copy_gate.lock().unwrap() = Some(Arc::clone(&gate));
-        let snapshots = service(&store, settings(4, 4, 1));
+        let snapshots = service(&store, settings(4, 4));
         let (source, target) = (
             agent_snapshots("fork-source"),
             agent_snapshots("fork-target"),
@@ -3057,7 +3300,7 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
     let pressure = FilesystemPressureConfig::new(1, u64::MAX, 1, 2, 1, Duration::ZERO).unwrap();
     let snapshots = AgentFilesystemSnapshots::enabled(
         StoreOf::Given(Arc::new(InMemorySnapshotStore::new()) as Arc<dyn FilesystemSnapshotStore>),
-        settings(4, 4, 1),
+        settings(4, 4),
         VolumeRoom::Pressure {
             volume: provisioning.volume().clone(),
             pressure,
@@ -3070,4 +3313,675 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
         .await;
 
     assert_eq!(admitted.err(), Some(SnapshotSkip::VolumeUnderPressure));
+}
+
+/// Whether the job of `agent` waits for its next run after a failed run.
+fn waits_after_failure(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) -> bool {
+    snapshots.core.as_ref().is_some_and(|core| {
+        core.registry
+            .read(|state| rules::job_waits_after_failure(state, agent))
+    })
+}
+
+#[test]
+fn a_newer_periodic_admission_replaces_a_save_in_its_backoff_and_discards_its_capture() {
+    paused(async {
+        let store = store_with_runs(3);
+        store.failing_saves.store(1, Ordering::SeqCst);
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("replaced-in-backoff");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let old = submit_counted(&snapshots, &agent, b"old", &discarded, confirmer(&confirm)).await;
+        eventually(|| waits_after_failure(&snapshots, &agent)).await;
+
+        let started = tokio::time::Instant::now();
+        let replacing = snapshots.admit_periodic(&agent, AgentMode::Durable).await;
+        assert!(replacing.is_ok());
+        eventually(|| discarded.load(Ordering::SeqCst) == 1).await;
+        // The call of the old job returned at once: before the wait of 2 s after its failed run.
+        let returned_after = started.elapsed();
+        drop(replacing);
+        ended(&snapshots, &agent).await;
+        let freed_after = started.elapsed();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+
+        assert!(
+            returned_after < Duration::from_secs(2),
+            "{returned_after:?}"
+        );
+        assert!(freed_after < Duration::from_secs(2), "{freed_after:?}");
+        assert_eq!(
+            (
+                store.runs_started.load(Ordering::SeqCst),
+                store.saved_names(),
+                confirm.names(),
+            ),
+            (1, vec![old.as_str().to_string()], Vec::new())
+        );
+    })
+}
+
+#[test]
+fn a_periodic_admission_during_a_run_is_refused_at_once_and_the_old_job_confirms_when_the_run_succeeds()
+ {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("refused-during-run");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let old = submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        gate.wait_reached(1).await;
+
+        let started = tokio::time::Instant::now();
+        let refused = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .err();
+        let waited = started.elapsed();
+        gate.open();
+        ended(&snapshots, &agent).await;
+
+        assert_eq!(
+            (refused, waited, confirm.names()),
+            (
+                Some(SnapshotSkip::UploadInFlight),
+                Duration::ZERO,
+                vec![old]
+            )
+        );
+    })
+}
+
+#[test]
+fn a_manual_update_is_woken_by_the_failed_run_replaces_the_job_and_never_sleeps_through_the_backoff()
+ {
+    paused(async {
+        let store = store_with_runs(3);
+        store.failing_saves.store(1, Ordering::SeqCst);
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("update-replaces");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let _old = submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        gate.wait_reached(1).await;
+
+        let started = tokio::time::Instant::now();
+        let admitting = snapshots.admit_update(&agent, AgentMode::Durable, no_interrupt());
+        let opening = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            gate.open();
+        };
+        let (admitted, ()) = futures::join!(admitting, opening);
+        let waited = started.elapsed();
+        drop(admitted);
+        ended(&snapshots, &agent).await;
+
+        assert_eq!(
+            (
+                waited,
+                confirm.names(),
+                store.runs_started.load(Ordering::SeqCst)
+            ),
+            (Duration::from_secs(1), Vec::new(), 1)
+        );
+    })
+}
+
+#[test]
+fn a_manual_update_that_finds_a_decided_job_in_its_deletes_waits_for_its_end() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let delete_gate = Arc::new(Gate::default());
+        *store.delete_gate.lock().unwrap() = Some(Arc::clone(&delete_gate));
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("decided-in-deletes");
+        let superseded = ScriptedConfirmer::answering(ConfirmOutcome::Superseded);
+        submit(&snapshots, &agent, b"old", confirmer(&superseded)).await;
+        delete_gate.wait_reached(1).await;
+
+        let started = tokio::time::Instant::now();
+        let admitting = snapshots.admit_update(&agent, AgentMode::Durable, no_interrupt());
+        let opening = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            delete_gate.open();
+        };
+        let (admitted, ()) = futures::join!(admitting, opening);
+        let waited = started.elapsed();
+
+        assert!(admitted.is_ok());
+        assert!(waited <= Duration::from_secs(1), "waited {waited:?}");
+    })
+}
+
+#[test]
+fn a_start_waiting_for_a_replaced_job_asks_the_store_once() {
+    paused(async {
+        let store = store_with_runs(3);
+        store.failing_saves.store(1, Ordering::SeqCst);
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
+        let agent = agent_snapshots("start-of-replaced");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let old = submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        eventually(|| waits_after_failure(&snapshots, &agent)).await;
+        let starting = {
+            let (snapshots, agent, old) = (Arc::clone(&snapshots), agent.clone(), old.clone());
+            tokio::spawn(async move { snapshots.prepare_start(&agent, &old, no_interrupt()).await })
+        };
+        tokio::task::yield_now().await;
+
+        let started = tokio::time::Instant::now();
+        let replacing = snapshots.admit_periodic(&agent, AgentMode::Durable).await;
+        let checked = starting.await.unwrap();
+
+        assert!(replacing.is_ok());
+        assert_eq!(
+            (checked, started.elapsed() < Duration::from_secs(5)),
+            (StartCheck::NotStored, true)
+        );
+    })
+}
+
+#[test]
+fn a_manual_update_after_its_deadline_answers_no_slot_and_makes_no_further_run() {
+    paused(async {
+        let (store, snapshots, holder, gate) = one_slot_with_a_held_agent();
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        submit(&snapshots, &holder, b"holder", confirmer(&confirm)).await;
+        gate.wait_reached(1).await;
+        let agent = agent_snapshots("update-without-slot");
+        let discarded = Arc::new(AtomicUsize::new(0));
+
+        let uploaded = snapshots
+            .admit_update(&agent, AgentMode::Durable, no_interrupt())
+            .await
+            .unwrap()
+            .upload_now(
+                capture(b"update", &discarded),
+                no_interrupt(),
+                no_lost_shard(),
+            )
+            .await;
+        let runs = store.runs_started.load(Ordering::SeqCst);
+        gate.open();
+
+        assert!(
+            matches!(uploaded, Err(UploadNowError::NoSlot)),
+            "{:?}",
+            uploaded.as_ref().err()
+        );
+        assert_eq!((runs, discarded.load(Ordering::SeqCst)), (1, 1));
+    })
+}
+
+#[test]
+fn a_manual_update_whose_run_failed_before_its_deadline_answers_the_storage_error() {
+    paused(async {
+        let store = store_with_runs(5);
+        store.failing_saves.store(usize::MAX, Ordering::SeqCst);
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("update-failed-run");
+        let discarded = Arc::new(AtomicUsize::new(0));
+
+        let started = tokio::time::Instant::now();
+        let uploaded = snapshots
+            .admit_update(&agent, AgentMode::Durable, no_interrupt())
+            .await
+            .unwrap()
+            .upload_now(
+                capture(b"update", &discarded),
+                no_interrupt(),
+                no_lost_shard(),
+            )
+            .await;
+
+        assert!(
+            matches!(&uploaded, Err(UploadNowError::Store(SaveError::Failed(_)))),
+            "{:?}",
+            uploaded.as_ref().err()
+        );
+        assert_eq!(
+            (store.runs_started.load(Ordering::SeqCst), started.elapsed()),
+            (4, Duration::from_secs(60))
+        );
+    })
+}
+
+#[test]
+fn a_manual_update_whose_first_take_comes_after_its_deadline_with_a_free_slot_runs_once() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("update-late-take");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let admission = snapshots
+            .admit_update(&agent, AgentMode::Durable, no_interrupt())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(61)).await;
+
+        let uploaded = admission
+            .upload_now(
+                capture(b"update", &discarded),
+                no_interrupt(),
+                no_lost_shard(),
+            )
+            .await;
+
+        assert!(uploaded.is_ok());
+        assert_eq!(store.runs_started.load(Ordering::SeqCst), 1);
+    })
+}
+
+#[test]
+fn a_stop_and_the_deadline_together_answer_stopped() {
+    paused(async {
+        let (_store, snapshots, holder, gate) = one_slot_with_a_held_agent();
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        submit(&snapshots, &holder, b"holder", confirmer(&confirm)).await;
+        gate.wait_reached(1).await;
+        let agent = agent_snapshots("update-stop-and-deadline");
+        let discarded = Arc::new(AtomicUsize::new(0));
+        let (interrupt, interrupted) = watch::channel(false);
+        let admission = snapshots
+            .admit_update(&agent, AgentMode::Durable, no_interrupt())
+            .await
+            .unwrap();
+        let interrupting = async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            interrupt.send_replace(true);
+        };
+
+        let (uploaded, ()) = futures::join!(
+            admission.upload_now(capture(b"update", &discarded), interrupted, no_lost_shard()),
+            interrupting
+        );
+        gate.open();
+
+        assert!(
+            matches!(uploaded, Err(UploadNowError::Stopped)),
+            "{:?}",
+            uploaded.as_ref().err()
+        );
+    })
+}
+
+#[test]
+fn a_stop_answers_a_delete_in_its_run_at_once() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let delete_gate = Arc::new(Gate::default());
+        *store.delete_gate.lock().unwrap() = Some(Arc::clone(&delete_gate));
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("stopped-delete");
+        let core = snapshots.core.as_ref().unwrap();
+        let stop = CancellationToken::new();
+        let deleting = core.calls.delete(
+            &agent,
+            Arc::from([SnapshotName::new("p-1").unwrap()]),
+            stop.clone().cancelled_owned(),
+        );
+        let stopping = async {
+            delete_gate.wait_reached(1).await;
+            stop.cancel();
+        };
+
+        let (deleted, ()) = futures::join!(deleting, stopping);
+        let busy = core.registry.read(|state| rules::busy(state, &agent));
+        delete_gate.open();
+        eventually(|| core.registry.read(|state| rules::busy(state, &agent)) == 0).await;
+
+        assert!(
+            matches!(deleted, store_calls::Deleted::Stopped),
+            "{deleted:?}"
+        );
+        assert_eq!(busy, 1);
+    })
+}
+
+#[test]
+fn a_restore_gives_its_slot_back_between_two_runs() {
+    paused(async {
+        let store = store_with_runs(2);
+        let snapshots = service(&store, settings(4, 1));
+        let (first, second) = (
+            agent_snapshots("restore-runs"),
+            agent_snapshots("restore-other"),
+        );
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let first_name = submit(&snapshots, &first, b"first", confirmer(&confirm)).await;
+        ended(&snapshots, &first).await;
+        let second_name = submit(&snapshots, &second, b"second", confirmer(&confirm)).await;
+        ended(&snapshots, &second).await;
+        store.failing_restores.store(1, Ordering::SeqCst);
+        let (first_into, second_into) =
+            (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let order = Arc::new(Mutex::new(Vec::new()));
+
+        let restoring_first = {
+            let restore = snapshots.restore(&first, &first_name).unwrap();
+            let order = Arc::clone(&order);
+            let into = first_into.path().to_path_buf();
+            async move {
+                let restored = restore.restore(&into).await;
+                order.lock().unwrap().push("first");
+                restored
+            }
+        };
+        let restoring_second = {
+            let restore = snapshots.restore(&second, &second_name).unwrap();
+            let order = Arc::clone(&order);
+            let into = second_into.path().to_path_buf();
+            async move {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let restored = restore.restore(&into).await;
+                order.lock().unwrap().push("second");
+                restored
+            }
+        };
+        let (first_restored, second_restored) = futures::join!(restoring_first, restoring_second);
+
+        assert!(first_restored.is_ok() && second_restored.is_ok());
+        assert_eq!(
+            (
+                order.lock().unwrap().clone(),
+                store.most_restores_at_once.load(Ordering::SeqCst)
+            ),
+            (vec!["second", "first"], 1)
+        );
+    })
+}
+
+fn retention_stopped(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) -> Option<bool> {
+    snapshots.core.as_ref().and_then(|core| {
+        core.registry
+            .read(|state| rules::job_retention_stopped(state, agent))
+    })
+}
+
+#[test]
+fn a_manual_update_stops_the_deletes_of_the_running_job_before_it_waits_for_the_job() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let agent = agent_snapshots("update-stops-retention-first");
+        let gate = store.hold_saves_of(&agent);
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let old = submit(&snapshots, &agent, b"tree", confirmer(&confirm)).await;
+        gate.wait_reached(1).await;
+        let before = retention_stopped(&snapshots, &agent);
+
+        let admitting = {
+            let (snapshots, agent) = (Arc::clone(&snapshots), agent.clone());
+            tokio::spawn(async move {
+                snapshots
+                    .admit_update(&agent, AgentMode::Durable, no_interrupt())
+                    .await
+                    .is_ok()
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let while_it_waits = (
+            retention_stopped(&snapshots, &agent),
+            admitting.is_finished(),
+        );
+        gate.open();
+        let admitted = admitting.await.unwrap();
+
+        assert_eq!(
+            (before, while_it_waits, admitted, confirm.names()),
+            (Some(false), (Some(true), false), true, vec![old])
+        );
+        assert!(store.deletes.lock().unwrap().is_empty());
+    })
+}
+
+#[test]
+fn a_save_waiting_for_a_late_publish_is_not_replaced_and_confirms_when_the_publish_landed() {
+    paused(async {
+        let store = store_with_runs(3);
+        store.failing_saves.store(1, Ordering::SeqCst);
+        store.publish_before_failing.store(true, Ordering::SeqCst);
+        let late = Arc::new(Gate::default());
+        *store.late_gate.lock().unwrap() = Some(Arc::clone(&late));
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
+        let agent = agent_snapshots("late-publish-not-replaced");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let old = submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        late.wait_reached(1).await;
+
+        let periodic = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .err();
+        let updating = {
+            let (snapshots, agent) = (Arc::clone(&snapshots), agent.clone());
+            tokio::spawn(async move {
+                snapshots
+                    .admit_update(&agent, AgentMode::Durable, no_interrupt())
+                    .await
+                    .is_ok()
+            })
+        };
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let update_waited = !updating.is_finished();
+        let waited_after_failure = waits_after_failure(&snapshots, &agent);
+        late.open();
+        let updated = updating.await.unwrap();
+
+        assert_eq!(
+            (
+                periodic,
+                waited_after_failure,
+                update_waited,
+                updated,
+                confirm.names(),
+                store.runs_started.load(Ordering::SeqCst),
+            ),
+            (
+                Some(SnapshotSkip::UploadInFlight),
+                false,
+                true,
+                true,
+                vec![old],
+                1
+            )
+        );
+    })
+}
+
+#[test]
+fn a_manual_update_waits_for_the_end_of_a_job_that_confirmed_when_its_run_succeeded() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let gate = Arc::new(Gate::default());
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("update-after-confirmed-run");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let old = submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        gate.wait_reached(1).await;
+
+        let started = tokio::time::Instant::now();
+        let admitting = snapshots.admit_update(&agent, AgentMode::Durable, no_interrupt());
+        let opening = async {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            gate.open();
+        };
+        let (admitted, ()) = futures::join!(admitting, opening);
+
+        assert!(admitted.is_ok());
+        assert_eq!(
+            (started.elapsed(), confirm.names()),
+            (Duration::from_secs(3), vec![old])
+        );
+    })
+}
+
+/// Runs a clean-up of the names of a revert whose delete the store holds at its gate, and an
+/// upload of the agent admitted while the delete is held: the save publishes before the delete
+/// goes on when `save_first`, and after the delete ended otherwise. Gives whether the upload was
+/// admitted, the names that the store keeps, and the content of the tree of the new name.
+async fn save_during_a_clean_up(save_first: bool) -> (bool, usize, Option<Vec<u8>>) {
+    let store = Arc::new(ScriptedStore::default());
+    let snapshots = service(&store, settings(4, 4));
+    let agent = agent_snapshots("save-during-clean-up");
+    let deferred = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+    let reverted = submit(&snapshots, &agent, b"reverted", confirmer(&deferred)).await;
+    ended(&snapshots, &agent).await;
+    let delete_gate = Arc::new(Gate::default());
+    *store.delete_gate.lock().unwrap() = Some(Arc::clone(&delete_gate));
+    let save_gate = Arc::new(Gate::default());
+    if !save_first {
+        *store.save_gate.lock().unwrap() = Some(Arc::clone(&save_gate));
+    }
+    snapshots.delete_snapshots(&agent, Box::new([reverted]));
+    delete_gate.wait_reached(1).await;
+
+    let admitted = snapshots.admit_periodic(&agent, AgentMode::Durable).await;
+    let is_admitted = admitted.is_ok();
+    let new = admitted.map(|admission| {
+        let name = admission.name().clone();
+        admission.submit(
+            capture(b"new tree", &Arc::new(AtomicUsize::new(0))),
+            None,
+            confirmer(&deferred),
+        );
+        name
+    });
+    if save_first {
+        eventually(|| store.saved_names().len() == 2).await;
+        delete_gate.open();
+    } else {
+        save_gate.wait_reached(1).await;
+        delete_gate.open();
+        eventually(|| store.deletes.lock().unwrap().len() == 1).await;
+        save_gate.open();
+    }
+    ended(&snapshots, &agent).await;
+    eventually(|| store.deletes.lock().unwrap().len() == 1).await;
+    let kept = store
+        .memory
+        .list(&agent, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap()
+        .len();
+    let restored = match new {
+        Ok(new) => {
+            let into = tempfile::tempdir().unwrap();
+            store
+                .memory
+                .restore(
+                    &agent,
+                    &store_name(&new).unwrap(),
+                    into.path(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+                .ok()
+                .and_then(|_| std::fs::read(into.path().join("content")).ok())
+        }
+        Err(_) => None,
+    };
+    (is_admitted, kept, restored)
+}
+
+#[test]
+fn a_save_during_a_names_clean_up_whose_delete_prunes_gives_whole_snapshots() {
+    paused(async {
+        let save_first = save_during_a_clean_up(true).await;
+        let delete_first = save_during_a_clean_up(false).await;
+
+        assert_eq!(
+            (save_first, delete_first),
+            (
+                (true, 1, Some(b"new tree".to_vec())),
+                (true, 1, Some(b"new tree".to_vec()))
+            )
+        );
+    })
+}
+
+#[test]
+fn a_delete_all_during_the_wait_for_a_late_publish_removes_the_landed_file() {
+    paused(async {
+        let store = store_with_runs(3);
+        store.failing_saves.store(1, Ordering::SeqCst);
+        store.publish_before_failing.store(true, Ordering::SeqCst);
+        let late = Arc::new(Gate::default());
+        *store.late_gate.lock().unwrap() = Some(Arc::clone(&late));
+        let snapshots = service(&store, settings(4, 4));
+        let agent = agent_snapshots("delete-all-during-late-wait");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        submit(&snapshots, &agent, b"landed", confirmer(&confirm)).await;
+        late.wait_reached(1).await;
+
+        snapshots.delete_all_snapshots(&agent);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let while_it_waits = store.all_deletes.load(Ordering::SeqCst);
+        late.open();
+        eventually(|| store.all_deletes.load(Ordering::SeqCst) == 1).await;
+        ended(&snapshots, &agent).await;
+
+        assert_eq!(while_it_waits, 0);
+        assert!(confirm.names().is_empty());
+        assert!(
+            store
+                .memory
+                .list(&agent, &crate::filesystem_snapshot::Unlimited)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    })
+}
+
+/// Runs a manual update whose save fails with a publish that ends without an answer, and whose
+/// wait for that publish ends 70 s after it began, after the deadline of the update. The publish
+/// lands when `lands`.
+async fn update_through_a_late_publish(lands: bool) -> Result<(), String> {
+    let store = store_with_runs(3);
+    store.failing_saves.store(1, Ordering::SeqCst);
+    store.publish_before_failing.store(lands, Ordering::SeqCst);
+    store
+        .late_publish_never_lands
+        .store(!lands, Ordering::SeqCst);
+    let late = Arc::new(Gate::default());
+    *store.late_gate.lock().unwrap() = Some(Arc::clone(&late));
+    let snapshots = service(&store, settings(4, 4));
+    let agent = agent_snapshots("update-deadline-in-late-wait");
+    let admission = snapshots
+        .admit_update(&agent, AgentMode::Durable, no_interrupt())
+        .await
+        .unwrap();
+    let uploading = admission.upload_now(
+        capture(b"update", &Arc::new(AtomicUsize::new(0))),
+        no_interrupt(),
+        no_lost_shard(),
+    );
+    let opening = async {
+        late.wait_reached(1).await;
+        tokio::time::sleep(Duration::from_secs(70)).await;
+        late.open();
+    };
+    let (uploaded, ()) = futures::join!(uploading, opening);
+    match uploaded {
+        Ok(_) => Ok(()),
+        Err(UploadNowError::Store(SaveError::Failed(_))) => Err("failed".to_string()),
+        Err(other) => Err(format!("{other:?}")),
+    }
+}
+
+#[test]
+fn a_manual_update_whose_deadline_comes_during_the_wait_for_a_late_publish_gets_saved_or_the_storage_error()
+ {
+    paused(async {
+        let landed = update_through_a_late_publish(true).await;
+        let never_landed = update_through_a_late_publish(false).await;
+
+        assert_eq!((landed, never_landed), (Ok(()), Err("failed".to_string())));
+    })
 }

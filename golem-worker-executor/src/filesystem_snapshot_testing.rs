@@ -15,12 +15,13 @@
 //! A filesystem snapshot store for the tests of the executor.
 //!
 //! The store keeps the snapshots in memory. A clone shares the snapshots, so a test keeps its
-//! store across a restart of the executor. A test can make saves fail, slow or held, make
+//! store across a restart of the executor; a shutdown stops only the clone that was shut down. A test can make saves fail, slow or held, make
 //! restores fail, and count the calls.
 
 use crate::filesystem_snapshot::{
-    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, InMemorySnapshotStore, SnapshotInfo,
-    SnapshotName, SnapshotStoreError,
+    AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore,
+    InMemorySnapshotStore, ReadError, RestoreFailure, RunSlots, SaveError, SnapshotInfo,
+    SnapshotName, Unlimited, Withdrawal,
 };
 use crate::services::agent_filesystem_snapshots::StoreSource;
 use crate::services::golem_config::FilesystemSnapshotUploadConfig;
@@ -108,7 +109,7 @@ impl TestFilesystemSnapshotStore {
         }
     }
 
-    /// Makes the next `count` saves fail with an error that allows a retry.
+    /// Makes the next `count` saves fail, as a save does whose storage fails in each run.
     pub fn fail_next_saves(&self, count: usize) {
         self.faults.failing_saves.store(count, Ordering::SeqCst);
     }
@@ -176,7 +177,7 @@ impl TestFilesystemSnapshotStore {
         }
     }
 
-    /// Makes each restore of the snapshot `name` fail with an error that allows no retry.
+    /// Makes each restore of the snapshot `name` give `Corrupt`, which a new try does not change.
     pub fn fail_restores_of(&self, name: &str) {
         self.faults
             .failing_restore_names
@@ -219,7 +220,7 @@ impl TestFilesystemSnapshotStore {
         fingerprint: AgentFingerprint,
     ) -> Vec<String> {
         self.inner
-            .list(&AgentSnapshots::agent(agent, fingerprint))
+            .list(&AgentSnapshots::agent(agent, fingerprint), &Unlimited)
             .await
             .map(|listing| {
                 listing
@@ -236,8 +237,33 @@ impl TestFilesystemSnapshotStore {
         if let Ok(name) = SnapshotName::new(name) {
             let _ = self
                 .inner
-                .delete(&AgentSnapshots::agent(agent, fingerprint), &[name])
+                .delete(
+                    &AgentSnapshots::agent(agent, fingerprint),
+                    &[name],
+                    &Unlimited,
+                )
                 .await;
+        }
+    }
+
+    /// Runs an injected failed save as the store runs a save whose storage fails in each run: a
+    /// run under a slot, the wait after the failed run, and a second run under a slot. A
+    /// withdrawal at a take, or a shutdown, gives `Stopped`, and a deadline after the first run
+    /// gives `Failed`.
+    async fn failed_runs(&self, slots: &dyn RunSlots) -> SaveError {
+        let failed = || SaveError::Failed(Failed::new(anyhow::anyhow!("an injected save failure")));
+        match self.inner.slot(slots).await {
+            Ok(slot) => drop(slot),
+            Err(cause) => return SaveError::Stopped(cause),
+        }
+        slots.waiting_after_failure();
+        match slots.take(false).await {
+            Ok(slot) => {
+                drop(slot);
+                failed()
+            }
+            Err(Withdrawal::Deadline) => failed(),
+            Err(Withdrawal::Stopped) => SaveError::Stopped(Withdrawal::Stopped),
         }
     }
 
@@ -257,7 +283,8 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         tree: &Path,
         parent: Option<(&SnapshotName, ChangeDetection)>,
         cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<SnapshotInfo, SaveError> {
         self.faults.saves.fetch_add(1, Ordering::SeqCst);
         self.faults
             .trees
@@ -289,12 +316,12 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             })
             .is_ok();
         if failing {
-            return Err(SnapshotStoreError::Storage {
-                retryable: true,
-                source: anyhow::anyhow!("an injected save failure"),
-            });
+            return Err(self.failed_runs(slots).await);
         }
-        let info = self.inner.save(agent, name, tree, parent, cancel).await?;
+        let info = self
+            .inner
+            .save(agent, name, tree, parent, cancel, slots)
+            .await?;
         let offset = *self
             .faults
             .clock_offset
@@ -319,7 +346,8 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         agent: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
-    ) -> Result<SnapshotInfo, SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<SnapshotInfo, RestoreFailure> {
         self.faults
             .restored
             .lock()
@@ -332,11 +360,11 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .unwrap_or_else(PoisonError::into_inner)
             .contains(name.as_str())
         {
-            return Err(SnapshotStoreError::Corrupt(anyhow::anyhow!(
+            return Err(RestoreFailure::Corrupt(anyhow::anyhow!(
                 "an injected restore failure"
             )));
         }
-        let restored = self.inner.restore(agent, name, into).await?;
+        let restored = self.inner.restore(agent, name, into, slots).await?;
         self.faults
             .completed_restores
             .lock()
@@ -349,7 +377,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         &self,
         agent: &AgentSnapshots,
         name: &SnapshotName,
-    ) -> Result<Option<SnapshotInfo>, SnapshotStoreError> {
+    ) -> Result<Option<SnapshotInfo>, ReadError> {
         Ok(self
             .inner
             .stat(agent, name)
@@ -360,10 +388,11 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
     async fn list(
         &self,
         agent: &AgentSnapshots,
-    ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, SnapshotStoreError> {
+        slots: &dyn RunSlots,
+    ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
         Ok(self
             .inner
-            .list(agent)
+            .list(agent, slots)
             .await?
             .iter()
             .map(|(name, info)| (name.clone(), self.timed(name, *info)))
@@ -374,19 +403,29 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         &self,
         agent: &AgentSnapshots,
         names: &[SnapshotName],
-    ) -> Result<(), SnapshotStoreError> {
-        self.inner.delete(agent, names).await
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        self.inner.delete(agent, names, slots).await
     }
 
-    async fn delete_all(&self, agent: &AgentSnapshots) -> Result<(), SnapshotStoreError> {
-        self.inner.delete_all(agent).await
+    async fn delete_all(
+        &self,
+        agent: &AgentSnapshots,
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        self.inner.delete_all(agent, slots).await
     }
 
     async fn copy_all(
         &self,
         from: &AgentSnapshots,
         to: &AgentSnapshots,
-    ) -> Result<(), SnapshotStoreError> {
-        self.inner.copy_all(from, to).await
+        slots: &dyn RunSlots,
+    ) -> Result<(), CallError> {
+        self.inner.copy_all(from, to, slots).await
+    }
+
+    async fn shut_down(&self) {
+        self.inner.shut_down().await
     }
 }
