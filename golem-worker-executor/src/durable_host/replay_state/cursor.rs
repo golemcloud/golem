@@ -3950,9 +3950,7 @@ fn historical_reconstruction_owner_failure(
             )
         }
         crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(kind) => {
-            WorkerExecutorError::runtime(format!(
-                "owner lifecycle changed while waiting for historical entity reconstruction: {kind:?}"
-            ))
+            WorkerExecutorError::Interrupted { kind }
         }
     }
 }
