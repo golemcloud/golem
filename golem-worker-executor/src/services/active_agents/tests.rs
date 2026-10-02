@@ -1,3 +1,4 @@
+use super::component_charge_bytes;
 use super::concurrent_agents_scheduler::ConcurrentAgentsScheduler;
 use super::concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
 use super::is_loaded_idle_filesystem_pressure_candidate;
@@ -1493,4 +1494,23 @@ mod grant_guard_liveness {
             })?;
         }
     }
+}
+
+#[test]
+fn component_charge_bytes_scales_the_module_size_by_the_coefficient() {
+    [
+        (1.0, 4096, 4096),
+        (1.5, 1001, 1501),
+        (0.0, 4096, 0),
+        (0.25, 7, 1),
+        (2.0, u64::MAX, u64::MAX),
+    ]
+    .into_iter()
+    .for_each(|(coefficient, module_bytes, expected)| {
+        assert_eq!(
+            component_charge_bytes(coefficient, module_bytes),
+            expected,
+            "coefficient {coefficient} on {module_bytes} bytes"
+        );
+    });
 }

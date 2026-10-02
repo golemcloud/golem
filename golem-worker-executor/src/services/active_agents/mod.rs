@@ -838,7 +838,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         component_revision: ComponentRevision,
         component_module_bytes: u64,
     ) -> WorkerComponentCharge {
-        let charge_bytes = (self.component_size_coefficient * component_module_bytes as f64) as u64;
+        let charge_bytes =
+            component_charge_bytes(self.component_size_coefficient, component_module_bytes);
         self.component_charges
             .acquire((component_id, component_revision), charge_bytes)
             .await
@@ -1725,7 +1726,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
             // correct.
             let (component_id, component_revision, module_bytes) =
                 worker.resident_component_charge_requirement().await;
-            let charge_bytes = (component_size_coefficient * module_bytes as f64) as u64;
+            let charge_bytes = component_charge_bytes(component_size_coefficient, module_bytes);
             let component: ComponentChargeKey = (component_id, component_revision);
             let last_changed = worker.last_execution_state_change();
             candidates.push((
@@ -1812,6 +1813,13 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
 /// [`ActiveAgents::acquire_with_component_charge`]: reserve the component's
 /// shared module, then admit the worker's own memory once.
 ///
+/// Gives the bytes that a component charges for its compiled module: the module size multiplied by
+/// `coefficient`, rounded toward zero. A result above `u64::MAX` gives `u64::MAX`, and a negative
+/// or NaN result gives 0.
+fn component_charge_bytes(coefficient: f64, module_bytes: u64) -> u64 {
+    (coefficient * module_bytes as f64) as u64
+}
+
 /// Returns the worker's [`MemoryGrant`] and its [`WorkerComponentCharge`], or
 /// `None` if the memory admission is refused (in which case dropping the charge
 /// releases the module again). Exists so the composition of the admission gate
