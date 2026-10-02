@@ -650,10 +650,9 @@ impl InvocationLoops {
     }
 }
 
-/// Holds owner-keyed active agent groups.
 /// The number of refused admission attempts of one worker start between two warnings. With the
-/// default retry delay of 500 ms, the first warning comes after 10 s of waiting, and one more
-/// comes every 10 s while the wait goes on.
+/// default retry delay of 500 ms, the first warning comes after about 10 s of waiting, and one
+/// more comes every 10 s while the wait goes on.
 const ADMISSION_REFUSALS_PER_WARNING: u32 = 20;
 
 /// Whether `acquire_memory` logs a warning after its `refusals`-th refused attempt.
@@ -661,6 +660,7 @@ fn admission_wait_warns(refusals: u32) -> bool {
     refusals.is_multiple_of(ADMISSION_REFUSALS_PER_WARNING)
 }
 
+/// Holds owner-keyed active agent groups.
 pub struct ActiveAgents<Ctx: WorkerCtx> {
     _unloaded_worker_eviction: UnloadedWorkerEvictionTask,
     agents: Cache<OwnedAgentId, (), Arc<ActiveAgent<Ctx>>, WorkerExecutorError>,
