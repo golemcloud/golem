@@ -28,7 +28,7 @@ use tokio_util::task::TaskTracker;
 
 /// Starts `workers` workers of the clean-ups on `jobs`. They end at `shutdown`.
 pub(super) fn start(
-    store: &Arc<StoreCalls>,
+    calls: &Arc<StoreCalls>,
     registry: &Arc<Registry>,
     shutdown: &CancellationToken,
     jobs: &TaskTracker,
@@ -36,7 +36,7 @@ pub(super) fn start(
 ) {
     std::iter::repeat_n((), workers).for_each(|()| {
         jobs.spawn(worker(
-            Arc::clone(store),
+            Arc::clone(calls),
             Arc::clone(registry),
             shutdown.clone(),
         ));
@@ -46,9 +46,9 @@ pub(super) fn start(
 /// Takes the agents whose clean-up is ready and runs their work, one at a time, until the
 /// shutdown. The receiver of the wake-ups is taken before each take, so a transition between the
 /// take and the wait is not lost.
-async fn worker(store: Arc<StoreCalls>, registry: Arc<Registry>, shutdown: CancellationToken) {
+async fn worker(calls: Arc<StoreCalls>, registry: Arc<Registry>, shutdown: CancellationToken) {
     futures::stream::unfold((), |()| {
-        let (store, registry, shutdown) = (&store, &registry, &shutdown);
+        let (calls, registry, shutdown) = (&calls, &registry, &shutdown);
         async move {
             if shutdown.is_cancelled() {
                 return None;
@@ -56,7 +56,7 @@ async fn worker(store: Arc<StoreCalls>, registry: Arc<Registry>, shutdown: Cance
             let mut changed = registry.subscribe();
             match registry.apply(rules::take_ready) {
                 Some((agent, work)) => {
-                    run(store, registry, &agent, work).await;
+                    run(calls, registry, &agent, work).await;
                     registry.apply(|state| rules::cleanup_ended(state, &agent));
                     Some(((), ()))
                 }
@@ -74,11 +74,11 @@ async fn worker(store: Arc<StoreCalls>, registry: Arc<Registry>, shutdown: Cance
 
 /// Runs the clean-up `work` of `agent`. A delete of names ends when a delete of all snapshots of
 /// the agent is requested.
-async fn run(store: &StoreCalls, registry: &Registry, agent: &AgentSnapshots, work: Work) {
+async fn run(calls: &StoreCalls, registry: &Registry, agent: &AgentSnapshots, work: Work) {
     let (operation, deleted) = match work {
         Work::Names(names) => (
             "delete",
-            store
+            calls
                 .delete(
                     agent,
                     names.into_iter().collect(),
@@ -86,7 +86,7 @@ async fn run(store: &StoreCalls, registry: &Registry, agent: &AgentSnapshots, wo
                 )
                 .await,
         ),
-        Work::All => ("delete_all", store.delete_all(agent).await),
+        Work::All => ("delete_all", calls.delete_all(agent).await),
     };
     if let Deleted::Leaked(error) = deleted {
         tracing::warn!(

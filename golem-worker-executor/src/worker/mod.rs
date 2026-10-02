@@ -5428,13 +5428,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             agent_filesystem_snapshots::ConfirmOutcome::Confirmed => {
                 agent_filesystem_snapshots::Confirmation::Confirmed {
-                    selectable: snapshot_selection::start_candidates(
+                    selectable: snapshot_selection::selectable_names(
                         &self.last_known_status.load(),
-                    )
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|(_, name)| name.cloned())
-                    .collect(),
+                    ),
                 }
             }
             agent_filesystem_snapshots::ConfirmOutcome::Superseded => {
