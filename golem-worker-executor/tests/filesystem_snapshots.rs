@@ -1865,7 +1865,8 @@ enum Restart {
     /// filesystem snapshot name is usable without the store, so only the rejection keeps the
     /// start from selecting it. The agent stops before the rejection. The executor writes the
     /// snapshot record of an invocation after the caller gets the result, and a stopped agent
-    /// writes no more records. So the rejection covers each record that a start can select.
+    /// writes no more records. So the rejection covers each automatic snapshot record that a
+    /// start can select.
     FullReplay,
 }
 
