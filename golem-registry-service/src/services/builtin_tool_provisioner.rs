@@ -147,11 +147,12 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         release_version: "5.9.2",
         kind: BuiltinExportKind::Tool,
     },
-    BuiltinToolDescriptor {
+    BuiltinExportDescriptor {
         component_name: "web-fetch",
         artifact_id: "web_fetch",
-        tool_name: "web-fetch",
+        export_name: "web-fetch",
         release_version: "0.1.0",
+        kind: BuiltinExportKind::Tool,
     },
 ];
 
