@@ -2941,19 +2941,28 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
     Ok(())
 }
 
-/// Waits until the newest snapshot record of `worker_id` has a name and its confirmation is in
-/// the oplog.
+/// Waits until the oplog of `worker_id` holds, after its last `AgentInvocationFinished`, a
+/// snapshot record with a name, and a confirmation of that name. The caller calls it after an
+/// invocation that ends at a snapshot boundary, so the record is the snapshot of that invocation,
+/// and no snapshot record is waiting for its upload when the wait ends.
 async fn newest_snapshot_confirmed(
     executor: &TestWorkerExecutor,
     worker_id: &AgentId,
 ) -> anyhow::Result<()> {
     eventually(Duration::from_secs(30), || async {
         let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
-        let newest = oplog.iter().rev().find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Snapshot(snapshot) => Some(snapshot.filesystem_snapshot.clone()),
-            _ => None,
-        });
-        Ok(newest.flatten().filter(|name| {
+        let after_last_invocation = oplog
+            .iter()
+            .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .map_or(&oplog[..], |last| &oplog[last..]);
+        let newest = after_last_invocation
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Snapshot(snapshot) => snapshot.filesystem_snapshot.clone(),
+                _ => None,
+            });
+        Ok(newest.filter(|name| {
             oplog.iter().any(|entry| {
                 matches!(
                     &entry.entry,
