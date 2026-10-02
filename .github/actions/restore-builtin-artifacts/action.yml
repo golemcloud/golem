@@ -1,5 +1,5 @@
 name: 'Restore Built-in Artifacts'
-description: 'Restore checksum-pinned built-in artifact WASMs from cache and install them'
+description: 'Install checksum-pinned built-in artifact WASMs from cache, or download them on a cache miss'
 inputs:
   cache-key:
     description: 'Built-in artifact cache key'
@@ -8,12 +8,13 @@ runs:
   using: 'composite'
   steps:
     - name: Restore built-in artifact WASMs
+      id: cache
       uses: actions/cache/restore@v5
       with:
         path: tmp/builtin-artifacts
         key: ${{ inputs.cache-key }}
-        fail-on-cache-miss: true
     - name: Install built-in artifact WASMs
+      if: steps.cache.outputs.cache-hit == 'true'
       shell: bash
       run: |
         cp -v tmp/builtin-artifacts/bash.wasm builtin-tools/bash.wasm
@@ -21,3 +22,21 @@ runs:
         cp -v tmp/builtin-artifacts/javascript-tools.wasm builtin-tools/javascript-tools.wasm
         cp -v tmp/builtin-artifacts/typescript-tools.wasm builtin-tools/typescript-tools.wasm
         cp -v tmp/builtin-artifacts/otlp-exporter.wasm plugins/otlp-exporter.wasm
+    # The cache a run saves is not always readable by its later jobs: a pull request from a fork
+    # that changes builtin-artifacts.lock.json misses it. Download the pinned releases instead.
+    - name: Download built-in artifact WASMs
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        repository=$(jq -r .repository builtin-artifacts.lock.json)
+        jq -r '.artifacts[] | "\(.component) \(.version) \(.sha256)"' builtin-artifacts.lock.json |
+          while read -r component version sha256; do
+            if [ "$component" = otlp-exporter ]; then
+              destination=plugins/$component.wasm
+            else
+              destination=builtin-tools/$component.wasm
+            fi
+            curl --fail --location --silent --show-error --retry 3 --output "$destination" \
+              "https://github.com/$repository/releases/download/$component-v$version/$component.wasm"
+            echo "$sha256  $destination" | sha256sum --check
+          done
