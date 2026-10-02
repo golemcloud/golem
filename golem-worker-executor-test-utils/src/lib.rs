@@ -130,6 +130,10 @@ use golem_worker_executor::services::golem_config::{
     MemoryConfig, OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
     ResourceUsageMeteringConfig, SchedulerStorageConfig, SnapshotPolicy,
 };
+#[cfg(target_os = "linux")]
+use golem_worker_executor::services::golem_config::{
+    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
+};
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
