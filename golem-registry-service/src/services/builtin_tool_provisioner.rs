@@ -78,6 +78,13 @@ struct ComponentExports {
 
 static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
     BuiltinExportDescriptor {
+        component_name: "bash",
+        artifact_id: "bash",
+        export_name: "bash",
+        release_version: "0.2.0",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
         component_name: "filesystem-tools",
         artifact_id: "filesystem_tools",
         export_name: "read-file",

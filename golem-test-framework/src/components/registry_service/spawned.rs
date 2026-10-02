@@ -166,6 +166,7 @@ fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) 
         .as_object()
         .expect("builtin-artifacts.lock.json must contain an artifacts object");
     let local_artifacts = [
+        ("bash", "builtin-tools/bash.wasm"),
         ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
         ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
         ("otlp_exporter", "plugins/otlp-exporter.wasm"),

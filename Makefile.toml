@@ -1707,6 +1707,46 @@ cp golem-temp/agents/golem_web_fetch_release.wasm ../web-fetch.wasm
 cd ../..
 '''
 
+[tasks.build-bash-tool]
+description = "Builds the built-in Bash tool component reproducibly in a pinned container (builtin-tools/bash/build-bash-wasm.sh); needs Docker"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error sh builtin-tools/bash/build-bash-wasm.sh
+'''
+
+[tasks.test-builtin-bash-pipelines]
+description = "Checks the Bash shell's exact WASM outputs against recorded Bash goldens, and the feature checklist"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build --manifest-path builtin-tools/bash/Cargo.toml --locked --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
+exec --fail-on-error python3 builtin-tools/bash/conformance/test_conformance.py
+exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py check --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py coverage --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+'''
+
+[tasks.test-builtin-bash-sweep]
+description = "Runs Brush's compatibility suite on the Bash shell against its baseline, and checks every matrix case (both tiers) against its recorded golden"
+script_runner = "@shell"
+script = '''
+builtin-tools/bash/conformance/compat/ci.sh ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
+'''
+
+[tasks.test-builtin-bash-oracle-drift]
+description = "Re-checks every recorded golden (both tiers) against a live Bash oracle, to catch one whose answer has since changed. `stale` only needs Docker, not a built wasm. Not run on every push -- see the Oracle drift workflow's paths/schedule triggers."
+script_runner = "@shell"
+script = '''
+python3 builtin-tools/bash/conformance/conformance.py stale
+'''
+
+[tasks.check-builtin-bash-deny]
+description = "Checks the Bash workspace's dependency sources against deny.toml (the pinned engine forks and nothing else)"
+script_runner = "@duckscript"
+script = '''
+cd builtin-tools/bash
+exec --fail-on-error cargo deny check sources
+cd ../..
+'''
+
 [tasks.build-javascript-typescript-tools]
 dependencies = ["wit", "build-sdk-ts"]
 description = "Builds the bundled, Wizer-preinitialized JavaScript and TypeScript tool components"
@@ -1735,7 +1775,7 @@ dependencies = ["build-javascript-typescript-tools"]
 description = "Builds the built-in TypeScript tool component"
 
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch"]
+dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool"]
 description = "Builds all built-in tool components"
 
 [tasks.fetch-builtin-artifacts]
@@ -1754,7 +1794,7 @@ if not is_path_exists ${cache_dir}
     mkdir ${cache_dir}
 end
 
-artifact_ids = array filesystem_tools git_tool javascript_tools otlp_exporter typescript_tools web_fetch
+artifact_ids = array bash filesystem_tools git_tool javascript_tools otlp_exporter typescript_tools web_fetch
 for artifact_id in ${artifact_ids}
     entry = map_get ${artifacts} ${artifact_id}
     component = map_get ${entry} component
@@ -1764,7 +1804,9 @@ for artifact_id in ${artifact_ids}
     url = set "https://github.com/${repository}/releases/download/${tag}/${component}.wasm"
     cached = set "${cache_dir}/${sha256}.wasm"
 
-    if equals ${artifact_id} filesystem_tools
+    if equals ${artifact_id} bash
+        destination = set builtin-tools/bash.wasm
+    elif equals ${artifact_id} filesystem_tools
         destination = set builtin-tools/filesystem-tools.wasm
     elif equals ${artifact_id} git_tool
         destination = set builtin-tools/git-tool.wasm
@@ -1868,6 +1910,14 @@ elif equals ${component} typescript-tools
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
+elif equals ${component} bash
+    build_task = set build-bash-tool
+    wasm = set builtin-tools/bash.wasm
+    artifact_id = set bash
+    exports_json = set "{\"tools\":[\"bash@0.2.0\"]}"
+    licenses = set builtin-tools/bash/LICENSE
+    source_notice = set builtin-tools/bash/NOTICE
+    sbom = set ""
 elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
@@ -1885,7 +1935,7 @@ elif equals ${component} web-fetch
     source_notice = set LICENSE
     sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD
@@ -1903,14 +1953,22 @@ size = get_file_size ${wasm}
 lock_text = readfile builtin-artifacts.lock.json
 lock = json_parse --collection ${lock_text}
 locked_artifacts = map_get ${lock} artifacts
-locked_entry = map_get ${locked_artifacts} ${artifact_id}
-locked_version = map_get ${locked_entry} version
-locked_sha256 = map_get ${locked_entry} sha256
-same_version = equals ${version} ${locked_version}
-same_bytes = equals ${sha256} ${locked_sha256}
-if ${same_version}
-    if not ${same_bytes}
-        trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
+# An artifact published for the first time has no lock entry to compare with.
+already_locked = map_contains_key ${locked_artifacts} ${artifact_id}
+if ${already_locked}
+    locked_entry = map_get ${locked_artifacts} ${artifact_id}
+    locked_version = map_get ${locked_entry} version
+    locked_sha256 = map_get ${locked_entry} sha256
+    same_version = equals ${version} ${locked_version}
+    same_bytes = equals ${sha256} ${locked_sha256}
+    if ${same_version}
+        if not ${same_bytes}
+            trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
+        end
+    else
+        if ${same_bytes}
+            trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
+        end
     end
 end
 release --recursive ${lock}
@@ -1938,6 +1996,10 @@ license_dir = set "${staging}/licenses"
 if equals ${licenses} LICENSE
     mkdir ${license_dir}
     cp LICENSE "${license_dir}/LICENSE"
+elif equals ${component} bash
+    mkdir ${license_dir}
+    cp ${licenses} "${license_dir}/LICENSE"
+    cp ${source_notice} "${license_dir}/NOTICE"
 elif equals ${component} web-fetch
     mkdir ${license_dir}
     cp ${licenses} "${license_dir}/THIRD_PARTY_LICENSES.html"

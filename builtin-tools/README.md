@@ -30,6 +30,10 @@ access. Its timeout, response-size, and redirect limits are optional invocation 
 deployment configuration. HTML is returned as decoded source unless the invocation enables
 conversion to readable text.
 
+The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly, in a pinned
+container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
+provides the `bash` tool; see [its contract and examples](bash/README.md).
+
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.7` supports local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`

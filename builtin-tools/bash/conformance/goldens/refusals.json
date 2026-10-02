@@ -1,0 +1,458 @@
+{
+ "cases": {
+  "refusals: a failed exec ends the script": {
+   "script": "c75d78d24eba025a",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: exec: nosuchcommand123: not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: a failed exec ends the subshell it's in": {
+   "script": "77679e8775c32599",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: exec: nosuchcommand123: not found\n"
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "refusals: a successful exec ends the subshell it's in": {
+   "script": "7f3c5e32d98d94e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nafter\n"
+   }
+  },
+  "refusals: a successful exec still ends the script": {
+   "script": "02cdc9452b16ae97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: bind -l is refused": {
+   "script": "5fe554ef21e04616",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: bind: warning: line editing not enabled\n"
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: bind -q is refused": {
+   "script": "68b576122561c3bf",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: bind: warning: line editing not enabled\n"
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: bind -x warns and succeeds": {
+   "script": "d8b45013890a278f",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: bind: warning: line editing not enabled\n"
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: bind binding form warns and succeeds": {
+   "script": "78011f82afeb4a49",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: bind: warning: line editing not enabled\n"
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: cd -@ is refused": {
+   "script": "7b47fd44c7e7e5cb",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: -@: invalid option\ncd: usage: cd [-L|[-P [-e]]] [-@] [dir]\n"
+   },
+   "stdout": {
+    "text": "s=2\n"
+   }
+  },
+  "refusals: cd /proc/self/fd works like cd /dev/fd": {
+   "script": "0af3f06131916624",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/fd\n/proc/self/fd\n"
+   }
+  },
+  "refusals: cd still works": {
+   "script": "325ac65fdc0b9222",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "refusals: enable -d of a name that is no builtin": {
+   "script": "e4b0effbd8e85325",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: enable: foo: not a shell builtin\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "refusals: enable -f is refused": {
+   "script": "641e4ec56542b348",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: enable: cannot open shared object /tmp/x.so: Error loading shared library /tmp/x.so: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "refusals: exec -- passes through to the command": {
+   "script": "2f6236cc21dd5a15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: exec -a is refused at run time too": {
+   "script": "9c5233116544360a",
+   "status": 1,
+   "stderr": {
+    "text": "coreutils: unknown program 'foo'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: exec -a name is still refused": {
+   "script": "487ef08e4d909a4f",
+   "status": 1,
+   "stderr": {
+    "text": "coreutils: unknown program 'myname'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: exec -l is still refused": {
+   "script": "ee51e579e6add83b",
+   "status": 1,
+   "stderr": {
+    "text": "coreutils: unknown program '-true'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: exec ls -l is not exec -l": {
+   "script": "e31c5b6984b6afa7",
+   "status": 2,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: exec sort -c is not exec -c": {
+   "script": "873af79275108c93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: exec wc -l is not exec -l": {
+   "script": "e771df5a9f20159d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 /tmp/wcl-xyz\n"
+   }
+  },
+  "refusals: extended test -N is refused": {
+   "script": "cee830638697723e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=1\nafter\n"
+   }
+  },
+  "refusals: fc is refused": {
+   "script": "1fd4b2bfa881a50a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: help -m is refused": {
+   "script": "db2c2b17f81f6a28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "NAME\n    cd - Change the shell working directory.\n\nSYNOPSIS\n    cd [-L|[-P [-e]]] [-@] [dir]\n\nDESCRIPTION\n    Change the shell working directory.\n    \n    Change the current directory to DIR.  The default DIR is the value of the\n    HOME shell variable. If DIR is \"-\", it is converted to $OLDPWD.\n    \n    The variable CDPATH defines the search path for the directory containing\n    DIR.  Alternative directory names in CDPATH are separated by a colon (:).\n    A null directory name is the same as the current directory.  If DIR begins\n    with a slash (/), then CDPATH is not used.\n    \n    If the directory is not found, and the shell option `cdable_vars' is set,\n    the word is assumed to be  a variable name.  If that variable has a value,\n    its value is used for DIR.\n    \n    Options:\n      -L\tforce symbolic links to be followed: resolve symbolic\n    \t\tlinks in DIR after processing instances of `..'\n      -P\tuse the physical directory structure without following\n    \t\tsymbolic links: resolve symbolic links in DIR before\n    \t\tprocessing instances of `..'\n      -e\tif the -P option is supplied, and the current working\n    \t\tdirectory cannot be determined successfully, exit with\n    \t\ta non-zero status\n      -@\ton systems that support it, present a file with extended\n    \t\tattributes as a directory containing the file attributes\n    \n    The default is to follow symbolic links, as if `-L' were specified.\n    `..' is processed by removing the immediately previous pathname component\n    back to a slash or the beginning of DIR.\n    \n    Exit Status:\n    Returns 0 if the directory is changed, and if $PWD is set successfully when\n    -P is used; non-zero otherwise.\n\nSEE ALSO\n    bash(1)\n\nIMPLEMENTATION\n    GNU bash, version 5.3.20(1)-release (aarch64-unknown-linux-musl)\n    Copyright (C) 2025 Free Software Foundation, Inc.\n    License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n\ns=0\n"
+   }
+  },
+  "refusals: history -a appends to a file": {
+   "script": "49e03eba8e97bf3b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo\n"
+   }
+  },
+  "refusals: history -c clears": {
+   "script": "304325479b961354",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: history -d deletes an offset": {
+   "script": "e425100a5c59be75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    1  bar\n"
+   }
+  },
+  "refusals: history -n reads a file": {
+   "script": "741237ae6ad9b7aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    1  foo\n    2  bar\n"
+   }
+  },
+  "refusals: history -p expands !!": {
+   "script": "00779c0fb46c3d02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo\n"
+   }
+  },
+  "refusals: history -p reports a bad event": {
+   "script": "f9ebc0992497c580",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: history: !nonexistentxyz: history expansion failed\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "refusals: history -s and display": {
+   "script": "03fa73fdb44ecf41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    1  foo\n"
+   }
+  },
+  "refusals: history -w then -r round-trips a file": {
+   "script": "1f10731311aca7e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    1  foo\n"
+   }
+  },
+  "refusals: history rejects a non-numeric N": {
+   "script": "46fea189e6408b40",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: history: 3x: numeric argument required\n"
+   },
+   "stdout": {
+    "text": "s=2\n"
+   }
+  },
+  "refusals: jobs -l still works": {
+   "script": "4351af64a86ab388",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: jobs with no args still works": {
+   "script": "2bd71e1297050f10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "refusals: mapfile -C runs its callback": {
+   "script": "0455a5f57c5243e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 a\n\n1 b\n\ndone=0\n"
+   }
+  },
+  "refusals: read -e reads plainly from input that is no terminal": {
+   "script": "706ea23b28504ee9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi 0\n"
+   }
+  },
+  "refusals: read still works": {
+   "script": "d7541763be13a0e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi 0\n"
+   }
+  },
+  "refusals: source of /dev/stdin is refused": {
+   "script": "728b278c6f8f69b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "refusals: source of process substitution works": {
+   "script": "cb3ec05d03da816c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "refusals: source searches PATH": {
+   "script": "6a5e9b4a1e0a0c6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi from sourced\n"
+   }
+  },
+  "refusals: sourced runtime error names the file": {
+   "script": "ac3dc00856f613fe",
+   "status": 127,
+   "stderr": {
+    "text": "/tmp/fixes-badsrc2.sh: line 2: UNSET_VAR: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "refusals: sourced syntax error names the file": {
+   "script": "9506fc44d1b415e2",
+   "status": 0,
+   "stderr": {
+    "text": "/tmp/fixes-badsrc.sh: line 2: syntax error near unexpected token `then'\n/tmp/fixes-badsrc.sh: line 2: `if then'\n"
+   },
+   "stdout": {
+    "text": "ok\nafter=2\n"
+   }
+  },
+  "refusals: ulimit is refused": {
+   "script": "1f46468fb269411b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "64\ns=0\n"
+   }
+  },
+  "refusals: ulimit is refused at run time too": {
+   "script": "fa4dbc4af1076019",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "64\ns=0\n"
+   }
+  },
+  "refusals: unreadable -d @file exits 26": {
+   "script": "82c5f1c930755f37",
+   "status": 0,
+   "stderr": {
+    "text": "curl: Failed to open /tmp/fixes-no-such-file-xyz\ncurl: option -d: error encountered when reading a file\ncurl: try 'curl --help' or 'curl --manual' for more information\n"
+   },
+   "stdout": {
+    "text": "status=26\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}
