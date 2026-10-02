@@ -42,7 +42,7 @@ jobs:
           install-cargo-component: 'true'
 
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Extract version from tag
         id: get_version

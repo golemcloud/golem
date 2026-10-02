@@ -44,7 +44,7 @@ jobs:
           wasm-rquickjs-version: ${{ env.WASM_RQUICKJS_VERSION }}
 
       - name: Update npm for trusted publishing
-        run: npm install --global npm@latest
+        run: npm install --global npm@11
 
       - name: Set package version from tag
         working-directory: sdks/effect
