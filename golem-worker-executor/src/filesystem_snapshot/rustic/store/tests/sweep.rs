@@ -22,8 +22,8 @@
 //! run, and the log of a case gives the call that took each step.
 
 use super::*;
+use crate::filesystem_snapshot::CallError;
 use futures::TryStreamExt;
-use tokio::task::JoinHandle;
 
 /// The operation labels of the blob calls of the prune protocol. The listing of the packs by a
 /// prune is a step too, and it is the start of the prune. The delete of a snapshot file is the
@@ -111,11 +111,12 @@ struct Step {
     landed: bool,
 }
 
-/// One delete of the case: its store, its scripted storage and its task.
+/// One delete of the case: its store, its scripted storage and its task, which a drop of the case
+/// aborts.
 struct Delete {
     store: Arc<RusticSnapshotStore>,
     storage: Arc<ScriptedBlobStorage>,
-    task: JoinHandle<Result<(), SnapshotStoreError>>,
+    task: AbortOnDropHandle<Result<(), CallError>>,
     /// The steps that the delete took, other than the writes of new markers.
     taken: usize,
     /// Whether the case dropped the delete. A dropped delete makes a call only for the release of
@@ -141,12 +142,26 @@ struct Case {
     pending: Option<(usize, usize, Step)>,
 }
 
+/// The checks of [`until`] after which it sleeps between two checks instead of yielding.
+const YIELDS_BEFORE_SLEEP: usize = 1000;
+
+/// The sleep between two late checks of [`until`].
+const POLL_STEP: Duration = Duration::from_millis(1);
+
 /// Waits until the condition holds, and gives false when it does not hold within [`LIMIT`]. The
-/// wait yields to the runtime between two checks, so a step ends as soon as it can.
+/// wait yields to the runtime between its first [`YIELDS_BEFORE_SLEEP`] checks, so a step ends as
+/// soon as it can, and then sleeps [`POLL_STEP`] between two checks. On a thread of the blocking
+/// pool a yield gives nothing back, so the sleeps keep a long wait from holding its thread busy.
 async fn until(condition: impl Fn() -> bool) -> bool {
     tokio::time::timeout(LIMIT, async {
-        futures::stream::repeat(())
-            .then(|()| tokio::task::yield_now())
+        futures::stream::iter(0usize..)
+            .then(|check| async move {
+                if check < YIELDS_BEFORE_SLEEP {
+                    tokio::task::yield_now().await;
+                } else {
+                    tokio::time::sleep(POLL_STEP).await;
+                }
+            })
             .take_while(|()| std::future::ready(!condition()))
             .for_each(|()| std::future::ready(()))
             .await
@@ -356,7 +371,7 @@ pub(super) async fn run_case(
 ) -> Result<(), String> {
     let scope = new_scope();
     store(shared.clone(), policy(LONG_DEADLINE, NEVER, Duration::ZERO))
-        .copy_all(prepared, &scope)
+        .copy_all(prepared, &scope, &crate::filesystem_snapshot::Unlimited)
         .await
         .map_err(|error| format!("the copy of the prepared scope failed: {error}"))?;
     let deletes = [0, 1].map(|who| {
@@ -383,10 +398,18 @@ pub(super) async fn run_case(
         });
         let deleting = store(storage.clone(), policy(LONG_DEADLINE, ALWAYS, SWEEP_GRACE));
         let scope = scope.clone();
-        let task = tokio::spawn({
+        let task = AbortOnDropHandle::new(tokio::spawn({
             let deleting = deleting.clone();
-            async move { deleting.delete(&scope, &[name(["p-1", "p-2"][who])]).await }
-        });
+            async move {
+                deleting
+                    .delete(
+                        &scope,
+                        &[name(["p-1", "p-2"][who])],
+                        &crate::filesystem_snapshot::Unlimited,
+                    )
+                    .await
+            }
+        }));
         Delete {
             store: deleting,
             storage,
@@ -597,7 +620,7 @@ async fn check(
     scope: &AgentSnapshots,
     schedule: &Schedule,
     log: &[Step],
-    results: Vec<Result<Result<(), SnapshotStoreError>, tokio::task::JoinError>>,
+    results: Vec<Result<Result<(), CallError>, tokio::task::JoinError>>,
 ) -> Result<(), String> {
     let failed = log.iter().any(|step| step.failed);
     let prune_starts = log

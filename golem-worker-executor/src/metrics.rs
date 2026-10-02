@@ -1836,7 +1836,7 @@ pub mod filesystem_snapshots {
         .unwrap();
         static ref LEAKED_CLEANUPS: CounterVec = register_counter_vec!(
             "filesystem_snapshot_leaked_cleanups_total",
-            "Clean-ups of filesystem snapshots that failed after their retries, by operation",
+            "Clean-ups of filesystem snapshots that failed, by operation",
             &["operation"]
         )
         .unwrap();

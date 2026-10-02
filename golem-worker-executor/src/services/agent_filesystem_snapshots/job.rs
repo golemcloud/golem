@@ -23,7 +23,7 @@ use super::{
     Admission, CapturedTree, Confirm, Core, JobDecision, SavedUpdate, SnapshotKind, UploadNowError,
     retention, store_name,
 };
-use crate::filesystem_snapshot::{ChangeDetection, SnapshotInfo, SnapshotName, SnapshotStoreError};
+use crate::filesystem_snapshot::{ChangeDetection, Failed, SaveError, SnapshotInfo, SnapshotName};
 use golem_common::model::oplog::FilesystemSnapshotName;
 use std::sync::Arc;
 use std::time::Instant;
@@ -35,16 +35,15 @@ use tokio_util::sync::CancellationToken;
 fn store_names(
     name: &FilesystemSnapshotName,
     parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
-) -> Result<(SnapshotName, Option<(SnapshotName, ChangeDetection)>), SnapshotStoreError> {
+) -> Result<(SnapshotName, Option<(SnapshotName, ChangeDetection)>), SaveError> {
     let parent = parent
         .map(|(name, detection)| store_name(&name).map(|name| (name, detection)))
         .transpose();
     match (store_name(name), parent) {
         (Ok(name), Ok(parent)) => Ok((name, parent)),
-        (Err(error), _) | (_, Err(error)) => Err(SnapshotStoreError::Storage {
-            retryable: false,
-            source: anyhow::Error::new(error),
-        }),
+        (Err(error), _) | (_, Err(error)) => {
+            Err(SaveError::Failed(Failed::new(anyhow::Error::new(error))))
+        }
     }
 }
 
@@ -90,7 +89,16 @@ pub(super) async fn run_job(
             );
             return;
         }
-        Upload::Stopped => return,
+        Upload::Stopped => {
+            if ticket.replaced() {
+                crate::metrics::filesystem_snapshots::record_upload(
+                    kind.label(),
+                    "replaced",
+                    started.elapsed(),
+                );
+            }
+            return;
+        }
     };
     crate::metrics::filesystem_snapshots::record_uploaded_bytes(kind.label(), info.bytes);
     if ticket.stop_requested() {
@@ -137,10 +145,13 @@ impl Admission {
     /// A terminal interrupt that `stop` reports, a caller that stops waiting, a lost shard that
     /// `lost_shard` reports, a shutdown, or a delete of all snapshots of the agent gives
     /// [`UploadNowError::Stopped`] at once and ends the admission. A save that runs then goes on
-    /// until it returns, and the tree is discarded after it; a lost shard also cancels that save
-    /// in the store, so it publishes nothing. The waits for a running save of the agent and for a
-    /// slot end at the deadline of the admission with [`UploadNowError::SaveRunning`] or
-    /// [`UploadNowError::NoSlot`].
+    /// until it returns, and the tree is discarded after it; a lost shard also cancels that save in
+    /// the store, so it publishes nothing. An error of the save after a stop also gives
+    /// [`UploadNowError::Stopped`]. A save that had succeeded before the stop gives `Saved`; when
+    /// the success and the stop are both there at the same wake, the success wins. The wait for a
+    /// running save of the agent ends at the deadline of the admission with
+    /// [`UploadNowError::SaveRunning`]. A save that the deadline withdrew gives
+    /// [`UploadNowError::NoSlot`] when no run of it failed, and the storage error otherwise.
     pub(crate) async fn upload_now(
         self,
         tree: CapturedTree,
@@ -254,9 +265,10 @@ pub(super) async fn interrupt_raised(mut stop: watch::Receiver<bool>) {
 
 /// Keeps the own snapshot `own` and the newest older snapshots of its kind, and deletes the rest
 /// of its kind that are older than it. `info` is the info of the own snapshot, and `kept` the
-/// snapshots that it never deletes and does not count. The listing and the delete each take a
-/// slot of the uploads. The stop of the deletes of the job ends it at once, also in its waits; a
-/// delete that the store already runs goes on, and a later retention deletes what it left.
+/// snapshots that it never deletes and does not count. Each run of the listing and of the delete
+/// takes a slot of the uploads. The stop of the deletes of the job ends it at once, also in its
+/// waits; a run of a delete that the store already runs goes on, and a later retention deletes
+/// what it left.
 pub(super) async fn delete_older_snapshots(
     core: &Core,
     ticket: &JobTicket,
@@ -267,7 +279,7 @@ pub(super) async fn delete_older_snapshots(
 ) {
     let agent = ticket.agent();
     let retention = async {
-        let listing = match core.calls.list(agent).await {
+        let listing = match core.calls.list(agent, ticket.deletes_stopped()).await {
             Ok(listing) => listing,
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to list the filesystem snapshots for retention");
@@ -285,7 +297,7 @@ pub(super) async fn delete_older_snapshots(
         }
         if let Deleted::Leaked(error) = core
             .calls
-            .delete(agent, Arc::clone(&victims), ticket.until_deletes_stopped())
+            .delete(agent, Arc::clone(&victims), ticket.deletes_stopped())
             .await
         {
             tracing::warn!(
@@ -298,12 +310,12 @@ pub(super) async fn delete_older_snapshots(
     };
     tokio::select! {
         biased;
-        () = ticket.until_deletes_stopped() => {}
+        () = ticket.deletes_stopped() => {}
         () = retention => {}
     }
 }
 
-/// Deletes the snapshot `own` of the job, which no confirmation record names, under its own slot
+/// Deletes the snapshot `own` of the job, which no confirmation record names, with its own slots
 /// of the uploads. The stop of the deletes of the job ends it at once, and the snapshot stays
 /// until a retention of its kind deletes it.
 async fn delete_superseded(core: &Core, ticket: &JobTicket, own: SnapshotName) {
@@ -312,7 +324,7 @@ async fn delete_superseded(core: &Core, ticket: &JobTicket, own: SnapshotName) {
         .delete(
             ticket.agent(),
             Arc::from([own.clone()]),
-            ticket.until_deletes_stopped(),
+            ticket.deletes_stopped(),
         )
         .await;
     if let Deleted::Leaked(error) = deleted {

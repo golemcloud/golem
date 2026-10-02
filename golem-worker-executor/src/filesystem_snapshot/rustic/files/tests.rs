@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::super::fault::{LeaseExpired, OperationCancelled};
+use super::super::fault::{CallFailure, LeaseExpired, OperationCancelled};
 use super::super::tests::polled_until;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
-use super::{Lease, SnapshotFiles, extended};
+use super::{
+    CallAgain, IN_CALL_TRIES, IN_CALL_WAITS, LateWrites, Lease, SnapshotFiles, call_again, extended,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::BlobStorageNamespace;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -292,5 +294,167 @@ async fn a_refresh_of_the_lease_during_a_call_does_not_move_the_end_of_that_call
         (true, true, true, true),
         "the call ended {:?} after its start",
         ended - started
+    );
+}
+
+#[test]
+fn a_call_tries_again_only_after_a_failure_with_tries_and_time_left_and_cuts_the_try_at_the_time_left()
+ {
+    let deadline = Duration::from_secs(60);
+    let spent = Duration::from_secs(20);
+
+    assert_eq!(
+        [
+            call_again(1, IN_CALL_TRIES, CallFailure::Failed, spent, deadline),
+            call_again(2, IN_CALL_TRIES, CallFailure::Failed, spent, deadline),
+            call_again(3, IN_CALL_TRIES, CallFailure::Failed, spent, deadline),
+            call_again(1, 1, CallFailure::Failed, spent, deadline),
+            call_again(1, IN_CALL_TRIES, CallFailure::Failed, deadline, deadline),
+            call_again(
+                1,
+                IN_CALL_TRIES,
+                CallFailure::Failed,
+                deadline - Duration::from_millis(1),
+                deadline
+            ),
+            call_again(1, IN_CALL_TRIES, CallFailure::TimedOut, spent, deadline),
+            call_again(1, IN_CALL_TRIES, CallFailure::Cancelled, spent, deadline),
+            call_again(1, IN_CALL_TRIES, CallFailure::LeaseExpired, spent, deadline),
+            call_again(1, IN_CALL_TRIES, CallFailure::Permanent, spent, deadline),
+        ],
+        [
+            CallAgain::After {
+                wait: IN_CALL_WAITS[0],
+                cut: Duration::from_secs(40)
+            },
+            CallAgain::After {
+                wait: IN_CALL_WAITS[1],
+                cut: Duration::from_secs(40)
+            },
+            CallAgain::End,
+            CallAgain::End,
+            CallAgain::End,
+            CallAgain::After {
+                wait: IN_CALL_WAITS[0],
+                cut: Duration::from_millis(1)
+            },
+            CallAgain::End,
+            CallAgain::End,
+            CallAgain::End,
+            CallAgain::End,
+        ]
+    );
+}
+
+/// A storage whose first `refused` calls give an error after `delay`, and whose later calls pass.
+fn refusing_first(refused: usize, delay: Duration) -> Arc<ScriptedBlobStorage> {
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |_, _| {
+        if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < refused {
+            Script::RefuseAfter(delay)
+        } else {
+            Script::Pass
+        }
+    })
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_blob_call_that_fails_fast_fewer_times_than_the_in_call_tries_does_not_end_the_run() {
+    let storage = refusing_first(2, Duration::ZERO);
+    let files = files_over(
+        storage.clone(),
+        CancellationToken::new(),
+        TaskTracker::new(),
+    );
+    let once = files.once();
+
+    let read = files.get("read", Path::new("a")).await;
+    let storage_once = refusing_first(1, Duration::ZERO);
+    let read_once = files_over(
+        storage_once.clone(),
+        CancellationToken::new(),
+        TaskTracker::new(),
+    )
+    .once()
+    .get("read", Path::new("a"))
+    .await;
+    drop(once);
+
+    assert!(matches!(read, Ok(None)), "{read:?}");
+    assert!(read_once.is_err(), "{read_once:?}");
+    assert_eq!((storage.calls().len(), storage_once.calls().len()), (3, 1));
+}
+
+#[test]
+fn a_blob_call_never_holds_its_run_longer_than_one_deadline_and_the_waits() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(the_tries_of_a_blob_call_that_never_answers());
+}
+
+/// The tries of a call whose storage answers each try with an error after 4 s, with a deadline
+/// of 10 s.
+async fn the_tries_of_a_blob_call_that_never_answers() {
+    let deadline = Duration::from_secs(10);
+    let storage = refusing_first(usize::MAX, Duration::from_secs(4));
+    let files = SnapshotFiles::new(
+        storage.clone(),
+        BlobStorageNamespace::InitialAgentFiles {
+            environment_id: EnvironmentId(Uuid::new_v4()),
+        },
+        deadline,
+        CancellationToken::new(),
+        TaskTracker::new(),
+    );
+    let started = tokio::time::Instant::now();
+
+    let read = files.get("read", Path::new("a")).await;
+
+    assert!(read.is_err(), "{read:?}");
+    assert_eq!(
+        (storage.calls().len(), started.elapsed()),
+        (3, deadline + IN_CALL_WAITS[0] + IN_CALL_WAITS[1])
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_write_whose_try_ended_without_an_answer_is_late_also_when_a_later_try_succeeds() {
+    let late = Arc::new(LateWrites::default());
+    let lost = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        move |_, _| {
+            if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                Script::LoseTheAnswer
+            } else {
+                Script::Pass
+            }
+        }
+    });
+    let files =
+        files_over(lost, CancellationToken::new(), TaskTracker::new()).recording(late.clone());
+    let read_only = Arc::new(LateWrites::default());
+    let refused_reads = files_over(
+        refusing_first(usize::MAX, Duration::ZERO),
+        CancellationToken::new(),
+        TaskTracker::new(),
+    )
+    .recording(read_only.clone());
+
+    let written = files.put("write", Path::new("a"), b"a").await;
+    let read = refused_reads.get("read", Path::new("a")).await;
+
+    assert!(written.is_ok(), "{written:?}");
+    assert!(read.is_err(), "{read:?}");
+    assert_eq!(
+        (
+            late.until(DEADLINE).is_some(),
+            read_only.until(DEADLINE).is_some()
+        ),
+        (true, false)
     );
 }

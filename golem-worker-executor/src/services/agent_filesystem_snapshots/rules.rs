@@ -18,15 +18,14 @@
 //! the store.
 
 use super::{ConfirmOutcome, JobDecision, SnapshotKind, SnapshotSkip};
-use crate::filesystem_snapshot::{AgentSnapshots, SnapshotInfo, SnapshotName, SnapshotStoreError};
+use crate::filesystem_snapshot::{AgentSnapshots, SnapshotName};
 use crate::sandbox_filesystem::FilesystemSpace;
 use crate::services::golem_config::{
     FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
 };
+use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::FilesystemSnapshotName;
-use golem_common::model::{AgentId, RetryConfig};
-use golem_common::retries::get_delay;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
@@ -128,7 +127,10 @@ impl State {
 struct Job {
     id: JobId,
     name: FilesystemSnapshotName,
+    kind: SnapshotKind,
     phase: JobPhase,
+    /// Where the store call of the upload of the job is.
+    run_phase: RunPhase,
     /// Stops the job. It is a child of the shutdown token.
     stop: CancellationToken,
     /// Stops the deletes of the job after its save. It is a child of `stop`, and the ticket of
@@ -153,10 +155,21 @@ pub(super) enum JobPhase {
     /// uploads.
     Admitted,
     /// The job has started saving: it got its first slot of the uploads. It stays here until it
-    /// decides, also while it waits between two attempts without a slot.
+    /// decides, also while it waits between two runs without a slot.
     Saving,
     /// The job knows how it ended its work on the snapshot.
     Decided(JobDecision),
+}
+
+/// Where the store call of the upload of a job is, as the store reports it through the limiter of
+/// the job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunPhase {
+    /// No run has had a slot yet, or a run holds one. The job cannot be replaced.
+    NotWaiting,
+    /// A run failed, and the store call waits for its next run. No write of the call can still
+    /// land, and the call runs nothing now.
+    WaitingAfterFailure,
 }
 
 /// Clean-up work of one agent.
@@ -237,7 +250,9 @@ pub(super) struct Requested {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Transition {
     Admit,
-    Saving,
+    Replace,
+    RunGranted,
+    RunFailed,
     Decide,
     End,
     StartWait,
@@ -261,6 +276,8 @@ enum Transition {
 fn wakes(transition: Transition) -> bool {
     match transition {
         Transition::Decide
+        | Transition::Replace
+        | Transition::RunFailed
         | Transition::End
         | Transition::RequestNames
         | Transition::RequestAll
@@ -268,7 +285,7 @@ fn wakes(transition: Transition) -> bool {
         | Transition::StoreCallEnded
         | Transition::ForkEnded => true,
         Transition::Admit
-        | Transition::Saving
+        | Transition::RunGranted
         | Transition::StartWait
         | Transition::Unwatch
         | Transition::TakeReady
@@ -323,6 +340,15 @@ pub(super) struct RunningJob {
     pub(super) retention_stop: CancellationToken,
 }
 
+/// A job that an admission gave.
+#[derive(Debug)]
+pub(super) struct Admitted {
+    pub(super) id: JobId,
+    /// The stop of the job that the admission replaced. The caller cancels it after the
+    /// transition.
+    pub(super) replaced: Option<CancellationToken>,
+}
+
 /// Whether an agent in `mode` keeps filesystem snapshots. Only a durable agent does: nothing
 /// restores an ephemeral agent, and nothing deletes the snapshots of one.
 pub(super) fn keeps_files(mode: AgentMode) -> bool {
@@ -332,26 +358,32 @@ pub(super) fn keeps_files(mode: AgentMode) -> bool {
     }
 }
 
-/// Admits a job with `name` for `agent`, in the order room, delete of all snapshots, running job.
-/// `stop` stops the job, `retention_stop` stops its deletes after its save, and `room` tells
-/// whether the volume has room for a capture. Gives the next state and the job, or the refusal.
+/// Admits a job of `kind` with `name` for `agent`, in the order room, delete of all snapshots,
+/// running job. `stop` stops the job, `retention_stop` stops its deletes after its save, and `room`
+/// tells whether the volume has room for a capture. A periodic job that waits for its next run
+/// after a failed run and has not decided is replaced: the old job leaves the state, its decision
+/// is `Replaced` for the starts that wait for it, and the answer gives its stop, which the caller
+/// cancels. Any other running job refuses the admission with `UploadInFlight`. Gives the next state
+/// and the job, or the refusal.
 pub(super) fn admit(
     mut state: State,
     agent: &AgentSnapshots,
     name: &FilesystemSnapshotName,
+    kind: SnapshotKind,
     stop: CancellationToken,
     retention_stop: CancellationToken,
     room: bool,
-) -> Next<Result<JobId, Refusal>> {
+) -> Next<Result<Admitted, Refusal>> {
     let running = state.jobs.get(agent).map(|job| RunningJob {
         id: job.id,
         retention_stop: job.retention_stop.clone(),
     });
+    let replaceable = state.jobs.get(agent).is_some_and(replaceable);
     let skip = if !room {
         Some(SnapshotSkip::VolumeUnderPressure)
     } else if all_requested(&state, agent) {
         Some(SnapshotSkip::DeletingAllSnapshots)
-    } else if running.is_some() {
+    } else if running.is_some() && !replaceable {
         Some(SnapshotSkip::UploadInFlight)
     } else {
         None
@@ -359,6 +391,10 @@ pub(super) fn admit(
     if let Some(skip) = skip {
         return Next::of(Transition::Admit, state, Err(Refusal { skip, running }));
     }
+    let replaced = state
+        .jobs
+        .remove(agent)
+        .map(|old| ended_with(&mut state, agent, old, JobDecision::Replaced));
     state.last_job += 1;
     let id = state.last_job;
     state.jobs.insert(
@@ -366,23 +402,102 @@ pub(super) fn admit(
         Job {
             id,
             name: name.clone(),
+            kind,
             phase: JobPhase::Admitted,
+            run_phase: RunPhase::NotWaiting,
             stop,
             retention_stop,
             waiters: 0,
         },
     );
-    Next::of(Transition::Admit, state, Ok(id))
+    // The replaced job left the state while its ticket lives, so the agent can be ready now.
+    let transition = if replaced.is_some() {
+        push_if_ready(&mut state, agent);
+        Transition::Replace
+    } else {
+        Transition::Admit
+    };
+    Next::of(transition, state, Ok(Admitted { id, replaced }))
 }
 
-/// The job `id` has started saving: it got a slot of the uploads. The phase only moves forward.
-pub(super) fn saving(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<()> {
-    if let Some(job) = live(&mut state, agent, id)
-        && job.phase == JobPhase::Admitted
-    {
-        job.phase = JobPhase::Saving;
+/// Whether an admission replaces `job`: a periodic job that waits for its next run after a failed
+/// run and has not decided.
+fn replaceable(job: &Job) -> bool {
+    job.kind == SnapshotKind::Periodic
+        && job.run_phase == RunPhase::WaitingAfterFailure
+        && !matches!(job.phase, JobPhase::Decided(_))
+}
+
+/// Keeps the decision of a job that left the state while starts wait for it, and gives its stop.
+fn ended_with(
+    state: &mut State,
+    agent: &AgentSnapshots,
+    job: Job,
+    decision: JobDecision,
+) -> CancellationToken {
+    if let Some(waiters) = NonZeroU32::new(job.waiters) {
+        state.ended.insert(
+            agent.clone(),
+            Ended {
+                id: job.id,
+                decision,
+                waiters,
+            },
+        );
     }
-    Next::of(Transition::Saving, state, ())
+    job.stop
+}
+
+/// A run of the job `id` got a slot of the uploads: the job is saving, and it waits after no
+/// failure. Gives false when the job is no longer live, and then the slot goes back and the run
+/// does not start.
+pub(super) fn run_granted(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<bool> {
+    let granted = match live(&mut state, agent, id) {
+        Some(job) => {
+            job.run_phase = RunPhase::NotWaiting;
+            if job.phase == JobPhase::Admitted {
+                job.phase = JobPhase::Saving;
+            }
+            true
+        }
+        None => false,
+    };
+    Next::of(Transition::RunGranted, state, granted)
+}
+
+/// A run of the job `id` failed, and its store call waits for its next run. A report of a job that
+/// is no longer live changes nothing.
+pub(super) fn run_failed(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<()> {
+    if let Some(job) = live(&mut state, agent, id) {
+        job.run_phase = RunPhase::WaitingAfterFailure;
+    }
+    Next::of(Transition::RunFailed, state, ())
+}
+
+/// Whether the deletes of the job of `agent` after its save are stopped, when a job runs.
+#[cfg(test)]
+pub(super) fn job_retention_stopped(state: &State, agent: &AgentSnapshots) -> Option<bool> {
+    state
+        .jobs
+        .get(agent)
+        .map(|job| job.retention_stop.is_cancelled())
+}
+
+/// Whether the job of `agent` waits for its next run after a failed run.
+#[cfg(test)]
+pub(super) fn job_waits_after_failure(state: &State, agent: &AgentSnapshots) -> bool {
+    state
+        .jobs
+        .get(agent)
+        .is_some_and(|job| job.run_phase == RunPhase::WaitingAfterFailure)
+}
+
+/// Whether an admission replaces the job `id` of `agent`, as [`admit`] decides.
+pub(super) fn is_replaceable(state: &State, agent: &AgentSnapshots, id: JobId) -> bool {
+    state
+        .jobs
+        .get(agent)
+        .is_some_and(|job| job.id == id && replaceable(job))
 }
 
 /// The job `id` decided. The first decision stays.
@@ -409,20 +524,12 @@ fn live<'a>(state: &'a mut State, agent: &AgentSnapshots, id: JobId) -> Option<&
 pub(super) fn end(mut state: State, agent: &AgentSnapshots, id: JobId) -> Next<()> {
     if state.jobs.get(agent).is_some_and(|job| job.id == id)
         && let Some(job) = state.jobs.remove(agent)
-        && let Some(waiters) = NonZeroU32::new(job.waiters)
     {
         let decision = match job.phase {
             JobPhase::Decided(decision) => decision,
             JobPhase::Admitted | JobPhase::Saving => JobDecision::Stopped,
         };
-        state.ended.insert(
-            agent.clone(),
-            Ended {
-                id,
-                decision,
-                waiters,
-            },
-        );
+        let _stop = ended_with(&mut state, agent, job, decision);
     }
     push_if_ready(&mut state, agent);
     Next::of(Transition::End, state, ())
@@ -804,9 +911,15 @@ pub(super) fn busy(state: &State, agent: &AgentSnapshots) -> u32 {
     state.busy.get(agent).map_or(0, |count| count.get())
 }
 
-/// The number of agents with pending clean-up work.
-pub(super) fn pending_cleanups(state: &State) -> usize {
+/// The clean-up work that a shutdown loses: the pending work of each agent and the running work
+/// of each agent, which the shutdown drops.
+pub(super) fn cleanups_lost_at_shutdown(state: &State) -> usize {
     state.pending_entries
+        + state
+            .cleanups
+            .values()
+            .filter(|cleanup| cleanup.running.is_some())
+            .count()
 }
 
 /// Begins a store call of `kind` for `agent`. A save is refused while another save of the agent
@@ -931,59 +1044,6 @@ fn with_one_less(
     busy
 }
 
-/// What one save attempt gave.
-#[derive(Debug)]
-pub(super) enum SaveAttempt {
-    /// The store holds the snapshot.
-    Saved(SnapshotInfo),
-    /// The store already holds the name. Each name belongs to one capture, so it is the tree of
-    /// an earlier attempt of the same job, and a `stat` of the name gives its info.
-    StatOwn,
-    /// The attempt failed.
-    Failed(SnapshotStoreError),
-}
-
-/// Classifies the result of a save of the own name of a job.
-pub(super) fn save_attempt(result: Result<SnapshotInfo, SnapshotStoreError>) -> SaveAttempt {
-    match result {
-        Ok(info) => SaveAttempt::Saved(info),
-        Err(SnapshotStoreError::AlreadyExists) => SaveAttempt::StatOwn,
-        Err(error) => SaveAttempt::Failed(error),
-    }
-}
-
-/// The delay before the next attempt after attempt number `attempt` failed with `error`, or
-/// `None` when no attempt follows. `jitter` is the jitter factor that the caller drew below the
-/// `max_jitter_factor` of `retry`: the delay grows by that part of itself, and stays at most the
-/// `max_delay` of `retry`, as [`get_delay`] gives it. A jitter that is negative or not a number
-/// counts as none, and a delay too large for a [`Duration`] is the `max_delay`, so no jitter
-/// panics.
-pub(super) fn retry_delay(
-    retry: &RetryConfig,
-    attempt: u32,
-    error: &SnapshotStoreError,
-    jitter: f64,
-) -> Option<Duration> {
-    let retryable = matches!(
-        error,
-        SnapshotStoreError::Storage {
-            retryable: true,
-            ..
-        }
-    );
-    let without_jitter = RetryConfig {
-        max_jitter_factor: None,
-        ..retry.clone()
-    };
-    let base = get_delay(&without_jitter, attempt).filter(|_| retryable)?;
-    let grown = base.as_secs_f64() * (1.0 + jitter.max(0.0));
-    Some(
-        Duration::try_from_secs_f64(grown)
-            .unwrap_or(retry.max_delay)
-            .min(retry.max_delay),
-    )
-}
-
 /// What a job does after its confirmation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FollowUp {
@@ -1047,19 +1107,40 @@ pub(super) fn store_check(
 pub(super) enum UpdateAdmit {
     /// It fails with the refusal.
     Refuse,
-    /// It stops the deletes of the running job, waits for the end of the job, then asks once
-    /// more.
-    WaitForEnd(RunningJob),
+    /// It waits until the job is gone or waits for its next run after a failed run, then asks
+    /// again. With `stop_deletes`, it first stops the deletes of the running job.
+    WaitForEndOrFailure {
+        running: RunningJob,
+        stop_deletes: bool,
+    },
 }
 
-/// What a manual update does after its first admission gave `refusal`. Only an upload that runs
-/// makes it wait. The admission after the wait fails with its refusal, so the update waits at
-/// most once.
-pub(super) fn update_admission(refusal: Refusal) -> UpdateAdmit {
+/// What a manual update does after an admission gave `refusal`. Only a job that runs makes it
+/// wait: a periodic job that an admission replaces once it waits after a failed run, or a job that
+/// ends after its deletes, such as the job of an earlier manual update in its retention. The
+/// update refuses when its deadline passed or the service shuts down. It stops the deletes of a
+/// running job once: not again for the job `stopped` whose deletes an earlier ask stopped.
+pub(super) fn update_admission(
+    refusal: Refusal,
+    deadline_passed: bool,
+    shut_down: bool,
+    stopped: Option<JobId>,
+) -> UpdateAdmit {
     match (refusal.skip, refusal.running) {
-        (SnapshotSkip::UploadInFlight, Some(running)) => UpdateAdmit::WaitForEnd(running),
+        (SnapshotSkip::UploadInFlight, Some(running)) if !deadline_passed && !shut_down => {
+            UpdateAdmit::WaitForEndOrFailure {
+                stop_deletes: stopped != Some(running.id),
+                running,
+            }
+        }
         _ => UpdateAdmit::Refuse,
     }
+}
+
+/// Whether a manual update that waits for the job `id` of `agent` asks for an admission again: the
+/// job is gone, or an admission can replace it.
+pub(super) fn update_may_ask_again(state: &State, agent: &AgentSnapshots, id: JobId) -> bool {
+    has_ended(state, agent, id) || is_replaceable(state, agent, id)
 }
 
 /// What a service binds to.
@@ -1138,7 +1219,15 @@ mod tests {
     }
 
     fn saving(state: &mut State, agent: &AgentSnapshots, id: JobId) {
-        step(state, |state| super::saving(state, agent, id))
+        step(state, |state| super::run_granted(state, agent, id));
+    }
+
+    fn granted(state: &mut State, agent: &AgentSnapshots, id: JobId) -> bool {
+        step(state, |state| super::run_granted(state, agent, id))
+    }
+
+    fn failed_run(state: &mut State, agent: &AgentSnapshots, id: JobId) {
+        step(state, |state| super::run_failed(state, agent, id))
     }
 
     fn decide(state: &mut State, agent: &AgentSnapshots, id: JobId, decision: JobDecision) {
@@ -1214,8 +1303,29 @@ mod tests {
         retention_stop: CancellationToken,
         room: bool,
     ) -> Result<JobId, Refusal> {
+        admit_kind(
+            state,
+            agent,
+            name,
+            SnapshotKind::Periodic,
+            stop,
+            retention_stop,
+            room,
+        )
+        .map(|admitted| admitted.id)
+    }
+
+    fn admit_kind(
+        state: &mut State,
+        agent: &AgentSnapshots,
+        name: &FilesystemSnapshotName,
+        kind: SnapshotKind,
+        stop: CancellationToken,
+        retention_stop: CancellationToken,
+        room: bool,
+    ) -> Result<Admitted, Refusal> {
         step(state, |state| {
-            super::admit(state, agent, name, stop, retention_stop, room)
+            super::admit(state, agent, name, kind, stop, retention_stop, room)
         })
     }
 
@@ -1255,6 +1365,85 @@ mod tests {
         name: &FilesystemSnapshotName,
     ) -> Result<JobId, Option<JobDecision>> {
         step(state, |state| start_wait(state, agent, name))
+    }
+
+    #[test]
+    fn a_clean_up_entry_has_its_measured_size() {
+        // The map entry of a clean-up: the key, which shares the namespace of the agent, and the
+        // entry. The pending names of the entry live on the heap, counted by `pending_names`.
+        assert_eq!(
+            (
+                std::mem::size_of::<Cleanup>(),
+                std::mem::size_of::<(AgentSnapshots, Cleanup)>(),
+                std::mem::size_of::<SnapshotName>(),
+            ),
+            (80, 88, 16)
+        );
+    }
+
+    #[test]
+    fn a_shutdown_loses_the_pending_and_the_running_clean_ups() {
+        let mut state = State::default();
+        let (pending, running, both) = (
+            agent_snapshots("pending"),
+            agent_snapshots("running"),
+            agent_snapshots("both"),
+        );
+        let name = || SnapshotName::new(FilesystemSnapshotName::periodic().as_str()).unwrap();
+        request_names(&mut state, &running, &[name()]);
+        request_names(&mut state, &both, &[name()]);
+        let taken = [take(&mut state), take(&mut state)].map(|taken| taken.is_some());
+        request_names(&mut state, &both, &[name()]);
+        request_names(&mut state, &pending, &[name()]);
+
+        assert_eq!(
+            (taken, cleanups_lost_at_shutdown(&state)),
+            ([true, true], 4)
+        );
+    }
+
+    #[test]
+    fn a_shutdown_loses_one_pending_and_two_running_clean_ups() {
+        let mut state = State::default();
+        let (pending, first, second) = (
+            agent_snapshots("pending"),
+            agent_snapshots("first-running"),
+            agent_snapshots("second-running"),
+        );
+        let name = || SnapshotName::new(FilesystemSnapshotName::periodic().as_str()).unwrap();
+        request_names(&mut state, &first, &[name()]);
+        request_names(&mut state, &second, &[name()]);
+        let taken = [take(&mut state), take(&mut state)].map(|taken| taken.is_some());
+        request_names(&mut state, &pending, &[name()]);
+
+        assert_eq!(
+            (taken, cleanups_lost_at_shutdown(&state)),
+            ([true, true], 3)
+        );
+    }
+
+    #[test]
+    fn a_replacing_admission_queues_the_agent_that_the_replaced_job_held() {
+        let mut state = State::default();
+        let agent = agent_snapshots("agent");
+        let (first, second) = (
+            FilesystemSnapshotName::periodic(),
+            FilesystemSnapshotName::periodic(),
+        );
+        let old = admitted(&mut state, &agent, &first);
+        granted(&mut state, &agent, old);
+        failed_run(&mut state, &agent, old);
+        request_names(
+            &mut state,
+            &agent,
+            &[SnapshotName::new(first.as_str()).unwrap()],
+        );
+        let held = take(&mut state).is_none();
+
+        admitted(&mut state, &agent, &second);
+        let taken = take(&mut state).map(|(taken, _)| taken);
+
+        assert_eq!((held, taken), (true, Some(agent)));
     }
 
     #[test]
@@ -1501,12 +1690,15 @@ mod tests {
                     fresh(),
                     &agent,
                     &name,
+                    SnapshotKind::Periodic,
                     CancellationToken::new(),
                     CancellationToken::new(),
                     true
                 )
                 .wakes(),
-                super::saving(fresh(), &agent, 1).wakes(),
+                super::run_granted(fresh(), &agent, 1).wakes(),
+                super::run_failed(fresh(), &agent, 1).wakes(),
+                replacing(&agent, &name).wakes(),
                 super::decide(fresh(), &agent, 1, JobDecision::Stopped).wakes(),
                 end(fresh(), &agent, 1).wakes(),
                 start_wait(fresh(), &agent, &name).wakes(),
@@ -1534,8 +1726,8 @@ mod tests {
                 .wakes(),
             ],
             [
-                false, false, true, true, false, false, true, true, false, true, false, true,
-                false, false, true
+                false, false, true, true, true, true, false, false, true, true, false, true, false,
+                true, false, false, true
             ]
         );
     }
@@ -2007,6 +2199,9 @@ mod tests {
         ForkBegan(usize, usize),
         ForkPublishing,
         ForkEnded(usize, bool),
+        RunGranted(usize),
+        RunFailed(usize),
+        EndReplaced(usize),
     }
 
     fn step_strategy() -> impl proptest::strategy::Strategy<Value = Step> {
@@ -2032,6 +2227,9 @@ mod tests {
             Just(Step::ForkPublishing),
             (0usize..3, any::<bool>())
                 .prop_map(|(index, published)| Step::ForkEnded(index, published)),
+            agent.clone().prop_map(Step::RunGranted),
+            agent.clone().prop_map(Step::RunFailed),
+            (0usize..3).prop_map(Step::EndReplaced),
         ]
     }
 
@@ -2083,6 +2281,7 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut state = limited(pending_cleanups, 4, names_per_cleanup);
             let mut jobs: HashMap<usize, JobId> = HashMap::new();
+            let mut replaced: Vec<(usize, JobId)> = Vec::new();
             let mut calls: Vec<(AgentSnapshots, CallKind)> = Vec::new();
             let mut forks: Vec<(AgentSnapshots, Flight, AgentSnapshots, bool)> = Vec::new();
             let mut fork_counter = 0u8;
@@ -2091,8 +2290,10 @@ mod tests {
                 match next {
                     Step::Admit(agent, name) => {
                         let name = job_names[name].clone();
-                        if let Ok(id) = try_admit(&mut state, &agents[agent], &name, true) {
-                            jobs.insert(agent, id);
+                        if let Ok(id) = try_admit(&mut state, &agents[agent], &name, true)
+                            && let Some(old) = jobs.insert(agent, id)
+                        {
+                            replaced.push((agent, old));
                         }
                     }
                     Step::End(agent) => {
@@ -2147,6 +2348,22 @@ mod tests {
                             step(&mut state, |state| fork_ended(state, &from, &flight, &stage, published));
                         }
                     }
+                    Step::RunGranted(agent) => {
+                        if let Some(id) = jobs.get(&agent) {
+                            granted(&mut state, &agents[agent], *id);
+                        }
+                    }
+                    Step::RunFailed(agent) => {
+                        if let Some(id) = jobs.get(&agent) {
+                            failed_run(&mut state, &agents[agent], *id);
+                        }
+                    }
+                    Step::EndReplaced(index) => {
+                        if !replaced.is_empty() {
+                            let (agent, id) = replaced.remove(index % replaced.len());
+                            end_job(&mut state, &agents[agent], id);
+                        }
+                    }
                 }
                 let (ready, queued) = ready_and_queued(&state, &all);
                 assert!(
@@ -2160,108 +2377,6 @@ mod tests {
             let taken = take(&mut state);
             proptest::prop_assert!(taken.is_some() || ready_before.is_empty());
         }
-    }
-
-    fn storage(retryable: bool) -> SnapshotStoreError {
-        SnapshotStoreError::Storage {
-            retryable,
-            source: anyhow::anyhow!("storage"),
-        }
-    }
-
-    #[test]
-    fn an_existing_own_name_is_checked_with_a_stat_and_other_errors_fail() {
-        let info = SnapshotInfo {
-            created_at: golem_common::model::Timestamp::from(1),
-            files: 1,
-            bytes: 2,
-        };
-        assert!(matches!(save_attempt(Ok(info)), SaveAttempt::Saved(saved) if saved == info));
-        assert!(matches!(
-            save_attempt(Err(SnapshotStoreError::AlreadyExists)),
-            SaveAttempt::StatOwn
-        ));
-        assert!(matches!(
-            save_attempt(Err(SnapshotStoreError::NotFound)),
-            SaveAttempt::Failed(SnapshotStoreError::NotFound)
-        ));
-    }
-
-    #[test]
-    fn only_a_retryable_storage_error_within_the_budget_gets_a_delay() {
-        let retry = RetryConfig {
-            max_attempts: 3,
-            min_delay: Duration::from_secs(2),
-            max_delay: Duration::from_secs(120),
-            multiplier: 4.0,
-            max_jitter_factor: None,
-        };
-        assert_eq!(
-            [
-                retry_delay(&retry, 1, &storage(true), 0.0),
-                retry_delay(&retry, 2, &storage(true), 0.0),
-                retry_delay(&retry, 3, &storage(true), 0.0),
-                retry_delay(&retry, 1, &storage(false), 0.0),
-                retry_delay(&retry, 1, &SnapshotStoreError::AlreadyExists, 0.0),
-            ],
-            [
-                Some(Duration::from_secs(2)),
-                Some(Duration::from_secs(8)),
-                None,
-                None,
-                None
-            ]
-        );
-    }
-
-    #[test]
-    fn a_jitter_that_is_negative_not_a_number_or_huge_never_panics() {
-        let retry = RetryConfig {
-            max_attempts: 5,
-            min_delay: Duration::from_secs(2),
-            max_delay: Duration::from_secs(20),
-            multiplier: 4.0,
-            max_jitter_factor: Some(1.0),
-        };
-
-        assert_eq!(
-            [-0.5, f64::NAN, 1e300, f64::INFINITY].map(|jitter| retry_delay(
-                &retry,
-                1,
-                &storage(true),
-                jitter
-            )),
-            [
-                Some(Duration::from_secs(2)),
-                Some(Duration::from_secs(2)),
-                Some(Duration::from_secs(20)),
-                Some(Duration::from_secs(20)),
-            ]
-        );
-    }
-
-    #[test]
-    fn the_drawn_jitter_grows_the_delay_up_to_the_largest_delay() {
-        let retry = RetryConfig {
-            max_attempts: 5,
-            min_delay: Duration::from_secs(2),
-            max_delay: Duration::from_secs(20),
-            multiplier: 4.0,
-            max_jitter_factor: Some(0.5),
-        };
-
-        assert_eq!(
-            [
-                retry_delay(&retry, 1, &storage(true), 0.25),
-                retry_delay(&retry, 2, &storage(true), 0.5),
-                retry_delay(&retry, 3, &storage(true), 0.1),
-            ],
-            [
-                Some(Duration::from_millis(2500)),
-                Some(Duration::from_secs(12)),
-                Some(Duration::from_secs(20)),
-            ]
-        );
     }
 
     #[test]
@@ -2361,10 +2476,70 @@ mod tests {
 
     /// The job that an update with `refusal` waits for.
     fn waits_for(refusal: Refusal) -> Option<JobId> {
-        match update_admission(refusal) {
-            UpdateAdmit::WaitForEnd(running) => Some(running.id),
+        match update_admission(refusal, false, false, None) {
+            UpdateAdmit::WaitForEndOrFailure { running, .. } => Some(running.id),
             UpdateAdmit::Refuse => None,
         }
+    }
+
+    /// What an update that waited for the job `stopped` does after `refusal`, before its deadline
+    /// and its shutdown with `ends`: the job that it waits for, and whether it stops its deletes.
+    fn update_after(
+        refusal: Refusal,
+        ends: (bool, bool),
+        stopped: Option<JobId>,
+    ) -> Option<(JobId, bool)> {
+        match update_admission(refusal, ends.0, ends.1, stopped) {
+            UpdateAdmit::WaitForEndOrFailure {
+                running,
+                stop_deletes,
+            } => Some((running.id, stop_deletes)),
+            UpdateAdmit::Refuse => None,
+        }
+    }
+
+    #[test]
+    fn a_manual_update_refuses_after_its_deadline_and_at_a_shutdown_and_stops_the_deletes_of_a_job_once()
+     {
+        let in_flight = || Refusal {
+            skip: SnapshotSkip::UploadInFlight,
+            running: Some(running(4)),
+        };
+
+        assert_eq!(
+            [
+                update_after(in_flight(), (false, false), None),
+                update_after(in_flight(), (false, false), Some(4)),
+                update_after(in_flight(), (false, false), Some(3)),
+                update_after(in_flight(), (true, false), None),
+                update_after(in_flight(), (false, true), None),
+            ],
+            [
+                Some((4, true)),
+                Some((4, false)),
+                Some((4, true)),
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_manual_update_asks_again_when_its_job_ended_or_waits_after_a_failed_run() {
+        let mut state = State::default();
+        let agent = agent_snapshots("agent");
+        let first = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+        granted(&mut state, &agent, first);
+        let while_saving = update_may_ask_again(&state, &agent, first);
+        failed_run(&mut state, &agent, first);
+        let after_a_failed_run = update_may_ask_again(&state, &agent, first);
+        end_job(&mut state, &agent, first);
+        let after_the_end = update_may_ask_again(&state, &agent, first);
+
+        assert_eq!(
+            (while_saving, after_a_failed_run, after_the_end),
+            (false, true, true)
+        );
     }
 
     #[test]
@@ -2392,8 +2567,340 @@ mod tests {
                     running: None
                 }),
             ],
-            [Some(4), None, None, None, None,]
+            [Some(4), None, None, None, None]
         );
+    }
+
+    /// The state after an admission of a periodic job of `agent` whose run failed, and the next
+    /// state that a replacing admission gives.
+    fn replacing(
+        agent: &AgentSnapshots,
+        name: &FilesystemSnapshotName,
+    ) -> Next<Result<Admitted, Refusal>> {
+        let mut state = State::default();
+        let old = admitted(&mut state, agent, name);
+        failed_run(&mut state, agent, old);
+        super::admit(
+            state,
+            agent,
+            name,
+            SnapshotKind::Periodic,
+            CancellationToken::new(),
+            CancellationToken::new(),
+            true,
+        )
+    }
+
+    /// Admits a job of `kind` with new stops, and gives its id and the stop of the job that it
+    /// replaced.
+    fn admit_new(
+        state: &mut State,
+        agent: &AgentSnapshots,
+        kind: SnapshotKind,
+    ) -> Result<(JobId, Option<CancellationToken>), Option<JobId>> {
+        admit_kind(
+            state,
+            agent,
+            &FilesystemSnapshotName::periodic(),
+            kind,
+            CancellationToken::new(),
+            CancellationToken::new(),
+            true,
+        )
+        .map(|admitted| (admitted.id, admitted.replaced))
+        .map_err(|refusal| refusal.running.map(|running| running.id))
+    }
+
+    #[test]
+    fn a_periodic_admission_replaces_a_periodic_job_that_waits_after_a_failure() {
+        let mut state = State::default();
+        let agent = agent_snapshots("replaced");
+        let stop = CancellationToken::new();
+        let old = admit(
+            &mut state,
+            &agent,
+            &FilesystemSnapshotName::periodic(),
+            stop.clone(),
+            stop.child_token(),
+            true,
+        )
+        .unwrap();
+        saving(&mut state, &agent, old);
+        failed_run(&mut state, &agent, old);
+
+        let new = admit_new(&mut state, &agent, SnapshotKind::Periodic);
+        let update = admit_new(&mut state, &agent, SnapshotKind::Update);
+
+        let (new_id, replaced) = new.unwrap();
+        assert!(new_id > old);
+        assert!(replaced.is_some_and(|replaced| !replaced.is_cancelled()));
+        assert!(!stop.is_cancelled());
+        assert_eq!(update.err(), Some(Some(new_id)));
+        assert!(has_ended(&state, &agent, old));
+    }
+
+    #[test]
+    fn a_replacement_records_replaced_and_gives_the_old_stop_without_cancelling_it() {
+        let mut state = State::default();
+        let agent = agent_snapshots("replaced-decision");
+        let name = FilesystemSnapshotName::periodic();
+        let stop = CancellationToken::new();
+        let old = admit(
+            &mut state,
+            &agent,
+            &name,
+            stop.clone(),
+            stop.child_token(),
+            true,
+        )
+        .unwrap();
+        saving(&mut state, &agent, old);
+        let waiting = wait(&mut state, &agent, &name);
+        failed_run(&mut state, &agent, old);
+
+        let replaced = admit_new(&mut state, &agent, SnapshotKind::Periodic)
+            .unwrap()
+            .1;
+
+        assert_eq!(waiting, Ok(old));
+        assert_eq!(
+            decision_of(&state, &agent, old),
+            Some(JobDecision::Replaced)
+        );
+        assert!(replaced.is_some_and(|replaced| {
+            let same = !replaced.is_cancelled();
+            replaced.cancel();
+            same && stop.is_cancelled()
+        }));
+    }
+
+    #[test]
+    fn an_admission_refuses_a_job_that_is_not_waiting_after_a_failure_or_is_decided() {
+        let agent = agent_snapshots("not-replaced");
+        let not_waiting = {
+            let mut state = State::default();
+            let old = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+            saving(&mut state, &agent, old);
+            admit_new(&mut state, &agent, SnapshotKind::Periodic).err()
+        };
+        let granted_again = {
+            let mut state = State::default();
+            let old = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+            failed_run(&mut state, &agent, old);
+            saving(&mut state, &agent, old);
+            admit_new(&mut state, &agent, SnapshotKind::Periodic).err()
+        };
+        let decided = {
+            let mut state = State::default();
+            let old = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+            failed_run(&mut state, &agent, old);
+            decide(&mut state, &agent, old, JobDecision::SaveFailed);
+            admit_new(&mut state, &agent, SnapshotKind::Periodic).err()
+        };
+
+        assert_eq!(
+            [not_waiting, granted_again, decided],
+            [Some(Some(1)), Some(Some(1)), Some(Some(1))]
+        );
+    }
+
+    #[test]
+    fn an_update_job_is_never_replaced() {
+        let mut state = State::default();
+        let agent = agent_snapshots("update-kept");
+        let (old, _) = admit_new(&mut state, &agent, SnapshotKind::Update).unwrap();
+        failed_run(&mut state, &agent, old);
+
+        assert_eq!(
+            [
+                admit_new(&mut state, &agent, SnapshotKind::Periodic).err(),
+                admit_new(&mut state, &agent, SnapshotKind::Update).err(),
+            ],
+            [Some(Some(old)), Some(Some(old))]
+        );
+    }
+
+    #[test]
+    fn the_grant_of_a_replaced_job_is_refused() {
+        let mut state = State::default();
+        let agent = agent_snapshots("stale-grant");
+        let old = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+        failed_run(&mut state, &agent, old);
+        let (new, _) = admit_new(&mut state, &agent, SnapshotKind::Periodic).unwrap();
+
+        assert_eq!(
+            [
+                granted(&mut state, &agent, old),
+                granted(&mut state, &agent, new)
+            ],
+            [false, true]
+        );
+    }
+
+    #[test]
+    fn a_stale_run_report_of_a_replaced_job_changes_nothing() {
+        let mut state = State::default();
+        let agent = agent_snapshots("stale-report");
+        let old = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+        failed_run(&mut state, &agent, old);
+        let (new, _) = admit_new(&mut state, &agent, SnapshotKind::Periodic).unwrap();
+        saving(&mut state, &agent, new);
+
+        failed_run(&mut state, &agent, old);
+
+        assert_eq!(
+            (
+                is_replaceable(&state, &agent, new),
+                admit_new(&mut state, &agent, SnapshotKind::Periodic).err()
+            ),
+            (false, Some(Some(new)))
+        );
+    }
+
+    #[test]
+    fn no_replacement_while_a_delete_of_all_snapshots_is_pending() {
+        let mut state = State::default();
+        let agent = agent_snapshots("no-replacement-while-deleting");
+        let old = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+        failed_run(&mut state, &agent, old);
+        delete_all_snapshots(&mut state, &agent);
+
+        let refusal = admit_kind(
+            &mut state,
+            &agent,
+            &FilesystemSnapshotName::periodic(),
+            SnapshotKind::Periodic,
+            CancellationToken::new(),
+            CancellationToken::new(),
+            true,
+        )
+        .err()
+        .map(|refusal| refusal.skip);
+
+        assert_eq!(refusal, Some(SnapshotSkip::DeletingAllSnapshots));
+        assert!(!has_ended(&state, &agent, old));
+    }
+
+    /// One step of the property of the replacement.
+    #[derive(Clone, Debug)]
+    enum ReplaceStep {
+        Admit(usize, bool),
+        Granted(usize, u64),
+        Failed(usize, u64),
+        Decide(usize, u64),
+        End(usize, u64),
+    }
+
+    fn replace_step_strategy() -> impl proptest::strategy::Strategy<Value = ReplaceStep> {
+        use proptest::prelude::*;
+        prop_oneof![
+            (0..2usize, any::<bool>())
+                .prop_map(|(agent, periodic)| ReplaceStep::Admit(agent, periodic)),
+            (0..2usize, 1..8u64).prop_map(|(agent, id)| ReplaceStep::Granted(agent, id)),
+            (0..2usize, 1..8u64).prop_map(|(agent, id)| ReplaceStep::Failed(agent, id)),
+            (0..2usize, 1..8u64).prop_map(|(agent, id)| ReplaceStep::Decide(agent, id)),
+            (0..2usize, 1..8u64).prop_map(|(agent, id)| ReplaceStep::End(agent, id)),
+        ]
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn replacements_keep_one_live_job_and_refuse_stale_reports(
+            steps in proptest::collection::vec(replace_step_strategy(), 1..40)
+        ) {
+            let agents = [agent_snapshots("one"), agent_snapshots("two")];
+            let mut state = State::default();
+            let mut replaced = HashSet::new();
+            // A manual update waits for the job of an agent until the job is gone or an admission
+            // can replace it. Each transition that makes that true for a job must wake the waiters.
+            let ready_for_an_update = |state: &State, agent: &AgentSnapshots, id: JobId| {
+                has_ended(state, agent, id) || is_replaceable(state, agent, id)
+            };
+            steps.into_iter().for_each(|step| {
+                let waited_on = agents
+                    .iter()
+                    .filter_map(|agent| {
+                        state
+                            .jobs
+                            .get(agent)
+                            .map(|job| (agent.clone(), job.id))
+                            .filter(|(agent, id)| !ready_for_an_update(&state, agent, *id))
+                    })
+                    .collect::<Vec<_>>();
+                let wakes = match step {
+                    ReplaceStep::Admit(agent, periodic) => {
+                        let kind = if periodic { SnapshotKind::Periodic } else { SnapshotKind::Update };
+                        let before = state.jobs.get(&agents[agent]).map(|job| job.id);
+                        let next = super::admit(
+                            std::mem::take(&mut state),
+                            &agents[agent],
+                            &FilesystemSnapshotName::periodic(),
+                            kind,
+                            CancellationToken::new(),
+                            CancellationToken::new(),
+                            true,
+                        );
+                        let wakes = next.wakes();
+                        let (next, answer) = next.into_parts();
+                        state = next;
+                        if let (Ok(admitted), Some(before)) = (&answer, before) {
+                            assert!(admitted.replaced.is_some());
+                            replaced.insert(before);
+                        }
+                        wakes
+                    }
+                    ReplaceStep::Granted(agent, id) => {
+                        let live = state.jobs.get(&agents[agent]).is_some_and(|job| job.id == id);
+                        let next = super::run_granted(std::mem::take(&mut state), &agents[agent], id);
+                        let wakes = next.wakes();
+                        let (next, granted) = next.into_parts();
+                        state = next;
+                        assert_eq!(granted, live);
+                        assert!(!(granted && replaced.contains(&id)));
+                        wakes
+                    }
+                    ReplaceStep::Failed(agent, id) => {
+                        let before = state.jobs.get(&agents[agent]).map(|job| (job.id, job.run_phase));
+                        let next = super::run_failed(std::mem::take(&mut state), &agents[agent], id);
+                        let wakes = next.wakes();
+                        state = next.into_parts().0;
+                        let after = state.jobs.get(&agents[agent]).map(|job| (job.id, job.run_phase));
+                        if before.is_none_or(|(live, _)| live != id) {
+                            assert_eq!(before, after);
+                        }
+                        wakes
+                    }
+                    ReplaceStep::Decide(agent, id) => {
+                        let next = super::decide(
+                            std::mem::take(&mut state),
+                            &agents[agent],
+                            id,
+                            JobDecision::SaveFailed,
+                        );
+                        let wakes = next.wakes();
+                        state = next.into_parts().0;
+                        wakes
+                    }
+                    ReplaceStep::End(agent, id) => {
+                        let next = end(std::mem::take(&mut state), &agents[agent], id);
+                        let wakes = next.wakes();
+                        state = next.into_parts().0;
+                        wakes
+                    }
+                };
+                // After each step: no replaced job is live, and a waiter whose job became ready
+                // for an update was woken.
+                agents.iter().for_each(|agent| {
+                    assert!(state.jobs.get(agent).is_none_or(|job| !replaced.contains(&job.id)));
+                });
+                waited_on.iter().for_each(|(agent, id)| {
+                    assert!(
+                        !ready_for_an_update(&state, agent, *id) || wakes,
+                        "the job {id} became ready for an update without a wake"
+                    );
+                });
+            });
+        }
     }
 
     #[test]

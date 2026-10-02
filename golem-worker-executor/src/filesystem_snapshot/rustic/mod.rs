@@ -20,33 +20,40 @@
 
 mod backend;
 mod claim;
+mod clear;
 mod fault;
 mod files;
 mod priority;
 mod prune;
 mod publish;
+mod reload;
+mod runs;
 mod scope;
 mod spawner;
 mod store;
 
 pub(crate) use store::RusticSnapshotStore;
 
+/// The range of the storage call deadline that the store accepts: at least the shortest try of a
+/// publish, and at most one eighth of the time that a pack that a prune marked stays.
+pub(super) const STORAGE_CALL_DEADLINES: std::ops::RangeInclusive<Duration> =
+    publish::MIN_PUBLISH_TRY..=store::MAX_STORAGE_CALL_DEADLINE;
+
 #[cfg(test)]
 mod tests;
 
 use crate::sandbox_filesystem::{NativeOperation, NativeStorageProfile, execute_native};
-use anyhow::Context;
 use backend::BlobBackend;
 use rustic_core::jiff::Span;
-use rustic_core::repofile::{Chunker, MasterKey, SnapshotFile};
+use rustic_core::repofile::{Chunker, MasterKey};
 use rustic_core::{
-    BackupOptions, ConfigOptions, Credentials, KeyOptions, LimitOption, LocalDestination,
-    LsOptions, OpenStatus, ParentOptions, PruneOptions, PruneStats, Repository as RusticRepository,
-    RepositoryBackends, RepositoryOptions, RestoreOptions, RusticResult, SnapshotGroupCriterion,
+    BackupOptions, ConfigOptions, Credentials, KeyOptions, LimitOption, OpenStatus, ParentOptions,
+    PruneOptions, PruneStats, Repository as RusticRepository, RepositoryBackends,
+    RepositoryOptions, RusticResult, SnapshotGroupCriterion,
 };
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -114,25 +121,6 @@ async fn run_blocking<R: Send + 'static>(
         task,
     )
     .await?
-}
-
-/// Writes the tree of the snapshot into the empty directory `into`.
-fn restore_snapshot(
-    repository: RusticRepository<OpenStatus>,
-    snapshot: &SnapshotFile,
-    into: &Path,
-    options: &RestoreOptions,
-) -> anyhow::Result<()> {
-    let repository = repository.to_indexed()?;
-    let into = into
-        .to_str()
-        .context("the directory of a restore must have a UTF-8 path")?;
-    let destination = LocalDestination::new(into, false, false)?;
-    let node = repository.node_from_snapshot_and_path(snapshot, "")?;
-    let entries = repository.ls(&node, &LsOptions::default())?;
-    let plan = repository.prepare_restore(options, entries.clone(), &destination, false)?;
-    repository.restore(plan, options, entries, &destination)?;
-    Ok(())
 }
 
 /// Prunes the repository. It deletes the packs that an earlier prune marked and whose time to stay
