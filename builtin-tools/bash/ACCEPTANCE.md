@@ -24,9 +24,9 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Runtime, CLI and Rust SDK | Golem baseline above, rebuilt with this change |
 | Rust compiler | `1.98.0 (88d9e12ae 2026-08-18)` |
 | Standalone WASM runner | Wasmtime `46.0.1` |
-| Guest artifact | `bash.wasm`, artifact `bash` 0.0.1 in `golemcloud/golem-builtins` (not committed), release build, `golem:bash` / `bash@0.2.0` |
-| Artifact size | 23,352,740 bytes (22.27 MiB) |
-| Artifact SHA-256 | `ff69ffbb0faf86a1e1696024b7102e78cf482d97e3451b69cbeab41f0c8927da` |
+| Guest artifact | `bash.wasm`, artifact `bash` 0.0.2 in `golemcloud/golem-builtins` (not committed), release build, `golem:bash` / `bash@0.2.0` |
+| Artifact size | 23,349,216 bytes (22.27 MiB) |
+| Artifact SHA-256 | `e99924ffc3c91d7c2823676d0ac5670fcf8c45e2912e73bf09a5bdaac929ae6b` |
 
 `cargo make build-bash-tool` built the component in the pinned container the README describes
 (Build and verify), wrote it to `builtin-tools/bash.wasm` and passed
@@ -39,7 +39,7 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Check | Result |
 |---|---|
 | Shared argv/help parser's moved tests | 15 passed; parser also checks on `wasm32-wasip2` without host features |
-| Standalone workspace library tests | 371 passed: shell 213, component 8, wget 37, curl 87, HTTP transport 26 |
+| Standalone workspace library tests | 369 passed: shell 213, component 6, wget 37, curl 87, HTTP transport 26 |
 | Unit tests run as WASM | 141 passed under Wasmtime: shell 133, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
 | Shell integration tests | 20 passed |
 | Exact pinned Brush library tests | Core 141, builtins 28 and parser 276 passed (parser's YAML snapshot test is ignored upstream) |
@@ -49,7 +49,8 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Brush compatibility suite | 2,541 cases run against the tool's shell; the 318 that fail match `conformance/compat/baseline.txt` exactly. One more, whose answer depends on timing in bash itself (`printf … | x=1` and SIGPIPE), may pass or fail |
 | Harness self-tests | 21 passed, including missing/unexpected stderr, mismatched shell status, stale goldens and splitting a script into calls |
 | Real Golem CLI integration | 3 scenarios passed: scripts, tools and crash recovery; background jobs with signals and sibling cancellation; a sibling's declared stderr through redirections and pipes. Three are quarantined for executor behaviour: a crash while a sibling is pending, whose replay sometimes fails since #3992; crash recovery of interrupted HTTP requests, which recovers in under a third of runs since #3967; and a crash while a background job waits |
-| Waits and result size, on a real server (by hand) | A script polling a background job's file every 0.1 s, `sleep 15`, `timeout 2 sleep 60` and a call stopped at a 2 s time limit each complete with no suspension of the owner during the call, and a simulated crash after each leaves the owner healthy. A call returning 2 MiB on each stream, its `--lookup` and `golem agent oplog` after three such calls all succeed |
+| Waits, on a real server (by hand) | Golem suspended the owner during every call that waited. `sleep 15`, `timeout 2 sleep 60` and a call stopped at a 2 s time limit completed with the right result, and a simulated crash after each left the owner healthy. A script polling a background job's file every 0.1 s did not return within 120 s; after a simulated crash the owner answered and the call's recorded result was correct. 24 waits of 0.5 s in a row left the owner permanently failed (`Unexpected oplog entry during replay`). See Known gaps |
+| Result size, on a real server (by hand) | A call returning 2 MiB on each stream, its `--lookup` and `golem agent oplog` after three such calls all succeed |
 | Lint and format | Standalone workspace native and WASM Clippy, all targets/features, `-D warnings`; format checks passed |
 | Dependency check | `cargo deny ... check advisories sources`: passed |
 
@@ -187,8 +188,8 @@ again with release host binaries before making a caching decision.
 Known gaps:
 
 - Crash recovery while a sibling that declares stderr is writing it.
-- A sibling tool that itself waits 10 s or more can still have its owner suspended in the middle of
-  a bash call; bash's own waits are bounded below that (see README, Limits).
+- Golem may suspend the owner in the middle of a call that only waits, and at this version the
+  replay that resumes it can hang or permanently fail the owner (see README, Limits).
 - Optional Rust argument wire encoding; the tool uses supported non-optional shapes.
 - Broader waiter/fairness and arbitrary chunk-boundary cases beyond the preserved cooperative
   regression suite.

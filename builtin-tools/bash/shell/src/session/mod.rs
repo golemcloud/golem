@@ -535,12 +535,9 @@ impl Session {
             None => script.await,
             Some(limit) => {
                 let watchdog = stop_at_time_limit(&table, services, limit, &timed_out);
-                // The watchdog is polled first. On Golem its wait starts by reading the clock, a
-                // synchronous durable call recorded whole before anything the script does, so the
-                // call's deadline stays out of the oplog range that Golem's recovery of a request
-                // interrupted by a crash discards by position. The steps of the wait start and
-                // end while the script runs. Once the timer is due, the script is stopped before
-                // it runs further, live and on replay alike.
+                // The watchdog is polled first, so its wait starts before anything the script
+                // does. Once the timer is due, the script is stopped before it runs further, live
+                // and on replay alike.
                 match futures::future::select(std::pin::pin!(watchdog), std::pin::pin!(script))
                     .await
                 {

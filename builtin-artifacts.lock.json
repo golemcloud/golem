@@ -4,8 +4,8 @@
   "artifacts": {
     "bash": {
       "component": "bash",
-      "version": "0.0.1",
-      "sha256": "ff69ffbb0faf86a1e1696024b7102e78cf482d97e3451b69cbeab41f0c8927da"
+      "version": "0.0.2",
+      "sha256": "e99924ffc3c91d7c2823676d0ac5670fcf8c45e2912e73bf09a5bdaac929ae6b"
     },
     "filesystem_tools": {
       "component": "filesystem-tools",
