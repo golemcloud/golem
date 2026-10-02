@@ -3458,6 +3458,10 @@ mod tests {
             ("..", false),
             ("a/b", false),
             ("/a", false),
+            ("a/", false),
+            ("a//", false),
+            ("a/.", false),
+            ("./a", false),
         ]
         .into_iter()
         .for_each(|(path, expected)| {

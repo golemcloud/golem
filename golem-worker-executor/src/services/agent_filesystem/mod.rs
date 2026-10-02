@@ -135,9 +135,6 @@ const OWNER_WRITE_BIT: libc::mode_t = 0o200;
 /// Linux when the line is not available, the function sets the mask two times: to 0o022, which
 /// gives the current mask, and then to that mask without the owner write bit. Between the two
 /// calls, a file that another thread creates gets the usual permissions of the mask 0o022.
-///
-/// Windows has no file mode creation mask, so nothing changes there. On Windows a file is
-/// read-only only when its read-only attribute is set, and an agent cannot set that attribute.
 #[cfg(unix)]
 pub(crate) fn keep_owner_write_permission() {
     let mask = current_file_creation_mask();

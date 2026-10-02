@@ -749,11 +749,21 @@ fn storage_profile(authority: QuotaAuthority) -> NativeStorageProfile {
     }
 }
 
-/// Gives how the files of a sandbox with `authority` are copied.
-fn file_copy_mode(authority: QuotaAuthority) -> FileCopyMode {
+/// Gives the project into which a sandbox with `authority` reflinks the files that it copies, or
+/// `None` when the sandbox copies bytes.
+fn reflink_project(authority: QuotaAuthority) -> Option<NonZeroU32> {
     match authority {
-        QuotaAuthority::Unsupported => FileCopyMode::Buffered,
-        QuotaAuthority::Project { .. } => FileCopyMode::Reflink,
+        QuotaAuthority::Unsupported => None,
+        QuotaAuthority::Project { project_id, .. } => Some(project_id),
+    }
+}
+
+/// Gives how the files of a sandbox with `authority` are copied: by reflink when
+/// [`reflink_project`] gives a project, and by bytes otherwise.
+fn file_copy_mode(authority: QuotaAuthority) -> FileCopyMode {
+    match reflink_project(authority) {
+        None => FileCopyMode::Buffered,
+        Some(_) => FileCopyMode::Reflink,
     }
 }
 
@@ -1609,6 +1619,19 @@ mod tests {
                 filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
             }),
             NativeStorageProfile::KnownLocal
+        );
+    }
+
+    #[test]
+    fn reflink_project_is_the_project_of_the_quota_authority() {
+        let project_id = NonZeroU32::new(7).unwrap();
+        assert_eq!(reflink_project(QuotaAuthority::Unsupported), None);
+        assert_eq!(
+            reflink_project(QuotaAuthority::Project {
+                project_id,
+                filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
+            }),
+            Some(project_id)
         );
     }
 

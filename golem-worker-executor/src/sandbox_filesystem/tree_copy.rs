@@ -448,13 +448,11 @@ fn seed_file(
     let source_file = open_file_nofollow(source_directory, &source.relative)?;
     let mut temporary = CapabilityTempFile::new(parent)?;
     let temporary_file = temporary.as_file().try_clone()?.into_std();
-    match context.quota_authority {
-        QuotaAuthority::Unsupported => {
+    match reflink_project(context.quota_authority) {
+        None => {
             std::io::copy(&mut &source_file, temporary.as_file_mut())?;
         }
-        QuotaAuthority::Project { project_id, .. } => {
-            reflink_into_project(project_id, &temporary_file, &source_file)?
-        }
+        Some(project_id) => reflink_into_project(project_id, &temporary_file, &source_file)?,
     }
     temporary_file.sync_all()?;
     temporary_file.set_permissions(seeded_permissions(

@@ -221,7 +221,8 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
 ///
 /// On a Unix platform it clears bit 0o200 of the mask and keeps the other bits, so each file that
 /// an agent creates has write permission for its owner. Other platforms have no such mask, and
-/// there the function only starts the active agents.
+/// there the function only starts the active agents. On Windows a file is read-only only when its
+/// read-only attribute is set, and an agent cannot set that attribute.
 async fn start_active_agents<
     Ctx: WorkerCtx,
     BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
@@ -259,6 +260,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// (cgroup/process/override). The in-process test harness overrides this to
     /// inject a probe with a pinned limit and usage so the gate is deterministic
     /// and isolated from the shared test process's RSS.
+    ///
+    /// The file loader of the agent filesystems keeps the downloads of initial files from
+    /// `initial_files_service`. On a Unix platform, the owner write bit of the file mode creation
+    /// mask of the process is already clear when this method runs.
     async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,

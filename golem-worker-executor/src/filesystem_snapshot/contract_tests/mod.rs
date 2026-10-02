@@ -813,7 +813,8 @@ pub(in crate::filesystem_snapshot) fn raced_restore_kept_the_contract(
         )),
         Err(SnapshotStoreError::NotFound | SnapshotStoreError::Corrupt(_)) => Ok(()),
         // The prune of the delete can remove an index file that the restore listed. The restore
-        // then gives a retryable `Storage`, and a new try gives `NotFound`.
+        // then gives a retryable `Storage`, and a new try gives `NotFound`, because the delete
+        // removed the name.
         Err(SnapshotStoreError::Storage {
             retryable: true, ..
         }) => Ok(()),

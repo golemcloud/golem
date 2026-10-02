@@ -202,8 +202,8 @@ impl std::error::Error for SnapshotStoreError {
 /// contract.
 ///
 /// The snapshots of one agent can have more than one writer at the same time, and no method
-/// locks. A delete of one name never damages a restore of another name. A restore of a name that
-/// is deleted at the same time gives the whole tree, `NotFound` or `Corrupt`. No method blocks
+/// locks. A restore that runs while a delete of the same agent runs gives the whole tree,
+/// `NotFound` or `Corrupt`, or a retryable `Storage`. No method blocks
 /// the async runtime. `save` costs the bytes that changed since the last snapshot of the agent,
 /// plus one metadata read for each file. `restore` costs the size of the tree. `stat` and `list`
 /// cost a few small reads.
@@ -287,9 +287,8 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// Each name stops resolving immediately, so no later restore of it can succeed. The call is
     /// idempotent for each name: an unknown name, or a name that is already deleted, gives
     /// success. Every other snapshot of the agent continues to work, also when it shares data
-    /// with a deleted one. Storage comes back after a grace period, and a restore that is already
-    /// in progress is not disturbed. A store reads the snapshots of the agent once for the whole
-    /// batch.
+    /// with a deleted one. Storage comes back after a grace period. A store reads the snapshots of
+    /// the agent once for the whole batch.
     async fn delete(
         &self,
         agent: &AgentSnapshots,

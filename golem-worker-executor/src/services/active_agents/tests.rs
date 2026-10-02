@@ -1504,6 +1504,8 @@ fn component_charge_bytes_scales_the_module_size_by_the_coefficient() {
         (0.0, 4096, 0),
         (0.25, 7, 1),
         (2.0, u64::MAX, u64::MAX),
+        (-1.0, 4096, 0),
+        (f64::NAN, 4096, 0),
     ]
     .into_iter()
     .for_each(|(coefficient, module_bytes, expected)| {

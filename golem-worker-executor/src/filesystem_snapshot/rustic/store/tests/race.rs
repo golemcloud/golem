@@ -68,19 +68,21 @@ async fn case(held: Held, k: usize) -> Option<((String, String), Result<(), Stri
         async move { store.delete(&scope, std::slice::from_ref(&raced)).await }
     };
     let is_held = || held_call.lock().unwrap().is_some();
-    let (restore, deleted) = match held {
+    // The side ended before call `k` gives `None`. The store shuts down on each path.
+    let raced = match held {
         Held::Restore => {
             let first = tokio::spawn(restoring);
             assert!(polled_until(LIMIT, || is_held() || first.is_finished()).await);
             if !is_held() {
                 storage.open_gate();
                 let _ = first.await;
-                return None;
+                None
+            } else {
+                let deleted = tokio::time::timeout(LIMIT, deleting).await.unwrap();
+                storage.open_gate();
+                let restore = tokio::time::timeout(LIMIT, first).await.unwrap().unwrap();
+                Some((restore, deleted))
             }
-            let deleted = tokio::time::timeout(LIMIT, deleting).await.unwrap();
-            storage.open_gate();
-            let restore = tokio::time::timeout(LIMIT, first).await.unwrap().unwrap();
-            (restore, deleted)
         }
         Held::Delete => {
             let first = tokio::spawn(deleting);
@@ -88,15 +90,17 @@ async fn case(held: Held, k: usize) -> Option<((String, String), Result<(), Stri
             if !is_held() {
                 storage.open_gate();
                 let _ = first.await;
-                return None;
+                None
+            } else {
+                let restore = tokio::time::timeout(LIMIT, restoring).await.unwrap();
+                storage.open_gate();
+                let deleted = tokio::time::timeout(LIMIT, first).await.unwrap().unwrap();
+                Some((restore, deleted))
             }
-            let restore = tokio::time::timeout(LIMIT, restoring).await.unwrap();
-            storage.open_gate();
-            let deleted = tokio::time::timeout(LIMIT, first).await.unwrap().unwrap();
-            (restore, deleted)
         }
     };
     store.shut_down().await;
+    let (restore, deleted) = raced?;
     let held_call = held_call.lock().unwrap().clone().unwrap();
     Some((
         held_call,
