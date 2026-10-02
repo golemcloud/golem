@@ -4,6 +4,7 @@ import {
   chmod,
   lstat,
   mkdtemp,
+  readFile,
   readlink,
   rm,
   symlink,
@@ -849,6 +850,14 @@ test("checkout -b switches an unborn repository to the new branch", async (t) =>
   await git.init({ fs, dir, defaultBranch: "main" });
   const repo = await repository([dir]);
 
+  await assert.rejects(
+    checkoutCommand(repo, "@", false, undefined, []),
+    /invalid git reference/,
+  );
+  assert.equal(
+    await readFile(path.join(dir, ".git", "HEAD"), "utf8"),
+    "ref: refs/heads/main\n",
+  );
   const result = await checkoutCommand(repo, "feature", false, undefined, []);
 
   assert.match(result.summary, /new branch 'feature'/);
@@ -856,11 +865,45 @@ test("checkout -b switches an unborn repository to the new branch", async (t) =>
     await git.currentBranch({ fs, dir, fullname: false }),
     "feature",
   );
-  await assert.rejects(
-    checkoutCommand(repo, "feature", false, undefined, []),
-    /already exists/,
-  );
 });
+
+for (const packed of [false, true]) {
+  test(`checkout -b rejects an existing ${packed ? "packed" : "loose"} branch on unborn HEAD`, async (t) => {
+    const dir = await fixture();
+    t.after(() => rm(dir, { recursive: true, force: true }));
+    await writeFile(path.join(dir, "tracked.txt"), "unchanged\n");
+    await git.add({ fs, dir, filepath: "tracked.txt" });
+    await git.commit({
+      fs,
+      dir,
+      message: "initial",
+      author: { name: "Test User", email: "test@example.com" },
+    });
+    if (packed) {
+      const mainOid = await git.resolveRef({ fs, dir, ref: "refs/heads/main" });
+      await writeFile(
+        path.join(dir, ".git", "packed-refs"),
+        `# pack-refs with: peeled fully-peeled sorted\n${mainOid} refs/heads/main\n`,
+      );
+      await rm(path.join(dir, ".git", "refs", "heads", "main"));
+    }
+    await writeFile(path.join(dir, ".git", "HEAD"), "ref: refs/heads/unborn\n");
+    const beforeIndex = await readFile(path.join(dir, ".git", "index"));
+    const repo = await repository([dir]);
+
+    await assert.rejects(
+      checkoutCommand(repo, "main", false, undefined, []),
+      /already exists/,
+    );
+
+    assert.equal(
+      await readFile(path.join(dir, ".git", "HEAD"), "utf8"),
+      "ref: refs/heads/unborn\n",
+    );
+    assert.deepEqual(await readFile(path.join(dir, ".git", "index")), beforeIndex);
+    assert.equal(await readFile(path.join(dir, "tracked.txt"), "utf8"), "unchanged\n");
+  });
+}
 
 test("ordinary checkout resolves a same-named local branch before its tag", async (t) => {
   const dir = await fixture();
