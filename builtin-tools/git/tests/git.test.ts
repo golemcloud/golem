@@ -78,11 +78,12 @@ test("author syntax is strict", () => {
   );
 });
 
-test("commit messages use paragraphs and reject only an empty message", () => {
+test("commit messages use paragraphs and reject invalid content", () => {
   assert.equal(commitMessage(["subject", "body"]), "subject\n\nbody");
   assert.equal(commitMessage(["subject", ""]), "subject\n\n");
   assert.throws(() => commitMessage([]), /must not be empty/);
   assert.throws(() => commitMessage(["", "  "]), /must not be empty/);
+  assert.throws(() => commitMessage(["subject\0injected"]), /NUL bytes/);
 });
 
 test("local config is narrow and commit keeps author and committer separate", async (t) => {

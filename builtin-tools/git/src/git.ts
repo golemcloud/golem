@@ -507,6 +507,8 @@ export function parseIdentity(value: string): { name: string; email: string } {
 export function commitMessage(parts: readonly string[]): string {
   const message = parts.join("\n\n");
   if (!message.trim()) throw new Error("commit messages must not be empty");
+  if (message.includes("\0"))
+    throw new Error("commit messages must not contain NUL bytes");
   return message;
 }
 
