@@ -26881,6 +26881,9 @@ components:
         storageLimit:
           type: integer
           format: uint64
+        blobStorageLimit:
+          type: integer
+          format: uint64
         monthlyGasLimit:
           type: integer
           format: uint64
@@ -26940,6 +26943,7 @@ components:
       - componentLimit
       - workerConnectionLimit
       - storageLimit
+      - blobStorageLimit
       - monthlyGasLimit
       - monthlyUploadLimit
       - maxMemoryPerWorker
