@@ -1,14 +1,13 @@
 # Bash built-in tool
 
-This standalone Golem application builds the Bash tool component, `bash@0.2.0`. The registry does
-not provision it yet. It exports one command, `run`, for finite shell execution. A
+This standalone Golem application builds the `bash` component, which the registry provisions as
+the grantable `bash@0.2.0` system tool. It exports one command, `run`, for finite shell execution. A
 call accepts a starting directory and a script, runs the script in a fresh shell, then returns
 captured stdout, captured stderr, the exit code and the directory the script ended in.
 
 ## Enable and invoke
 
-Once the registry provisions Bash, select the exact release and explicitly bind it to an agent in
-the consumer's manifest:
+Select the exact release and explicitly bind it to an agent in the consumer's manifest:
 
 ```yaml
 tools:
@@ -126,7 +125,8 @@ flowchart TD
   idempotent) with a new one, so the server may see such a POST or PATCH twice. At this Golem
   version that recovery is unreliable: in testing, fewer than a third of crashes with a request in
   flight recovered, and the rest left the owner hung or permanently failed without sending the
-  request again. A script that needs exactly-once should send its own key, which Golem then
+  request again (the [CLI fixture](../../cli/golem-cli/test-data/builtin-bash/README.md)'s test of
+  it is quarantined). A script that needs exactly-once should send its own key, which Golem then
   keeps on the resent request:
   `curl -H 'Idempotency-Key: order-42' -d @order.json https://api.example.com/orders`.
 - Diagnostics that a caller could miss — a rejected directory, a tool call that failed, a job
@@ -517,9 +517,11 @@ container it runs the same Cargo build as `golem.yaml`'s release preset, with th
 `wasm-tools validate --features all` and writes `builtin-tools/bash.wasm`. That file is not
 committed: built-in artifacts are published as immutable releases of `golemcloud/golem-builtins`
 with `cargo make publish-builtin-artifact` (`BUILTIN_COMPONENT=bash`) and pinned by SHA-256 in
-`builtin-artifacts.lock.json`. A rebuild of unchanged sources gives the published bytes, so a
+`builtin-artifacts.lock.json`; `cargo make fetch-builtin-artifacts` downloads the pinned bytes to
+the same path. A rebuild of unchanged sources gives the published bytes, so a
 rebuilt `bash.wasm` differs only where a change reached it. The Golem SDK is a path dependency:
-after a change to it, or to this workspace, publish a new artifact version.
+after a change to it, or to this workspace, publish a new artifact version and update the lock
+entry in the same change.
 
 A native build cannot be reproducible, for two reasons. Cargo mixes the host platform into the
 hashes that name every crate (through the proc macros and build scripts it depends on). It also
@@ -533,7 +535,8 @@ the Dockerfile's image together, then publishing a new artifact version.
 
 A published artifact is immutable: any change to the component's bytes needs a new artifact
 version, and a change to the exported tool metadata a new tool version
-(`#[tool_definition(version = …)]`) as well.
+(`#[tool_definition(version = …)]`) and a matching `release_version` in the registry's descriptor
+as well.
 
 The independent workspace commits its own `Cargo.lock`. Forks are pinned by git revision in the
 workspace `[patch.crates-io]`; no local dependency overrides are required.
@@ -556,7 +559,14 @@ cargo clippy --manifest-path builtin-tools/bash/Cargo.toml --locked --workspace 
 CARGO_TARGET_WASM32_WASIP2_RUNNER="wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y --dir /tmp::/tmp" \
   cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
 cargo make test-builtin-bash-pipelines
+cargo make fetch-builtin-artifacts
+cargo build -p golem -p golem-cli
+cargo test -p golem-cli --test integration -- app::builtin_bash --report-time
 ```
 
-The [conformance matrix](conformance/README.md) documents the standalone Bash-oracle tests, which
-run the shell under WASI CLI and Wasmtime.
+The [CLI fixture](../../cli/golem-cli/test-data/builtin-bash/README.md) documents the HTTP and
+recovery tests, and the [conformance matrix](conformance/README.md) the standalone Bash-oracle
+tests. The matrix runs the shell under WASI CLI and Wasmtime, whereas the fixture invokes the
+provisioned component through a real Golem server. The fixture's tests refuse a
+`builtin-tools/bash.wasm` that differs from the lock, so after a local rebuild that changed the
+bytes, point the lock entry at the new SHA-256 while developing.

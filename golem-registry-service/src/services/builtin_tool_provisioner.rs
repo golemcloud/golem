@@ -55,6 +55,12 @@ pub struct BuiltinToolDescriptor {
 
 static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
     BuiltinToolDescriptor {
+        component_name: "bash",
+        artifact_id: "bash",
+        tool_name: "bash",
+        release_version: "0.2.0",
+    },
+    BuiltinToolDescriptor {
         component_name: "filesystem-tools",
         artifact_id: "filesystem_tools",
         tool_name: "read-file",

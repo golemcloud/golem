@@ -23,8 +23,8 @@ standard-library declarations and npm's manual pages are embedded as private rea
 components must use the `optimized` TypeScript preset so Wizer pre-initializes their provider state.
 
 The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly, in a pinned
-container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The registry does not
-provision it yet; see [its README](bash/README.md).
+container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
+provides the `bash` tool; see [its contract and examples](bash/README.md).
 
 ## Adding a component-implemented built-in tool
 

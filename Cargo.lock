@@ -3742,6 +3742,7 @@ dependencies = [
  "dotenvy",
  "expectrl",
  "fd-lock",
+ "flate2",
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",

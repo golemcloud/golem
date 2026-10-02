@@ -2,14 +2,13 @@
 
 Version 0.2.0 changes the contract to `run(cwd, script, timeout)`: a call stops its script at a
 time limit (600 s by default, at most 3600 s) with TERM, then KILL, and exit code 124, and the
-shell gains GNU's `timeout` command. The artifact rows below are for
-0.2.0.
+shell gains GNU's `timeout` command. The artifact rows below are for 0.2.0.
 
-Verified on 2026-10-01 on the `builtin-bash-tool` branch, based on Golem `c2fc5d83c`, with the
-fork revisions and the artifact below. The conformance matrix runs the same shell library as the
-standalone `cooperative` example, built from the same source and pins; the other checks were run on
-that source too. Provisioning Bash as a built-in tool, with its registry tests and the real-server
-CLI scenarios, is a separate change.
+Verified on 2026-10-01 on the `builtin-bash-tool` branch with the fork revisions and the artifact
+below. The real-server scenarios were run on 2026-10-02 on Golem `0f4bd0e4e` with that artifact,
+provisioned by the registry from the SHA-256 pinned in `builtin-artifacts.lock.json`. The
+conformance matrix runs the same shell library as the standalone `cooperative` example, built from
+the same source and pins; the other checks were run on that source too.
 Optional Rust argument encoding remains a separate requirement for the full 1.6 surface.
 
 ## Revisions and artifact
@@ -25,7 +24,7 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Runtime, CLI and Rust SDK | Golem baseline above, rebuilt with this change |
 | Rust compiler | `1.98.0 (88d9e12ae 2026-08-18)` |
 | Standalone WASM runner | Wasmtime `46.0.1` |
-| Guest artifact | `builtin-tools/bash.wasm` (built, not committed), release build, `golem:bash` / `bash@0.2.0` |
+| Guest artifact | `bash.wasm`, artifact `bash` 0.0.1 in `golemcloud/golem-builtins` (not committed), release build, `golem:bash` / `bash@0.2.0` |
 | Artifact size | 23,352,740 bytes (22.27 MiB) |
 | Artifact SHA-256 | `ff69ffbb0faf86a1e1696024b7102e78cf482d97e3451b69cbeab41f0c8927da` |
 
@@ -49,7 +48,8 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Feature checklist | 316 of 316 features have at least one matrix case |
 | Brush compatibility suite | 2,541 cases run against the tool's shell; the 318 that fail match `conformance/compat/baseline.txt` exactly. One more, whose answer depends on timing in bash itself (`printf … | x=1` and SIGPIPE), may pass or fail |
 | Harness self-tests | 21 passed, including missing/unexpected stderr, mismatched shell status, stale goldens and splitting a script into calls |
-| Waits and result size, on a real server (by hand, with Bash provisioned as in the separate change) | A script polling a background job's file every 0.1 s, `sleep 15`, `timeout 2 sleep 60` and a call stopped at a 2 s time limit each complete with no suspension of the owner during the call, and a simulated crash after each leaves the owner healthy. A call returning 2 MiB on each stream, its `--lookup` and `golem agent oplog` after three such calls all succeed |
+| Real Golem CLI integration | 3 scenarios passed: scripts, tools and crash recovery; background jobs with signals and sibling cancellation; a sibling's declared stderr through redirections and pipes. Three are quarantined for executor behaviour: a crash while a sibling is pending, whose replay sometimes fails since #3992; crash recovery of interrupted HTTP requests, which recovers in under a third of runs since #3967; and a crash while a background job waits |
+| Waits and result size, on a real server (by hand) | A script polling a background job's file every 0.1 s, `sleep 15`, `timeout 2 sleep 60` and a call stopped at a 2 s time limit each complete with no suspension of the owner during the call, and a simulated crash after each leaves the owner healthy. A call returning 2 MiB on each stream, its `--lookup` and `golem agent oplog` after three such calls all succeed |
 | Lint and format | Standalone workspace native and WASM Clippy, all targets/features, `-D warnings`; format checks passed |
 | Dependency check | `cargo deny ... check advisories sources`: passed |
 
@@ -83,8 +83,110 @@ reader/writer clone lifetimes, EOF and BrokenPipe wakeups, legacy synchronous-in
 early consumer exit, process status and nested task cleanup. These are tests of the actual pinned
 fork, not a copied buffer implementation.
 
-## Known gaps
+## What the real Golem test proves
 
+The CLI test starts an isolated current Golem server, consumes the protected built-in release,
+builds its sibling fixture with the in-tree SDK, and creates existing owners before invoking bash.
+It verifies:
+
+- Exact shell stdout, stderr and nonzero exit status through successful external tool RPC.
+- `while :; do echo x; done | cat | head -n 1`, followed by a clean second invocation.
+- Sibling discovery/help, streamed input/output, pipelines, command substitution, finite nested
+  bash invocation, and the fixture's declared exit code 42.
+- Input and output exceeding 16 MiB are refused, followed by clean subsequent calls.
+- A pending sibling permits local peer progress. Downstream reader closure does not cancel its
+  accepted filesystem write; completed effects remain visible.
+- Shared owner files, an explicitly denied sibling filesystem binding, and an owner where the
+  sibling is absent. Starting in a directory another owner used does not add that missing binding.
+- Separate invocations: the returned cwd, passed back, is where the next call starts, and nothing
+  else carries (a variable and a function are gone); a file one call writes and a later call
+  sources brings them back. A relative or missing cwd is rejected with `invalid-cwd` before any
+  file effect, and the rejection is in the agent's oplog.
+- Background jobs run, and their file effects are visible after `wait`. Both
+  process-substitution forms run, buffered. No human approval operation is involved.
+- `curl` and `wget` help, real requests, downloads relative to cwd, and HTTP failure behavior
+  against a controlled local server.
+- Crash after a completed invocation, observation through the same idempotency key, preserved
+  output and cwd, no duplicate file append, and a clean later invocation.
+
+A second scenario crashes the owner while bash is waiting for a sibling. It is **quarantined**
+(`#[ignore]`): it passed every time before #3992, and since that change the owner's replay after the
+crash fails in about two full-suite runs of three (`Unexpected oplog entry during replay: … entity
+body returned before consuming its recorded descendant`). It passes run on its own. The same replay
+failure follows a crash during a plain `sleep 0.3; curl …` with no sibling, in about half of runs,
+so it is not specific to siblings. The fixture's
+`checkpoint` operation appends `before`, parks on a GET to a test-controlled HTTP endpoint, then
+appends `after`. The test submits bash with `--trigger`, a fixed key and a non-root `--cwd`,
+waits until the endpoint receives the request, confirms through input-free `--lookup` that the
+invocation is pending, and runs `agent simulate-crash`. Recovery re-sends the incomplete GET with
+the same `idempotency-key` header; once the test releases it, the original invocation completes.
+It verifies:
+
+- Exact stdout, stderr, nonzero exit status, cwd and `PIPESTATUS` of a recovered
+  `fixture checkpoint … | cat` pipeline started in that directory.
+- The same crash with `head -c 0` as the reader returns the result of an uninterrupted control
+  run: reader closure and the crash together do not cancel the accepted sibling call.
+- After a second crash, both keys return their recorded results and cwds unchanged, and a fresh
+  invocation finds each owner file holding `before` and `after` exactly once.
+- The endpoint receives exactly five requests: two per crashed invocation and one for the
+  control. Replaying completed invocations sends none.
+
+A third scenario covers the process model. It verifies:
+
+- `$$` is a number in 1,000–4,194,303, and a different one in each call.
+- `kill` of a background job waiting on `fixture checkpoint` ends it with status 143 and cancels
+  the sibling call: its `after` effect is never written. The script polls the test server's
+  arrival count with `curl` and kills only once the request has arrived. Waiting for the
+  sibling's `before` file raced: a kill between that write and the request cancelled the call
+  before it was sent.
+- The end of a run stops a leftover job waiting on a sibling, again once its request has arrived.
+  It reports `bash: stopped job [1] (pid N, hangup): …` on stderr and cancels the sibling call.
+- Each owner file holds exactly the expected `before` effect, and the endpoint receives exactly
+  one checkpoint request per job.
+
+A fifth scenario, `bound_bash_recovers_a_crash_while_a_background_job_waits`, crashes the owner
+while a background job waits on a sibling. It is **quarantined** (`#[ignore]`): in 3 of 7 runs,
+locally and in CI, the owner was never reconstructed after `simulate-crash`, so the recovered
+call's request never arrived. Nothing in the bash tool runs in that window; the executor's handling
+of a crash while the owner is parked is being investigated separately.
+
+The 18 process-model matrix cases compare `&`, `wait`, `wait -n`, `$!`, `$$`, `BASHPID`, `kill`
+(TERM, HUP, KILL, INT, `-0`), trap handlers inside jobs, trap inheritance and exit statuses against
+Bash 5. Two fixtures cover the deliberate end-of-run stop and report, which Bash does not do.
+
+A fourth scenario crashes the owner while `curl` in the script waits on a request the test server
+holds. A GET, which Golem treats as idempotent, is re-sent with the same `idempotency-key` header
+and completes once released. A POST is run again from the start of its request: the server sees it
+a second time with a new key, the documented at-least-once behavior for POST and PATCH. Five crash
+cycles, each on a fresh owner and followed by an ordinary call, check that recovery leaves the
+owner healthy. It is **quarantined** (`#[ignore]`): it passed every time on the executor before
+#3967. At this version fewer than a third of crashes with a request in flight recover (8 of 28,
+across GET, POST and `curl`/`wget` mid-body); in the rest the request is never re-sent, nothing is
+logged and the owner hangs, or its replay fails. The same artifact on the executor before that
+change passes.
+
+A sixth scenario, `bound_bash_routes_a_siblings_stderr`, binds a sibling command that declares a
+stderr channel and writes to stdout and stderr alternately. It verifies the exact bytes on each
+stream for a plain call, `2>/dev/null`, `2>&1`, `|&`, `| tr` (which sees only stdout) and `2>file`,
+and that a failing call writes the sibling's stderr, then `tool error: selected: …`, and exits 42.
+
+The sibling scenarios use a simulated crash and an idempotent GET checkpoint. They do not cover a
+crash while a sibling is inside a call Golem does not re-execute, such as a POST, or a crash while
+a sibling that declares stderr is writing it.
+
+## Timing and limits
+
+These figures come from an earlier, 22.1 MB build of this branch, not the artifact above. The
+first scenario took 75.008 seconds including fixture build and server work, with the scenarios run
+one at a time. The first shell invocation took 4,944.595 ms. The next
+eight calls took 62.977–105.900 ms. Across all 38 subsequent calls, the median was 68.314 ms and
+the range 40.382–1,015.551 ms, including deliberately delayed tools and large attachments. These are local macOS arm64 measurements with a **debug host/CLI and
+release guest**, including CLI overhead. They are not production latency measurements; measure
+again with release host binaries before making a caching decision.
+
+Known gaps:
+
+- Crash recovery while a sibling that declares stderr is writing it.
 - A sibling tool that itself waits 10 s or more can still have its owner suspended in the middle of
   a bash call; bash's own waits are bounded below that (see README, Limits).
 - Optional Rust argument wire encoding; the tool uses supported non-optional shapes.
@@ -96,6 +198,6 @@ GNU Bash/Coreutils/curl/wget. Native embedding retains the source port's process
 constraints and must serialize native sessions. The production WASM path uses invocation-owned
 I/O and injected task services.
 
-See [README](README.md#build-and-verify) and the [conformance matrix](conformance/README.md) for
-reproducible commands. HTTP unit tests need loopback networking; recording goldens and the Brush
-compatibility suite need Docker.
+See [README](README.md#build-and-verify) and the
+[CLI test instructions](../../cli/golem-cli/test-data/builtin-bash/README.md) and the
+[conformance matrix](conformance/README.md) for reproducible commands. HTTP unit tests need loopback networking; integration tests need local ports and Docker.

@@ -2,6 +2,11 @@
   "schemaVersion": 1,
   "repository": "golemcloud/golem-builtins",
   "artifacts": {
+    "bash": {
+      "component": "bash",
+      "version": "0.0.1",
+      "sha256": "ff69ffbb0faf86a1e1696024b7102e78cf482d97e3451b69cbeab41f0c8927da"
+    },
     "filesystem_tools": {
       "component": "filesystem-tools",
       "version": "0.0.1",
