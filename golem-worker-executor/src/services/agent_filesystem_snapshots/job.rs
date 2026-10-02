@@ -65,7 +65,7 @@ pub(super) async fn run_job(
     let started = Instant::now();
     let uploaded = match store_names(&name, parent) {
         Ok((own, parent)) => {
-            core.store
+            core.calls
                 .upload(&ticket, &own, tree, parent, Stops::none(), None)
                 .await
         }
@@ -188,7 +188,7 @@ impl Admission {
         let started = Instant::now();
         let uploaded = match store_names(&name, None) {
             Ok((own, _)) => {
-                core.store
+                core.calls
                     .upload(&ticket, &own, tree, None, stops, deadline)
                     .await
             }
@@ -267,7 +267,7 @@ pub(super) async fn delete_older_snapshots(
 ) {
     let agent = ticket.agent();
     let retention = async {
-        let listing = match core.store.list(agent).await {
+        let listing = match core.calls.list(agent).await {
             Ok(listing) => listing,
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to list the filesystem snapshots for retention");
@@ -284,7 +284,7 @@ pub(super) async fn delete_older_snapshots(
             return;
         }
         if let Deleted::Leaked(error) = core
-            .store
+            .calls
             .delete(agent, Arc::clone(&victims), ticket.until_deletes_stopped())
             .await
         {
@@ -308,7 +308,7 @@ pub(super) async fn delete_older_snapshots(
 /// until a retention of its kind deletes it.
 async fn delete_superseded(core: &Core, ticket: &JobTicket, own: SnapshotName) {
     let deleted = core
-        .store
+        .calls
         .delete(
             ticket.agent(),
             Arc::from([own.clone()]),

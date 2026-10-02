@@ -287,6 +287,17 @@ pub(crate) fn start_candidates(
     ]
 }
 
+/// The filesystem snapshot names of the two automatic snapshot records that a start can select,
+/// as [`start_candidates`] gives them, the last record first. Retention keeps them whatever their
+/// age.
+pub(crate) fn selectable_names(status: &AgentStatusRecord) -> Box<[FilesystemSnapshotName]> {
+    start_candidates(status)
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, name)| name.cloned())
+        .collect()
+}
+
 /// The update snapshot names that a valid cut of the agent can still make a baseline: the names
 /// of the successful updates and of the pending updates in the status. A revert rebuilds the
 /// status, so the names of updates in its dropped region are not in it.

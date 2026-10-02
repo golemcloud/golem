@@ -2118,7 +2118,7 @@ fn upload_answers_stopped_at_once_and_discards_the_capture_after_the_save_return
         let (uploaded, ()) = futures::join!(uploading, stopping);
         let after_the_answer = (
             discarded.load(Ordering::SeqCst),
-            core.store.upload_attempts(),
+            core.calls.upload_attempts(),
             snapshots
                 .admit_periodic(&agent, AgentMode::Durable)
                 .await
@@ -2129,7 +2129,7 @@ fn upload_answers_stopped_at_once_and_discards_the_capture_after_the_save_return
 
         assert!(matches!(uploaded, Err(UploadNowError::Stopped)));
         assert_eq!(after_the_answer, (0, 1, true));
-        assert_eq!(core.store.upload_attempts(), 0);
+        assert_eq!(core.calls.upload_attempts(), 0);
     })
 }
 
@@ -2194,7 +2194,7 @@ fn an_upload_whose_slots_are_gone_stops_and_frees_the_agent() {
         submit(&snapshots, &agent, b"waiting", confirmer(&confirm)).await;
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        snapshots.core.as_ref().unwrap().store.close_slots();
+        snapshots.core.as_ref().unwrap().calls.close_slots();
         ended(&snapshots, &agent).await;
         gate.open();
 
@@ -2244,16 +2244,16 @@ fn a_call_that_runs_on_keeps_its_slot_until_it_returns() {
         let (_store, snapshots, gate, _) =
             with_a_save_held(&agent, ConfirmOutcome::Confirmed).await;
         let core = snapshots.core.as_ref().unwrap();
-        let during = (core.store.upload_attempts(), core.store.free_slots());
+        let during = (core.calls.upload_attempts(), core.calls.free_slots());
 
         snapshots.delete_all_snapshots(&agent);
         ended(&snapshots, &agent).await;
-        let after_the_stop = (core.store.upload_attempts(), core.store.free_slots());
+        let after_the_stop = (core.calls.upload_attempts(), core.calls.free_slots());
         gate.open();
-        eventually(|| core.store.free_slots() == 4).await;
+        eventually(|| core.calls.free_slots() == 4).await;
 
         assert_eq!((during, after_the_stop), ((1, 3), (1, 3)));
-        assert_eq!(core.store.upload_attempts(), 0);
+        assert_eq!(core.calls.upload_attempts(), 0);
     })
 }
 
@@ -2768,13 +2768,13 @@ fn a_cancelled_save_is_discarded_after_the_call_returned_and_never_published() {
         };
         let (uploaded, ()) = futures::join!(uploading, losing);
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let while_the_save_runs = (discarded.load(Ordering::SeqCst), core.store.free_slots());
+        let while_the_save_runs = (discarded.load(Ordering::SeqCst), core.calls.free_slots());
         gate.open();
         eventually(|| discarded.load(Ordering::SeqCst) == 1).await;
 
         assert!(matches!(uploaded, Err(UploadNowError::Stopped)));
         assert_eq!(while_the_save_runs, (0, 3));
-        assert_eq!(core.store.free_slots(), 4);
+        assert_eq!(core.calls.free_slots(), 4);
         assert!(store.memory.list(&agent).await.unwrap().is_empty());
     })
 }

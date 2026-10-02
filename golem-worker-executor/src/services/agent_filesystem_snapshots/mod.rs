@@ -372,7 +372,7 @@ pub struct AgentFilesystemSnapshots {
 /// What an enabled service holds.
 struct Core {
     /// The calls to the store. Nothing else holds the store.
-    store: Arc<StoreCalls>,
+    calls: Arc<StoreCalls>,
     settings: FilesystemSnapshotUploadConfig,
     registry: Arc<Registry>,
     room: VolumeRoom,
@@ -443,7 +443,7 @@ impl AgentFilesystemSnapshots {
         let registry = Arc::new(Registry::new(rules::Limits::new(
             settings.max_pending_deletes_per_agent(),
         )));
-        let store = Arc::new(StoreCalls::bind(
+        let calls = Arc::new(StoreCalls::bind(
             store,
             &settings,
             Arc::clone(&registry),
@@ -451,7 +451,7 @@ impl AgentFilesystemSnapshots {
             jobs.clone(),
         ));
         cleanup::start(
-            &store,
+            &calls,
             &registry,
             &shutdown,
             &jobs,
@@ -459,7 +459,7 @@ impl AgentFilesystemSnapshots {
         );
         Self {
             core: Some(Arc::new(Core {
-                store,
+                calls,
                 settings,
                 registry,
                 room,
@@ -615,7 +615,7 @@ impl AgentFilesystemSnapshots {
         tokio::select! {
             biased;
             () = job::interrupt_raised(interrupt) => StartCheck::NotStored,
-            stat = core.store.stat(agent, &store_name, limit) => match stat {
+            stat = core.calls.stat(agent, &store_name, limit) => match stat {
                 Ok(Some(_)) => StartCheck::Stored,
                 Ok(None) => StartCheck::NotStored,
                 Err(error) => {
@@ -635,7 +635,7 @@ impl AgentFilesystemSnapshots {
         name: &FilesystemSnapshotName,
     ) -> Result<StoreRestore, SnapshotsDisabled> {
         let core = self.core.as_ref().ok_or(SnapshotsDisabled)?;
-        Ok(core.store.restore(agent, name))
+        Ok(core.calls.restore(agent, name))
     }
 
     /// Deletes the filesystem snapshots `names` of `agent` in the background, after every store
@@ -702,7 +702,7 @@ impl AgentFilesystemSnapshots {
         to: &AgentSnapshots,
     ) -> Result<(), SnapshotStoreError> {
         match &self.core {
-            Some(core) => core.store.copy(from, to).await,
+            Some(core) => core.calls.copy(from, to).await,
             None => Ok(()),
         }
     }
@@ -711,7 +711,7 @@ impl AgentFilesystemSnapshots {
     /// [`StoreCalls::shut_down`], and waits for them.
     async fn shut_down(&self) {
         if let Some(core) = &self.core {
-            core.store.shut_down().await;
+            core.calls.shut_down().await;
         }
     }
 }
