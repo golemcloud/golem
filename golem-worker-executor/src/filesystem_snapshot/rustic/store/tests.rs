@@ -413,8 +413,8 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
         .unwrap();
     let backend = backend_of(storage, &scope, LONG_DEADLINE);
     let paths = tokio::task::spawn_blocking(move || {
-        let repository = open_existing(backend, &key()).unwrap().unwrap();
-        scope_snapshots(&repository)
+        let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
+        scope_snapshots(&repository, &backend)
             .unwrap()
             .readable
             .iter()
@@ -5130,8 +5130,8 @@ async fn snapshot_files(
 ) -> Vec<rustic_core::repofile::SnapshotFile> {
     let backend = backend_of(storage, scope, LONG_DEADLINE);
     tokio::task::spawn_blocking(move || {
-        let repository = open_existing(backend, &key()).unwrap().unwrap();
-        scope_snapshots(&repository).unwrap().readable
+        let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
+        scope_snapshots(&repository, &backend).unwrap().readable
     })
     .await
     .unwrap()

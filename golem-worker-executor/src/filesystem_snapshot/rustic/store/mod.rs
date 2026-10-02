@@ -54,10 +54,11 @@ use rustic_core::jiff::tz::TimeZone;
 use rustic_core::jiff::{Timestamp as SnapshotTime, Zoned};
 use rustic_core::repofile::{SnapshotFile, SnapshotId};
 use rustic_core::{
-    BackupOptions, DevIdOption, LocalSourceSaveOptions, Open, PathList,
+    BackupOptions, DevIdOption, FileType, LocalSourceSaveOptions, Open, PathList,
     Repository as RusticRepository, RestoreOptions, SnapshotOptions,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::pin::pin;
@@ -605,10 +606,10 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         };
         self.blocking(Operation::Restore, move || {
             pool.in_own_pool("fs-snap-restore", move || {
-                let Some(repository) = open_existing(backend, &key)? else {
+                let Some(repository) = open_existing(backend.clone(), &key)? else {
                     return Ok(Lookup::Missing);
                 };
-                match lookup(scope_snapshots(&repository)?, &name) {
+                match lookup(scope_snapshots(&repository, &backend)?, &name) {
                     Lookup::Found(snapshot, info) => {
                         restore_snapshot(repository, &snapshot, &into, &options)?;
                         Ok(Lookup::Found(snapshot, info))
@@ -632,8 +633,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let key = self.key.clone();
         let name = name.clone();
         self.blocking(Operation::Repository, move || {
-            Ok(match open_existing(backend, &key)? {
-                Some(repository) => lookup(scope_snapshots(&repository)?, &name),
+            Ok(match open_existing(backend.clone(), &key)? {
+                Some(repository) => lookup(scope_snapshots(&repository, &backend)?, &name),
                 None => Lookup::Missing,
             })
         })
@@ -649,8 +650,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let backend = Arc::new(self.scope_backend(scope, &token)?);
         let key = self.key.clone();
         self.blocking(Operation::Repository, move || {
-            Ok(match open_existing(backend, &key)? {
-                Some(repository) => newest_first(listed(scope_snapshots(&repository)?)),
+            Ok(match open_existing(backend.clone(), &key)? {
+                Some(repository) => newest_first(listed(scope_snapshots(&repository, &backend)?)),
                 None => Box::default(),
             })
         })
@@ -671,11 +672,11 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .collect::<std::collections::HashSet<_>>();
         let found = self
             .blocking(Operation::Repository, move || {
-                let Some(repository) = open_existing(backend, &key)? else {
+                let Some(repository) = open_existing(backend.clone(), &key)? else {
                     return Ok(None);
                 };
                 // One listing finds every snapshot of the batch.
-                let named = scope_snapshots(&repository)?
+                let named = scope_snapshots(&repository, &backend)?
                     .readable
                     .into_iter()
                     .filter(|snapshot| names.contains(snapshot.label.as_str()))
@@ -883,9 +884,12 @@ fn stage_save(
     // `ConfigExists`. A config that is there after the error is the repository of the winner.
     let repository = match open_or_create(backend.clone(), key) {
         Ok(repository) => repository,
-        Err(error) => open_existing(backend, key).ok().flatten().ok_or(error)?,
+        Err(error) => open_existing(backend.clone(), key)
+            .ok()
+            .flatten()
+            .ok_or(error)?,
     };
-    let before = scope_snapshots(&repository)?;
+    let (before, listed) = scope_snapshots_except(&repository, &backend, &HashSet::new())?;
     if has_name(&before, name) {
         return Ok(None);
     }
@@ -918,7 +922,10 @@ fn stage_save(
     let staged = stage
         .take()
         .context("the backup gave no snapshot file to the stage")?;
-    if has_name(&scope_snapshots(&repository)?, name) {
+    // Only a file that is new since the first read can have the name now: a late publish of an
+    // earlier attempt of the same job. So the save reads only those files again.
+    let (since, _) = scope_snapshots_except(&repository, &backend, &listed)?;
+    if has_name(&since, name) {
         return Ok(None);
     }
     Ok(Some((
@@ -931,28 +938,63 @@ fn stage_save(
     )))
 }
 
-/// Reads each snapshot file of the repository. A failed storage call fails the read, a file that a
-/// delete removed after the listing is left out, and each other failure counts as a failed check.
-fn scope_snapshots<S: Open>(repository: &RusticRepository<S>) -> anyhow::Result<ScopeSnapshots> {
-    repository.list::<SnapshotId>()?.try_fold(
-        ScopeSnapshots {
-            readable: Vec::new(),
-            unreadable: false,
-        },
-        |mut found, id| match repository.get_file::<SnapshotFile>(&id) {
-            Ok(mut snapshot) => {
-                snapshot.id = id;
-                found.readable.push(snapshot);
-                Ok(found)
-            }
-            Err(error) if is_storage_failure(&*error) => Err(anyhow::Error::from(error)),
-            Err(error) if is_file_missing(&*error) => Ok(found),
-            Err(_) => Ok(ScopeSnapshots {
-                unreadable: true,
-                ..found
-            }),
-        },
-    )
+/// Reads each snapshot file of the repository, whose blobs `backend` reads. A failed storage call
+/// fails the read, a file that a delete removed after the listing is left out, and each other
+/// failure counts as a failed check.
+fn scope_snapshots<S: Open>(
+    repository: &RusticRepository<S>,
+    backend: &BlobBackend,
+) -> anyhow::Result<ScopeSnapshots> {
+    scope_snapshots_except(repository, backend, &HashSet::new()).map(|(found, _)| found)
+}
+
+/// Reads each snapshot file of the repository whose id is not in `known`, as
+/// [`scope_snapshots`] does, and gives also the ids of every snapshot file that the listing found.
+/// The files are read ahead concurrently through `backend` before rustic reads and decrypts them
+/// one after the other, so the reads of the storage overlap. The order of the files does not
+/// matter, because each reader sorts or filters them.
+fn scope_snapshots_except<S: Open>(
+    repository: &RusticRepository<S>,
+    backend: &BlobBackend,
+    known: &HashSet<SnapshotId>,
+) -> anyhow::Result<(ScopeSnapshots, HashSet<SnapshotId>)> {
+    let listed = repository.list::<SnapshotId>()?.collect::<HashSet<_>>();
+    let new = listed
+        .iter()
+        .filter(|id| !known.contains(id))
+        .copied()
+        .collect::<Vec<_>>();
+    backend.read_ahead(FileType::Snapshot, new.iter().map(|id| **id));
+    new.into_iter()
+        .try_fold(
+            ScopeSnapshots {
+                readable: Vec::new(),
+                unreadable: false,
+            },
+            |found, id| read_snapshot_file(repository, found, id),
+        )
+        .map(|found| (found, listed))
+}
+
+/// Adds the snapshot file `id` of the repository to `found`, as [`scope_snapshots`] says.
+fn read_snapshot_file<S: Open>(
+    repository: &RusticRepository<S>,
+    mut found: ScopeSnapshots,
+    id: SnapshotId,
+) -> anyhow::Result<ScopeSnapshots> {
+    match repository.get_file::<SnapshotFile>(&id) {
+        Ok(mut snapshot) => {
+            snapshot.id = id;
+            found.readable.push(snapshot);
+            Ok(found)
+        }
+        Err(error) if is_storage_failure(&*error) => Err(anyhow::Error::from(error)),
+        Err(error) if is_file_missing(&*error) => Ok(found),
+        Err(_) => Ok(ScopeSnapshots {
+            unreadable: true,
+            ..found
+        }),
+    }
 }
 
 fn has_name(found: &ScopeSnapshots, name: &SnapshotName) -> bool {
