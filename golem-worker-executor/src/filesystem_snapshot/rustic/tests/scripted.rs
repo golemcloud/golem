@@ -47,8 +47,8 @@ pub(crate) enum Script {
     Delay(std::time::Duration),
     /// Waits for the time, and then gives an error and does not pass the call.
     RefuseAfter(std::time::Duration),
-    /// Gives no blob to a read of a whole blob, as a delete after a listing does. Each other call
-    /// passes.
+    /// Gives no blob to a read of a whole blob or to the source of a copy, as a delete after a
+    /// listing does. Each other call passes.
     Vanish,
     /// Passes the call, and then answers a write if absent with `AlreadyExists`, as a new try of a
     /// call whose first answer was lost does. Each other call passes.
@@ -550,6 +550,36 @@ impl BlobStorageBackend for ScriptedBlobStorage {
             path,
             self.inner
                 .delete_dir_at(target_label, op_label, namespace, path),
+        )
+        .await
+    }
+
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        let script = (self.rule)(op_label, from);
+        if script == Script::Vanish {
+            self.record(op_label, from);
+            return Ok(false);
+        }
+        self.follow(
+            script,
+            op_label,
+            from,
+            self.inner.copy_between_at(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            ),
         )
         .await
     }

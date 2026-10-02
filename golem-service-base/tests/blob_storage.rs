@@ -123,11 +123,6 @@ impl GetBlobStorage for FsTest {
             fs::FileSystemBlobStorage::new(&path).await.unwrap(),
         ))
     }
-
-    /// The filesystem backend gives the error of the filesystem for a source with no blob.
-    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
-        false
-    }
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "fs")]
@@ -4197,4 +4192,271 @@ async fn the_filesystem_snapshots_namespace_gives_each_agent_incarnation_its_own
             .chain((1..namespaces.len()).map(own_blob))
             .collect::<Vec<_>>()
     );
+}
+
+/// The namespace of another incarnation of the agent of [`filesystem_snapshots`], whose location
+/// is in the same bucket under another prefix.
+fn other_incarnation() -> BlobStorageNamespace {
+    filesystem_snapshots_of(
+        "4c8c5ff4-2a42-4e81-ac48-e63005f609fd",
+        "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11",
+        r#"counter("a/../b")"#,
+        "6a2e7b3c-1d4f-4b8c-ae20-7f3b4c5d6e7f",
+    )
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_writes_the_blob_into_another_namespace_and_keeps_the_source(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_writes_the_blob_into_another_namespace_and_keeps_the_source";
+    let (source, same_bucket, other_bucket) = (
+        filesystem_snapshots(),
+        other_incarnation(),
+        custom_storage(),
+    );
+    let blobs = [("data/ab/pack", "payload"), ("empty", "")];
+    futures::stream::iter(blobs)
+        .then(|(path, content)| {
+            let (storage, source) = (&storage, &source);
+            async move {
+                storage
+                    .put_raw(
+                        label,
+                        "put-raw",
+                        source.clone(),
+                        Path::new(path),
+                        content.as_bytes(),
+                    )
+                    .await
+            }
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+
+    let copied = futures::stream::iter([
+        (same_bucket.clone(), "data/ab/pack", "data/ab/pack"),
+        (same_bucket.clone(), "empty", "empty"),
+        (other_bucket.clone(), "data/ab/pack", "elsewhere/pack"),
+    ])
+    .then(|(target, from, to)| {
+        let (storage, source) = (&storage, &source);
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    source.clone(),
+                    Path::new(from),
+                    target.clone(),
+                    Path::new(to),
+                )
+                .await?;
+            storage
+                .get_raw(label, "get-raw", target, Path::new(to))
+                .await
+        }
+    })
+    .try_collect::<Vec<_>>()
+    .await
+    .unwrap();
+    let kept = storage
+        .get_raw(label, "get-raw", source, Path::new("data/ab/pack"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (copied, kept),
+        (
+            vec![
+                Some(b"payload".to_vec()),
+                Some(Vec::new()),
+                Some(b"payload".to_vec())
+            ],
+            Some(b"payload".to_vec())
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_from_a_missing_source_gives_blob_missing_error_and_writes_nothing(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_from_a_missing_source_gives_blob_missing_error_and_writes_nothing";
+
+    let copied = storage
+        .copy_between(
+            label,
+            "copy-between",
+            filesystem_snapshots(),
+            Path::new("missing/blob"),
+            other_incarnation(),
+            Path::new("target"),
+        )
+        .await;
+    let written = storage
+        .get_raw(label, "get-raw", other_incarnation(), Path::new("target"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            copied.map_err(|error| error.downcast_ref::<BlobMissingError>().is_some()),
+            written
+        ),
+        (Err(true), None)
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_at_a_root_path_is_an_error(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_at_a_root_path_is_an_error";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+
+    let errors = futures::stream::iter(
+        ROOT_PATHS
+            .iter()
+            .flat_map(|root| [(*root, "blob"), ("blob", *root)]),
+    )
+    .then(|(from, to)| {
+        let storage = &storage;
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    filesystem_snapshots(),
+                    Path::new(from),
+                    other_incarnation(),
+                    Path::new(to),
+                )
+                .await
+                .err()
+                .and_then(name_error)
+        }
+    })
+    .collect::<Vec<_>>()
+    .await;
+
+    assert!(
+        errors.iter().all(|error| *error
+            == Some(BlobNameError::NoName {
+                path: PathBuf::new()
+            })),
+        "{errors:?}"
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_onto_the_same_path_in_the_same_namespace_changes_nothing(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_onto_the_same_path_in_the_same_namespace_changes_nothing";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+    let copy_onto_itself = |path: &'static str| {
+        let storage = &storage;
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    filesystem_snapshots(),
+                    Path::new(path),
+                    filesystem_snapshots(),
+                    Path::new(path),
+                )
+                .await
+        }
+    };
+
+    let present = copy_onto_itself("blob").await;
+    let missing = copy_onto_itself("missing").await;
+    let after = storage
+        .get_raw(label, "get-raw", filesystem_snapshots(), Path::new("blob"))
+        .await
+        .unwrap();
+
+    assert!(present.is_ok(), "{present:?}");
+    assert!(
+        missing
+            .err()
+            .is_some_and(|error| error.downcast_ref::<BlobMissingError>().is_some())
+    );
+    assert_eq!(after, Some(b"payload".to_vec()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_checks_each_name_before_it_becomes_a_key(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_checks_each_name_before_it_becomes_a_key";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+
+    let broken = futures::stream::iter([("a/../blob", "target"), ("blob", "a/../target")])
+        .then(|(from, to)| {
+            let storage = &storage;
+            async move {
+                storage
+                    .copy_between(
+                        label,
+                        "copy-between",
+                        filesystem_snapshots(),
+                        Path::new(from),
+                        other_incarnation(),
+                        Path::new(to),
+                    )
+                    .await
+                    .err()
+                    .and_then(name_error)
+                    .is_some()
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+    let written = storage
+        .get_raw(label, "get-raw", other_incarnation(), Path::new("target"))
+        .await
+        .unwrap();
+
+    assert_eq!((broken, written), (vec![true, true], None));
 }

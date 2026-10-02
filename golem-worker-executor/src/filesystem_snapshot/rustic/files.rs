@@ -22,7 +22,7 @@
 
 use super::fault::{LeaseExpired, OperationCancelled};
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
+    BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -203,6 +203,32 @@ impl SnapshotFiles {
             end,
         ))
         .await
+    }
+
+    /// Copies the blob at the path into the same path of the blobs `to`, on the side of the
+    /// storage, so no byte comes to this process. Gives false when the path has no blob, and then
+    /// writes nothing. The blobs `to` must be of the same storage.
+    pub(super) async fn copy_to(
+        &self,
+        to: &SnapshotFiles,
+        op_label: &'static str,
+        path: &Path,
+    ) -> anyhow::Result<bool> {
+        match self
+            .answer(self.storage.copy_between(
+                TARGET_LABEL,
+                op_label,
+                self.namespace.clone(),
+                path,
+                to.namespace.clone(),
+                path,
+            ))
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error) if error.downcast_ref::<BlobMissingError>().is_some() => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Writes the content as the blob at the path, over the blob that was there.

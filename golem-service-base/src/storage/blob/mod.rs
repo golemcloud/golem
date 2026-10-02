@@ -300,6 +300,24 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
         to: &Path,
     ) -> Result<(), Error>;
 
+    /// Writes the blob at `from` in `from_namespace` as the blob at `to` in `to_namespace`, and
+    /// keeps the blob at `from`.
+    ///
+    /// The rules of `copy` hold for each end: a root path at either end gives
+    /// [`BlobNameError::NoName`], a `from` with no blob gives [`BlobMissingError`] and writes
+    /// nothing, and the same path in the same namespace writes nothing and gives
+    /// [`BlobMissingError`] when the blob is not there. Each name is checked before it becomes a
+    /// key of the backend. A blob at `to` is replaced.
+    async fn copy_between(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &Path,
+        to_namespace: BlobStorageNamespace,
+        to: &Path,
+    ) -> Result<(), Error>;
+
     /// Writes the blob at the `from` path as the blob at the `to` path, and then deletes the
     /// blob at `from`.
     ///
@@ -542,33 +560,22 @@ pub trait BlobStorageBackend: Debug + Send + Sync {
             == ExistsResult::File)
     }
 
-    /// Writes the blob at the `from` path as the blob at the `to` path, and keeps the blob at
-    /// `from`. The two paths are not the same path.
+    /// Writes the blob at `from` in `from_namespace` as the blob at `to` in `to_namespace`, and
+    /// keeps the blob at `from`. The two ends are not the same path in the same namespace, and
+    /// neither is a root path.
     ///
     /// Gives true when the copy wrote the blob, and false when `from` has no blob. False writes
-    /// nothing to `to`. A backend can give an error of its own for a `from` with no blob in
-    /// place of false, and then [`BlobStorage`] gives that error in place of
-    /// [`BlobMissingError`]. The default reads the blob with `get_raw_at`, gives false when it
-    /// finds none, and writes it with `put_raw_at`.
-    async fn copy_at(
+    /// nothing to `to`. Each backend keeps the rule of a late change of
+    /// [`BlobStorage::copy_between`].
+    async fn copy_between_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
-        namespace: BlobStorageNamespace,
+        from_namespace: BlobStorageNamespace,
         from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
         to: &NormalizedBlobPath<'_>,
-    ) -> Result<bool, Error> {
-        match self
-            .get_raw_at(target_label, op_label, namespace.clone(), from)
-            .await?
-        {
-            Some(data) => self
-                .put_raw_at(target_label, op_label, namespace, to, &data)
-                .await
-                .map(|()| true),
-            None => Ok(false),
-        }
-    }
+    ) -> Result<bool, Error>;
 }
 
 /// Gives the one form of a path that names a blob, or `None` for a root path, which is a
@@ -841,15 +848,43 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        self.copy_between(
+            target_label,
+            op_label,
+            namespace.clone(),
+            from,
+            namespace,
+            to,
+        )
+        .await
+    }
+
+    async fn copy_between(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &Path,
+        to_namespace: BlobStorageNamespace,
+        to: &Path,
+    ) -> Result<(), Error> {
         let (source, target) = (normalized_blob_path(from)?, normalized_blob_path(to)?);
         // A copy onto the same path writes nothing, and it still needs the blob that it reads.
-        let found = if blob_copy_changes_nothing(&source, &target)? {
-            self.has_blob_at(target_label, op_label, namespace, &source)
+        let found =
+            if blob_copy_changes_nothing(&source, &target)? && from_namespace == to_namespace {
+                self.has_blob_at(target_label, op_label, from_namespace, &source)
+                    .await?
+            } else {
+                self.copy_between_at(
+                    target_label,
+                    op_label,
+                    from_namespace,
+                    &source,
+                    to_namespace,
+                    &target,
+                )
                 .await?
-        } else {
-            self.copy_at(target_label, op_label, namespace, &source, &target)
-                .await?
-        };
+            };
         blob_found(found, from)
     }
 
@@ -871,7 +906,14 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         }
 
         let found = self
-            .copy_at(target_label, op_label, namespace.clone(), &source, &target)
+            .copy_between_at(
+                target_label,
+                op_label,
+                namespace.clone(),
+                &source,
+                namespace.clone(),
+                &target,
+            )
             .await?;
         blob_found(found, from)?;
         self.delete_at(target_label, op_label, namespace, &source)
@@ -1248,14 +1290,12 @@ pub struct BlobRangeError {
 /// The name is good: the rules of [`BlobNameError`] accept it, and the backend can use it. The
 /// storage holds no blob at it.
 ///
-/// `copy` of [`BlobStorage`] gives this error when the storage holds no blob at its source path and
-/// the backend tells it so. A copy onto the same path gives it on each backend. For a copy to
-/// another path, the in-memory and the SQLite backends use the default `copy_at` of
-/// [`BlobStorageBackend`], which reads the blob at the source path, and the S3 backend has a
-/// `copy_at` of its own, which sends one `CopyObject` request and reads the code `NoSuchKey` of the
-/// source key. The filesystem backend has a `copy_at` of its own too, which gives the error of the
-/// filesystem for a source with no blob, and not this error. `move` is a copy and then a delete of
-/// the source, so it gives the error of the copy too, and it deletes nothing. A guest picks the
+/// `copy` and `copy_between` of [`BlobStorage`] give this error when the storage holds no blob at
+/// the source path, on each backend. The in-memory backend reads its map, the SQLite backend copies
+/// the row with one statement, the S3 backend sends one `CopyObject` request and reads the code
+/// `NoSuchKey` of the source key, and the filesystem backend opens the source before it writes.
+/// `move` is a copy and then a delete of the source, so it gives the error of the copy too, and it
+/// deletes nothing. A guest picks the
 /// source container name and the source object name of `copy_object` and of `move_object`, so the
 /// path is of the guest. The storage names the path as the guest wrote it, and not in the
 /// normalized form that the storage uses. Each [`BlobNameError`] does the same, because the guest

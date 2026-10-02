@@ -200,3 +200,48 @@ fn metadata_gives_the_blob_and_else_a_created_directory_with_a_size_of_zero() {
         ]
     );
 }
+
+#[test]
+async fn a_copy_between_namespaces_writes_the_blob_and_a_missing_source_writes_nothing() {
+    use crate::storage::blob::BlobStorage;
+    let storage = InMemoryBlobStorage::new();
+    let label = "memory-copy-between";
+    storage
+        .put_raw(label, "put-raw", namespace(), Path::new("a/x"), b"payload")
+        .await
+        .unwrap();
+
+    let copied = storage
+        .copy_between(
+            label,
+            "copy-between",
+            namespace(),
+            Path::new("a/x"),
+            other_namespace(),
+            Path::new("b/y"),
+        )
+        .await;
+    let missing = storage
+        .copy_between(
+            label,
+            "copy-between",
+            namespace(),
+            Path::new("missing"),
+            other_namespace(),
+            Path::new("b/z"),
+        )
+        .await;
+    let target = storage
+        .get_raw(label, "get-raw", other_namespace(), Path::new("b/y"))
+        .await
+        .unwrap();
+    let not_written = storage
+        .get_raw(label, "get-raw", other_namespace(), Path::new("b/z"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (copied.is_ok(), missing.is_err(), target, not_written),
+        (true, true, Some(b"payload".to_vec()), None)
+    );
+}

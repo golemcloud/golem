@@ -4221,7 +4221,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
     // as a prune does.
     let inner = Arc::new(InMemoryBlobStorage::new());
     let storage = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
-        if op_label == "copy_read" && path.starts_with("index") {
+        if op_label == "copy" && path.starts_with("index") {
             Script::WaitForGate
         } else {
             Script::Pass
@@ -4242,7 +4242,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
         storage
             .calls()
             .iter()
-            .any(|(op_label, path)| *op_label == "copy_read" && path.starts_with("index"))
+            .any(|(op_label, path)| *op_label == "copy" && path.starts_with("index"))
     })
     .await;
     let index_files = blobs(&*inner, &from.0, "index/").await;
@@ -4280,7 +4280,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
 async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listing() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
-            if op_label == "copy_read" && path.starts_with("snapshots") {
+            if op_label == "copy" && path.starts_with("snapshots") {
                 Script::Vanish
             } else {
                 Script::Pass

@@ -572,6 +572,27 @@ impl OverlapCountingStorage {
 
 #[async_trait]
 impl BlobStorageBackend for OverlapCountingStorage {
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .copy_between_at(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,
@@ -1577,8 +1598,8 @@ async fn a_repository_with_many_snapshots_stays_usable() {
                 let (copied, copy) =
                     measured(counting, "copy_all", store.copy_all(scope, &target)).await;
                 let copy_counts = (
-                    counting.count_of("read"),
-                    counting.count_of("write") + counting.count_of("write_if_absent"),
+                    counting.count_of("copy_read"),
+                    counting.count_of("copy_write"),
                     counting.count_of("copy"),
                 );
                 let index_files = stored_paths(inner, scope)

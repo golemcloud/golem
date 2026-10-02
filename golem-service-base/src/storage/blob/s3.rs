@@ -1876,37 +1876,48 @@ impl BlobStorageBackend for S3BlobStorage {
             .is_some())
     }
 
-    /// Writes the blob at `from` to `to` with one `CopyObject` request, and keeps the blob at
-    /// `from`. S3 reads the source and writes the target, so no byte of the object comes to
-    /// this process.
+    /// Writes the blob at `from` in its bucket to `to` in its bucket with one `CopyObject`
+    /// request, and keeps the blob at `from`. The two ends can be in different buckets and under
+    /// different prefixes. S3 reads the source and writes the target, so no byte of the object
+    /// comes to this process.
     ///
     /// A `from` with no object at it gives false. One request gives that answer:
     /// `is_copy_object_error_retriable` stops the retry loop at the code `NoSuchKey`.
-    async fn copy_at(
+    async fn copy_between_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
-        namespace: BlobStorageNamespace,
+        from_namespace: BlobStorageNamespace,
         from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
         to: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
-        let bucket = self.bucket_of(&namespace);
-        let from_key = self.key_of(&namespace, from)?;
-        let to_key = self.key_of(&namespace, to)?;
+        let from_bucket = self.bucket_of(&from_namespace);
+        let to_bucket = self.bucket_of(&to_namespace);
+        let from_key = self.key_of(&from_namespace, from)?;
+        let to_key = self.key_of(&to_namespace, to)?;
         let encoded_from_key = Self::encode_copy_source_key(&from_key);
 
         let result = with_retries_customized(
             target_label,
             op_label,
-            Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
+            Some(format!(
+                "{from_bucket} - {from_key:?} -> {to_bucket} - {to_key:?}"
+            )),
             &self.config.retries,
-            &(self.client.clone(), bucket, encoded_from_key, to_key),
-            |(client, bucket, encoded_from_key, to_key)| {
+            &(
+                self.client.clone(),
+                from_bucket,
+                encoded_from_key,
+                to_bucket,
+                to_key,
+            ),
+            |(client, from_bucket, encoded_from_key, to_bucket, to_key)| {
                 Box::pin(async move {
                     client
                         .copy_object()
-                        .bucket(*bucket)
-                        .copy_source(format!("/{}/{}", *bucket, encoded_from_key))
+                        .bucket(*to_bucket)
+                        .copy_source(format!("/{}/{}", *from_bucket, encoded_from_key))
                         .key(to_key.clone())
                         .send()
                         .await
