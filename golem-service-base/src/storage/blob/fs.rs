@@ -27,13 +27,23 @@ use futures::stream::BoxStream;
 use golem_common::model::Timestamp;
 use std::io::{ErrorKind, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
     root: PathBuf,
+    /// A gate that each blocking write and delete passes right before its last check of the drop
+    /// flag, so that a test can hold the write there.
+    #[cfg(test)]
+    before_commit: Option<CommitGate>,
+    /// A hook that each whole and partial read runs right after its metadata check, so that a
+    /// test can remove the blob there.
+    #[cfg(test)]
+    after_metadata: Option<CommitGate>,
 }
 
 impl FileSystemBlobStorage {
@@ -61,7 +71,27 @@ impl FileSystemBlobStorage {
                 .context("Failed to create custom_data directory")?;
         }
 
-        Ok(Self { root: canonical })
+        // An old file of the staging directory that cannot be removed only takes space, so the
+        // storage starts and logs it.
+        let staging = canonical.join(STAGING_DIRECTORY);
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+            remove_old_staging_files(&staging, SystemTime::now())
+        })
+        .await?
+        {
+            tracing::warn!(
+                error = %error,
+                "Failed to remove old files of the staging directory of the blob storage"
+            );
+        }
+
+        Ok(Self {
+            root: canonical,
+            #[cfg(test)]
+            before_commit: None,
+            #[cfg(test)]
+            after_metadata: None,
+        })
     }
 
     /// Attaches synchronously to an already-prepared blob storage root.
@@ -79,7 +109,21 @@ impl FileSystemBlobStorage {
     pub fn attach_existing(root: &Path) -> Result<Self, Error> {
         let canonical = std::fs::canonicalize(root)
             .map_err(|err| anyhow!("Failed to canonicalize blob storage root: {err}"))?;
-        Ok(Self { root: canonical })
+        Ok(Self {
+            root: canonical,
+            #[cfg(test)]
+            before_commit: None,
+            #[cfg(test)]
+            after_metadata: None,
+        })
+    }
+
+    /// Runs the hook of a test after the metadata check of a read. Production code has no hook.
+    fn after_metadata(&self) {
+        #[cfg(test)]
+        if let Some(hook) = &self.after_metadata {
+            (hook.0)();
+        }
     }
 
     fn path_of(&self, namespace: &BlobStorageNamespace, path: &NormalizedBlobPath) -> PathBuf {
@@ -149,6 +193,74 @@ impl FileSystemBlobStorage {
             Ok(())
         }
     }
+
+    /// Runs `work` on a blocking thread with a [`Commit`] whose drop flag this call sets when it is
+    /// dropped. So a queued `work` that starts after the drop, or that reaches its last check after
+    /// it, gives up.
+    async fn unless_dropped<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&Commit) -> std::io::Result<T> + Send + 'static,
+    ) -> Result<T, Error> {
+        let dropped = SetOnDrop(Arc::new(AtomicBool::new(false)));
+        let commit = Commit {
+            dropped: dropped.0.clone(),
+            #[cfg(test)]
+            gate: self.before_commit.clone(),
+        };
+        Ok(tokio::task::spawn_blocking(move || work(&commit)).await??)
+    }
+}
+
+/// Sets its flag when it is dropped.
+struct SetOnDrop(Arc<AtomicBool>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// What a blocking write shares with its async call.
+struct Commit {
+    /// True after the async call was dropped.
+    dropped: Arc<AtomicBool>,
+    #[cfg(test)]
+    gate: Option<CommitGate>,
+}
+
+impl Commit {
+    /// Gives an error of the kind [`ErrorKind::Interrupted`] when the async call was dropped.
+    fn go_on(&self) -> std::io::Result<()> {
+        if self.dropped.load(Ordering::Acquire) {
+            Err(std::io::Error::new(
+                ErrorKind::Interrupted,
+                "the call of the write was dropped",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The last check before the step that makes the write visible.
+    fn before_commit(&self) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(gate) = &self.gate {
+            (gate.0)();
+        }
+        self.go_on()
+    }
+}
+
+/// A test gate of [`Commit::before_commit`].
+#[cfg(test)]
+#[derive(Clone)]
+struct CommitGate(Arc<dyn Fn() + Send + Sync>);
+
+#[cfg(test)]
+impl std::fmt::Debug for CommitGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CommitGate")
+    }
 }
 
 #[async_trait]
@@ -164,8 +276,8 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
-            let data = async_fs::read(&full_path).await?;
-            Ok(Some(data))
+            self.after_metadata();
+            Ok(absent_on_not_found(async_fs::read(&full_path).await)?)
         } else {
             Ok(None)
         }
@@ -239,7 +351,10 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         if async_fs::metadata(&full_path).await.is_err() {
             return Ok(None);
         }
-        let mut file = async_fs::File::open(&full_path).await?;
+        self.after_metadata();
+        let Some(mut file) = absent_on_not_found(async_fs::File::open(&full_path).await)? else {
+            return Ok(None);
+        };
         // The length comes from the open file, so a change of the path after the open does not
         // change it.
         let metadata = file.metadata().await?;
@@ -288,6 +403,14 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
+        if matches!(namespace, BlobStorageNamespace::FilesystemSnapshots { .. }) {
+            let staging = self.root.join(STAGING_DIRECTORY);
+            let data: Box<[u8]> = Box::from(data);
+            return self
+                .unless_dropped(move |commit| write_staged(commit, &staging, &full_path, &data))
+                .await;
+        }
+
         if let Some(parent) = full_path.parent()
             && async_fs::metadata(parent).await.is_err()
         {
@@ -312,10 +435,8 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let staging = self.root.join(STAGING_DIRECTORY);
         let data: Box<[u8]> = Box::from(data);
 
-        Ok(
-            tokio::task::spawn_blocking(move || write_if_absent(&staging, &full_path, &data))
-                .await??,
-        )
+        self.unless_dropped(move |commit| write_if_absent(commit, &staging, &full_path, &data))
+            .await
     }
 
     async fn put_stream_at(
@@ -359,8 +480,13 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        async_fs::remove_file(&full_path).await?;
-        Ok(())
+        if matches!(namespace, BlobStorageNamespace::FilesystemSnapshots { .. }) {
+            return self
+                .unless_dropped(move |commit| remove_unless_dropped(commit, &full_path))
+                .await;
+        }
+
+        Ok(absent_on_not_found(async_fs::remove_file(&full_path).await).map(|_| ())?)
     }
 
     async fn create_dir_at(
@@ -488,33 +614,152 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         self.ensure_path_is_inside_root(&to_full_path)?;
         let staging = self.root.join(STAGING_DIRECTORY);
 
-        Ok(tokio::task::spawn_blocking(move || {
-            copy_staged(&from_full_path, &staging, &to_full_path)
+        self.unless_dropped(move |commit| {
+            copy_staged(commit, &from_full_path, &staging, &to_full_path)
         })
-        .await??)
+        .await
     }
 }
 
-/// The directory at the storage root that holds the bytes of a `put_raw_if_absent` call while
-/// the call writes them.
+/// The directory at the storage root that holds the bytes of a `put_raw_if_absent` call, of a
+/// copy, and of a `put_raw` call in the filesystem snapshot namespace, while the call writes them.
 ///
 /// The directory is outside the directory of every namespace, so no listing shows a blob that is
 /// only partly written. A process that stops during a write can leave a file in it, and no
-/// namespace sees that file.
+/// namespace sees that file. `FileSystemBlobStorage::new` removes such a file when it is older than
+/// [`STAGING_FILE_AGE`].
 const STAGING_DIRECTORY: &str = ".staging";
+
+/// The age after which `FileSystemBlobStorage::new` removes a file of the staging directory.
+///
+/// Services that share a root can have writes in flight, so a younger file can belong to a write
+/// that still runs.
+const STAGING_FILE_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// The mode that a staged `put_raw` file gets before the process umask, as `File::create` gives.
+#[cfg(unix)]
+const STAGED_PUT_MODE: u32 = 0o666;
+
+/// Tells if a file of the staging directory that was last changed at `modified` is old enough at
+/// `now` to remove.
+fn staging_file_is_old(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
+        .is_ok_and(|age| age > STAGING_FILE_AGE)
+}
+
+/// Removes each file of `staging` that [`staging_file_is_old`] finds old. A `staging` that does not
+/// exist holds nothing, and a file that another process removed first is not an error. A file that
+/// cannot be removed does not stop the removal of the other files; the call then gives the first
+/// error.
+fn remove_old_staging_files(staging: &Path, now: SystemTime) -> std::io::Result<()> {
+    let Some(entries) = absent_on_not_found(std::fs::read_dir(staging))? else {
+        return Ok(());
+    };
+    first_error(entries.map(|entry| {
+        let Some(entry) = listed_entry(entry)? else {
+            return Ok(());
+        };
+        let Some(metadata) = listed_entry(entry.metadata())? else {
+            return Ok(());
+        };
+        if metadata.is_file() && staging_file_is_old(metadata.modified()?, now) {
+            absent_on_not_found(std::fs::remove_file(entry.path())).map(|_| ())
+        } else {
+            Ok(())
+        }
+    }))
+}
+
+/// Runs each step of `steps`, also after a step failed, and gives the first error.
+fn first_error(steps: impl Iterator<Item = std::io::Result<()>>) -> std::io::Result<()> {
+    // Each step runs while the steps are collected; only then the first error is taken.
+    steps.collect::<Vec<_>>().into_iter().collect()
+}
+
+/// Gives `None` for a read that found nothing at its path, which a remove of the path after its
+/// metadata was read causes.
+fn absent_on_not_found<T>(read: std::io::Result<T>) -> std::io::Result<Option<T>> {
+    match read {
+        Ok(found) => Ok(Some(found)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Gives `None` for a part of a listing that a remove during the listing took away: an entry, its
+/// kind, its metadata or the listing of a directory below it.
+fn listed_entry<T>(found: std::io::Result<T>) -> std::io::Result<Option<T>> {
+    absent_on_not_found(found)
+}
+
+/// Writes `data` as the file at `target`, over the file that was there.
+///
+/// The bytes go to a new file in `staging` first. Then the file gets the name `target` in one step.
+/// So a reader sees the whole new file or the one before. The new file gets the mode that
+/// `File::create` gives. A `commit` whose call was dropped stops the write before it makes a
+/// directory and before the step.
+fn write_staged(
+    commit: &Commit,
+    staging: &Path,
+    target: &Path,
+    data: &[u8],
+) -> std::io::Result<()> {
+    commit.go_on()?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir_all(staging)?;
+    let mut file = staged_put_file(staging)?;
+    file.write_all(data)?;
+    commit.before_commit()?;
+    file.persist(target).map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// A new file in `staging` with the mode of [`STAGED_PUT_MODE`], which the umask then masks.
+#[cfg(unix)]
+fn staged_put_file(staging: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    use std::os::unix::fs::PermissionsExt;
+    tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(STAGED_PUT_MODE))
+        .tempfile_in(staging)
+}
+
+/// A new file in `staging`.
+#[cfg(not(unix))]
+fn staged_put_file(staging: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    tempfile::NamedTempFile::new_in(staging)
+}
+
+/// Removes the file at `target`. A `target` with no file changes nothing. A `commit` whose call was
+/// dropped stops the remove.
+fn remove_unless_dropped(commit: &Commit, target: &Path) -> std::io::Result<()> {
+    commit.go_on()?;
+    commit.before_commit()?;
+    absent_on_not_found(std::fs::remove_file(target)).map(|_| ())
+}
 
 /// Writes `data` as the file at `target` when `target` has no file.
 ///
 /// The bytes go to a new file in `staging` first. Then the file gets the name `target` in one step.
 /// That step refuses a name that exists. So a reader sees the whole file or no file. Of two calls
 /// for one `target`, only one gives `Written`. The file in `staging` goes away when the step fails.
-fn write_if_absent(staging: &Path, target: &Path, data: &[u8]) -> std::io::Result<PutIfAbsent> {
+/// A `commit` whose call was dropped stops the write before it makes a directory and before the
+/// step.
+fn write_if_absent(
+    commit: &Commit,
+    staging: &Path,
+    target: &Path,
+    data: &[u8],
+) -> std::io::Result<PutIfAbsent> {
+    commit.go_on()?;
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::create_dir_all(staging)?;
     let mut file = tempfile::NamedTempFile::new_in(staging)?;
     file.write_all(data)?;
+    commit.before_commit()?;
     match file.persist_noclobber(target) {
         Ok(_) => Ok(PutIfAbsent::Written),
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -524,20 +769,41 @@ fn write_if_absent(staging: &Path, target: &Path, data: &[u8]) -> std::io::Resul
     }
 }
 
+/// Tells whether an error of the open of the source of a copy means that the source has no file:
+/// no entry at the path, or a path below a file.
+fn no_source_file(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
 /// Copies the file at `source` to `target` through a new file in `staging`, and gives false when
-/// `source` has no file. The source is opened before anything is written.
-fn copy_staged(source: &Path, staging: &Path, target: &Path) -> std::io::Result<bool> {
+/// `source` has no file: no entry, a directory, or a path below a file. The source is opened and
+/// checked before anything is written. A `commit` whose call was dropped stops the copy before it
+/// makes a directory and before the step that names the target.
+fn copy_staged(
+    commit: &Commit,
+    source: &Path,
+    staging: &Path,
+    target: &Path,
+) -> std::io::Result<bool> {
+    commit.go_on()?;
     let mut source = match std::fs::File::open(source) {
         Ok(source) => source,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if no_source_file(error.kind()) => return Ok(false),
         Err(error) => return Err(error),
     };
+    if !source.metadata()?.is_file() {
+        return Ok(false);
+    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::create_dir_all(staging)?;
     let mut staged = tempfile::NamedTempFile::new_in(staging)?;
     std::io::copy(&mut source, &mut staged)?;
+    commit.before_commit()?;
     staged.persist(target).map_err(|error| error.error)?;
     Ok(true)
 }
@@ -562,23 +828,34 @@ fn list_files_below(directory: &Path, root: &Path) -> std::io::Result<Box<[Liste
 
 /// Adds each regular file below the entries of a directory to `listed`, and gives the list back.
 ///
-/// The walk does not follow symlinks, and symlinks are not in the list.
+/// The walk does not follow symlinks, and symlinks are not in the list. An entry that a remove
+/// takes away during the walk is not in the list, and the walk goes on.
 fn add_files(
-    mut entries: std::fs::ReadDir,
+    mut entries: impl Iterator<Item = std::io::Result<std::fs::DirEntry>>,
     root: &Path,
     listed: Vec<ListedBlob>,
 ) -> std::io::Result<Vec<ListedBlob>> {
     entries.try_fold(listed, |mut listed, entry| {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
+        let Some(entry) = listed_entry(entry)? else {
+            return Ok(listed);
+        };
+        let Some(file_type) = listed_entry(entry.file_type())? else {
+            return Ok(listed);
+        };
         if file_type.is_dir() {
-            add_files(std::fs::read_dir(entry.path())?, root, listed)
+            match listed_entry(std::fs::read_dir(entry.path()))? {
+                Some(below) => add_files(below, root, listed),
+                None => Ok(listed),
+            }
         } else if file_type.is_file() {
+            let Some(metadata) = listed_entry(entry.metadata())? else {
+                return Ok(listed);
+            };
             let path = entry.path();
             let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
             listed.push(ListedBlob {
                 path: relative.into(),
-                size: entry.metadata()?.len(),
+                size: metadata.len(),
             });
             Ok(listed)
         } else {

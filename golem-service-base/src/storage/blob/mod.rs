@@ -61,6 +61,14 @@ fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error
 /// path or `.`, and the root is a directory. A directory is there while a blob is below it, at
 /// any depth, and a directory that `create_dir` made is there until `delete_dir` removes it. A
 /// directory that `create_dir` made keeps a size of zero and a time, which `get_metadata` gives.
+///
+/// A late change: a write or a delete whose call ended without an answer, or whose call was
+/// dropped, lands within one storage call deadline of the end of the call, or never. The doc of a
+/// method says when this holds for it. It is an assumption about each backend: the filesystem
+/// backend checks right before it makes the change visible that the call was not dropped, and a
+/// change that passed that check becomes visible within one deadline; the SQLite backend runs a
+/// dropped statement that already reached its connection within one deadline; and the S3 server
+/// applies a request that it got in full within one deadline.
 #[async_trait]
 pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
@@ -132,6 +140,10 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Writes the bytes as the blob at the path, over the blob that was there.
     ///
     /// A blob cannot be where a directory is, so a root path is an error.
+    ///
+    /// In the namespace [`BlobStorageNamespace::FilesystemSnapshots`] a reader sees the whole new
+    /// blob or the one before, and the rule of a late change in the doc of [`BlobStorage`] holds.
+    /// The other namespaces have neither promise.
     async fn put_raw(
         &self,
         target_label: &'static str,
@@ -153,6 +165,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// `put_raw` does. When the response to an attempt that wrote the blob does not arrive, the
     /// next attempt finds that blob. The call then gives `AlreadyExists`, although the call
     /// wrote the blob.
+    ///
+    /// The rule of a late change in the doc of [`BlobStorage`] holds for this call.
     async fn put_raw_if_absent(
         &self,
         target_label: &'static str,
@@ -178,6 +192,9 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     ///
     /// A path that has no blob changes nothing. A directory has no blob at its path, and a root
     /// path is a directory.
+    ///
+    /// The rule of a late change in the doc of [`BlobStorage`] holds for this call in the
+    /// namespace `FilesystemSnapshots`.
     async fn delete(
         &self,
         target_label: &'static str,
@@ -245,6 +262,10 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// the result. A path that does not exist, or the path of a blob, gives an empty result. Paths
     /// that differ only in case are different paths, unless the backend stores them as one blob.
     /// The order of the result is not specified.
+    ///
+    /// On a strongly consistent store: a blob that exists for the whole listing is in the result.
+    /// A blob that a write or a delete adds or removes during the listing can be present or
+    /// absent, and the listing does not fail because of it.
     async fn list_blobs_below(
         &self,
         target_label: &'static str,
@@ -308,6 +329,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// nothing, and the same path in the same namespace writes nothing and gives
     /// [`BlobMissingError`] when the blob is not there. Each name is checked before it becomes a
     /// key of the backend. A blob at `to` is replaced.
+    ///
+    /// The rule of a late change in the doc of [`BlobStorage`] holds for this call.
     async fn copy_between(
         &self,
         target_label: &'static str,

@@ -4315,6 +4315,57 @@ async fn copy_between_from_a_missing_source_gives_blob_missing_error_and_writes_
 
 #[test]
 #[tracing::instrument]
+async fn copy_between_from_a_directory_or_from_below_a_file_gives_blob_missing_error_and_writes_nothing(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_from_a_directory_or_from_below_a_file_gives_blob_missing_error_and_writes_nothing";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("directory/blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+
+    let copied = futures::stream::iter([
+        ("directory", "target/from-directory"),
+        ("directory/blob/below", "target/from-below-a-file"),
+    ])
+    .then(|(from, to)| {
+        let storage = &storage;
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    filesystem_snapshots(),
+                    Path::new(from),
+                    other_incarnation(),
+                    Path::new(to),
+                )
+                .await
+                .map_err(|error| error.downcast_ref::<BlobMissingError>().is_some())
+        }
+    })
+    .collect::<Vec<_>>()
+    .await;
+    let written = storage
+        .exists(label, "exists", other_incarnation(), Path::new("target"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (copied, written),
+        (vec![Err(true), Err(true)], ExistsResult::DoesNotExist)
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn copy_between_at_a_root_path_is_an_error(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
 ) {
@@ -4459,4 +4510,29 @@ async fn copy_between_checks_each_name_before_it_becomes_a_key(
         .unwrap();
 
     assert_eq!((broken, written), (vec![true, true], None));
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_of_a_missing_blob_succeeds(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] snapshots: &BlobStorageNamespace,
+    #[tagged_as("cs")] custom: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_delete_of_a_missing_blob_succeeds";
+    let path = Path::new("missing/blob");
+
+    let deleted = (
+        storage
+            .delete(label, "delete", snapshots.clone(), path)
+            .await
+            .map_err(|error| error.to_string()),
+        storage
+            .delete(label, "delete", custom.clone(), path)
+            .await
+            .map_err(|error| error.to_string()),
+    );
+
+    assert_eq!(deleted, (Ok(()), Ok(())));
 }

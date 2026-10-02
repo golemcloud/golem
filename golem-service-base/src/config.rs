@@ -219,6 +219,9 @@ impl Default for S3BlobStorageConfig {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalFileSystemBlobStorageConfig {
+    /// The directory of the blobs. The whole tree below it must be on one volume: a write puts its
+    /// bytes in a file of a directory below the root first, and then renames that file into place,
+    /// and a rename works only within one volume.
     pub root: PathBuf,
 }
 
