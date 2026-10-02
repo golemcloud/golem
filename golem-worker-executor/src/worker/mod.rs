@@ -5448,8 +5448,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(name) = self.selection_in_memory(&status).candidate else {
             return;
         };
-        let agent_snapshots =
-            crate::filesystem_snapshot::AgentSnapshots::agent(&self.owned_agent_id);
+        let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.initial_worker_metadata.fingerprint,
+        );
         if self
             .agent_filesystem_snapshots()
             .prepare_start(&agent_snapshots, &name, self.terminal_interrupt())
@@ -11155,8 +11157,10 @@ impl RunningWorker {
         };
         match step {
             filesystem_snapshots::BaselineStep::Ready { kind, restore } => {
-                let agent_snapshots =
-                    crate::filesystem_snapshot::AgentSnapshots::agent(&parent.owned_agent_id);
+                let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+                    &parent.owned_agent_id,
+                    parent.initial_worker_metadata.fingerprint,
+                );
                 let restore = match restore {
                     Some(name) => Some(filesystem_snapshots::StartRestore::Store(
                         snapshots.restore(&agent_snapshots, &name).map_err(|_| {

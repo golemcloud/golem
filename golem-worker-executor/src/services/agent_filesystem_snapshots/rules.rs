@@ -545,13 +545,16 @@ mod tests {
     use test_r::test;
 
     fn agent_snapshots(name: &str) -> AgentSnapshots {
-        AgentSnapshots::agent(&OwnedAgentId::new(
-            EnvironmentId::new(),
-            &AgentId {
-                component_id: ComponentId::new(),
-                agent_id: name.to_string(),
-            },
-        ))
+        AgentSnapshots::agent(
+            &OwnedAgentId::new(
+                EnvironmentId::new(),
+                &AgentId {
+                    component_id: ComponentId::new(),
+                    agent_id: name.to_string(),
+                },
+            ),
+            golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+        )
     }
 
     /// Runs the rule `rule` on the state in `state`, puts its next state back, and gives its

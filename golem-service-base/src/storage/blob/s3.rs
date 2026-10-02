@@ -453,17 +453,23 @@ impl S3BlobStorage {
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id,
                 agent_id,
+                fingerprint,
             } => {
                 // The agent is one segment of a bounded length, because a raw agent id can hold
-                // `/`, `\` and `.` segments, which the rules of a key refuse.
+                // `/`, `\` and `.` segments, which the rules of a key refuse. The fingerprint of
+                // the incarnation is the segment below it.
                 let environment_id_string = environment_id.to_string();
                 let agent = agent_path_segment(agent_id);
+                let fingerprint = fingerprint.0.to_string();
                 if self.config.object_prefix.is_empty() {
-                    Path::new(&environment_id_string).join(agent)
+                    Path::new(&environment_id_string)
+                        .join(agent)
+                        .join(fingerprint)
                 } else {
                     Path::new(&self.config.object_prefix)
                         .join(environment_id_string)
                         .join(agent)
+                        .join(fingerprint)
                 }
             }
         }

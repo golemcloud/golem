@@ -162,9 +162,11 @@ impl SqliteBlobStorage {
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id,
                 agent_id,
+                fingerprint,
             } => {
                 let agent = agent_path_segment(&agent_id);
-                format!("filesystem_snapshots-{environment_id}-{agent}")
+                let fingerprint = fingerprint.0;
+                format!("filesystem_snapshots-{environment_id}-{agent}-{fingerprint}")
             }
         }
     }

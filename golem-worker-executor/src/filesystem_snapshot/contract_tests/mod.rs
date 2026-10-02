@@ -200,13 +200,16 @@ pub(crate) fn register(
 
 /// Gives a scope that no other test uses.
 pub(super) fn new_scope() -> AgentSnapshots {
-    AgentSnapshots::agent(&OwnedAgentId::new(
-        EnvironmentId(Uuid::new_v4()),
-        &AgentId {
-            component_id: ComponentId(Uuid::new_v4()),
-            agent_id: "counter(\"contract\")".to_string(),
-        },
-    ))
+    AgentSnapshots::agent(
+        &OwnedAgentId::new(
+            EnvironmentId(Uuid::new_v4()),
+            &AgentId {
+                component_id: ComponentId(Uuid::new_v4()),
+                agent_id: "counter(\"contract\")".to_string(),
+            },
+        ),
+        golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+    )
 }
 
 fn name(text: &str) -> SnapshotName {

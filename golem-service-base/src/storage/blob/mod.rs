@@ -22,7 +22,7 @@ use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{AgentId, Timestamp};
+use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
@@ -1150,10 +1150,13 @@ pub enum BlobStorageNamespace {
     Components {
         environment_id: EnvironmentId,
     },
-    /// The filesystem snapshots of one agent. Each agent has its own location on each backend.
+    /// The filesystem snapshots of one incarnation of an agent. Each incarnation has its own
+    /// location on each backend. The locations of the incarnations of one agent share the prefix
+    /// of the agent.
     FilesystemSnapshots {
         environment_id: EnvironmentId,
         agent_id: AgentId,
+        fingerprint: AgentFingerprint,
     },
 }
 

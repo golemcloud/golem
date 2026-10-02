@@ -19,7 +19,7 @@
 //! store must have, and it compiles only for tests.
 
 use async_trait::async_trait;
-use golem_common::model::{OwnedAgentId, Timestamp};
+use golem_common::model::{AgentFingerprint, OwnedAgentId, Timestamp};
 use golem_service_base::storage::blob::BlobStorageNamespace;
 use std::cmp::Reverse;
 use std::fmt::{Display, Formatter};
@@ -39,20 +39,23 @@ pub(crate) use memory::InMemorySnapshotStore;
 pub(crate) use memory::SpacedTimes;
 use rustic::RusticSnapshotStore;
 
-/// The filesystem snapshots of one agent.
+/// The filesystem snapshots of one incarnation of an agent.
 ///
-/// Each agent has one value. The value is opaque outside this module. Many owners hold it, so a
-/// clone shares the namespace instead of copying it.
+/// Each incarnation has one value: the agent with the fingerprint of the incarnation. A new
+/// incarnation of the same agent id has another fingerprint, so it never shares the snapshots of
+/// an earlier one. The value is opaque outside this module. Many owners hold it, so a clone shares
+/// the namespace instead of copying it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AgentSnapshots(std::sync::Arc<BlobStorageNamespace>);
 
 impl AgentSnapshots {
-    /// Gives the filesystem snapshots of the agent.
-    pub(crate) fn agent(agent: &OwnedAgentId) -> Self {
+    /// Gives the filesystem snapshots of the incarnation `fingerprint` of the agent.
+    pub(crate) fn agent(agent: &OwnedAgentId, fingerprint: AgentFingerprint) -> Self {
         Self(std::sync::Arc::new(
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id: agent.environment_id,
                 agent_id: agent.agent_id.clone(),
+                fingerprint,
             },
         ))
     }

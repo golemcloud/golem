@@ -25,7 +25,9 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, Co
 use golem_common::model::oplog::{
     MultipartPartData, OplogEntry, OplogPayload, PublicOplogEntry, PublicSnapshotData,
 };
-use golem_common::model::{AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -226,6 +228,25 @@ impl Agent {
 
     fn owned(&self, context: &TestContext) -> OwnedAgentId {
         OwnedAgentId::new(context.default_environment_id, &self.worker_id)
+    }
+
+    /// The agent and the fingerprint of its incarnation, which the `Create` entry of its oplog
+    /// holds. The filesystem snapshots of the agent are keyed by both.
+    async fn incarnation(
+        &self,
+        executor: &TestWorkerExecutor,
+        context: &TestContext,
+    ) -> anyhow::Result<(OwnedAgentId, AgentFingerprint)> {
+        let fingerprint = executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .find_map(|entry| match entry.entry {
+                PublicOplogEntry::Create(create) => Some(AgentFingerprint(create.instance_id)),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("the oplog of the agent has no create entry"))?;
+        Ok((self.owned(context), fingerprint))
     }
 
     /// Applies `operation` and gives its result: `ok`, or the error of the agent.
@@ -904,10 +925,11 @@ async fn stop_during_an_upload(
         Ok(records.newest_name())
     })
     .await?;
+    let (owned, fingerprint) = agent.incarnation(executor, context).await?;
     agent.stop(executor, context).await?;
     eventually(Duration::from_secs(30), || async {
         Ok(store
-            .snapshot_names(&agent.owned(context))
+            .snapshot_names(&owned, fingerprint)
             .await
             .contains(&named)
             .then_some(()))
@@ -1947,15 +1969,15 @@ async fn run_history(
             .reject_automatic_snapshots(&agent.worker_id, periodic_records)
             .await?;
     }
+    let (owned, fingerprint) = agent.incarnation(&executor, &context).await?;
     executor.release().await?;
     let root = tempfile::tempdir()?;
     if let Restart::FullReplay = restart {
-        let owned = agent.owned(&context);
-        futures::stream::iter(store.snapshot_names(&owned).await)
+        futures::stream::iter(store.snapshot_names(&owned, fingerprint).await)
             .filter(|name| std::future::ready(name.starts_with("p-")))
             .for_each(|name| {
                 let (store, owned) = (&store, &owned);
-                async move { store.lose(owned, &name).await }
+                async move { store.lose(owned, fingerprint, &name).await }
             })
             .await;
     }
@@ -2410,9 +2432,10 @@ async fn a_start_during_an_upload_waits_for_it_and_then_confirms_its_snapshot(
         Ok(records.newest_name())
     })
     .await?;
+    let (owned, fingerprint) = agent.incarnation(&executor, &context).await?;
     agent.stop(&executor, &context).await?;
     let stored_at_start = store
-        .snapshot_names(&agent.owned(&context))
+        .snapshot_names(&owned, fingerprint)
         .await
         .contains(&named);
     let restores = store.restored_names().len();
@@ -2605,10 +2628,10 @@ async fn failed_manual_updates_never_delete_the_snapshot_of_the_last_successful_
         )
         .await?;
     agent.confirmed(&executor).await?;
-    let owned = agent.owned(&context);
+    let (owned, fingerprint) = agent.incarnation(&executor, &context).await?;
     let update_names = || async {
         store
-            .snapshot_names(&owned)
+            .snapshot_names(&owned, fingerprint)
             .await
             .into_iter()
             .filter(|name| name.starts_with("u-"))
@@ -2639,11 +2662,11 @@ async fn failed_manual_updates_never_delete_the_snapshot_of_the_last_successful_
     })
     .await?;
     let records = agent.records(&executor).await?;
-    futures::stream::iter(store.snapshot_names(&owned).await)
+    futures::stream::iter(store.snapshot_names(&owned, fingerprint).await)
         .filter(|name| std::future::ready(name.starts_with("p-")))
         .for_each(|name| {
             let (store, owned) = (&store, &owned);
-            async move { store.lose(owned, &name).await }
+            async move { store.lose(owned, fingerprint, &name).await }
         })
         .await;
     agent.stop(&executor, &context).await?;

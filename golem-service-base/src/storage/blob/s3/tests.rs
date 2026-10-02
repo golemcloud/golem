@@ -42,10 +42,10 @@ use axum::http::{Response, StatusCode as ServerStatus};
 use axum::routing::put;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::widen_infallible;
 use http_body::Frame;
 use http_body_util::StreamBody;
@@ -3186,7 +3186,7 @@ async fn put_raw_if_absent_rejects_a_name_that_breaks_a_rule_without_a_request()
 }
 
 #[test]
-async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its_agent() {
+async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its_incarnation() {
     // The agent name holds a `..` segment, which the rules of a key refuse. So the key holds the
     // bounded segment of the agent and not the agent name. The path style of the client puts the
     // bucket first in the URI.
@@ -3194,9 +3194,11 @@ async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its
         component_id: ComponentId(Uuid::nil()),
         agent_id: r#"counter("a/../b")"#.to_string(),
     };
+    let fingerprint = Uuid::from_u128(7);
     let namespace = BlobStorageNamespace::FilesystemSnapshots {
         environment_id: EnvironmentId(Uuid::nil()),
         agent_id: agent_id.clone(),
+        fingerprint: AgentFingerprint(fingerprint),
     };
     let segment = agent_path_segment(&agent_id);
     let (plain, plain_requests) = scripted_storage("", |_, _| Answer::new(200, ""));
@@ -3224,11 +3226,11 @@ async fn a_filesystem_snapshot_blob_goes_to_its_own_bucket_and_to_the_key_of_its
         ),
         (
             vec![format!(
-                "/filesystem-snapshots/{}/{segment}/config",
+                "/filesystem-snapshots/{}/{segment}/{fingerprint}/config",
                 Uuid::nil()
             )],
             vec![format!(
-                "/filesystem-snapshots/prefix/{}/{segment}/config",
+                "/filesystem-snapshots/prefix/{}/{segment}/{fingerprint}/config",
                 Uuid::nil()
             )]
         )

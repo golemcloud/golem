@@ -459,13 +459,16 @@ fn service(
 }
 
 fn agent_snapshots(name: &str) -> AgentSnapshots {
-    AgentSnapshots::agent(&OwnedAgentId::new(
-        EnvironmentId::new(),
-        &AgentId {
-            component_id: ComponentId::new(),
-            agent_id: name.to_string(),
-        },
-    ))
+    AgentSnapshots::agent(
+        &OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: name.to_string(),
+            },
+        ),
+        golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+    )
 }
 
 /// The time that a test waits for a condition. The time of the tests is paused, so it only has

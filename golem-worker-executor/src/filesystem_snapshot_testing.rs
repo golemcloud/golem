@@ -25,7 +25,7 @@ use crate::filesystem_snapshot::{
 use crate::services::agent_filesystem_snapshots::StoreSource;
 use crate::services::golem_config::FilesystemSnapshotUploadConfig;
 use async_trait::async_trait;
-use golem_common::model::OwnedAgentId;
+use golem_common::model::{AgentFingerprint, OwnedAgentId};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -212,10 +212,14 @@ impl TestFilesystemSnapshotStore {
             .collect()
     }
 
-    /// The names of the snapshots of the agent, newest first.
-    pub async fn snapshot_names(&self, agent: &OwnedAgentId) -> Vec<String> {
+    /// The names of the snapshots of the incarnation `fingerprint` of the agent, newest first.
+    pub async fn snapshot_names(
+        &self,
+        agent: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Vec<String> {
         self.inner
-            .list(&AgentSnapshots::agent(agent))
+            .list(&AgentSnapshots::agent(agent, fingerprint))
             .await
             .map(|listing| {
                 listing
@@ -226,12 +230,13 @@ impl TestFilesystemSnapshotStore {
             .unwrap_or_default()
     }
 
-    /// Deletes the snapshot `name` of the agent, as a loss of storage does.
-    pub async fn lose(&self, agent: &OwnedAgentId, name: &str) {
+    /// Deletes the snapshot `name` of the incarnation `fingerprint` of the agent, as a loss of
+    /// storage does.
+    pub async fn lose(&self, agent: &OwnedAgentId, fingerprint: AgentFingerprint, name: &str) {
         if let Ok(name) = SnapshotName::new(name) {
             let _ = self
                 .inner
-                .delete(&AgentSnapshots::agent(agent), &[name])
+                .delete(&AgentSnapshots::agent(agent, fingerprint), &[name])
                 .await;
         }
     }

@@ -129,10 +129,12 @@ impl FileSystemBlobStorage {
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id,
                 agent_id,
+                fingerprint,
             } => {
                 result.push("filesystem_snapshots");
                 result.push(environment_id.to_string());
                 result.push(agent_path_segment(agent_id));
+                result.push(fingerprint.0.to_string());
             }
         }
 

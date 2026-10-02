@@ -1643,13 +1643,16 @@ mod tests {
     }
 
     fn agent_snapshots(name: &str) -> AgentSnapshots {
-        AgentSnapshots::agent(&golem_common::model::OwnedAgentId::new(
-            golem_common::model::environment::EnvironmentId::new(),
-            &AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: name.to_string(),
-            },
-        ))
+        AgentSnapshots::agent(
+            &golem_common::model::OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId::new(),
+                &AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: name.to_string(),
+                },
+            ),
+            golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+        )
     }
 
     /// An enabled service over an in-memory store, with the shutdown that keeps it running.
