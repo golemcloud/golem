@@ -1196,6 +1196,18 @@ fn broken() -> anyhow::Error {
 
 #[async_trait]
 impl BlobStorageBackend for FailingBlobStorage {
+    async fn copy_between_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        _from_namespace: BlobStorageNamespace,
+        _from: &NormalizedBlobPath<'_>,
+        _to_namespace: BlobStorageNamespace,
+        _to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        Err(broken())
+    }
+
     async fn get_raw_at(
         &self,
         _target_label: &'static str,

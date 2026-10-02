@@ -315,6 +315,30 @@ impl BlobStorageBackend for CountingBlobStorage {
         .await
     }
 
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        self.counted(
+            op_label,
+            from,
+            self.inner.copy_between_at(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            ),
+        )
+        .await
+    }
+
     async fn exists_at(
         &self,
         target_label: &'static str,

@@ -467,31 +467,31 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         }
     }
 
-    /// Copies the file. As `put_raw_at` does, the copy makes the directory of the target when it
-    /// is not there. A `from` path with no file gives the error of the filesystem.
-    ///
-    /// `async_fs::copy` opens the target for writing before it reads the source, so a copy onto
-    /// the same path would empty the blob. The two paths of this method are never the same path.
-    async fn copy_at(
+    /// Copies the file. The source is opened first, so a source with no file gives false and
+    /// writes nothing, and an error of the target is never read as a missing source. The bytes go
+    /// to a new file in the staging directory of the root, which then gets the name of the target
+    /// in one step, as `put_raw_if_absent_at` writes. So a reader sees the whole target or the
+    /// one before. As `put_raw_at` does, the copy makes the directory of the target when it is not
+    /// there.
+    async fn copy_between_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
-        namespace: BlobStorageNamespace,
+        from_namespace: BlobStorageNamespace,
         from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
         to: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
-        let from_full_path = self.path_of(&namespace, from);
-        let to_full_path = self.path_of(&namespace, to);
+        let from_full_path = self.path_of(&from_namespace, from);
+        let to_full_path = self.path_of(&to_namespace, to);
         self.ensure_path_is_inside_root(&from_full_path)?;
         self.ensure_path_is_inside_root(&to_full_path)?;
+        let staging = self.root.join(STAGING_DIRECTORY);
 
-        if let Some(parent) = to_full_path.parent()
-            && async_fs::metadata(parent).await.is_err()
-        {
-            async_fs::create_dir_all(parent).await?;
-        }
-        async_fs::copy(&from_full_path, &to_full_path).await?;
-        Ok(true)
+        Ok(tokio::task::spawn_blocking(move || {
+            copy_staged(&from_full_path, &staging, &to_full_path)
+        })
+        .await??)
     }
 }
 
@@ -522,6 +522,24 @@ fn write_if_absent(staging: &Path, target: &Path, data: &[u8]) -> std::io::Resul
         }
         Err(error) => Err(error.error),
     }
+}
+
+/// Copies the file at `source` to `target` through a new file in `staging`, and gives false when
+/// `source` has no file. The source is opened before anything is written.
+fn copy_staged(source: &Path, staging: &Path, target: &Path) -> std::io::Result<bool> {
+    let mut source = match std::fs::File::open(source) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::create_dir_all(staging)?;
+    let mut staged = tempfile::NamedTempFile::new_in(staging)?;
+    std::io::copy(&mut source, &mut staged)?;
+    staged.persist(target).map_err(|error| error.error)?;
+    Ok(true)
 }
 
 /// Lists each regular file below `directory`, with its path relative to `root` and its size.
