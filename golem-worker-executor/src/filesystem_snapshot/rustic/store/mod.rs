@@ -28,7 +28,7 @@ use super::fault::{
 use super::files::SnapshotFiles;
 use super::priority::LowPriority;
 use super::prune::{
-    Percent, PrunePolicy, due_prune, holds_generation, read_ledger, record_freed, remove_freed,
+    Percent, PrunePolicy, belongs_to_ledger, due_prune, read_ledger, record_freed, remove_freed,
     remove_old_claims, remove_older_ledgers, write_ledger,
 };
 use super::publish::{SnapshotStage, StagedSnapshot, publish};
@@ -457,7 +457,7 @@ impl RusticSnapshotStore {
         let again = read_ledger(files, &*self.clock)
             .await
             .map_err(storage_failure)?;
-        if !holds_generation(claim.directory(), &again) {
+        if !belongs_to_ledger(claim.directory(), &again) {
             return Ok(None);
         }
         Ok(Some(Arc::new(self.backend(claim.leased(files))?)))

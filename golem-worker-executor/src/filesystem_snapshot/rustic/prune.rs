@@ -496,7 +496,7 @@ fn claims_directory(ledger: &PruneLedger) -> Box<Path> {
 /// Tells whether a claim in the directory belongs to the ledger: the directory is the claim
 /// directory of the time of the last prune in the ledger. Whether marked packs wait for removal
 /// does not count.
-pub(super) fn holds_generation(directory: &Path, ledger: &PruneLedger) -> bool {
+pub(super) fn belongs_to_ledger(directory: &Path, ledger: &PruneLedger) -> bool {
     *claims_directory(ledger) == *directory
 }
 
@@ -796,7 +796,7 @@ enum Next {
     /// Read the records of freed bytes and list the snapshot files.
     SettleFreed,
     /// List the claim directory of the ledger.
-    ListClaims(Arc<Path>),
+    ListClaims(Box<Path>),
     /// No prune is due, or another delete holds the claims of the ledger.
     Stop,
     /// Take the claim.
@@ -879,12 +879,15 @@ fn next(observed: &Observed, now: Timestamp, policy: &PrunePolicy) -> Next {
     if !may_be_due(&ledger, settled.bytes, size, policy.threshold) {
         return Next::Stop;
     }
-    let directory: Arc<Path> = claims_directory(&ledger).into();
+    let directory = claims_directory(&ledger);
     let Some(claims) = &observed.claims else {
         return Next::ListClaims(directory);
     };
     match next_claim(claims, now, claim_hold(policy.grace, policy.deadline)) {
-        ClaimChoice::Claim(number) => Next::Claim(ClaimName { directory, number }),
+        ClaimChoice::Claim(number) => Next::Claim(ClaimName {
+            directory: directory.into(),
+            number,
+        }),
         ClaimChoice::Held => Next::Stop,
     }
 }
@@ -968,12 +971,12 @@ mod tests {
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, ClaimName, FREED_PATH,
         FreedRecord, FreedRecords, LEDGERS_PATH, Lease, ListedFreed, Next, Observed, Percent,
-        PruneLedger, PrunePolicy, claim_hold, claims_directory, holds_generation, keep_claim_fresh,
-        lease_span, list_claims, list_freed_names, marker_path, marker_time, may_be_due,
-        named_bytes, newest_ledger, next, next_claim, old_claim_directories, older_entries,
-        parse_claim_entry, parse_freed, parse_ledger_entry, parse_record, read_ledger,
-        record_content, record_freed, refresh_period, settle, settle_freed, take_claim,
-        write_ledger,
+        PruneLedger, PrunePolicy, belongs_to_ledger, claim_hold, claims_directory,
+        keep_claim_fresh, lease_span, list_claims, list_freed_names, marker_path, marker_time,
+        may_be_due, named_bytes, newest_ledger, next, next_claim, old_claim_directories,
+        older_entries, parse_claim_entry, parse_freed, parse_ledger_entry, parse_record,
+        read_ledger, record_content, record_freed, refresh_period, settle, settle_freed,
+        take_claim, write_ledger,
     };
     use crate::filesystem_snapshot::clock::SystemClock;
     use futures::StreamExt;
@@ -1115,7 +1118,7 @@ mod tests {
     fn a_due_check_lists_each_kind_once_in_order_and_ends_with_the_claim_after_the_largest() {
         let now = at(10_000_000);
         let last = ledger(Some(10_000_000 - HOLD_MILLIS), false);
-        let directory: Arc<Path> = claims_directory(&last).into();
+        let directory = claims_directory(&last);
         let ledger_found = Observed {
             ledger: Some(last),
             ..Observed::default()
@@ -1154,7 +1157,7 @@ mod tests {
                 Next::SettleFreed,
                 Next::ListClaims(directory.clone()),
                 Next::Claim(ClaimName {
-                    directory,
+                    directory: directory.into(),
                     number: 4,
                 }),
             ]
@@ -1758,12 +1761,12 @@ mod tests {
 
         assert_eq!(
             [
-                holds_generation(&directory, &ledger(Some(42), false)),
-                holds_generation(&directory, &ledger(Some(42), true)),
-                holds_generation(&directory, &ledger(Some(43), false)),
-                holds_generation(&directory, &ledger(None, false)),
-                holds_generation(&none, &ledger(Some(42), false)),
-                holds_generation(&none, &ledger(None, true)),
+                belongs_to_ledger(&directory, &ledger(Some(42), false)),
+                belongs_to_ledger(&directory, &ledger(Some(42), true)),
+                belongs_to_ledger(&directory, &ledger(Some(43), false)),
+                belongs_to_ledger(&directory, &ledger(None, false)),
+                belongs_to_ledger(&none, &ledger(Some(42), false)),
+                belongs_to_ledger(&none, &ledger(None, true)),
             ],
             [true, true, false, false, false, true]
         );
