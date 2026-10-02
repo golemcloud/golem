@@ -1871,23 +1871,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 auth_ctx,
             )
             .await?;
-        Worker::<Ctx>::get_latest_metadata(self, &target)
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(self, &target)
             .await
-            .map_err(RpcError::from)?
+            .map_err(|error| error.map_other(RpcError::from))?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(target.agent_id()))
             .map_err(RpcError::from)?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &target,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await
-        .map_err(RpcError::from)?;
         worker
             .control_durable_stream_attachment(request)
             .await
@@ -1941,23 +1929,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     details: error.to_string(),
                 })?,
         }
-        Worker::<Ctx>::get_latest_metadata(self, &producer)
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(self, &producer)
             .await
-            .map_err(RpcError::from)?
+            .map_err(|error| error.map_other(RpcError::from))?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(producer.agent_id()))
             .map_err(RpcError::from)?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &producer,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await
-        .map_err(RpcError::from)?;
         match request {
             DurableStreamReadRequest::AttachedConsumer(request) => {
                 let events = worker

@@ -23,6 +23,7 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::ToolName;
 use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
+use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;
@@ -1632,6 +1633,40 @@ async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
         .await
         .expect_err("biased barrier must prefer a ready owner failure");
     assert!(error.to_string().contains("ready owner failure"));
+}
+
+#[test]
+async fn owner_lifecycle_change_during_reconstruction_remains_an_interrupt() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog.add(noop()).await.unwrap();
+    let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+    let replay = ReplayState::new_for_owner(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::default(),
+        None,
+        owner_operations.clone(),
+    )
+    .await
+    .expect("failed to build replay state");
+    owner_operations
+        .select_owner_failure(
+            crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(
+                InterruptKind::Restart,
+            ),
+        )
+        .await;
+
+    let error = replay
+        .test_wait_for_reconstruction_fences()
+        .await
+        .expect_err("owner lifecycle change must interrupt reconstruction");
+    assert_eq!(
+        error,
+        WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Restart
+        }
+    );
 }
 
 #[test]

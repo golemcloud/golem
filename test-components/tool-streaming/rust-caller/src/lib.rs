@@ -2329,7 +2329,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let (counter_target, counter_stdout) = tool_host::create_output();
         rpc.invoke_and_await(
             path.to_vec(),
-            raw_input("read-counter"),
+            raw_input("wait-counter:5"),
             Some(closed_raw_stdin()),
             Some(counter_target),
             None,

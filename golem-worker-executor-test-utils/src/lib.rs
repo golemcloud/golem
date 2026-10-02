@@ -747,13 +747,14 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> anyhow::Result<golem_common::model::ExportForkAdmissions> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = Worker::find_durable_stream_worker(
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
             self.services
                 .as_ref()
                 .expect("test service graph is captured"),
             &owned_agent_id,
         )
-        .await?
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok(worker
             .get_attached_last_known_status()
@@ -876,13 +877,14 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> anyhow::Result<AgentStatusRecord> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = Worker::find_durable_stream_worker(
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
             self.services
                 .as_ref()
                 .expect("test service graph is captured"),
             &owned_agent_id,
         )
-        .await?
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok((*worker.get_attached_last_known_status().await).clone())
     }
@@ -2423,8 +2425,26 @@ impl NativeTestTool for NativeTestToolImpl {
         mut stderr: Option<golem_native_tool::NativeToolOutput>,
         _principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()> {
-        if mode != "read-counter" && ctx.is_live() {
+        let wait_for_count = mode
+            .strip_prefix("wait-counter:")
+            .map(str::parse::<usize>)
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
+        let reads_counter = mode == "read-counter" || wait_for_count.is_some();
+        let is_live = ctx.is_live();
+
+        if !reads_counter && is_live {
             self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        if is_live && let Some(expected) = wait_for_count {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while self.0.load(Ordering::SeqCst) < expected {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow!("native effect counter did not reach {expected}"))?;
         }
 
         if mode == "wait-cancel" {
@@ -2453,9 +2473,10 @@ impl NativeTestTool for NativeTestToolImpl {
         }
 
         if let Some(mut stdout) = stdout {
-            if mode == "read-counter" {
+            if reads_counter {
+                let count = wait_for_count.unwrap_or_else(|| self.0.load(Ordering::SeqCst));
                 stdout
-                    .write(self.0.load(Ordering::SeqCst).to_string().into_bytes())
+                    .write(count.to_string().into_bytes())
                     .await
                     .map_err(anyhow::Error::msg)?;
             } else {
