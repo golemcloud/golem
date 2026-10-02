@@ -96,6 +96,12 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         tool_name: "tsc",
         release_version: "5.9.2",
     },
+    BuiltinToolDescriptor {
+        component_name: "web-fetch",
+        artifact_id: "web_fetch",
+        tool_name: "web-fetch",
+        release_version: "0.1.0",
+    },
 ];
 
 #[allow(clippy::too_many_arguments)]

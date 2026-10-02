@@ -253,6 +253,12 @@ test_component!(
     "golem:typescript-tools"
 );
 test_component!(
+    web_fetch,
+    "web_fetch",
+    "../builtin-tools/web-fetch",
+    "golem:web-fetch"
+);
+test_component!(
     tool_streaming_ts_provider,
     "tool_streaming_ts_provider",
     "golem_it_tool_streaming_ts_provider",

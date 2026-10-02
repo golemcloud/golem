@@ -22,6 +22,13 @@ they do not provision an npm or TypeScript package tree into the invoking agent.
 standard-library declarations and npm's manual pages are embedded as private read-only data. Both
 components must use the `optimized` TypeScript preset so Wizer pre-initializes their provider state.
 
+The web fetch tool is implemented separately under `builtin-tools/web-fetch/`. Its generated
+`builtin-tools/web-fetch.wasm` is published externally rather than committed. It provides the
+read-only, open-world `web-fetch` tool for bounded HTTP and HTTPS retrieval without filesystem
+access. Its timeout, response-size, and redirect limits are optional invocation arguments, not
+deployment configuration. HTML is returned as decoded source unless the invocation enables
+conversion to readable text.
+
 ## Adding a component-implemented built-in tool
 
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
@@ -82,3 +89,19 @@ filesystem access but provision no files of their own. This example explicitly g
 `filesystemAccess: allowed` on the agent binding; if it is omitted and no grant is inherited,
 deployment fails with an error requesting that permission. This fails closed rather than exposing
 the agent's filesystem.
+
+The `web-fetch` release is selected and bound in the same way, but requires no filesystem grant:
+
+```yaml
+tools:
+  web-fetch:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: web-fetch
+      version: 0.1.0
+
+agents:
+  ResearchAgent:
+    tools:
+      web-fetch: {}
+```
