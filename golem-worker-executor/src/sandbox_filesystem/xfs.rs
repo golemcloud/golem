@@ -689,6 +689,21 @@ fn clear_root_project_assignment(
     Ok(())
 }
 
+/// Gives the project of a stale managed sandbox path from the project on disk and the project
+/// that this process reserved for the path.
+///
+/// The stale project is the one that exists. When both exist and differ, the result is an error
+/// that holds both, the disk project first.
+fn stale_project(
+    disk: Option<NonZeroU32>,
+    reserved: Option<NonZeroU32>,
+) -> Result<Option<NonZeroU32>, (NonZeroU32, NonZeroU32)> {
+    match (disk, reserved) {
+        (Some(disk), Some(reserved)) if disk != reserved => Err((disk, reserved)),
+        (disk, reserved) => Ok(disk.or(reserved)),
+    }
+}
+
 /// Whether a directory has a project id or gives one to what is made in it.
 fn has_project_identity(attributes: &linux_raw_sys::general::fsxattr) -> bool {
     attributes.fsx_projid != 0
@@ -1099,14 +1114,11 @@ impl ManagedProvisioning {
             }
         };
         let reserved_project = self.reserved_project(&owner);
-        let stale_project = match (disk_project, reserved_project) {
-            (Some(disk_project), Some(reserved_project)) if disk_project != reserved_project => {
-                return Err(FilesystemStorageError::cleanup_verification(
-                    "match stale managed XFS path and reserved project",
-                    &cleanup_path,
-                ));
-            }
-            (disk_project, reserved_project) => disk_project.or(reserved_project),
+        let Ok(stale_project) = stale_project(disk_project, reserved_project) else {
+            return Err(FilesystemStorageError::cleanup_verification(
+                "match stale managed XFS path and reserved project",
+                &cleanup_path,
+            ));
         };
 
         let mut stale_cleanup = if let Some(project_id) = stale_project {
@@ -1976,6 +1988,28 @@ mod tests {
             }
         );
         sources.discard().await.unwrap();
+    }
+
+    #[test]
+    fn stale_project_is_the_project_that_exists_and_refuses_two_different_ones() {
+        let one = NonZeroU32::new(1).unwrap();
+        let two = NonZeroU32::new(2).unwrap();
+        [
+            (None, None, Ok(None)),
+            (Some(one), None, Ok(Some(one))),
+            (None, Some(two), Ok(Some(two))),
+            (Some(one), Some(one), Ok(Some(one))),
+            (Some(one), Some(two), Err((one, two))),
+            (Some(two), Some(one), Err((two, one))),
+        ]
+        .into_iter()
+        .for_each(|(disk, reserved, expected)| {
+            assert_eq!(
+                stale_project(disk, reserved),
+                expected,
+                "disk {disk:?}, reserved {reserved:?}"
+            );
+        });
     }
 
     #[test]

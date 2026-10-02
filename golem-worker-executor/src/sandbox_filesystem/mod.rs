@@ -715,6 +715,31 @@ enum QuotaAuthority {
     },
 }
 
+/// The storage mode that the settings select.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StorageMode<'a> {
+    /// Managed XFS storage at this root.
+    Managed(&'a Path),
+    /// Unmanaged storage, at the deterministic root when one is given.
+    Unmanaged,
+}
+
+/// Gives the storage mode of the settings. A managed root selects managed XFS storage, and no
+/// managed root selects unmanaged storage. Both roots together give a verification error.
+fn storage_mode<'a>(
+    deterministic_root: Option<&Path>,
+    managed_xfs_root: Option<&'a Path>,
+) -> Result<StorageMode<'a>, FilesystemStorageError> {
+    match (deterministic_root, managed_xfs_root) {
+        (Some(_), Some(_)) => Err(FilesystemStorageError::verification(
+            "select exactly one filesystem storage mode",
+            Path::new("<configuration>"),
+        )),
+        (None, Some(root)) => Ok(StorageMode::Managed(root)),
+        (_, None) => Ok(StorageMode::Unmanaged),
+    }
+}
+
 /// Gives the storage profile of the native calls on a sandbox with `authority`. A sandbox with a
 /// project identity is on known local storage. The storage of a sandbox without one is unknown.
 fn storage_profile(authority: QuotaAuthority) -> NativeStorageProfile {
@@ -779,16 +804,12 @@ impl SandboxFilesystemProvisioning {
         managed_xfs_root_dir: Option<PathBuf>,
         cleanup_retry: RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
-        if deterministic_root_dir.is_some() && managed_xfs_root_dir.is_some() {
-            return Err(FilesystemStorageError::verification(
-                "select exactly one filesystem storage mode",
-                Path::new("<configuration>"),
-            ));
-        }
-
-        match managed_xfs_root_dir.as_deref() {
-            Some(root) => configured_managed(root, &cleanup_retry),
-            None => {
+        match storage_mode(
+            deterministic_root_dir.as_deref(),
+            managed_xfs_root_dir.as_deref(),
+        )? {
+            StorageMode::Managed(root) => configured_managed(root, &cleanup_retry),
+            StorageMode::Unmanaged => {
                 let unmanaged =
                     unmanaged::UnmanagedProvisioning::new(deterministic_root_dir, cleanup_retry);
                 Ok(Self {
@@ -1552,6 +1573,29 @@ fn running_as_root() -> bool {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn storage_mode_selects_one_mode_and_refuses_both_roots() {
+        let deterministic = Path::new("/deterministic");
+        let managed = Path::new("/managed");
+
+        assert_eq!(storage_mode(None, None).unwrap(), StorageMode::Unmanaged);
+        assert_eq!(
+            storage_mode(Some(deterministic), None).unwrap(),
+            StorageMode::Unmanaged
+        );
+        assert_eq!(
+            storage_mode(None, Some(managed)).unwrap(),
+            StorageMode::Managed(managed)
+        );
+        let error = storage_mode(Some(deterministic), Some(managed)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("select exactly one filesystem storage mode"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn storage_profile_follows_the_quota_authority() {

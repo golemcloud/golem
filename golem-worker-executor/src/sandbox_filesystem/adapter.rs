@@ -725,6 +725,129 @@ impl Display for SandboxInspectionFailure {
 
 impl std::error::Error for SandboxInspectionFailure {}
 
+/// What an open asks for, from its options.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct OpenRequest {
+    /// The kind of object that the open expects.
+    expected: SandboxObjectKind,
+    access: SandboxAccessMode,
+    follow: SandboxFollow,
+    /// The creation or truncation rule of a file open, and `None` when the open creates and
+    /// truncates nothing.
+    disposition: Option<SandboxFileDisposition>,
+    /// Whether the open is an inspection.
+    inspection: bool,
+}
+
+/// Gives what `options` ask for.
+///
+/// An inspection reads its object, does not follow a symlink, and creates nothing. An open of an
+/// existing object creates nothing. A file open expects a regular file and has a disposition.
+fn open_request(options: SandboxOpenOptions) -> OpenRequest {
+    match options {
+        SandboxOpenOptions::Inspection { expected } => OpenRequest {
+            expected,
+            access: SandboxAccessMode::Read,
+            follow: SandboxFollow::No,
+            disposition: None,
+            inspection: true,
+        },
+        SandboxOpenOptions::Existing {
+            expected,
+            access,
+            follow,
+        } => OpenRequest {
+            expected,
+            access,
+            follow,
+            disposition: None,
+            inspection: false,
+        },
+        SandboxOpenOptions::File {
+            access,
+            disposition,
+            follow,
+        } => OpenRequest {
+            expected: SandboxObjectKind::File,
+            access,
+            follow,
+            disposition: Some(disposition),
+            inspection: false,
+        },
+    }
+}
+
+/// Whether `path` is exactly one normal path component, as an inspection requires.
+fn is_single_normal_component(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(Component::Normal(name)) if name == path.as_os_str())
+        && components.next().is_none()
+}
+
+/// The flags of a native open.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct NativeOpenFlags {
+    read: bool,
+    write: bool,
+    create: bool,
+    create_new: bool,
+    truncate: bool,
+    nonblock: bool,
+    follow: bool,
+}
+
+/// Gives the native open flags of `request`.
+///
+/// A directory is opened for read only, whatever access the request asks for. A file is opened
+/// for read with `Read` and `ReadAndSetTimes`, for write with `Write`, and for both with
+/// `ReadWrite`. Each disposition writes: `CreateIfMissing` creates a missing file,
+/// `CreateExclusive` creates a new file and fails on an existing one, `TruncateExisting` truncates
+/// an existing file, and `CreateOrTruncate` does both of the first and the third. An inspection
+/// does not block on a special file.
+fn native_open_flags(request: OpenRequest) -> NativeOpenFlags {
+    let (read, write) = if request.expected == SandboxObjectKind::Directory {
+        (true, false)
+    } else {
+        match request.access {
+            SandboxAccessMode::Read | SandboxAccessMode::ReadAndSetTimes => (true, false),
+            SandboxAccessMode::Write => (false, true),
+            SandboxAccessMode::ReadWrite => (true, true),
+        }
+    };
+    let (create, create_new, truncate) = match request.disposition {
+        None => (false, false, false),
+        Some(SandboxFileDisposition::CreateIfMissing) => (true, false, false),
+        Some(SandboxFileDisposition::CreateExclusive) => (false, true, false),
+        Some(SandboxFileDisposition::TruncateExisting) => (false, false, true),
+        Some(SandboxFileDisposition::CreateOrTruncate) => (true, false, true),
+    };
+    NativeOpenFlags {
+        read,
+        write: write || request.disposition.is_some(),
+        create,
+        create_new,
+        truncate,
+        nonblock: request.inspection,
+        follow: request.follow == SandboxFollow::Yes,
+    }
+}
+
+/// Checks that an opened object has the kind that the open expects. Another kind gives an
+/// `InvalidInput` error that names both kinds.
+fn check_opened_kind(
+    opened: SandboxObjectKind,
+    expected: SandboxObjectKind,
+) -> std::io::Result<()> {
+    if opened == expected {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("expected {expected:?}, opened {opened:?}"),
+        ))
+    }
+}
+
 fn check_inspection_kind(
     metadata: &cap_std::fs::Metadata,
     expected: SandboxObjectKind,
@@ -1165,87 +1288,46 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 let directory = directory_for(&root_directory, &target)?;
                 let mut native_options = cap_std::fs::OpenOptions::new();
                 native_options.maybe_dir(true);
-                let (expected, access, follow, disposition) = match options {
-                    SandboxOpenOptions::Inspection { expected } => {
-                        let mut components = target.path.components();
-                        if !matches!(components.next(), Some(Component::Normal(name)) if name == target.path.as_os_str())
-                            || components.next().is_some()
-                        {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::InvalidInput,
-                                "inspection requires a single normal path component",
-                            ));
-                        }
-                        // Reject FIFOs/devices before opening. Recheck the opened descriptor below.
-                        check_inspection_kind(
-                            &directory.symlink_metadata(&target.path)?,
-                            expected,
-                        )?;
-                        native_options.nonblock(true);
-                        (expected, SandboxAccessMode::Read, SandboxFollow::No, None)
+                let request = open_request(options);
+                if request.inspection {
+                    if !is_single_normal_component(&target.path) {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "inspection requires a single normal path component",
+                        ));
                     }
-                    SandboxOpenOptions::Existing {
-                        expected,
-                        access,
-                        follow,
-                    } => (expected, access, follow, None),
-                    SandboxOpenOptions::File {
-                        access,
-                        disposition,
-                        follow,
-                    } => (SandboxObjectKind::File, access, follow, Some(disposition)),
-                };
-                if expected == SandboxObjectKind::Directory {
-                    native_options.read(true);
-                } else {
-                    match access {
-                        SandboxAccessMode::Read | SandboxAccessMode::ReadAndSetTimes => {
-                            native_options.read(true);
-                        }
-                        SandboxAccessMode::Write => {
-                            native_options.write(true);
-                        }
-                        SandboxAccessMode::ReadWrite => {
-                            native_options.read(true).write(true);
-                        }
-                    }
+                    // Reject FIFOs/devices before opening. Recheck the opened descriptor below.
+                    check_inspection_kind(
+                        &directory.symlink_metadata(&target.path)?,
+                        request.expected,
+                    )?;
                 }
+                let flags = native_open_flags(request);
+                if flags.nonblock {
+                    native_options.nonblock(true);
+                }
+                native_options.read(flags.read).write(flags.write);
                 // A directory takes the same right, because its times change the same way.
                 #[cfg(windows)]
-                if access == SandboxAccessMode::ReadAndSetTimes {
+                if request.access == SandboxAccessMode::ReadAndSetTimes {
                     windows_add_set_times_right(&mut native_options);
                 }
-                match disposition {
-                    None => {}
-                    Some(SandboxFileDisposition::CreateIfMissing) => {
-                        native_options.create(true).write(true);
-                    }
-                    Some(SandboxFileDisposition::CreateExclusive) => {
-                        native_options.create_new(true).write(true);
-                    }
-                    Some(SandboxFileDisposition::TruncateExisting) => {
-                        native_options.truncate(true).write(true);
-                    }
-                    Some(SandboxFileDisposition::CreateOrTruncate) => {
-                        native_options.create(true).truncate(true).write(true);
-                    }
-                }
-                native_options.follow(match follow {
-                    SandboxFollow::Yes => FollowSymlinks::Yes,
-                    SandboxFollow::No => FollowSymlinks::No,
+                native_options
+                    .create(flags.create)
+                    .create_new(flags.create_new)
+                    .truncate(flags.truncate);
+                native_options.follow(if flags.follow {
+                    FollowSymlinks::Yes
+                } else {
+                    FollowSymlinks::No
                 });
                 let opened = directory.open_with(&target.path, &native_options)?;
                 let metadata = opened.metadata()?;
-                if let SandboxOpenOptions::Inspection { expected } = options {
-                    check_inspection_kind(&metadata, expected)?;
+                if request.inspection {
+                    check_inspection_kind(&metadata, request.expected)?;
                 }
                 let kind = object_kind(&metadata);
-                if kind != expected {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("expected {expected:?}, opened {kind:?}"),
-                    ));
-                }
+                check_opened_kind(kind, request.expected)?;
                 let read_only_file = is_read_only_file(&metadata);
                 let node = match kind {
                     SandboxObjectKind::Directory => {
@@ -3317,6 +3399,189 @@ pub(crate) use scripted::*;
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn open_request_follows_the_open_options() {
+        assert_eq!(
+            open_request(SandboxOpenOptions::Inspection {
+                expected: SandboxObjectKind::Directory,
+            }),
+            OpenRequest {
+                expected: SandboxObjectKind::Directory,
+                access: SandboxAccessMode::Read,
+                follow: SandboxFollow::No,
+                disposition: None,
+                inspection: true,
+            },
+            "an inspection reads, does not follow a symlink and creates nothing"
+        );
+        assert_eq!(
+            open_request(SandboxOpenOptions::Existing {
+                expected: SandboxObjectKind::File,
+                access: SandboxAccessMode::Write,
+                follow: SandboxFollow::Yes,
+            }),
+            OpenRequest {
+                expected: SandboxObjectKind::File,
+                access: SandboxAccessMode::Write,
+                follow: SandboxFollow::Yes,
+                disposition: None,
+                inspection: false,
+            },
+            "an open of an existing object creates nothing"
+        );
+        assert_eq!(
+            open_request(SandboxOpenOptions::File {
+                access: SandboxAccessMode::ReadWrite,
+                disposition: SandboxFileDisposition::CreateExclusive,
+                follow: SandboxFollow::No,
+            }),
+            OpenRequest {
+                expected: SandboxObjectKind::File,
+                access: SandboxAccessMode::ReadWrite,
+                follow: SandboxFollow::No,
+                disposition: Some(SandboxFileDisposition::CreateExclusive),
+                inspection: false,
+            },
+            "a file open expects a regular file"
+        );
+    }
+
+    #[test]
+    fn an_inspection_names_exactly_one_normal_component() {
+        [
+            ("name", true),
+            (".hidden", true),
+            ("", false),
+            (".", false),
+            ("..", false),
+            ("a/b", false),
+            ("/a", false),
+        ]
+        .into_iter()
+        .for_each(|(path, expected)| {
+            assert_eq!(
+                is_single_normal_component(Path::new(path)),
+                expected,
+                "{path:?}"
+            );
+        });
+    }
+
+    fn request(
+        expected: SandboxObjectKind,
+        access: SandboxAccessMode,
+        disposition: Option<SandboxFileDisposition>,
+    ) -> OpenRequest {
+        OpenRequest {
+            expected,
+            access,
+            follow: SandboxFollow::No,
+            disposition,
+            inspection: false,
+        }
+    }
+
+    fn flags(
+        read: bool,
+        write: bool,
+        create: bool,
+        create_new: bool,
+        truncate: bool,
+    ) -> NativeOpenFlags {
+        NativeOpenFlags {
+            read,
+            write,
+            create,
+            create_new,
+            truncate,
+            nonblock: false,
+            follow: false,
+        }
+    }
+
+    #[test]
+    fn native_open_flags_follow_the_access_and_the_disposition() {
+        use SandboxAccessMode::{Read, ReadAndSetTimes, ReadWrite, Write};
+        use SandboxFileDisposition::{
+            CreateExclusive, CreateIfMissing, CreateOrTruncate, TruncateExisting,
+        };
+        use SandboxObjectKind::{Directory, File};
+        [
+            (
+                request(Directory, Read, None),
+                flags(true, false, false, false, false),
+            ),
+            (
+                request(Directory, Write, None),
+                flags(true, false, false, false, false),
+            ),
+            (
+                request(Directory, ReadWrite, None),
+                flags(true, false, false, false, false),
+            ),
+            (
+                request(File, Read, None),
+                flags(true, false, false, false, false),
+            ),
+            (
+                request(File, ReadAndSetTimes, None),
+                flags(true, false, false, false, false),
+            ),
+            (
+                request(File, Write, None),
+                flags(false, true, false, false, false),
+            ),
+            (
+                request(File, ReadWrite, None),
+                flags(true, true, false, false, false),
+            ),
+            (
+                request(File, Read, Some(CreateIfMissing)),
+                flags(true, true, true, false, false),
+            ),
+            (
+                request(File, Write, Some(CreateExclusive)),
+                flags(false, true, false, true, false),
+            ),
+            (
+                request(File, Write, Some(TruncateExisting)),
+                flags(false, true, false, false, true),
+            ),
+            (
+                request(File, ReadWrite, Some(CreateOrTruncate)),
+                flags(true, true, true, false, true),
+            ),
+        ]
+        .into_iter()
+        .for_each(|(request, expected)| {
+            assert_eq!(native_open_flags(request), expected, "{request:?}");
+        });
+        let inspection = native_open_flags(open_request(SandboxOpenOptions::Inspection {
+            expected: File,
+        }));
+        assert!(
+            inspection.nonblock,
+            "an inspection must not block on a special file"
+        );
+        assert!(inspection.read && !inspection.write && !inspection.follow);
+        let followed = native_open_flags(OpenRequest {
+            follow: SandboxFollow::Yes,
+            ..request(File, Read, None)
+        });
+        assert!(followed.follow && !followed.nonblock);
+    }
+
+    #[test]
+    fn the_opened_kind_must_be_the_expected_kind() {
+        use SandboxObjectKind::{Directory, File, Symlink};
+        [Directory, File, Symlink].into_iter().for_each(|kind| {
+            check_opened_kind(kind, kind).unwrap();
+        });
+        let error = check_opened_kind(Directory, File).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(error.to_string(), "expected File, opened Directory");
+    }
 
     fn name() -> SandboxFilesystemName {
         SandboxFilesystemName::new(

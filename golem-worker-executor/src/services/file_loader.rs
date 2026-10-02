@@ -234,33 +234,54 @@ impl FileLoader {
         let mut actual_size = 0u64;
 
         while let Some(chunk) = data.try_next().await.map_err(|e| anyhow!(e))? {
-            actual_size = actual_size
-                .checked_add(chunk.len() as u64)
-                .ok_or_else(|| anyhow!("Downloaded initial file size overflowed"))?;
-            if actual_size > expected_size {
-                return Err(anyhow!(
-                    "Downloaded initial file size exceeds declared size {expected_size}"
-                ));
-            }
+            actual_size = downloaded_size(actual_size, chunk.len() as u64, expected_size)?;
             hasher.update(&chunk);
             writer.write_all(&chunk).await?;
         }
 
         writer.flush().await?;
         writer.get_ref().sync_all().await?;
-        let actual = hasher.finalize();
-        if actual != *key.0.as_blake3_hash() {
-            return Err(anyhow!(
-                "Downloaded initial file content hash does not match {key}"
-            ));
-        }
-        if actual_size != expected_size {
-            return Err(anyhow!(
-                "Downloaded initial file size {actual_size} does not match declared size {expected_size}"
-            ));
-        }
-        Ok(())
+        verify_download(&hasher.finalize(), &key, actual_size, expected_size)
     }
+}
+
+/// Gives the size of a download after a chunk of `chunk_bytes` bytes, from the size before it.
+/// A size that overflows, or that is larger than `expected_size`, gives an error.
+fn downloaded_size(
+    actual_size: u64,
+    chunk_bytes: u64,
+    expected_size: u64,
+) -> Result<u64, anyhow::Error> {
+    let actual_size = actual_size
+        .checked_add(chunk_bytes)
+        .ok_or_else(|| anyhow!("Downloaded initial file size overflowed"))?;
+    if actual_size > expected_size {
+        return Err(anyhow!(
+            "Downloaded initial file size exceeds declared size {expected_size}"
+        ));
+    }
+    Ok(actual_size)
+}
+
+/// Checks a whole download. The content hash must equal the hash of `key`, and then the size must
+/// equal `expected_size`. The first check that fails gives the error.
+fn verify_download(
+    actual_hash: &blake3::Hash,
+    key: &AgentFileContentHash,
+    actual_size: u64,
+    expected_size: u64,
+) -> Result<(), anyhow::Error> {
+    if actual_hash != key.0.as_blake3_hash() {
+        return Err(anyhow!(
+            "Downloaded initial file content hash does not match {key}"
+        ));
+    }
+    if actual_size != expected_size {
+        return Err(anyhow!(
+            "Downloaded initial file size {actual_size} does not match declared size {expected_size}"
+        ));
+    }
+    Ok(())
 }
 
 // Scary type, let's break it down:
@@ -414,5 +435,51 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    fn key_of(content: &[u8]) -> AgentFileContentHash {
+        AgentFileContentHash(golem_common::model::diff::Hash::new(blake3::hash(content)))
+    }
+
+    #[test]
+    fn downloaded_size_adds_the_chunk_and_refuses_more_than_declared_or_an_overflow() {
+        assert_eq!(downloaded_size(0, 4, 10).unwrap(), 4);
+        assert_eq!(downloaded_size(4, 6, 10).unwrap(), 10);
+        assert_eq!(
+            downloaded_size(4, 7, 10).unwrap_err().to_string(),
+            "Downloaded initial file size exceeds declared size 10"
+        );
+        assert_eq!(
+            downloaded_size(u64::MAX, 1, u64::MAX)
+                .unwrap_err()
+                .to_string(),
+            "Downloaded initial file size overflowed"
+        );
+    }
+
+    #[test]
+    fn verify_download_needs_the_hash_of_the_key_and_then_the_declared_size() {
+        let key = key_of(b"content");
+
+        verify_download(&blake3::hash(b"content"), &key, 7, 7).unwrap();
+        assert_eq!(
+            verify_download(&blake3::hash(b"other"), &key, 7, 7)
+                .unwrap_err()
+                .to_string(),
+            format!("Downloaded initial file content hash does not match {key}")
+        );
+        assert_eq!(
+            verify_download(&blake3::hash(b"content"), &key, 6, 7)
+                .unwrap_err()
+                .to_string(),
+            "Downloaded initial file size 6 does not match declared size 7"
+        );
+        assert_eq!(
+            verify_download(&blake3::hash(b"other"), &key, 6, 7)
+                .unwrap_err()
+                .to_string(),
+            format!("Downloaded initial file content hash does not match {key}"),
+            "the hash is checked before the size"
+        );
     }
 }
