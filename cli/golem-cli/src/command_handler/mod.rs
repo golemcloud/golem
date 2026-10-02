@@ -15,6 +15,7 @@
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
 use self::secret::SecretCommandHandler;
+use self::ssh::SshCommandHandler;
 use self::tool::ToolCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
@@ -80,6 +81,7 @@ mod repl;
 mod resource_definition;
 mod retry_policy;
 mod secret;
+mod ssh;
 pub(crate) mod template;
 mod tool;
 
@@ -322,6 +324,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                             !disable_stream,
                             disable_auto_imports,
                         )
+                        .await
+                }
+                GolemCliSubcommand::Ssh {
+                    agent_id,
+                    command,
+                    tool,
+                    cwd,
+                    timeout,
+                } => {
+                    ctx.get_or_init()
+                        .await?
+                        .ssh_handler()
+                        .cmd_ssh(agent_id, command, tool, cwd, timeout)
                         .await
                 }
                 GolemCliSubcommand::Deploy {
@@ -675,6 +690,7 @@ pub trait Handlers {
     fn component_handler(&self) -> ComponentCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
     fn tool_handler(&self) -> ToolCommandHandler;
+    fn ssh_handler(&self) -> SshCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
@@ -744,6 +760,10 @@ impl Handlers for Arc<Context> {
 
     fn tool_handler(&self) -> ToolCommandHandler {
         ToolCommandHandler::new(self.clone())
+    }
+
+    fn ssh_handler(&self) -> SshCommandHandler {
+        SshCommandHandler::new(self.clone())
     }
 
     fn error_handler(&self) -> ErrorHandler {
