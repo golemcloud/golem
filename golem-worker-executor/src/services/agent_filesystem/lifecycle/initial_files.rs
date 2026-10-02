@@ -798,7 +798,7 @@ async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
         let agrees = !entries.is_empty()
             && entries.iter().all(|entry| {
                 entry.kind == SandboxObjectKind::Directory
-                    || dropped_golem_file(&directory.join(&entry.name), old, new, states)
+                    || dropped_initial_file(&directory.join(&entry.name), old, new, states)
             });
         // A directory that does not agree ends the read, so no other directory is read.
         let pending = if agrees {
@@ -825,7 +825,7 @@ async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
 /// Tells whether `object` is the initial file at a path that `old` declares and `new` does not
 /// declare.
 /// `states` gives what is at the paths whose declarations differ.
-fn dropped_golem_file(
+fn dropped_initial_file(
     object: &Path,
     old: &DeclarationView<'_>,
     new: &DeclarationView<'_>,

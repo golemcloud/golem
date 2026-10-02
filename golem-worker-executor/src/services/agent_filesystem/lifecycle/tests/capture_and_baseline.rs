@@ -425,7 +425,7 @@ async fn a_deletion_waits_for_a_capture_whose_future_the_caller_dropped() {
 }
 
 #[test]
-async fn capture_leaves_out_the_read_only_files_that_hold_golem_s_file_with_a_single_name() {
+async fn capture_leaves_out_the_read_only_files_that_hold_the_initial_file_with_a_single_name() {
     let store = InitialFileStore::new().await;
     let read_only = |path: &'static str| {
         let store = &store;
@@ -1409,7 +1409,7 @@ async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone(
 }
 
 #[test]
-async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_file() {
+async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_the_initial_file() {
     let store = InitialFileStore::new().await;
     let installed = store
         .declare("/config", AgentFilePermissions::ReadOnly, b"installed")
@@ -1696,7 +1696,7 @@ fn list_entries(
 
 #[test]
 #[timeout("60s")]
-async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_the_path_is_golem_s_file()
+async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_the_path_is_the_initial_file()
  {
     let agents = UnmanagedAgents::new().await;
     let store = &agents.store;
