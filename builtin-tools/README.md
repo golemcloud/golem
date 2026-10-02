@@ -34,6 +34,24 @@ The Bash tool is implemented under `builtin-tools/bash/` and built reproducibly,
 container, into `builtin-tools/bash.wasm` (`cargo make build-bash-tool`). The `bash` component
 provides the `bash` tool; see [its contract and examples](bash/README.md).
 
+The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
+`isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. Release `git@0.1.7` supports local
+`init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and narrow local `config`
+workflows. It exposes no remote commands. The runtime provides WASI HTTP, and a separate integration
+probe verifies that explicitly injecting `isomorphic-git/http/web` uses durable WASI HTTP calls
+without executing socket calls. Any future network command must use that adapter path.
+
+The initial Git release intentionally does not support remotes, merge/rebase, stash, reset/clean,
+hooks, signing, submodules, linked worktrees, force operations, revision-expression syntax, or
+pathspec magic. Checkout of paths after `--` is destructive and restores from the index. Branch
+checkout rejects local changes it would overwrite. Diff output and computation have explicit
+limits and fail instead of returning a truncated patch.
+
+Executable-file modes cannot currently be persisted across separate TypeScript runtime instances.
+Git operations fail closed when a `100755` entry is observable rather than silently changing it.
+Relative symlinks are supported. File-to-directory checkout transitions are also rejected because
+the pinned library cannot apply them safely.
+
 ## Adding a component-implemented built-in tool
 
 1. Add a standalone tool component source and build it through its Golem application manifest. Do
@@ -142,6 +160,31 @@ filesystem access but provision no files of their own. This example explicitly g
 `filesystemAccess: allowed` on the agent binding; if it is omitted and no grant is inherited,
 deployment fails with an error requesting that permission. This fails closed rather than exposing
 the agent's filesystem.
+
+The Git tool uses the same exact-release selection and explicit filesystem grant:
+
+```yaml
+tools:
+  git:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: git
+      version: 0.1.7
+
+agents:
+  CodingAgent:
+    tools:
+      git:
+        filesystemAccess: allowed
+```
+
+Examples of the supported command surface include `git -C workspace status --short`,
+`git -C workspace diff --cached -- src/main.ts`, `git -C workspace add -- src/main.ts`,
+`git -C workspace commit -m "Fix validation"`, and
+`git -C workspace checkout -b fix-validation`. Repeated `-C` values are applied in order. Because
+the shared tool command model requires canonical long names, short-only Git options also have
+descriptive long forms such as `--working-directory` and `--new-branch`; inherited `-C` is accepted
+after a subcommand as well as before it.
 
 The `web-fetch` release is selected and bound in the same way, but requires no filesystem grant:
 

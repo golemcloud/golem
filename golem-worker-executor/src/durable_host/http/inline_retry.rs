@@ -56,6 +56,7 @@ use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::InterruptKind;
 use http::{HeaderName, HeaderValue};
 use http_body_util::BodyExt;
+use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -741,6 +742,18 @@ fn classify_interrupt_aware_send_decision(
     }
 }
 
+async fn select_response_ready_or_interrupt(
+    response_ready: impl Future<Output = ()>,
+    interrupt: impl Future<Output = InterruptKind>,
+) -> Result<(), InterruptKind> {
+    tokio::select! {
+        // A completed response remains observable if lifecycle arrives in the same poll.
+        biased;
+        () = response_ready => Ok(()),
+        interrupt_kind = interrupt => Err(interrupt_kind),
+    }
+}
+
 async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
     ctx: &mut crate::durable_host::DurableWorkerCtx<Ctx>,
     request_state: &HttpRequestState,
@@ -785,7 +798,10 @@ async fn send_with_interrupt_aware_retries<Ctx: crate::workerctx::WorkerCtx>(
             default_send_request_with_pool(http_request, config, None, connection_pool.clone());
 
         use wasmtime_wasi::Pollable;
-        future_resp.ready().await;
+        let interrupt = ctx.create_interrupt_signal();
+        select_response_ready_or_interrupt(future_resp.ready(), interrupt)
+            .await
+            .map_err(HttpStreamResumeError::Lifecycle)?;
 
         match future_resp.unwrap_ready() {
             Ok(Ok(resp)) => return Ok(InterruptAwareSendOutcome::Response(resp)),
@@ -2062,7 +2078,10 @@ pub(crate) async fn try_status_code_retry<Ctx: crate::workerctx::WorkerCtx>(
                 default_send_request_with_pool(http_request, config, None, connection_pool);
 
             use wasmtime_wasi::Pollable;
-            future_resp.ready().await;
+            let interrupt = ctx.create_interrupt_signal();
+            select_response_ready_or_interrupt(future_resp.ready(), interrupt)
+                .await
+                .map_err(anyhow::Error::from)?;
 
             let retried = match future_resp.unwrap_ready() {
                 Ok(result) => result,
@@ -2155,6 +2174,58 @@ mod tests {
             assume_idempotence: true,
             max_in_function_retry_delay: Duration::from_secs(1),
         }
+    }
+
+    #[test]
+    async fn response_readiness_wins_when_already_ready() {
+        let result = select_response_ready_or_interrupt(
+            futures::future::ready(()),
+            futures::future::pending(),
+        )
+        .await;
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    async fn response_readiness_wins_a_simultaneous_interrupt() {
+        let result = select_response_ready_or_interrupt(
+            futures::future::ready(()),
+            futures::future::ready(InterruptKind::Restart),
+        )
+        .await;
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    async fn response_readiness_observes_an_already_pending_interrupt() {
+        let expected = InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc());
+        let result = select_response_ready_or_interrupt(
+            futures::future::pending(),
+            futures::future::ready(expected),
+        )
+        .await;
+
+        assert_eq!(result, Err(expected));
+    }
+
+    #[test]
+    async fn response_readiness_observes_interrupt_after_waiting() {
+        let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
+        let expected = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let signal = async move { interrupt_rx.await.expect("interrupt sender dropped") };
+        let send = async move {
+            tokio::task::yield_now().await;
+            interrupt_tx.send(expected).expect("readiness wait stopped");
+        };
+
+        let (result, ()) = tokio::join!(
+            select_response_ready_or_interrupt(futures::future::pending(), signal),
+            send,
+        );
+
+        assert_eq!(result, Err(expected));
     }
 
     #[test]

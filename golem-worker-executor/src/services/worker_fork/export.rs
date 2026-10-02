@@ -8,6 +8,7 @@ use super::{DefaultWorkerFork, admission, admission::Admission, stream_cut};
 use crate::durable_host::durable_stream::DurableStreamStore;
 use crate::services::HasOplog;
 use crate::services::oplog::{CommitLevel, OplogOps, OplogService, OplogServiceOps};
+use crate::services::rpc::DurableStreamRemoteError;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -42,6 +43,17 @@ enum Error {
 impl From<WorkerExecutorError> for Error {
     fn from(error: WorkerExecutorError) -> Self {
         Self::Worker(error)
+    }
+}
+
+impl From<DurableStreamRemoteError<WorkerExecutorError>> for Error {
+    fn from(error: DurableStreamRemoteError<WorkerExecutorError>) -> Self {
+        match error {
+            DurableStreamRemoteError::Unavailable => Self::Worker(WorkerExecutorError::runtime(
+                "durable stream producer is unavailable",
+            )),
+            DurableStreamRemoteError::Other(error) => Self::Worker(error),
+        }
     }
 }
 
@@ -136,7 +148,7 @@ async fn execute<Ctx: WorkerCtx>(
     {
         return Err(reject(Reason::Conflict));
     }
-    let worker = Worker::find_durable_stream_worker(service, &source)
+    let (worker, _response_lease) = Worker::find_durable_stream_worker(service, &source)
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?;
     let slot = worker
@@ -180,7 +192,7 @@ async fn execute<Ctx: WorkerCtx>(
             }
             candidate
         }
-        None => prepare_candidate(service, request, &source, metadata.fingerprint).await?,
+        None => prepare_candidate(request, &source, metadata.fingerprint, worker.clone()).await?,
     };
     let identity = (
         source.clone(),
@@ -474,14 +486,11 @@ async fn schedule_expiry<Ctx: WorkerCtx>(
 }
 
 async fn prepare_candidate<Ctx: WorkerCtx>(
-    service: &DefaultWorkerFork<Ctx>,
     request: &ForkStreamSlotRequest,
     source: &OwnedAgentId,
     fingerprint: AgentFingerprint,
+    worker: std::sync::Arc<Worker<Ctx>>,
 ) -> Result<Candidate, Error> {
-    let worker = Worker::find_durable_stream_worker(service, source)
-        .await?
-        .ok_or_else(|| reject(Reason::NotFound))?;
     // A refused commit means the source has a new owner: fail the fork rather than read a
     // horizon this executor is no longer allowed to write past.
     worker

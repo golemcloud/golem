@@ -93,6 +93,9 @@ pub trait HttpClient4 {
     /// Sends a buffered POST with a retry policy that retries HTTP 500 responses.
     async fn post_with_status_retry_policy(&self) -> String;
 
+    /// Sends the same status-retried POST through the WASI HTTP 0.2 API.
+    async fn post_with_status_retry_policy_p2(&self) -> String;
+
     /// Sends a raw wasip3 POST whose bounded body is terminal before send.
     async fn p3_terminal_post(&self) -> String;
 
@@ -298,6 +301,18 @@ impl HttpClient4 for HttpClient4Impl {
         .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16));
 
         with_named_policy_async(&policy, || async { do_p3_terminal_post().await })
+            .await
+            .unwrap()
+    }
+
+    async fn post_with_status_retry_policy_p2(&self) -> String {
+        let policy = NamedPolicy::named(
+            "http-status-retry-test-p2",
+            Policy::immediate().max_retries(10),
+        )
+        .applies_when(Predicate::eq(Props::STATUS_CODE, 500u16));
+
+        with_named_policy_async(&policy, || async { do_p2_terminal_post() })
             .await
             .unwrap()
     }
@@ -1460,6 +1475,51 @@ fn get_incoming_response_p2(
             get_incoming_response_p2(future)
         }
     }
+}
+
+fn do_p2_terminal_post() -> String {
+    let port = std::env::var("PORT").unwrap_or("9999".to_string());
+    let headers = wasi::http::types::Fields::from_list(&[
+        ("x-test".to_string(), b"test-header".to_vec()),
+        ("content-length".to_string(), b"9".to_vec()),
+    ])
+    .unwrap();
+    let request = wasi::http::types::OutgoingRequest::new(headers);
+    request
+        .set_method(&wasi::http::types::Method::Post)
+        .unwrap();
+    request.set_path_with_query(Some("/")).unwrap();
+    request
+        .set_scheme(Some(&wasi::http::types::Scheme::Http))
+        .unwrap();
+    request
+        .set_authority(Some(&format!("localhost:{port}")))
+        .unwrap();
+
+    let body = request.body().unwrap();
+    let stream = body.write().unwrap();
+    let options = wasi::http::types::RequestOptions::new();
+    options
+        .set_first_byte_timeout(Some(30_000_000_000))
+        .unwrap();
+    let future = wasi::http::outgoing_handler::handle(request, Some(options)).unwrap();
+    stream.blocking_write_and_flush(b"test-body").unwrap();
+    drop(stream);
+    wasi::http::types::OutgoingBody::finish(body, None).unwrap();
+
+    let response = get_incoming_response_p2(&future);
+    let status = response.status();
+    let body = response.consume().unwrap();
+    let stream = body.stream().unwrap();
+    let mut bytes = Vec::new();
+    loop {
+        match stream.blocking_read(256) {
+            Ok(mut chunk) => bytes.append(&mut chunk),
+            Err(wasi::io::streams::StreamError::Closed) => break,
+            Err(error) => panic!("P2 body read failed: {error:?}"),
+        }
+    }
+    format!("{status} {}", String::from_utf8_lossy(&bytes))
 }
 
 async fn do_get_chunked_read_with_range() -> String {

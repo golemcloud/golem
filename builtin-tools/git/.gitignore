@@ -1,0 +1,7 @@
+node_modules/
+golem-temp/
+.golem/
+dist/
+.agents/
+.claude
+AGENTS.md

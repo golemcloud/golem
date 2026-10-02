@@ -161,6 +161,13 @@ static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
         release_version: "0.1.0",
         kind: BuiltinExportKind::Tool,
     },
+    BuiltinExportDescriptor {
+        component_name: "git-tool",
+        artifact_id: "git_tool",
+        export_name: "git",
+        release_version: "0.1.7",
+        kind: BuiltinExportKind::Tool,
+    },
 ];
 
 #[allow(clippy::too_many_arguments)]
