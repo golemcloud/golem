@@ -31,8 +31,18 @@ golem tool invoke --agent 'MyAgent("one")' bash -- run 'printf ready; exit 7'
 ```
 
 The successful RPC contains `stdout: "ready"`, empty stderr, `exit_code: 7` and `cwd: "/"`. To
-continue where a script left off, pass its returned `cwd` as `--cwd` on the next call. `golem ssh`
-is not needed to use this component.
+continue where a script left off, pass its returned `cwd` as `--cwd` on the next call.
+
+`golem ssh` makes the same calls from a command prompt and carries the returned `cwd` for you; with
+`-c` it runs one script, passes its stdout and stderr through and exits with its status:
+
+```shell
+golem ssh 'MyAgent("one")'
+golem ssh 'MyAgent("one")' -c 'printf ready; exit 7'
+```
+
+It remembers nothing but the directory: every command is still a fresh shell. The component does
+not depend on it.
 
 ## Contract
 

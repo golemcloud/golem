@@ -48,6 +48,7 @@ use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser};
 use clap::{Command, CommandFactory, Subcommand};
 use clap_verbosity_flag::{ErrorLevel, LogLevel};
+use golem_common::base_model::tool::ToolName;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -95,6 +96,7 @@ impl GolemCliCommand {
                     vec!["profile"],
                     vec!["repl"],
                     vec!["server"],
+                    vec!["ssh"],
                 ],
                 arg_id_exclude: vec![
                     "app_manifest_path",
@@ -769,6 +771,40 @@ pub enum GolemCliSubcommand {
         /// empty scope and import them yourself.
         #[clap(long)]
         disable_auto_imports: bool,
+    },
+    /// Open a command prompt on an existing agent through its bound bash tool. This is an
+    /// interactive command; the global `--format` flag is ignored.
+    ///
+    /// Each command is one call of the tool's `run` operation in a fresh shell: variables,
+    /// functions, aliases, options and `$?` do not carry over. Only the directory a command ended
+    /// in does; it is passed as `--cwd` to the next one. Anything that must last belongs in the
+    /// agent's files. Waiting at the prompt holds no invocation open on the agent.
+    ///
+    /// Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line. When stdin is not a
+    /// terminal, each input line is one command and no prompt is printed.
+    #[command(after_help = crate::command_examples::SSH)]
+    Ssh {
+        /// The existing agent, in the same forms `tool invoke --agent` accepts
+        agent_id: RawAgentId,
+        /// Run this script once and exit with its status instead of opening a prompt. Its stdout
+        /// and stderr are passed through unchanged; status 255 means it did not run, or that its
+        /// outcome is unknown. The value is always the script, even when it starts with `-`.
+        #[arg(
+            short = 'c',
+            long = "command",
+            value_name = "SCRIPT",
+            allow_hyphen_values = true
+        )]
+        command: Option<String>,
+        /// The tool binding to use; any tool whose `run` operation matches bash's works
+        #[arg(long, value_name = "NAME", default_value = "bash")]
+        tool: ToolName,
+        /// The directory the first command starts in; defaults to the agent's starting directory
+        #[arg(long, value_name = "DIR")]
+        cwd: Option<String>,
+        /// Seconds each command may run before the tool stops it; defaults to the tool's limit
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u32>,
     },
     /// Deploy application
     #[command(after_help = crate::command_examples::DEPLOY)]

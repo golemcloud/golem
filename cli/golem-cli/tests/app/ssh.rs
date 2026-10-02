@@ -1,0 +1,460 @@
+// Copyright 2024-2026 Golem Cloud
+// Licensed under the Golem Source License v1.1
+
+use super::builtin_bash::{OWNER, context, invoke};
+use super::{InteractiveSession, RawOutput, TestContext};
+use golem_cli::fs;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
+use test_r::{test, timeout};
+
+const BASH_ONLY: &str = r#"BashOnlyOwner("isolated")"#;
+const DENIED_FILES: &str = r#"DeniedFilesOwner("denied")"#;
+const MARKER: &str = "\u{276f}";
+
+// Runs `golem ssh` with piped input: each input line is one command and stdout carries only the
+// scripts' output.
+async fn ssh(ctx: &TestContext, args: &[&str], input: &str) -> RawOutput {
+    let mut command = vec!["ssh"];
+    command.extend(args);
+    tokio::time::timeout(
+        Duration::from_secs(180),
+        ctx.cli_with_input(command, input.as_bytes()),
+    )
+    .await
+    .expect("golem ssh did not finish")
+}
+
+fn status(output: &RawOutput) -> i32 {
+    output
+        .exit_code()
+        .expect("golem ssh was killed by a signal")
+}
+
+fn assert_output(output: &RawOutput, status_code: i32, stdout: &str, stderr: &str) {
+    assert_eq!(
+        (status(output), output.stdout_text(), output.stderr_text()),
+        (status_code, stdout.to_string(), stderr.to_string())
+    );
+}
+
+fn assert_not_run(output: &RawOutput, diagnostic: &str) {
+    assert_eq!(status(output), 255, "{}", output.stderr_text());
+    assert_eq!(output.stdout_text(), "");
+    assert!(
+        output.stderr_text().contains(diagnostic),
+        "{}",
+        output.stderr_text()
+    );
+}
+
+// A terminal answers the line editor's cursor-position query before each prompt; the PTY does
+// not, so the test answers it.
+fn answer_cursor_query(session: &mut dyn InteractiveSession) -> anyhow::Result<()> {
+    session.expect_str("\x1b[6n")?;
+    session.send("\x1b[1;1R")
+}
+
+// Types a line and presses Enter.
+fn enter(session: &mut dyn InteractiveSession, line: &str) -> anyhow::Result<()> {
+    session.send(&format!("{line}\r"))
+}
+
+// Runs the CLI synchronously with the test context's configuration, for use while an
+// interactive session holds the test thread.
+struct BlockingCli {
+    path: PathBuf,
+    config_dir: PathBuf,
+    working_dir: PathBuf,
+    env: HashMap<String, String>,
+}
+
+impl BlockingCli {
+    fn new(ctx: &TestContext) -> Self {
+        Self {
+            path: ctx.golem_cli_path.clone(),
+            config_dir: ctx.config_dir.path().to_path_buf(),
+            working_dir: fs::absolute_lexical_path(&ctx.working_dir).unwrap(),
+            env: ctx.env.clone(),
+        }
+    }
+
+    fn run(&self, args: &[&str]) -> anyhow::Result<String> {
+        let output = std::process::Command::new(&self.path)
+            .arg("--config-dir")
+            .arg(&self.config_dir)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&self.working_dir)
+            .stdin(Stdio::null())
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_validates_the_tool_before_running() {
+    let ctx = context().await;
+
+    // The default `bash` binding of an existing agent connects and runs.
+    let connected = ssh(&ctx, &[OWNER, "-c", "printf ok"], "").await;
+    assert_output(&connected, 0, "ok", "");
+
+    // A missing agent is reported, not created: a second attempt fails the same way.
+    for _ in 0..2 {
+        let missing = ssh(&ctx, &[r#"BashOwner("missing")"#, "-c", "true"], "").await;
+        assert_not_run(&missing, "not found");
+    }
+
+    // An owner without the binding is refused as such.
+    let absent = ssh(&ctx, &[BASH_ONLY, "--tool", "fixture", "-c", "true"], "").await;
+    assert_not_run(&absent, "`fixture` is not bound to");
+
+    // A bound tool that does not offer bash's `run` is refused before anything is submitted.
+    let incompatible = ssh(
+        &ctx,
+        &[
+            OWNER,
+            "--tool",
+            "fixture",
+            "-c",
+            "mkdir -p /tmp/ssh && printf ran >/tmp/ssh/marker",
+        ],
+        "",
+    )
+    .await;
+    assert_not_run(&incompatible, "is not a compatible bash tool");
+    let marker = invoke(&ctx, OWNER, "", "test ! -e /tmp/ssh/marker").await;
+    assert_eq!(marker.exit_code, 0, "{marker:?}");
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_runs_commands_in_order_and_idles_without_holding_the_owner() {
+    let ctx = context().await;
+    let other = BlockingCli::new(&ctx);
+
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        session.expect_str("Connected to")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+
+        enter(
+            session,
+            "mkdir -p /tmp/ssh-order && cd /tmp/ssh-order && echo first",
+        )?;
+        session.expect_str("first")?;
+        answer_cursor_query(session)?;
+        // The prompt shows the directory the command ended in.
+        session.expect_str("/tmp/ssh-order")?;
+        enter(session, "echo second; exit 7")?;
+        session.expect_str("second")?;
+        answer_cursor_query(session)?;
+        // `$?` cannot reach the next command, so the prompt shows the status.
+        session.expect_str("[7]")?;
+
+        // Waiting at the prompt holds nothing open on the agent: other calls on it complete.
+        let name = other.run(&["agent", "invoke", OWNER, "name"])?;
+        anyhow::ensure!(name.contains("acceptance"), "{name}");
+        let direct = other.run(&[
+            "--format",
+            "json",
+            "tool",
+            "invoke",
+            "--agent",
+            OWNER,
+            "bash",
+            "--",
+            "run",
+            "--",
+            "printf idle",
+        ])?;
+        anyhow::ensure!(direct.contains("idle"), "{direct}");
+
+        // Ctrl+C clears the line being typed; nothing is submitted.
+        session.send("echo discarded")?;
+        session.send("\u{3}")?;
+        answer_cursor_query(session)?;
+        enter(session, "pwd")?;
+        session.expect_regex("\r\n/tmp/ssh-order\r\n")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+
+    // A terminal that does not answer the cursor-position query in time still gets plain line
+    // input, and its late answer does not reach the next command.
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(60)));
+        session.expect_str(MARKER)?;
+        session.send("\x1b[1;1R")?;
+        enter(session, "pwd")?;
+        session.expect_str("/\r\n")?;
+        session.expect_str(&format!("/ {MARKER}"))?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_carries_only_the_directory() {
+    let ctx = context().await;
+
+    let output = ssh(
+        &ctx,
+        &[OWNER],
+        concat!(
+            "mkdir -p /tmp/ssh-carry && cd /tmp/ssh-carry\n",
+            "pwd\n",
+            "X=kept; f() { echo fn; }; alias a='echo alias'; set -o noglob\n",
+            "echo \"[${X-unset}]\"; type f >/dev/null 2>&1 || echo no-function; ",
+            "alias a >/dev/null 2>&1 || echo no-alias; ",
+            "case $- in *f*) echo noglob ;; *) echo globbing ;; esac\n",
+        ),
+    )
+    .await;
+    assert_output(
+        &output,
+        0,
+        "/tmp/ssh-carry\n[unset]\nno-function\nno-alias\nglobbing\n",
+        "",
+    );
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_resets_a_removed_directory() {
+    let ctx = context().await;
+
+    // The remembered directory is removed: the next command is refused before it runs, the
+    // session goes back to where it started, and the command is not resubmitted.
+    let output = ssh(
+        &ctx,
+        &[OWNER],
+        "mkdir -p /tmp/gone && cd /tmp/gone\nrmdir /tmp/gone\npwd\npwd\n",
+    )
+    .await;
+    assert_eq!(status(&output), 0, "{}", output.stderr_text());
+    assert_eq!(output.stdout_text(), "/\n");
+    let stderr = output.stderr_text();
+    assert!(stderr.contains("`invalid-cwd`"), "{stderr}");
+    assert!(
+        stderr.contains("Continuing from the agent's starting directory; the command was not run."),
+        "{stderr}"
+    );
+
+    // A session started with `--cwd` goes back to that directory.
+    let created = invoke(&ctx, OWNER, "", "mkdir -p /tmp/start/sub").await;
+    assert_eq!(created.exit_code, 0, "{created:?}");
+    let output = ssh(
+        &ctx,
+        &[OWNER, "--cwd", "/tmp/start"],
+        "cd sub\nrmdir /tmp/start/sub\npwd\npwd\n",
+    )
+    .await;
+    assert_eq!(
+        output.stdout_text(),
+        "/tmp/start\n",
+        "{}",
+        output.stderr_text()
+    );
+    assert!(
+        output.stderr_text().contains("Continuing from /tmp/start;"),
+        "{}",
+        output.stderr_text()
+    );
+
+    // When the starting directory itself is refused, the agent's starting directory is used.
+    let output = ssh(&ctx, &[OWNER, "--cwd", "/tmp/nowhere"], "pwd\npwd\n").await;
+    assert_eq!(output.stdout_text(), "/\n", "{}", output.stderr_text());
+    assert!(
+        output
+            .stderr_text()
+            .contains("Continuing from the agent's starting directory"),
+        "{}",
+        output.stderr_text()
+    );
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_command_mode_passes_output_and_status_through() {
+    let ctx = context().await;
+
+    // Exactly the script's bytes and status; no CLI text on either stream.
+    let output = ssh(
+        &ctx,
+        &[OWNER, "-c", "printf out; printf err >&2; exit 7"],
+        "",
+    )
+    .await;
+    assert_output(&output, 7, "out", "err");
+    let output = ssh(&ctx, &[OWNER, "-c", "true"], "").await;
+    assert_output(&output, 0, "", "");
+
+    // A named tool error means nothing ran: status 255 and a diagnostic naming it.
+    let output = ssh(&ctx, &[OWNER, "--cwd", "tmp", "-c", "pwd"], "").await;
+    assert_not_run(&output, "`invalid-cwd`");
+
+    // `--timeout` reaches the tool, which stops the script and returns 124.
+    let output = ssh(
+        &ctx,
+        &[
+            OWNER,
+            "--timeout",
+            "1",
+            "-c",
+            "echo start; while :; do x=1; done",
+        ],
+        "",
+    )
+    .await;
+    assert_output(
+        &output,
+        124,
+        "start\n",
+        "bash: the call exceeded its 1 s time limit\n",
+    );
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_scripts_reach_sibling_tools_and_shared_files() {
+    let ctx = context().await;
+
+    // The same output and status as a direct external invocation of the same script.
+    for (owner, script) in [
+        (OWNER, "fixture transfer --help"),
+        (
+            OWNER,
+            "printf 'sibling-stream' | fixture transfer 'prefix:' | cat",
+        ),
+        (
+            OWNER,
+            "printf '%s' \"$(printf sub | fixture transfer prefix:)\"",
+        ),
+        (OWNER, "fixture fail"),
+        (BASH_ONLY, "fixture fail"),
+    ] {
+        let through_ssh = ssh(&ctx, &[owner, "-c", script], "").await;
+        let direct = invoke(&ctx, owner, "", script).await;
+        assert_output(
+            &through_ssh,
+            i32::from(direct.exit_code),
+            &direct.stdout,
+            &direct.stderr,
+        );
+    }
+
+    // Bash and the sibling see the same owner files, whichever way they are reached.
+    let written = ssh(
+        &ctx,
+        &[
+            OWNER,
+            "-c",
+            "mkdir -p /tmp/ssh-shared && fixture write /tmp/ssh-shared/one via-sibling >/dev/null",
+        ],
+        "",
+    )
+    .await;
+    assert_output(&written, 0, "", "");
+    let read = invoke(&ctx, OWNER, "", "cat /tmp/ssh-shared/one").await;
+    assert_eq!(read.stdout, "via-sibling", "{read:?}");
+    let written = invoke(&ctx, OWNER, "", "printf via-bash >/tmp/ssh-shared/two").await;
+    assert_eq!(written.exit_code, 0, "{written:?}");
+    let read = ssh(&ctx, &[OWNER, "-c", "fixture read /tmp/ssh-shared/two"], "").await;
+    assert_eq!(status(&read), 0, "{}", read.stderr_text());
+    assert!(
+        read.stdout_text().contains("via-bash"),
+        "{}",
+        read.stdout_text()
+    );
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_reports_denied_operations() {
+    let ctx = context().await;
+    let script = concat!(
+        "mkdir -p /tmp/guarded && printf owner-data >/tmp/guarded/file && ",
+        "fixture write /tmp/guarded/file forbidden",
+    );
+
+    // With `-c`, the denial is reported with a nonzero status and the process exits.
+    let output = ssh(&ctx, &[DENIED_FILES, "-c", script], "").await;
+    assert_eq!(status(&output), 23, "{}", output.stderr_text());
+    assert!(
+        output.stderr_text().starts_with("tool error: file:"),
+        "{}",
+        output.stderr_text()
+    );
+    let kept = invoke(&ctx, DENIED_FILES, "", "cat /tmp/guarded/file").await;
+    assert_eq!(kept.stdout, "owner-data", "{kept:?}");
+
+    // Interactively, the denial is reported and the session goes on to the next line.
+    let output = ssh(&ctx, &[DENIED_FILES], &format!("{script}\necho next\n")).await;
+    assert_eq!(status(&output), 0, "{}", output.stderr_text());
+    assert_eq!(output.stdout_text(), "next\n");
+    assert!(
+        output.stderr_text().contains("tool error: file:"),
+        "{}",
+        output.stderr_text()
+    );
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_presents_a_siblings_stderr() {
+    let ctx = context().await;
+    let setup = "mkdir -p /tmp/ssh-stderr && cd /tmp/ssh-stderr && ";
+    let both = "out-1\nout-2\nerr-1\nerr-2\n";
+
+    // Each channel reaches its own process stream; redirections apply inside the script.
+    for (script, stdout, stderr) in [
+        ("fixture interleave ok", "out-1\nout-2\n", "err-1\nerr-2\n"),
+        ("fixture interleave ok 2>/dev/null", "out-1\nout-2\n", ""),
+        // Nothing records how the channels interleaved: stdout comes first.
+        ("fixture interleave ok 2>&1", both, ""),
+        ("fixture interleave ok |& cat", both, ""),
+        (
+            "fixture interleave ok | tr a-z A-Z",
+            "OUT-1\nOUT-2\n",
+            "err-1\nerr-2\n",
+        ),
+        ("fixture interleave ok 2>err; cat err", both, ""),
+    ] {
+        let output = ssh(&ctx, &[OWNER, "-c", &format!("{setup}{script}")], "").await;
+        assert_output(&output, 0, stdout, stderr);
+    }
+
+    // A declared error follows the provider's stderr and sets the status.
+    let output = ssh(&ctx, &[OWNER, "-c", "fixture interleave fail"], "").await;
+    assert_output(
+        &output,
+        42,
+        "out-1\nout-2\n",
+        "err-1\nerr-2\ntool error: selected: \"interleave failure\"\n",
+    );
+
+    // Interactively, the failure is shown and the session goes on to the next command.
+    let output = ssh(&ctx, &[OWNER], "fixture interleave fail\necho next\n").await;
+    assert_output(
+        &output,
+        0,
+        "out-1\nout-2\nnext\n",
+        "err-1\nerr-2\ntool error: selected: \"interleave failure\"\n",
+    );
+}
