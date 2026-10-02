@@ -184,7 +184,8 @@ function readDatabaseField(name: string, db: DatabaseSync): DatabaseField {
 /**
  * Reads the databases of a loaded snapshot from its multipart parts and the `fileDatabases`
  * field of its JSON envelope. Throws a string, which starts with `description`, when the
- * envelope has no `fileDatabases` field or when the field does not map field names to locations.
+ * envelope has no `fileDatabases` field, when the field does not map field names to locations,
+ * or when a field is both an in-memory part and a `fileDatabases` entry.
  */
 export function decodeSnapshotDatabases(
   parts: readonly MultipartPart[],
@@ -203,12 +204,14 @@ export function decodeSnapshotDatabases(
   ) {
     throw `${description} 'fileDatabases' must map field names to locations`;
   }
-  return {
-    inMemory: parts
-      .filter((part) => part.name.startsWith(DATABASE_PART_PREFIX))
-      .map((part) => ({ name: part.name.slice(DATABASE_PART_PREFIX.length), bytes: part.body })),
-    fileDatabases: fileDatabases as Record<string, string>,
-  };
+  const inMemory = parts
+    .filter((part) => part.name.startsWith(DATABASE_PART_PREFIX))
+    .map((part) => ({ name: part.name.slice(DATABASE_PART_PREFIX.length), bytes: part.body }));
+  const both = inMemory.find(({ name }) => Object.hasOwn(fileDatabases, name));
+  if (both) {
+    throw `${description} names database field ${JSON.stringify(both.name)} both in memory and in 'fileDatabases'`;
+  }
+  return { inMemory, fileDatabases: fileDatabases as Record<string, string> };
 }
 
 /** What a load finds in one field of the restored state. */

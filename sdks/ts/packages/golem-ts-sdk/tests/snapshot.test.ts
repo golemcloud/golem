@@ -625,6 +625,29 @@ describe('snapshot — database plan', () => {
     }
   });
 
+  it('rejects a snapshot that names a field both in memory and in fileDatabases', async () => {
+    const { decodeSnapshotDatabases } = await import('../src/internal/databaseSnapshot');
+    const parts = [
+      { name: 'state', contentType: 'application/json', body: new Uint8Array() },
+      { name: 'db:db', contentType: 'application/x-sqlite3', body: new Uint8Array([1]) },
+    ];
+    expect(() =>
+      decodeSnapshotDatabases(
+        parts,
+        { fileDatabases: { db: '/data/app.db' } },
+        'multipart state part',
+      ),
+    ).toThrow(
+      `multipart state part names database field "db" both in memory and in 'fileDatabases'`,
+    );
+    expect(
+      decodeSnapshotDatabases(parts, { fileDatabases: { other: '/data/app.db' } }, 'x'),
+    ).toEqual({
+      inMemory: [{ name: 'db', bytes: new Uint8Array([1]) }],
+      fileDatabases: { other: '/data/app.db' },
+    });
+  });
+
   it('keeps a file-backed field name that a multipart part name cannot hold, as a JSON key', async () => {
     const { planDatabases, decodeSnapshotDatabases } =
       await import('../src/internal/databaseSnapshot');
