@@ -3611,7 +3611,7 @@ mod rejection_mapping_tests {
                 .push(freshness_disposition);
             let routing_miss = self
                 .routing_misses
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                     left.checked_sub(1)
                 })
                 .is_ok();

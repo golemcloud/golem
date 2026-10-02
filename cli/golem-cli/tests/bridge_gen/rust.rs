@@ -19,7 +19,9 @@ use crate::bridge_gen::fixtures::{
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode, RustTypeName};
+use golem_cli::bridge_gen::rust::{
+    RustBridgeGenerator, RustBridgeGeneratorConfig, RustBridgeMode, RustTypeName,
+};
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::language::GuestLanguage;
 use golem_common::model::Empty;
@@ -535,11 +537,14 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         vec![def("CapabilityEnvelope", envelope)],
         AgentMode::Durable,
     );
-    let mut generator = RustBridgeGenerator::new_with_mode(
+    let config =
+        RustBridgeGeneratorConfig::from_cli(&[".*=Debug,Clone".into()], &[], dir.path()).unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
         agent_type,
         target_path,
         true,
         RustBridgeMode::GuestWasmRpc,
+        config,
     )
     .unwrap();
     generator.generate().unwrap();
@@ -571,6 +576,115 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         "generated guest capability crate failed cargo check\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn configured_derives_cover_generated_named_and_synthetic_types() {
+    let dir = TempDir::new().unwrap();
+    let target_path = Utf8Path::from_path(dir.path()).unwrap();
+    let media = multimodal(vec![
+        variant_case("text", Some(SchemaType::string())),
+        variant_case("count", Some(SchemaType::u32())),
+    ]);
+    let agent_type = agent(
+        "DerivedAgent",
+        "rust",
+        vec![],
+        vec![
+            method(
+                "named",
+                vec![field("record", ref_to("OrderRecord"))],
+                Some(ref_to("OrderVariant")),
+            ),
+            method("media", vec![field("media", media.clone())], Some(media)),
+            method(
+                "language",
+                vec![field(
+                    "text",
+                    unstructured_text_schema_type(TextRestrictions {
+                        languages: Some(vec!["en".into(), "de".into()]),
+                        ..Default::default()
+                    }),
+                )],
+                None,
+            ),
+            method(
+                "mime",
+                vec![field(
+                    "binary",
+                    unstructured_binary_schema_type(BinaryRestrictions {
+                        mime_types: Some(vec!["image/png".into(), "image/jpeg".into()]),
+                        ..Default::default()
+                    }),
+                )],
+                None,
+            ),
+            method("alias", vec![field("alias", ref_to("StringAlias"))], None),
+        ],
+        vec![
+            def(
+                "OrderRecord",
+                SchemaType::record(vec![named_field("id", SchemaType::u32())]),
+            ),
+            def(
+                "OrderVariant",
+                SchemaType::variant(vec![
+                    variant_case("empty", None),
+                    variant_case("record", Some(ref_to("OrderRecord"))),
+                ]),
+            ),
+            def("StringAlias", SchemaType::string()),
+        ],
+        AgentMode::Durable,
+    );
+    let config = RustBridgeGeneratorConfig::from_cli(
+        &[
+            ".*=PartialEq,Clone".into(),
+            "^(OrderRecord|Multimodal0)$=Eq,PartialEq".into(),
+        ],
+        &[],
+        dir.path(),
+    )
+    .unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
+        agent_type,
+        target_path,
+        true,
+        RustBridgeMode::ExternalRest,
+        config,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+    for type_name in [
+        "OrderRecord",
+        "OrderVariant",
+        "Multimodal0",
+        "Languages0",
+        "Mimetypes0",
+    ] {
+        let declaration = ["pub struct ", "pub enum "]
+            .into_iter()
+            .find_map(|prefix| source.find(&format!("{prefix}{type_name}")))
+            .unwrap_or_else(|| panic!("missing generated type {type_name}:\n{source}"));
+        let derive = &source[source[..declaration].rfind("#[derive(").unwrap()..declaration];
+        assert!(derive.contains("PartialEq"), "{type_name}: {derive}");
+        assert_eq!(derive.matches("Clone").count(), 1, "{type_name}: {derive}");
+        if matches!(type_name, "OrderRecord" | "Multimodal0") {
+            assert_eq!(
+                derive.matches("PartialEq").count(),
+                1,
+                "{type_name}: {derive}"
+            );
+            assert!(derive.contains("Eq"), "{type_name}: {derive}");
+        }
+    }
+    let alias = source.find("pub type StringAlias").unwrap();
+    assert!(
+        !source[source[..alias].rfind('\n').unwrap_or(0)..alias].contains("derive"),
+        "aliases cannot receive derives:\n{source}"
     );
 }
 
@@ -1028,10 +1142,25 @@ fn external_streaming_generation_compiles_recursive_streams_and_config() {
         &agent_type.type_name,
         BridgeMode::External,
     ));
-    RustBridgeGenerator::new(agent_type, &package_dir, true)
-        .unwrap()
-        .generate()
-        .unwrap();
+    let config =
+        RustBridgeGeneratorConfig::from_cli(&["^Streaming.*=Debug,Clone".into()], &[], dir.path())
+            .unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
+        agent_type,
+        &package_dir,
+        true,
+        RustBridgeMode::ExternalRest,
+        config,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+    let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
+    for type_name in ["StreamingInput", "StreamingOutput"] {
+        let declaration = source.find(&format!("pub struct {type_name}")).unwrap();
+        let derive = &source[source[..declaration].rfind("#[derive(").unwrap()..declaration];
+        assert_eq!(derive.matches("Debug").count(), 1, "{type_name}: {derive}");
+        assert!(!derive.contains("Clone"), "{type_name}: {derive}");
+    }
     cargo_check_with_args(&package_dir, &[]);
     cargo_check_with_args(&package_dir, &["--no-default-features"]);
 
@@ -1954,7 +2083,70 @@ fn cargo_output(target_path: &Utf8Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn tool_generation_compiles() {
+fn configured_agent_bridges_compile_with_local_custom_derive_dependency() {
+    let dir = TempDir::new().unwrap();
+    let root = Utf8Path::from_path(dir.path()).unwrap();
+    let derive_crate = root.join("custom-derive");
+    std::fs::create_dir_all(derive_crate.join("src")).unwrap();
+    std::fs::write(
+        derive_crate.join("Cargo.toml"),
+        "[package]\nname = \"custom-derive\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nproc-macro = true\n",
+    ).unwrap();
+    std::fs::write(
+        derive_crate.join("src/lib.rs"),
+        "extern crate proc_macro;\nuse proc_macro::TokenStream;\n#[proc_macro_derive(Marker)]\npub fn marker(_: TokenStream) -> TokenStream { TokenStream::new() }\n",
+    ).unwrap();
+
+    let target = root.join("configured-client");
+    let config = RustBridgeGeneratorConfig::from_cli(
+        &[".*=custom_derive::Marker".into()],
+        &[format!(
+            "custom-derive = {{ path = {:?} }}",
+            derive_crate.as_str()
+        )],
+        root.as_std_path(),
+    )
+    .unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
+        code_first_snippets_agent_type(GuestLanguage::Rust, "FooAgent"),
+        &target,
+        true,
+        RustBridgeMode::ExternalRest,
+        config,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let cargo_toml = std::fs::read_to_string(target.join("Cargo.toml")).unwrap();
+    let lib_rs = std::fs::read_to_string(target.join("src/lib.rs")).unwrap();
+    assert!(cargo_toml.contains("custom-derive"), "{cargo_toml}");
+    assert!(lib_rs.contains("custom_derive::Marker"), "{lib_rs}");
+    cargo_check(&target);
+
+    let guest_target = root.join("configured-guest-client");
+    let guest_config = RustBridgeGeneratorConfig::from_cli(
+        &[".*=custom_derive::Marker".into()],
+        &[format!(
+            "custom-derive = {{ path = {:?} }}",
+            derive_crate.as_str()
+        )],
+        root.as_std_path(),
+    )
+    .unwrap();
+    let mut guest_generator = RustBridgeGenerator::new_with_mode_and_config(
+        code_first_snippets_agent_type(GuestLanguage::Rust, "FooAgent"),
+        &guest_target,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+        guest_config,
+    )
+    .unwrap();
+    guest_generator.generate().unwrap();
+    cargo_check(&guest_target);
+}
+
+#[test]
+fn rust_tool_generation_compiles_unchanged() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
     assert!(lib_rs.contains("pub async fn replace("), "{lib_rs}");

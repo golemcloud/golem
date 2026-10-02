@@ -28,7 +28,7 @@ import {
   Sink,
   Stream,
 } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import * as net from "node:net"
 import * as path from "node:path"
 import * as url from "node:url"
