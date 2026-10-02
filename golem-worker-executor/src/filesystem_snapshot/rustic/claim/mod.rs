@@ -48,8 +48,8 @@ use tokio::task::JoinHandle;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::warn;
 
-/// The markers of a claim that this delete keeps: the first marker, which the claim write also
-/// uses, and each refresh marker whose write succeeded.
+/// The markers of a claim that this delete keeps: the first marker, which `take_claim` also uses,
+/// and each refresh marker whose write succeeded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Markers {
     first: Arc<Path>,
@@ -278,7 +278,7 @@ impl Claim {
     ) -> anyhow::Result<Option<Claim>> {
         let span = lease_span(policy.grace, policy.deadline);
         let (started, time) = marker_time(&*clock);
-        // The state and the claim write both hold the first marker.
+        // The state and `take_claim` both use the first marker.
         let first: Arc<Path> = marker_path(&name.directory, name.number, time).into();
         let claim = Claim {
             lease: Arc::new(Lease::until(started + span)),
