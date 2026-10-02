@@ -25,8 +25,8 @@ Optional Rust argument encoding remains a separate requirement for the full 1.6 
 | Rust compiler | `1.98.0 (88d9e12ae 2026-08-18)` |
 | Standalone WASM runner | Wasmtime `46.0.1` |
 | Guest artifact | `bash.wasm`, artifact `bash` 0.0.2 in `golemcloud/golem-builtins` (not committed), release build, `golem:bash` / `bash@0.2.0` |
-| Artifact size | 23,349,216 bytes (22.27 MiB) |
-| Artifact SHA-256 | `e99924ffc3c91d7c2823676d0ac5670fcf8c45e2912e73bf09a5bdaac929ae6b` |
+| Artifact size | 23,346,707 bytes (22.27 MiB) |
+| Artifact SHA-256 | `1cc1f740f94e448d5beeb29b8350eced6256e015fdb7dea0e9717f8af5a3ca5e` |
 
 `cargo make build-bash-tool` built the component in the pinned container the README describes
 (Build and verify), wrote it to `builtin-tools/bash.wasm` and passed
@@ -39,8 +39,8 @@ a committed lockfile and immutable Brush/Coreutils git pins, with no local fork 
 | Check | Result |
 |---|---|
 | Shared argv/help parser's moved tests | 15 passed; parser also checks on `wasm32-wasip2` without host features |
-| Standalone workspace library tests | 369 passed: shell 213, component 6, wget 37, curl 87, HTTP transport 26 |
-| Unit tests run as WASM | 141 passed under Wasmtime: shell 133, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
+| Standalone workspace library tests | 365 passed: shell 209, component 6, wget 37, curl 87, HTTP transport 26 |
+| Unit tests run as WASM | 138 passed under Wasmtime: shell 130, HTTP transport 8 (the component needs Golem's host; the rest need threads or `tempfile`) |
 | Shell integration tests | 20 passed |
 | Exact pinned Brush library tests | Core 141, builtins 28 and parser 276 passed (parser's YAML snapshot test is ignored upstream) |
 | Conformance matrix | 2,253 per-PR cases passed on arm64 and on x86-64; exact shell exit code, stdout and stderr, against goldens recorded from Bash 5 and the GNU tools. Of the 18,008 cases including the sweep tier, the 238 that fail on each architecture are exactly those listed in `conformance/sweep-known-failures.json` |
@@ -190,6 +190,10 @@ Known gaps:
 - Crash recovery while a sibling that declares stderr is writing it.
 - Golem may suspend the owner in the middle of a call that only waits, and at this version the
   replay that resumes it can hang or permanently fail the owner (see README, Limits).
+- A relative symbolic link that climbs above the agent's root is created, as in bash; at this
+  Golem version following one revokes the agent's filesystem.
+- `curl -m` and `wget -T` race a timer against the request; at this Golem version a crash in the
+  middle of a POST or PATCH with that timer pending can fail the owner on replay.
 - Optional Rust argument wire encoding; the tool uses supported non-optional shapes.
 - Broader waiter/fairness and arbitrary chunk-boundary cases beyond the preserved cooperative
   regression suite.

@@ -103,10 +103,6 @@ flowchart TD
 - `shell/` and `utilities/` are reusable Rust libraries with no Golem dependency. The shell uses
   Brush's cooperative execution services and runs every command below in-process. HTTP helpers
   expose the supported `curl` and `wget` options, including downloads relative to the shell's cwd.
-  `curl -i`/`-I`/`-v` and `wget -S` print response headers sorted by name, not wire order: a
-  header-iteration order that could vary between a recorded run and a replay would make Golem
-  refuse to resume it (`Unexpected oplog entry`), so a stable order is chosen deliberately over
-  reproducing curl's own presentation.
 - `component/` exports the SDK tool, supplies Golem's guest task/timer services before shell
   initialization, checks the starting directory, and adapts discovered owner bindings into
   commands.
@@ -268,11 +264,9 @@ the shell read or write the path, `-x` holds only for directories (nothing can b
 and `-G` hold for every existing path (the agent owns its whole filesystem), and `-ef` compares
 device and inode. A symbolic
 link to an absolute path cannot be created on WASI, so `ln -s /abs/path link` is refused with that
-reason; so is a relative target that climbs back above the sandbox root with enough `..` (`ln -s
-../../../etc esc`) — following one, once created, reaches outside the agent's own filesystem —
-so only a relative target that stays inside the sandbox works. `cp -s` (which creates a symbolic
-link the same way `ln -s` does) and `cp -a`/`-d`/`-P` of a source that is already a symbolic link
-(which recreates its target text verbatim at the new location) get the same two checks. Nor can a
+reason; a relative target works. `cp -s` (which creates a symbolic link the same way `ln -s`
+does) and `cp -a`/`-d`/`-P` of a source that is already a symbolic link (which recreates its
+target text at the new location) get the same check. Nor can a
 file whose name holds bytes that are not UTF-8, since WASI
 names files with Unicode strings: creating one fails with `Illegal byte sequence`. Shell values
 themselves keep such bytes, as bash's do. A script with a syntax error is refused whole, before any of it runs,
@@ -437,9 +431,7 @@ pipe. What a call returns is bounded lower, by what Golem can carry (see Output)
   `curl: response body exceeded 67108864 bytes` (status 4). `curl -m`/`wget -T` bound the whole
   transfer, including a body that keeps arriving: `curl -m 1` on an endless response ends with
   curl's status 28 (`curl: (28) Operation timed out after N milliseconds with M bytes received`).
-  The budget is carried in WASI-HTTP's own connect/first-byte and between-bytes timeouts and
-  checked after every read, so a body that stops arriving just before the deadline is only cut by
-  the between-bytes timeout: such a transfer can take up to about twice `-m`. WASI-HTTP always
+  The budget is a durable timer raced against the request and each read of its body. WASI-HTTP always
   verifies a server's certificate, so `curl -k`/`--insecure` cannot skip that check: a certificate
   it refuses ends the transfer with curl's status 60 and a message that says `--insecure` is
   unsupported.

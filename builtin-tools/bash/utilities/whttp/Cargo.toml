@@ -40,11 +40,12 @@ iri-string = "0.7"
 # both the agent's executor and the standalone bins'. Pinned exactly, as upstream golem pins it in
 # its own agent components and in the app template the CLI generates.
 #
-# `-m`/`--max-time` is carried in WASI-HTTP's own connect/first-byte and between-bytes timeouts
-# plus a clock check after each wait (see `Deadline` in src/lib.rs), not a timer raced against the
-# request.
+# `wasi-fetch`'s own `.timeout()` sets WASI-HTTP's connect/first-byte deadline only, not a bound
+# on the whole transfer. `-m`/`--max-time` is enforced by racing each await against `wasip3`'s
+# clock (see `with_deadline` in src/lib.rs).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasi-fetch = { workspace = true }
+wasip3 = { workspace = true }
 
 # native: reqwest with pure-Rust rustls TLS (no system libcurl/OpenSSL). Auto-redirect is disabled
 # in code so this crate's shared loop is the single source of redirect behavior on both targets.

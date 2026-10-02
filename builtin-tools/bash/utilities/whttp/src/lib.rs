@@ -55,7 +55,7 @@ pub struct Request {
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default overall request budget, applied when the caller sets none. On wasm this bounds the
-/// WHOLE operation — connect, headers and body — not just the first byte (see [`Deadline`]).
+/// WHOLE operation — connect, headers and body — not just the first byte (see [`with_deadline`]).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Default cap on a buffered response body. Generous for API responses and ordinary downloads,
@@ -271,8 +271,8 @@ impl StreamingResponse {
 #[derive(Debug)]
 pub struct BodyStream {
     inner: BodyStreamInner,
-    /// The total-budget deadline (curl `-m`/wget `-T`) each `next_chunk()` checks after its read,
-    /// on wasm; `None` on native, where the transport's own request-level timeout already bounds
+    /// The total-budget deadline (curl `-m`/wget `-T`) each `next_chunk()` races against, on
+    /// wasm; `None` on native, where the transport's own request-level timeout already bounds
     /// the whole response including the body.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     deadline: Option<std::time::Instant>,
@@ -311,22 +311,19 @@ impl BodyStream {
     ///
     /// Returns [`Error::Timeout`] once the request's budget has run out, and (natively)
     /// [`Error::Transport`] if the connection fails while reading. On wasm `wasi-fetch`'s `chunk()`
-    /// reports a failed read as end-of-body; one that ends past the deadline is the budget's
-    /// between-bytes timeout, and is reported as such.
+    /// has no error case: it reports a failed read as end-of-body.
     pub async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, Error> {
         match &mut self.inner {
             #[cfg(target_arch = "wasm32")]
             BodyStreamInner::Open(body) => {
                 // Bounded by the same deadline `-m`/`--max-time` set for the whole request: a
                 // slowly trickling body (headers already in hand) must not run past it either.
-                let chunk = body.chunk().await;
-                if self
-                    .deadline
-                    .is_some_and(|deadline| std::time::Instant::now() >= deadline)
-                {
-                    return Err(Error::Timeout);
+                match self.deadline {
+                    Some(deadline) => Ok(with_deadline(deadline, body.chunk())
+                        .await?
+                        .map(|bytes| bytes.to_vec())),
+                    None => Ok(body.chunk().await.map(|bytes| bytes.to_vec())),
                 }
-                Ok(chunk.map(|bytes| bytes.to_vec()))
             }
             #[cfg(not(target_arch = "wasm32"))]
             BodyStreamInner::Open(response) => response
@@ -452,22 +449,27 @@ async fn fetch_once_streaming(
     if let Some(bytes) = body {
         builder = builder.body(bytes);
     }
-    // See `fetch_once`. The deadline carries across every later `next_chunk()` too, via
-    // `BodyStream`'s own copy, so a slowly trickling body remains bounded after this returns.
-    let deadline = Deadline::start(timeout.unwrap_or(DEFAULT_TIMEOUT));
-    let builder = deadline.bound(builder, connect_timeout);
-    let response = deadline.sent(builder.send().await)?;
+    // See `fetch_once`: the connect budget alone goes on the builder. The total budget is
+    // enforced below and carries across every later `next_chunk()` too, via `BodyStream`'s own
+    // deadline, so a slowly trickling body remains bounded after this function returns.
+    if let Some(d) = connect_timeout {
+        builder = builder.timeout(d);
+    }
+    let deadline = std::time::Instant::now() + timeout.unwrap_or(DEFAULT_TIMEOUT);
+    let response = with_deadline(deadline, builder.send())
+        .await?
+        .map_err(send_error)?;
     let status = response.status().as_u16();
     let headers = collect_headers(response.headers());
     let stream = if is_bodyless(method, status) {
         BodyStream {
             inner: BodyStreamInner::Empty,
-            deadline: Some(deadline.at),
+            deadline: Some(deadline),
         }
     } else {
         BodyStream {
             inner: BodyStreamInner::Open(response.into_body()),
-            deadline: Some(deadline.at),
+            deadline: Some(deadline),
         }
     };
     Ok((status, headers, stream))
@@ -519,71 +521,51 @@ async fn fetch_once_streaming(
     Ok((status, headers, stream))
 }
 
-/// A request's total time budget (curl `-m`/`--max-time`, wget `-T`) on wasm, without a timer.
-///
-/// A timer raced against the request is a second durable call in flight beside it, and a crash in
-/// the middle of a non-idempotent request (POST, PATCH) is then recovered unreliably by Golem: its
-/// replay can fail and leave the agent unusable. Instead WASI-HTTP's own timeouts bound each wait
-/// — connect and first byte by the connect budget (capped at the total), each gap between body
-/// bytes by the total budget — and the clock is read after every wait: a request still waiting
-/// or reading at the deadline fails with [`Error::Timeout`] as soon as the wait returns. A body
-/// that keeps arriving is cut at the deadline; one that stops arriving just before it is cut by
-/// the between-bytes timeout, so the whole transfer takes at most about twice the budget.
+/// Sleeps until `deadline` on `wasip3`'s clock. The runtime that drives `wasi-fetch`'s futures
+/// polls this one too.
 #[cfg(target_arch = "wasm32")]
-#[derive(Clone, Copy, Debug)]
-struct Deadline {
-    at: std::time::Instant,
-    budget: Duration,
+async fn sleep_until(deadline: std::time::Instant) {
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    let nanos = u64::try_from(remaining.as_nanos()).unwrap_or(u64::MAX);
+    wasip3::clocks::monotonic_clock::wait_for(nanos).await;
 }
 
+/// Awaits `future`, failing with [`Error::Timeout`] if `deadline` passes first. This is how the
+/// total budget (curl `-m`/`--max-time`, wget `-T`) is enforced on wasm: `wasi-fetch`'s own
+/// `.timeout()` carries only WASI-HTTP's connect/first-byte deadline, so a response that trickles
+/// in after its headers would otherwise run past the budget.
 #[cfg(target_arch = "wasm32")]
-impl Deadline {
-    fn start(budget: Duration) -> Self {
-        Self {
-            at: std::time::Instant::now() + budget,
-            budget,
-        }
+async fn with_deadline<T>(
+    deadline: std::time::Instant,
+    future: impl std::future::Future<Output = T>,
+) -> Result<T, Error> {
+    use std::task::Poll;
+    if std::time::Instant::now() >= deadline {
+        return Err(Error::Timeout);
     }
-
-    /// Bounds the request's waits by WASI-HTTP's own timeouts.
-    fn bound(
-        self,
-        builder: wasi_fetch::RequestBuilder,
-        connect_timeout: Option<Duration>,
-    ) -> wasi_fetch::RequestBuilder {
-        let first_byte = connect_timeout.map_or(self.budget, |d| d.min(self.budget));
-        builder
-            .timeout(first_byte)
-            .between_bytes_timeout(self.budget)
-    }
-
-    /// Fails with [`Error::Timeout`] once the budget has run out.
-    fn check(self) -> Result<(), Error> {
-        if std::time::Instant::now() >= self.at {
-            Err(Error::Timeout)
-        } else {
-            Ok(())
+    let mut future = std::pin::pin!(future);
+    let mut timer = std::pin::pin!(sleep_until(deadline));
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(value) = future.as_mut().poll(cx) {
+            return Poll::Ready(Ok(value));
         }
-    }
-
-    /// The outcome of sending the request: a WASI-HTTP timeout, or any failure past the
-    /// deadline, is the budget running out.
-    fn sent<T>(self, result: Result<T, wasi_fetch::Error>) -> Result<T, Error> {
-        match result {
-            Ok(value) => {
-                self.check()?;
-                Ok(value)
-            }
-            Err(error) => {
-                self.check()?;
-                let message = error.to_string();
-                if message.contains("Timeout") {
-                    Err(Error::Timeout)
-                } else {
-                    Err(classify(format!("request failed: {message}")))
-                }
-            }
+        if timer.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(Error::Timeout));
         }
+        Poll::Pending
+    })
+    .await
+}
+
+/// A failure to send the request: WASI-HTTP's own connect/first-byte timeout is the connect
+/// budget running out, and any other is classified by its `error-code`.
+#[cfg(target_arch = "wasm32")]
+fn send_error(error: wasi_fetch::Error) -> Error {
+    let message = error.to_string();
+    if message.contains("Timeout") {
+        Error::Timeout
+    } else {
+        classify(format!("request failed: {message}"))
     }
 }
 
@@ -766,11 +748,17 @@ async fn fetch_once(
     if let Some(bytes) = body {
         builder = builder.body(bytes);
     }
-    // The total budget (curl `-m`/wget `-T`, defaulting to `DEFAULT_TIMEOUT`) bounds the whole
-    // call: connect, headers AND body (see `Deadline`).
-    let deadline = Deadline::start(timeout.unwrap_or(DEFAULT_TIMEOUT));
-    let builder = deadline.bound(builder, connect_timeout);
-    let response = deadline.sent(builder.send().await)?;
+    // `wasi-fetch`'s own `.timeout()` carries only WASI-HTTP's connect/first-byte deadline; set
+    // it to the connect budget so that phase is bounded even without `-m`. The total budget
+    // (curl `-m`/wget `-T`, defaulting to `DEFAULT_TIMEOUT`) is enforced by `with_deadline`
+    // across the whole call: connect, headers AND body.
+    if let Some(d) = connect_timeout {
+        builder = builder.timeout(d);
+    }
+    let deadline = std::time::Instant::now() + timeout.unwrap_or(DEFAULT_TIMEOUT);
+    let response = with_deadline(deadline, builder.send())
+        .await?
+        .map_err(send_error)?;
     let status = response.status().as_u16();
     let headers = collect_headers(response.headers());
     // A HEAD/204/304 response has NO body. Reading the stream anyway waits on `Content-Length`
@@ -799,11 +787,7 @@ async fn fetch_once(
         // to accept on wstd is closed here rather than inherited.
         let mut body = response.into_body();
         let mut acc: Vec<u8> = Vec::new();
-        while let Some(chunk) = {
-            let chunk = body.chunk().await;
-            deadline.check()?;
-            chunk
-        } {
+        while let Some(chunk) = with_deadline(deadline, body.chunk()).await? {
             if acc.len() + chunk.len() > max_body {
                 return Err(Error::BodyTooLarge(max_body));
             }
@@ -972,23 +956,13 @@ fn decode_capped(mut reader: impl std::io::Read, max_body: usize) -> Decoded {
 /// Flatten an `http::HeaderMap` into `(name, value)` pairs, dropping any header whose value is not
 /// valid UTF-8 (non-ASCII header values are vanishingly rare and unusable as text anyway).
 fn collect_headers(map: &http::HeaderMap) -> Vec<(String, String)> {
-    // `HeaderMap::iter()` yields headers in an UNSPECIFIED (hash) order that can differ between two
-    // executions of the same request. On the durable agent that is a replay hazard: the first run
-    // records this Vec (e.g. as a `curl -I` eval result) in the oplog, and a later resume re-executes
-    // the request — a different iteration order produces a non-matching result and Golem refuses to
-    // resume (`Unexpected oplog entry`, INTERNAL_AGENT_RESUME_FAILED). Sort to a stable order so the
-    // recorded and replayed outputs are byte-identical. (curl/wget don't promise the wire order
-    // anyway, and a stable order also makes `-I`/`-i` output reproducible for tests and demos.)
-    let mut headers: Vec<(String, String)> = map
-        .iter()
+    map.iter()
         .filter_map(|(k, v)| {
             v.to_str()
                 .ok()
                 .map(|v| (k.as_str().to_string(), v.to_string()))
         })
-        .collect();
-    headers.sort();
-    headers
+        .collect()
 }
 
 #[cfg(test)]

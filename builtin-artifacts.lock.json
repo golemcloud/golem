@@ -5,7 +5,7 @@
     "bash": {
       "component": "bash",
       "version": "0.0.2",
-      "sha256": "e99924ffc3c91d7c2823676d0ac5670fcf8c45e2912e73bf09a5bdaac929ae6b"
+      "sha256": "1cc1f740f94e448d5beeb29b8350eced6256e015fdb7dea0e9717f8af5a3ca5e"
     },
     "filesystem_tools": {
       "component": "filesystem-tools",

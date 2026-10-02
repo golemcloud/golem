@@ -204,12 +204,7 @@ turns to finish, and then:
 1. Every job still running is sent HUP: jobs of the script (listed or disowned), and jobs that
    subshells, stages, substitutions and child shells started.
 2. The tool waits until those jobs exit, or until 1 second passes on the durable monotonic clock.
-   The second is one timer raced against the jobs ending, so a run that ends with leftover jobs
-   creates at most one grace timer, however long their handlers take. (A loop of short sleeps
-   would make the number of timers depend on how far local compute got, which replay cannot
-   reproduce.) A job that ends while others still run is marked in the durable record with a
-   zero-length sleep; replay cannot release the grace timer before it has passed those marks, so
-   the jobs that ended before the timer live also end before it on replay.
+   The second is one timer raced against the jobs ending.
 3. Remaining jobs are sent KILL, and their sibling tool calls are cancelled (below).
 4. One line per stopped job is appended to the result's stderr:
    `bash: stopped job [1] (pid 1043, hangup): sleep 1000` or `(pid 1043, killed)`. A job the
@@ -265,12 +260,8 @@ with the same `Idempotency-Key` header, a POST or PATCH with a new one, because 
 default that a non-idempotent write may be retried. The server may therefore see an interrupted
 POST or PATCH twice; a script that needs exactly-once sends its own `Idempotency-Key`, which Golem
 keeps on the resent request. At this Golem version that recovery is unreliable (see the README).
-`curl -m` and `wget -T` do not race a durable timer against the request: Golem's recovery of an
-interrupted POST discards the oplog range after the request's start by position, including the
-entries of a timer racing it, and the replay then failed and left the agent unusable. They use
-WASI-HTTP's own timeouts instead (see the README's HTTP limits). The call's own time limit
-(`run`'s `timeout`) cannot stay out of that range: it is one durable wait, started before the
-script and pending alongside it.
+`curl -m` and `wget -T` race a durable timer against the request, and the call's own time limit
+(`run`'s `timeout`) is one durable wait, started before the script and pending alongside it.
 
 ## Error Handling
 

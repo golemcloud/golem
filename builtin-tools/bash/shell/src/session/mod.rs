@@ -594,12 +594,7 @@ impl Session {
     /// one line: `hangup` if it ended during the grace period, `killed` if it needed KILL. A job
     /// this shell started keeps its job number.
     ///
-    /// The grace is one timer, raced against the jobs ending, never a loop of short sleeps: how
-    /// many durable timers a run creates must not depend on how far local compute got, or replay
-    /// would ask for timers the recorded run never created. A job that ends while others still
-    /// run is marked in the durable record with a zero-length sleep: replay releases the timer
-    /// only once it has passed that mark, so a job that ended before the timer live also ends
-    /// before it on replay, whatever its handler computes.
+    /// The grace is one timer, raced against the jobs ending.
     #[cfg(target_arch = "wasm32")]
     async fn stop_leftover_jobs(&mut self) -> Vec<String> {
         use brush_core::execution::process::{self, signals};
@@ -637,16 +632,10 @@ impl Session {
                     .iter()
                     .map(|pid| Box::pin(process::process_exited(&table, *pid))),
             );
-            match futures::future::select(next_exit, grace.as_mut()).await {
-                futures::future::Either::Left(_) => {
-                    if remaining
-                        .iter()
-                        .any(|pid| process::process_exists(&table, *pid))
-                    {
-                        (services.sleep)(std::time::Duration::ZERO).await;
-                    }
-                }
-                futures::future::Either::Right(_) => break,
+            if let futures::future::Either::Right(_) =
+                futures::future::select(next_exit, grace.as_mut()).await
+            {
+                break;
             }
         }
         let mut notes = Vec::new();
@@ -872,8 +861,7 @@ mod end_of_run_tests {
         (stderr, SLEEPS.with_borrow(Clone::clone))
     }
 
-    /// The grace for leftover jobs is one durable timer, however long their HUP handlers
-    /// compute: replay then asks for exactly the timers the recorded run created.
+    /// The grace for leftover jobs is one timer, however long their HUP handlers compute.
     #[test]
     fn leftover_jobs_get_one_grace_timer_whatever_their_handlers_do() {
         let (stderr, sleeps) = run(
@@ -886,15 +874,14 @@ mod end_of_run_tests {
         assert!(stderr.contains(", killed): "), "{stderr}");
         assert_eq!(sleeps, [Duration::from_secs(1)]);
 
-        // One job ends on HUP after computing while another ignores it: its end is marked with
-        // a zero-length sleep before the timer fires.
+        // One job ends on HUP after computing while another ignores it.
         let (stderr, sleeps) = run(
             "(trap 'for i in $(seq 300); do :; done; exit 0' HUP; while :; do :; done) & \
              trap '' HUP; (while :; do :; done) & echo main",
         );
         assert!(stderr.contains("[1] (pid 2, hangup): "), "{stderr}");
         assert!(stderr.contains("[2] (pid 3, killed): "), "{stderr}");
-        assert_eq!(sleeps, [Duration::from_secs(1), Duration::ZERO]);
+        assert_eq!(sleeps, [Duration::from_secs(1)]);
 
         // No leftover job, no timer.
         let (stderr, sleeps) = run("true & wait; echo main");
