@@ -3016,12 +3016,14 @@ async fn ts_sqlite_snapshot_keeps_in_memory_databases_and_restores_file_database
     executor
         .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
         .await?;
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "addItem", data_value!("banana"))
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
         .await?;
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("after-init"))
         .await?;
@@ -3137,6 +3139,7 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
     executor
         .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
         .await?;
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
     executor
         .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
         .await?;
