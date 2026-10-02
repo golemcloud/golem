@@ -107,16 +107,24 @@ async fn case(held: Held, k: usize) -> Option<((String, String), Result<(), Stri
 /// Runs the case at each blob call of the side, and gives the held call and the reason of each
 /// case that broke the contract.
 async fn broken_cases(held: Held) -> Vec<String> {
-    let mut broken = Vec::new();
-    for k in 1..=MOST_CALLS {
-        let Some((held_call, judged)) = case(held, k).await else {
-            return broken;
-        };
-        if let Err(why) = judged {
-            broken.push(format!("call {k} {held_call:?}: {why}"));
-        }
+    // The fold ends with `Err` when the held side ends before call `k`, so that every call was
+    // held once. An `Ok` after the last call means that the side made more calls than the bound.
+    let swept = futures::stream::iter(1..=MOST_CALLS)
+        .map(Ok::<usize, Vec<String>>)
+        .try_fold(Vec::new(), |mut broken, k| async move {
+            let Some((held_call, judged)) = case(held, k).await else {
+                return Err(broken);
+            };
+            if let Err(why) = judged {
+                broken.push(format!("call {k} {held_call:?}: {why}"));
+            }
+            Ok(broken)
+        })
+        .await;
+    match swept {
+        Err(broken) => broken,
+        Ok(_) => panic!("the {held:?} made more than {MOST_CALLS} blob calls"),
     }
-    panic!("the {held:?} made more than {MOST_CALLS} blob calls");
 }
 
 #[test]

@@ -796,15 +796,16 @@ struct NativeOpenFlags {
     follow: bool,
 }
 
-/// Gives the native open flags of `request`.
+/// Gives the native open flags of `options`.
 ///
-/// A directory is opened for read only, whatever access the request asks for. A file is opened
+/// A directory is opened for read only, whatever access the options ask for. A file is opened
 /// for read with `Read` and `ReadAndSetTimes`, for write with `Write`, and for both with
 /// `ReadWrite`. Each disposition writes: `CreateIfMissing` creates a missing file,
 /// `CreateExclusive` creates a new file and fails on an existing one, `TruncateExisting` truncates
 /// an existing file, and `CreateOrTruncate` does both of the first and the third. An inspection
 /// does not block on a special file.
-fn native_open_flags(request: OpenRequest) -> NativeOpenFlags {
+fn native_open_flags(options: SandboxOpenOptions) -> NativeOpenFlags {
+    let request = open_request(options);
     let (read, write) = if request.expected == SandboxObjectKind::Directory {
         (true, false)
     } else {
@@ -1302,7 +1303,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                         request.expected,
                     )?;
                 }
-                let flags = native_open_flags(request);
+                let flags = native_open_flags(options);
                 if flags.nonblock {
                     native_options.nonblock(true);
                 }
@@ -3468,17 +3469,19 @@ mod tests {
         });
     }
 
-    fn request(
-        expected: SandboxObjectKind,
-        access: SandboxAccessMode,
-        disposition: Option<SandboxFileDisposition>,
-    ) -> OpenRequest {
-        OpenRequest {
+    fn existing(expected: SandboxObjectKind, access: SandboxAccessMode) -> SandboxOpenOptions {
+        SandboxOpenOptions::Existing {
             expected,
             access,
             follow: SandboxFollow::No,
+        }
+    }
+
+    fn file(access: SandboxAccessMode, disposition: SandboxFileDisposition) -> SandboxOpenOptions {
+        SandboxOpenOptions::File {
+            access,
             disposition,
-            inspection: false,
+            follow: SandboxFollow::No,
         }
     }
 
@@ -3509,65 +3512,64 @@ mod tests {
         use SandboxObjectKind::{Directory, File};
         [
             (
-                request(Directory, Read, None),
+                existing(Directory, Read),
                 flags(true, false, false, false, false),
             ),
             (
-                request(Directory, Write, None),
+                existing(Directory, Write),
                 flags(true, false, false, false, false),
             ),
             (
-                request(Directory, ReadWrite, None),
+                existing(Directory, ReadWrite),
                 flags(true, false, false, false, false),
             ),
             (
-                request(File, Read, None),
+                existing(File, Read),
                 flags(true, false, false, false, false),
             ),
             (
-                request(File, ReadAndSetTimes, None),
+                existing(File, ReadAndSetTimes),
                 flags(true, false, false, false, false),
             ),
             (
-                request(File, Write, None),
+                existing(File, Write),
                 flags(false, true, false, false, false),
             ),
             (
-                request(File, ReadWrite, None),
+                existing(File, ReadWrite),
                 flags(true, true, false, false, false),
             ),
             (
-                request(File, Read, Some(CreateIfMissing)),
+                file(Read, CreateIfMissing),
                 flags(true, true, true, false, false),
             ),
             (
-                request(File, Write, Some(CreateExclusive)),
+                file(Write, CreateExclusive),
                 flags(false, true, false, true, false),
             ),
             (
-                request(File, Write, Some(TruncateExisting)),
+                file(Write, TruncateExisting),
                 flags(false, true, false, false, true),
             ),
             (
-                request(File, ReadWrite, Some(CreateOrTruncate)),
+                file(ReadWrite, CreateOrTruncate),
                 flags(true, true, true, false, true),
             ),
         ]
         .into_iter()
-        .for_each(|(request, expected)| {
-            assert_eq!(native_open_flags(request), expected, "{request:?}");
+        .for_each(|(options, expected)| {
+            assert_eq!(native_open_flags(options), expected, "{options:?}");
         });
-        let inspection = native_open_flags(open_request(SandboxOpenOptions::Inspection {
-            expected: File,
-        }));
+        let inspection = native_open_flags(SandboxOpenOptions::Inspection { expected: File });
         assert!(
             inspection.nonblock,
             "an inspection must not block on a special file"
         );
         assert!(inspection.read && !inspection.write && !inspection.follow);
-        let followed = native_open_flags(OpenRequest {
+        let followed = native_open_flags(SandboxOpenOptions::Existing {
+            expected: File,
+            access: Read,
             follow: SandboxFollow::Yes,
-            ..request(File, Read, None)
         });
         assert!(followed.follow && !followed.nonblock);
     }

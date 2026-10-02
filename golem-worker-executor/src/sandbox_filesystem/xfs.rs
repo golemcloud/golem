@@ -692,17 +692,21 @@ fn clear_root_project_assignment(
 /// Gives the project of a stale managed sandbox path from the project on disk and the project
 /// that this process reserved for the path.
 ///
-/// The stale project is the one that exists. When both exist and differ, the result is an error
-/// that holds both, the disk project first.
+/// The stale project is the one that exists. When both exist and differ, the result is
+/// [`ProjectMismatch`].
 fn stale_project(
     disk: Option<NonZeroU32>,
     reserved: Option<NonZeroU32>,
-) -> Result<Option<NonZeroU32>, (NonZeroU32, NonZeroU32)> {
+) -> Result<Option<NonZeroU32>, ProjectMismatch> {
     match (disk, reserved) {
-        (Some(disk), Some(reserved)) if disk != reserved => Err((disk, reserved)),
+        (Some(disk), Some(reserved)) if disk != reserved => Err(ProjectMismatch),
         (disk, reserved) => Ok(disk.or(reserved)),
     }
 }
+
+/// The project on disk and the project that this process reserved for a path differ.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProjectMismatch;
 
 /// Whether a directory has a project id or gives one to what is made in it.
 fn has_project_identity(attributes: &linux_raw_sys::general::fsxattr) -> bool {
@@ -1999,8 +2003,8 @@ mod tests {
             (Some(one), None, Ok(Some(one))),
             (None, Some(two), Ok(Some(two))),
             (Some(one), Some(one), Ok(Some(one))),
-            (Some(one), Some(two), Err((one, two))),
-            (Some(two), Some(one), Err((two, one))),
+            (Some(one), Some(two), Err(ProjectMismatch)),
+            (Some(two), Some(one), Err(ProjectMismatch)),
         ]
         .into_iter()
         .for_each(|(disk, reserved, expected)| {

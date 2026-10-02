@@ -69,8 +69,8 @@ pub(crate) struct HostDirectories {
 /// A directory on the host that this value owns.
 ///
 /// [`HostDirectory::discard`] removes the directory with all that is in it and checks that it is
-/// gone. An owner that knows the end of the directory calls it. A drop without a discard removes
-/// the directory as a best effort, does not check, and only logs a failure.
+/// gone, and gives the failure of either step. A drop without a discard removes the directory as a
+/// best effort, does not check, and only logs a failure.
 ///
 /// `.scratch` and `.initial-files` keep the volume root that they are in usable while they live,
 /// also after their provisioning is dropped. A directory that [`HostDirectory::create_in`] makes

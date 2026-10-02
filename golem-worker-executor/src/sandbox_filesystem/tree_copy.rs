@@ -685,8 +685,8 @@ fn occupant(metadata: &cap_std::fs::Metadata) -> Occupant {
     }
 }
 
-/// Makes `name` in `directory` ready for a file or a symlink that a `Replace` seed renames there,
-/// as [`placement_action`] decides for a source that is not a directory.
+/// Clears `name` in `directory` for a rename of a file or a symlink onto it, as
+/// [`placement_action`] decides for a source that is not a directory with `Replace`.
 ///
 /// A free name and an object that the rename replaces stay as they are. A directory goes away with
 /// all that is in it. A symlink is not followed. A file and a symlink have the same row in the
