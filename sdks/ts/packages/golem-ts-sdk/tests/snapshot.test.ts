@@ -376,6 +376,7 @@ async function isolate() {
     isOpen = true;
     pragmas: Record<string, number> = { page_count: 1, page_size: 4096, cache_size: -2000 };
     returnArrays = false;
+    warmUpError: string | undefined = undefined;
     constructor(
       readonly path: string,
       options?: unknown,
@@ -389,6 +390,9 @@ async function isolate() {
       const pragma = sql.match(/^PRAGMA (\w+)$/)?.[1];
       return {
         get: () => {
+          if (this.warmUpError !== undefined) {
+            throw new Error(this.warmUpError);
+          }
           if (pragma !== undefined) {
             return this.returnArrays ? [this.pragmas[pragma]] : { [pragma]: this.pragmas[pragma] };
           }
@@ -1343,6 +1347,43 @@ describe('snapshot — in-memory and file-backed databases', () => {
     });
 
     expect(env.serializeDatabaseSync.mock.calls.map(([db]) => db.path)).toEqual(['/data/app.db']);
+  });
+
+  it('names the field of a database whose warm-up fails', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'FailingWarmUp',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => ({ count: 0 }),
+        methods: {},
+        snapshot: {
+          load() {
+            const fileDb = new env.FakeDatabaseSync('/data/app.db');
+            fileDb.warmUpError = 'database disk image is malformed';
+            return { count: 8, fileDb };
+          },
+        },
+      });
+    env.select('FailingWarmUp');
+
+    await expect(
+      env.isolatedGuest.loadSnapshot.load({
+        payload: new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            principal: { tag: 'anonymous' },
+            state: { count: 8 },
+            fileDatabases: {},
+          }),
+        ),
+        mimeType: 'application/json',
+      }),
+    ).rejects.toContain('snapshot database field \\"fileDb\\": database disk image is malformed');
   });
 
   it('warms a database once when a custom load puts it in two fields', async () => {

@@ -327,11 +327,21 @@ export function restoreDatabases(state: Record<string, unknown>, databases: Snap
     restoreDatabaseSync(state[name] as DatabaseSync, bytes);
   }
   for (const { name, allPages } of plan.val.warm) {
-    const database = state[name] as DatabaseSync;
+    warmDatabase(name, state[name] as DatabaseSync, allPages);
+  }
+}
+
+/** Warms the database in field `name`; an error names the field. */
+function warmDatabase(name: string, database: DatabaseSync, allPages: boolean) {
+  try {
     database.prepare('SELECT count(*) FROM sqlite_master').get();
     if (allPages && fitsInPageCache(pageCacheOf(database))) {
       serializeDatabaseSync(database);
     }
+  } catch (error) {
+    throw new Error(
+      `snapshot database field "${name}": ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
