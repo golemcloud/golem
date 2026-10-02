@@ -13,8 +13,8 @@ const forkedLine =
 
 const sharedModules = [
   ["effect", "dist/effect.mjs"],
-  ["effect/unstable/http", "dist/effect-http.mjs"],
-  ["effect/unstable/httpapi", "dist/effect-httpapi.mjs"],
+  ["effect/http", "dist/effect-http.mjs"],
+  ["effect/http-api", "dist/effect-httpapi.mjs"],
 ]
 
 for (const template of templateMatrix) {

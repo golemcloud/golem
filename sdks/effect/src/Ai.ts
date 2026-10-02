@@ -1,6 +1,6 @@
 /** Optional Effect AI integration for explicitly selected Golem tools. @since 1.6.0 */
 import { Cause, Effect, Exit, Schema, SchemaAST, Stream } from "effect"
-import { Tool as EffectAiTool, Toolkit as EffectAiToolkit } from "effect/unstable/ai"
+import { Tool as EffectAiTool, Toolkit as EffectAiToolkit } from "effect/ai"
 import {
   Reflection as GolemReflection,
   Tool as GolemTool,

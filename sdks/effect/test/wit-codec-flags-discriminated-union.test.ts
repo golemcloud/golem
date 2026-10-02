@@ -22,7 +22,7 @@ describe("public flags and discriminated-union schemas", () => {
     const schema = DiscriminatedUnion([
       {
         tag: "ssh",
-        schema: Schema.String.pipe(Schema.check(Schema.isStartsWith("ssh://"))),
+        schema: Schema.String.pipe(Schema.check(Schema.isStartingWith("ssh://"))),
         discriminator: { tag: "prefix", val: "ssh://" },
       },
       {
