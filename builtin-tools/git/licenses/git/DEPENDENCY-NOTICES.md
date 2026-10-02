@@ -46,7 +46,7 @@ Generated from the pinned production package tree. Every production package has 
 | minimist | 1.2.8 | MIT | https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz | `dependencies/minimist@1.2.8/LICENSE` |
 | minimisted | 2.0.1 | MIT | https://registry.npmjs.org/minimisted/-/minimisted-2.0.1.tgz | `dependencies/minimisted@2.0.1/PACKAGE-LICENSE.txt` |
 | once | 1.4.0 | ISC | https://registry.npmjs.org/once/-/once-1.4.0.tgz | `dependencies/once@1.4.0/LICENSE` |
-| pako | 1.0.11 | (MIT AND Zlib) | https://registry.npmjs.org/pako/-/pako-1.0.11.tgz | `dependencies/pako@1.0.11/LICENSE` |
+| pako | 1.0.11 | (MIT AND Zlib) | https://registry.npmjs.org/pako/-/pako-1.0.11.tgz | `dependencies/pako@1.0.11/LICENSE`<br>`dependencies/pako@1.0.11/ZLIB-LICENSE` |
 | pify | 4.0.1 | MIT | https://registry.npmjs.org/pify/-/pify-4.0.1.tgz | `dependencies/pify@4.0.1/license` |
 | possible-typed-array-names | 1.1.0 | MIT | https://registry.npmjs.org/possible-typed-array-names/-/possible-typed-array-names-1.1.0.tgz | `dependencies/possible-typed-array-names@1.1.0/LICENSE` |
 | process | 0.11.10 | MIT | https://registry.npmjs.org/process/-/process-0.11.10.tgz | `dependencies/process@0.11.10/LICENSE` |

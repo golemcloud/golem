@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { collectLicenseAssets } from "./compliance-policy.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const outputRoot = path.join(root, "licenses");
@@ -210,18 +211,7 @@ const generated = new Map([
 ]);
 
 for (const item of packages) {
-  const licenseFiles = fs
-    .readdirSync(item.root, { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isFile() &&
-        /^(licen[cs]e|copying|notice)(?:[-._]|$)/i.test(entry.name),
-    )
-    .map((entry) => ({
-      name: entry.name,
-      content: normalizedNotice(path.join(item.root, entry.name)),
-    }));
-  const assets = licenseFiles.length ? licenseFiles : fallbackLicenseAssets(item);
+  const assets = collectLicenseAssets(item, fallbackLicenseAssets);
   const directory = `git/dependencies/${packageDirectoryName(item)}`;
   for (const asset of assets) {
     const relative = `${directory}/${asset.name}`;
