@@ -16,6 +16,7 @@ use crate::Tracing;
 use axum::Router;
 use axum::extract::Query;
 use axum::routing::{any, get};
+use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{GolemUserPrincipal, Principal};
@@ -1914,31 +1915,35 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
 
     drop(executor);
     let executor = start(deps, &context).await?;
-    let mut events = executor.capture_output(&worker_id).await?;
+    let events = executor.capture_output(&worker_id).await?;
 
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
     assert_eq!(state_before, state_after);
 
-    let failures = tokio::time::timeout(Duration::from_secs(10), async {
-        let mut failures = Vec::new();
-        while let Some(event) = events.recv().await {
-            match AgentEvent::try_from(event) {
-                Ok(AgentEvent::SnapshotRecoveryFailed {
-                    snapshot_index,
-                    error,
-                    ..
-                }) => failures.push((snapshot_index, error)),
-                Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
-                    panic!("the snapshot at {snapshot_index} loaded without its database file")
-                }
-                Ok(AgentEvent::InvocationFinished { .. }) => return failures,
-                _ => {}
-            }
-        }
-        failures
-    })
+    let failures: Vec<(OplogIndex, String)> = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio_stream::wrappers::UnboundedReceiverStream::new(events)
+            .filter_map(|event| std::future::ready(AgentEvent::try_from(event).ok()))
+            .take_while(|event| {
+                std::future::ready(!matches!(event, AgentEvent::InvocationFinished { .. }))
+            })
+            .filter_map(|event| {
+                std::future::ready(match event {
+                    AgentEvent::SnapshotRecoveryFailed {
+                        snapshot_index,
+                        error,
+                        ..
+                    } => Some((snapshot_index, error)),
+                    AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
+                        panic!("the snapshot at {snapshot_index} loaded without its database file")
+                    }
+                    _ => None,
+                })
+            })
+            .collect(),
+    )
     .await?;
     let failed_indexes: Vec<OplogIndex> = failures.iter().map(|(index, _)| *index).collect();
     assert_eq!(failed_indexes, newest_two);
