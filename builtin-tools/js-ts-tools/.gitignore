@@ -1,0 +1,7 @@
+/target/
+/golem-temp/
+/.agents/
+/.claude
+/AGENTS.md
+/node_modules/
+/generated/

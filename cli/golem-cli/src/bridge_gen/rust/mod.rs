@@ -55,6 +55,7 @@ use syn::Index;
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value, value};
 use tracing::debug;
 
+pub mod config;
 #[allow(clippy::module_inception)]
 mod rust;
 mod schema_graph;
@@ -62,6 +63,7 @@ pub mod tool;
 mod type_name;
 mod wire;
 
+pub use config::RustBridgeGeneratorConfig;
 pub use type_name::RustTypeName;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,6 +203,7 @@ pub struct RustBridgeGenerator {
     testing: bool,
     mode: RustBridgeMode,
     same_language: bool,
+    config: RustBridgeGeneratorConfig,
 
     type_naming: TypeNaming<RustTypeName>,
     /// Distinct text-language restriction sets discovered while generating, each
@@ -256,12 +259,23 @@ impl RustBridgeGenerator {
         testing: bool,
         mode: RustBridgeMode,
     ) -> anyhow::Result<Self> {
+        Self::new_with_mode_and_config(agent_type, target_path, testing, mode, Default::default())
+    }
+
+    pub fn new_with_mode_and_config(
+        agent_type: AgentTypeSchema,
+        target_path: &Utf8Path,
+        testing: bool,
+        mode: RustBridgeMode,
+        config: RustBridgeGeneratorConfig,
+    ) -> anyhow::Result<Self> {
         Self::new_with_mode_and_extra_reserved_names(
             agent_type,
             target_path,
             testing,
             mode,
             std::iter::empty::<String>(),
+            config,
         )
     }
 
@@ -277,6 +291,7 @@ impl RustBridgeGenerator {
             testing,
             RustBridgeMode::GuestWasmRpc,
             extra,
+            Default::default(),
         )
     }
 
@@ -286,6 +301,7 @@ impl RustBridgeGenerator {
         testing: bool,
         mode: RustBridgeMode,
         extra: impl IntoIterator<Item = String>,
+        config: RustBridgeGeneratorConfig,
     ) -> anyhow::Result<Self> {
         validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
         let same_language = agent_type.source_language.eq_ignore_ascii_case("rust");
@@ -330,6 +346,7 @@ impl RustBridgeGenerator {
             testing,
             mode,
             same_language,
+            config,
             type_naming,
             generated_language_enums: Vec::new(),
             generated_mimetypes_enums: Vec::new(),
@@ -393,6 +410,9 @@ impl RustBridgeGenerator {
                 doc["dependencies"]["serde"] = dep("1", &["derive"]);
                 doc["dependencies"]["uuid"] = dep("1.18.1", &["v4"]);
             }
+        }
+        for (name, dependency) in self.config.dependencies() {
+            doc["dependencies"][name] = config::dependency_item(dependency);
         }
 
         std::fs::write(path, doc.to_string())
@@ -2369,17 +2389,10 @@ impl RustBridgeGenerator {
                 }
             }
 
-            let definition = if streaming {
-                quote! {
-                    #[derive(Debug)]
-                    pub enum #enum_ident { #(#variants),* }
-                }
-            } else {
-                quote! {
-                    #[derive(Debug, Clone)]
-                    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-                    pub enum #enum_ident { #(#variants),* }
-                }
+            let derive = self.derive_attribute(&name, false, streaming);
+            let definition = quote! {
+                #derive
+                pub enum #enum_ident { #(#variants),* }
             };
             if streaming {
                 client_definitions.push(definition);
@@ -2553,15 +2566,11 @@ impl RustBridgeGenerator {
                             || find_host_managed_type(&self.agent_type.schema, payload)?.is_some(),
                     )
                 })?;
-            let derive = if contains_host_managed
-                || (streaming && self.mode == RustBridgeMode::GuestWasmRpc)
-            {
-                quote! {}
-            } else if streaming {
-                quote! { #[derive(Debug)] }
-            } else {
-                quote! { #[derive(Debug, Clone)] }
-            };
+            let derive = self.derive_attribute(
+                &name,
+                contains_host_managed || (streaming && self.mode == RustBridgeMode::GuestWasmRpc),
+                streaming,
+            );
             let ordinary_codecs = if streaming && self.mode == RustBridgeMode::ExternalRest {
                 quote! {}
             } else {
@@ -2813,19 +2822,11 @@ impl RustBridgeGenerator {
         let contains_host_managed = self.mode == RustBridgeMode::GuestWasmRpc
             && find_host_managed_type(&self.agent_type.schema, resolved)?.is_some();
         let streaming = contains_stream_in_graph(&self.agent_type.schema, resolved);
-        let derive =
-            if contains_host_managed || (streaming && self.mode == RustBridgeMode::GuestWasmRpc) {
-                quote! {}
-            } else if streaming {
-                quote! { #[derive(Debug)] }
-            } else if self.mode == RustBridgeMode::ExternalRest {
-                quote! {
-                    #[derive(Debug, Clone)]
-                    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-                }
-            } else {
-                quote! { #[derive(Debug, Clone)] }
-            };
+        let derive = self.derive_attribute(
+            &name.to_string(),
+            contains_host_managed || (streaming && self.mode == RustBridgeMode::GuestWasmRpc),
+            streaming,
+        );
         match resolved {
             SchemaType::Record { fields, .. } => {
                 let mut emitted = Vec::new();
@@ -2910,6 +2911,49 @@ impl RustBridgeGenerator {
                 // Aliases to structural / scalar forms.
                 let ty = self.type_reference(other, true)?;
                 Ok(quote! { pub type #name = #ty; })
+            }
+        }
+    }
+
+    fn derive_attribute(
+        &self,
+        type_name: &str,
+        omit_builtins: bool,
+        debug_only: bool,
+    ) -> TokenStream {
+        let builtins: &[&str] = if omit_builtins {
+            &[]
+        } else if debug_only {
+            &["Debug"]
+        } else {
+            &["Debug", "Clone"]
+        };
+        let include_serde_derives =
+            self.mode == RustBridgeMode::ExternalRest && !omit_builtins && !debug_only;
+        let mut deduplication_builtins = builtins.to_vec();
+        if include_serde_derives {
+            deduplication_builtins.extend(["serde::Serialize", "serde::Deserialize"]);
+        }
+        let additional = self.config.derives_for(
+            type_name,
+            &deduplication_builtins,
+            !omit_builtins,
+            !omit_builtins && !debug_only,
+        );
+        if builtins.is_empty() && additional.is_empty() {
+            quote! {}
+        } else {
+            let builtins = builtins
+                .iter()
+                .map(|path| syn::parse_str::<syn::Path>(path).expect("built-in derive path"));
+            let serde_derive = include_serde_derives.then(|| {
+                quote! {
+                    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+                }
+            });
+            quote! {
+                #[derive(#(#builtins,)* #(#additional),*)]
+                #serde_derive
             }
         }
     }
@@ -4213,14 +4257,9 @@ impl RustBridgeGenerator {
                     quote! { crate::__golem_bridge_runtime::agentic::AllowedLanguages }
                 }
             };
-            let serde_derive = (self.mode == RustBridgeMode::ExternalRest).then(|| {
-                quote! {
-                    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-                }
-            });
+            let derive = self.derive_attribute(name, false, false);
             enums.push(quote! {
-                #[derive(Debug, Clone)]
-                #serde_derive
+                #derive
                 pub enum #ident {
                     #(#cases),*
                 }
@@ -4284,14 +4323,9 @@ impl RustBridgeGenerator {
                     quote! { crate::__golem_bridge_runtime::agentic::AllowedMimeTypes }
                 }
             };
-            let serde_derive = (self.mode == RustBridgeMode::ExternalRest).then(|| {
-                quote! {
-                    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-                }
-            });
+            let derive = self.derive_attribute(name, false, false);
             enums.push(quote! {
-                #[derive(Debug, Clone)]
-                #serde_derive
+                #derive
                 pub enum #ident {
                     #(#cases),*
                 }

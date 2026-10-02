@@ -66,7 +66,9 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
     let owner = config.initial_accounts["builtin_tool_owner"].clone();
     let consumer = config.initial_accounts["root"].id;
     let mut join_set = JoinSet::new();
-    let services = Services::new(&config, &mut join_set).await.unwrap();
+    let services = Services::new_without_component_builtins(&config, &mut join_set)
+        .await
+        .unwrap();
     let auth = AuthCtx::system();
     let user_auth = services
         .auth_service

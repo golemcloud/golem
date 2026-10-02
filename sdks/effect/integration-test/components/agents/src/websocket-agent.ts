@@ -3,7 +3,7 @@
  * against a real Golem runtime, using a public WebSocket echo server.
  *
  * The host's `golem:websocket/client@1.5.0` binding is wrapped in an
- * Effect-idiomatic `Socket` (`effect/unstable/socket`) by the SDK, so
+ * Effect-idiomatic `Socket` (`effect/socket`) by the SDK, so
  * this agent can use the same `runString` / writer / `Effect.scoped`
  * patterns a regular Effect application would use against a browser
  * or Node WebSocket.

@@ -15,6 +15,8 @@ use golem_registry_service::services::builtin_tool_provisioner::{
 };
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::model::auth::AuthCtx;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use test_r::{test, timeout};
 use tokio::task::JoinSet;
 
@@ -41,22 +43,29 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     };
     let owner = config.initial_accounts["builtin_tool_owner"].id;
     let mut join_set = JoinSet::new();
-    let services = Services::new(&config, &mut join_set).await.unwrap();
+    let services = Services::new_without_component_builtins(&config, &mut join_set)
+        .await
+        .unwrap();
     let wasm = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../test-components/",
         "golem_it_tool_streaming_rust_provider_release.wasm"
     ))
     .expect("build the tool-streaming test component before running this test");
-    let wasm = Box::leak(wasm.into_boxed_slice());
+    let artifacts = BTreeMap::from([("streaming", Arc::new(wasm))]);
     let descriptor = BuiltinToolDescriptor {
         component_name: "builtin-tool-streaming-test",
+        artifact_id: "streaming",
         tool_name: "streaming",
         release_version: "1.0.0",
-        wasm_bytes: wasm,
     };
     let auth = AuthCtx::system();
 
+    let descriptors = std::slice::from_ref(&descriptor);
+    tokio::join!(
+        provision(&services, owner, descriptors, &artifacts),
+        provision(&services, owner, descriptors, &artifacts)
+    );
     let app = services
         .application_service
         .get_in_account(owner, &ApplicationName("golem-system".into()), &auth)
@@ -67,24 +76,6 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         .get_in_application(app.id, &EnvironmentName("builtin-tools".into()), &auth)
         .await
         .unwrap();
-    let baseline_component_count = services
-        .component_service
-        .list_staged_components_for_environment(&env, &auth)
-        .await
-        .unwrap()
-        .len();
-    let baseline_deployment_count = services
-        .deployment_service
-        .list_deployments(env.id, None, &auth)
-        .await
-        .unwrap()
-        .len();
-
-    let descriptors = std::slice::from_ref(&descriptor);
-    tokio::join!(
-        provision(&services, owner, descriptors),
-        provision(&services, owner, descriptors)
-    );
     let first_component = services
         .component_service
         .get_staged_component_by_name(
@@ -101,9 +92,15 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
         .await
         .unwrap();
     assert_eq!(first_component.revision, ComponentRevision::INITIAL);
-    assert_eq!(first_deployments.len(), baseline_deployment_count + 1);
+    assert_eq!(first_deployments.len(), 1);
 
-    provision(&services, owner, std::slice::from_ref(&descriptor)).await;
+    provision(
+        &services,
+        owner,
+        std::slice::from_ref(&descriptor),
+        &artifacts,
+    )
+    .await;
     let repeated_component = services
         .component_service
         .get_staged_component_by_name(
@@ -124,7 +121,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
             .await
             .unwrap()
             .len(),
-        baseline_deployment_count + 1
+        1
     );
 
     let mismatch = BuiltinToolDescriptor {
@@ -133,6 +130,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
     };
     let error = provision_descriptors(
         std::slice::from_ref(&mismatch),
+        &artifacts,
         owner,
         &services.auth_service,
         &services.application_service,
@@ -159,7 +157,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
             .await
             .unwrap()
             .len(),
-        baseline_component_count + 1
+        1
     );
     assert_eq!(
         services
@@ -168,7 +166,7 @@ async fn provisions_component_tool_release_idempotently_and_rejects_mismatch_wit
             .await
             .unwrap()
             .len(),
-        baseline_deployment_count + 1
+        1
     );
 }
 
@@ -193,7 +191,9 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
     };
     let owner = config.initial_accounts["builtin_tool_owner"].id;
     let mut join_set = JoinSet::new();
-    let services = Services::new(&config, &mut join_set).await.unwrap();
+    let services = Services::new_without_component_builtins(&config, &mut join_set)
+        .await
+        .unwrap();
     let wasm = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../builtin-tools/filesystem-tools.wasm"
@@ -214,27 +214,29 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
             changed_wasm[offset..offset + 5].copy_from_slice(b"7.3.0");
         }
     }
-    let first_wasm = Box::leak(first_wasm.into_boxed_slice());
-    let changed_wasm = Box::leak(changed_wasm.into_boxed_slice());
+    let artifacts = BTreeMap::from([
+        ("filesystem_tools_first", Arc::new(first_wasm)),
+        ("filesystem_tools_second", Arc::new(changed_wasm)),
+    ]);
     let first = BuiltinToolDescriptor {
         component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools_first",
         tool_name: "read-file",
         release_version: "7.2.0",
-        wasm_bytes: first_wasm,
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
+        artifact_id: "filesystem_tools_second",
         tool_name: first.tool_name,
         release_version: "7.3.0",
-        wasm_bytes: changed_wasm,
     };
 
-    provision(&services, owner, std::slice::from_ref(&first)).await;
+    provision(&services, owner, std::slice::from_ref(&first), &artifacts).await;
     let old_release =
         release_coordinate(&services, owner, first.tool_name, first.release_version).await;
     let (component_id, old_revision) = component_source(&old_release);
 
-    provision(&services, owner, std::slice::from_ref(&second)).await;
+    provision(&services, owner, std::slice::from_ref(&second), &artifacts).await;
     let new_release =
         release_coordinate(&services, owner, second.tool_name, second.release_version).await;
     let (new_component_id, new_revision) = component_source(&new_release);
@@ -249,7 +251,7 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         (component_id, old_revision)
     );
 
-    provision(&services, owner, std::slice::from_ref(&second)).await;
+    provision(&services, owner, std::slice::from_ref(&second), &artifacts).await;
     let replayed =
         release_coordinate(&services, owner, second.tool_name, second.release_version).await;
     assert_eq!(replayed.id, new_release.id);
@@ -277,7 +279,9 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
     };
     let owner = config.initial_accounts["builtin_tool_owner"].id;
     let mut join_set = JoinSet::new();
-    let services = Services::new(&config, &mut join_set).await.unwrap();
+    let services = Services::new_without_component_builtins(&config, &mut join_set)
+        .await
+        .unwrap();
     let mut wasm = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../builtin-tools/filesystem-tools.wasm"
@@ -291,29 +295,29 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
         }
     }
     assert!(replacements > 0);
-    let wasm = Box::leak(wasm.into_boxed_slice());
+    let artifacts = BTreeMap::from([("filesystem_tools", Arc::new(wasm))]);
     let first = BuiltinToolDescriptor {
         component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools",
         tool_name: "read-file",
         release_version: "8.2.0",
-        wasm_bytes: wasm,
     };
     let second = BuiltinToolDescriptor {
         component_name: first.component_name,
+        artifact_id: first.artifact_id,
         tool_name: "write-file",
         release_version: first.release_version,
-        wasm_bytes: wasm,
     };
 
-    provision(&services, owner, std::slice::from_ref(&first)).await;
+    provision(&services, owner, std::slice::from_ref(&first), &artifacts).await;
     let old_release =
         release_coordinate(&services, owner, first.tool_name, first.release_version).await;
     let (component_id, old_revision) = component_source(&old_release);
 
     let complete = [first, second];
     tokio::join!(
-        provision(&services, owner, &complete),
-        provision(&services, owner, &complete)
+        provision(&services, owner, &complete, &artifacts),
+        provision(&services, owner, &complete, &artifacts)
     );
     let new_release = release_coordinate(
         &services,
@@ -339,7 +343,7 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
         (component_id, old_revision)
     );
 
-    provision(&services, owner, &complete).await;
+    provision(&services, owner, &complete, &artifacts).await;
     let replayed = release_coordinate(
         &services,
         owner,
@@ -351,9 +355,15 @@ async fn same_artifact_adds_missing_tool_with_complete_metadata_and_is_retry_saf
     assert_eq!(component_source(&replayed), (component_id, new_revision));
 }
 
-async fn provision(services: &Services, owner: AccountId, descriptors: &[BuiltinToolDescriptor]) {
+async fn provision(
+    services: &Services,
+    owner: AccountId,
+    descriptors: &[BuiltinToolDescriptor],
+    artifacts: &BTreeMap<&str, Arc<Vec<u8>>>,
+) {
     provision_descriptors(
         descriptors,
+        artifacts,
         owner,
         &services.auth_service,
         &services.application_service,
