@@ -1158,7 +1158,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let operation_path = target.operation_path(self.root());
         let opened_path = operation_path.clone();
         let append_coordinators = Arc::clone(&self.append_coordinators);
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         let root_directory = self.root_directory_state();
         async move {
             execute_native(storage_profile, NativeOperation::Open, move || {
@@ -1301,7 +1301,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             .to_path_buf();
         let name_mode_source = self.name_mode_source;
         let name_mode_probe = self.name_mode_probe.clone();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         let root_directory = self.root_directory_state();
         async move {
             execute_native(storage_profile, NativeOperation::Namespace, move || {
@@ -1339,7 +1339,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<Bytes, FilesystemStorageError>> + Send {
         let operation_path = file.path.clone();
         let file = file.host().cloned();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             let file = file?;
             execute_native(
@@ -1380,7 +1380,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     {
         let host = directory.host().cloned();
         let path = directory.path.clone();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             let directory = host?;
             execute_native(
@@ -1413,7 +1413,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<SandboxSymlinkTarget, FilesystemStorageError>> + Send {
         let operation_path = path.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Metadata, move || {
                 let directory = directory_for(&root_directory, &path)?;
@@ -1439,7 +1439,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<SandboxWriteAttempt, FilesystemStorageError>> + Send {
         let host = file.host().cloned();
         let path = file.path.clone();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         let transfer_size = bytes.len();
         async move {
             let file = match host {
@@ -1481,7 +1481,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let node = into_host_node(node).map_err(|error| {
             FilesystemStorageError::io("read sandbox filesystem attributes", &path, error)
         });
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             let node = node?;
             execute_native(storage_profile, NativeOperation::Metadata, move || {
@@ -1502,7 +1502,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<SandboxAttributes, FilesystemStorageError>> + Send {
         let path = target.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Metadata, move || {
                 let directory = directory_for(&root_directory, &target)?;
@@ -1535,7 +1535,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 error,
             )
         });
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             let left = left?;
             let right = right?;
@@ -1568,7 +1568,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let host = file.host().cloned();
         let path = file.path.clone();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             let file = host?;
             execute_native(storage_profile, NativeOperation::Metadata, move || {
@@ -1591,7 +1591,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let node = into_host_node(node).map_err(|error| {
             FilesystemStorageError::io("set sandbox filesystem times", &path, error)
         });
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             let node = node?;
             execute_native(storage_profile, NativeOperation::Metadata, move || {
@@ -1613,7 +1613,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let path = target.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Metadata, move || {
                 let directory = directory_for(&root_directory, &target)?;
@@ -1633,7 +1633,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let operation_path = path.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Namespace, move || {
                 let directory = directory_for(&root_directory, &path)?;
@@ -1664,7 +1664,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let operation_path = path.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Namespace, move || {
                 let directory = directory_for(&root_directory, &path)?;
@@ -1690,7 +1690,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         destination: SandboxPath,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let destination_path = destination.operation_path(self.root());
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         let root_directory = self.root_directory_state();
         async move {
             execute_native(storage_profile, NativeOperation::Namespace, move || {
@@ -1722,7 +1722,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         destination: SandboxPath,
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let destination_path = destination.operation_path(self.root());
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         let root_directory = self.root_directory_state();
         async move {
             execute_native(storage_profile, NativeOperation::Namespace, move || {
@@ -1750,7 +1750,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let operation_path = path.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Namespace, move || {
                 let directory = directory_for(&root_directory, &path)?;
@@ -1780,7 +1780,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
     ) -> impl Future<Output = Result<(), FilesystemStorageError>> + Send {
         let operation_path = path.operation_path(self.root());
         let root_directory = self.root_directory_state();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Namespace, move || {
                 let directory = directory_for(&root_directory, &path)?;
@@ -1804,7 +1804,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
             SandboxNode::Directory(directory) => directory.path.clone(),
         };
         let node = node.clone();
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             execute_native(storage_profile, NativeOperation::Flush, move || {
                 host_node(&node)?.flush(level)
@@ -1830,7 +1830,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let root_directory = self.root_directory_state();
         let quota_authority = self.quota_authority;
         let mode = file_copy_mode(quota_authority);
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         async move {
             let error_path = Arc::clone(&materialization_root);
             execute_native(storage_profile, NativeOperation::TreeCopy, move || {
@@ -1898,7 +1898,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
         let operation_path = source.operation_path(self.root());
         let root_directory = self.root_directory_state();
         let copy_mode = file_copy_mode(self.quota_authority);
-        let storage_profile = self.storage_profile();
+        let storage_profile = storage_profile(self.quota_authority);
         let target = target.clone();
         async move {
             execute_native(storage_profile, NativeOperation::TreeCopy, move || {
@@ -5619,7 +5619,7 @@ mod tests {
         .await
         .unwrap();
         let root_directory = filesystem.root_directory_state();
-        let storage_profile = filesystem.storage_profile();
+        let storage_profile = storage_profile(filesystem.quota_authority);
         let (first, second) = execute_native(storage_profile, NativeOperation::Open, move || {
             let target = SandboxPath::at_root(".");
             Ok::<_, std::io::Error>((

@@ -715,6 +715,15 @@ enum QuotaAuthority {
     },
 }
 
+/// Gives the storage profile of the native calls on a sandbox with `authority`. A sandbox with a
+/// project identity is on known local storage. The storage of a sandbox without one is unknown.
+fn storage_profile(authority: QuotaAuthority) -> NativeStorageProfile {
+    match authority {
+        QuotaAuthority::Project { .. } => NativeStorageProfile::KnownLocal,
+        QuotaAuthority::Unsupported => NativeStorageProfile::Unknown,
+    }
+}
+
 /// Gives how the files of a sandbox with `authority` are copied.
 fn file_copy_mode(authority: QuotaAuthority) -> FileCopyMode {
     match authority {
@@ -1022,13 +1031,6 @@ impl SandboxFilesystem {
         match self.quota_authority {
             QuotaAuthority::Project { project_id, .. } => project_id,
             QuotaAuthority::Unsupported => panic!("sandbox filesystem has no project identity"),
-        }
-    }
-
-    fn storage_profile(&self) -> NativeStorageProfile {
-        match self.quota_authority {
-            QuotaAuthority::Project { .. } => NativeStorageProfile::KnownLocal,
-            QuotaAuthority::Unsupported => NativeStorageProfile::Unknown,
         }
     }
 }
@@ -1550,6 +1552,21 @@ fn running_as_root() -> bool {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn storage_profile_follows_the_quota_authority() {
+        assert_eq!(
+            storage_profile(QuotaAuthority::Unsupported),
+            NativeStorageProfile::Unknown
+        );
+        assert_eq!(
+            storage_profile(QuotaAuthority::Project {
+                project_id: NonZeroU32::new(1).unwrap(),
+                filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
+            }),
+            NativeStorageProfile::KnownLocal
+        );
+    }
 
     #[test]
     fn file_copy_mode_follows_the_quota_authority() {

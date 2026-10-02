@@ -176,18 +176,16 @@ pub(super) async fn make_host_directories(
 ) -> Result<HostDirectories, FilesystemStorageError> {
     let (root, anchor, verify_no_project) = match &provisioning.mode {
         SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => {
-            (unmanaged.deterministic_root().map(Box::from), None, false)
+            (unmanaged.deterministic_root().map(Arc::from), None, false)
         }
         #[cfg(target_os = "linux")]
         SandboxFilesystemProvisioningMode::Managed(managed) => (
-            Some(Box::from(managed.root())),
+            Some(Arc::from(managed.root())),
             provisioning.volume.managed_root().cloned(),
             true,
         ),
     };
-    let error_root: Box<Path> = root
-        .clone()
-        .unwrap_or_else(|| Box::from(Path::new("<temp>")));
+    let error_root: Option<Arc<Path>> = root.clone();
     let (scratch, initial_files, temporary_root) = execute_native(
         NativeStorageProfile::Unknown,
         NativeOperation::RecursiveCleanup,
@@ -195,7 +193,11 @@ pub(super) async fn make_host_directories(
     )
     .await
     .map_err(|error| {
-        FilesystemStorageError::task_failure("create host directory", &error_root, error)
+        FilesystemStorageError::task_failure(
+            "create host directory",
+            error_root.as_deref().unwrap_or(Path::new("<temp>")),
+            error,
+        )
     })??;
     let directory = |path: HostPath| HostDirectory {
         path,
@@ -216,7 +218,7 @@ type MadeHostDirectories = (HostPath, HostPath, Option<Arc<tempfile::TempDir>>);
 /// Makes the root, or a temporary root when `root` is `None`, and then `.scratch` and
 /// `.initial-files` in it, as [`make_host_directories`] says.
 fn make_host_directories_blocking(
-    root: Option<Box<Path>>,
+    root: Option<Arc<Path>>,
     verify_no_project: bool,
 ) -> Result<MadeHostDirectories, FilesystemStorageError> {
     let (root, temporary_root) = match root {
@@ -237,7 +239,7 @@ fn make_host_directories_blocking(
                         error,
                     )
                 })?;
-            (Box::from(temporary.path()), Some(Arc::new(temporary)))
+            (Arc::from(temporary.path()), Some(Arc::new(temporary)))
         }
     };
     let scratch = HostPath(Arc::from(root.join(SCRATCH)));

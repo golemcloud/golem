@@ -48,6 +48,23 @@ pub(crate) use lifecycle::*;
 
 const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
 
+/// Resolves an agent's byte allocation into storage limits with `policy`.
+///
+/// An allocation at or above the effectively-unlimited sentinel of the resource service gives
+/// `Unlimited`. A smaller allocation gives the finite limits of `policy`, which refuses zero bytes.
+fn resolve_storage_limits(
+    policy: &FilesystemObjectLimitPolicyConfig,
+    allocated_bytes: u64,
+) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
+    if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE {
+        Ok(ResolvedStorageLimits::Unlimited)
+    } else {
+        policy
+            .resolve(allocated_bytes)
+            .map(ResolvedStorageLimits::Finite)
+    }
+}
+
 /// Observes the volume of `provisioning` and checks that the pressure targets of `settings` fit in
 /// its capacity.
 fn validate_volume_capacity(
@@ -269,13 +286,7 @@ impl AgentFilesystems {
         &self,
         allocated_bytes: u64,
     ) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
-        if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE {
-            Ok(ResolvedStorageLimits::Unlimited)
-        } else {
-            self.filesystem_object_limit_policy
-                .resolve(allocated_bytes)
-                .map(ResolvedStorageLimits::Finite)
-        }
+        resolve_storage_limits(&self.filesystem_object_limit_policy, allocated_bytes)
     }
 
     /// Creates an empty filesystem generation for an agent with the requested limits.
@@ -483,6 +494,42 @@ mod tests {
             error
                 .to_string()
                 .contains("resolve nonzero agent filesystem storage limit")
+        );
+    }
+
+    #[test]
+    fn storage_limits_are_unlimited_from_the_sentinel_and_finite_below_it() {
+        let policy = FilesystemObjectLimitPolicyConfig::default();
+        let sentinel = AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE;
+
+        assert_eq!(
+            resolve_storage_limits(&policy, sentinel).unwrap(),
+            ResolvedStorageLimits::Unlimited
+        );
+        assert_eq!(
+            resolve_storage_limits(&policy, u64::MAX).unwrap(),
+            ResolvedStorageLimits::Unlimited
+        );
+        match resolve_storage_limits(&policy, sentinel - 1).unwrap() {
+            ResolvedStorageLimits::Finite(limits) => {
+                assert_eq!(limits.allocated_bytes, sentinel - 1)
+            }
+            ResolvedStorageLimits::Unlimited => {
+                panic!("an allocation one byte below the sentinel must be finite")
+            }
+        }
+    }
+
+    #[test]
+    fn storage_limits_refuse_an_allocation_of_zero_bytes() {
+        let error =
+            resolve_storage_limits(&FilesystemObjectLimitPolicyConfig::default(), 0).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("resolve nonzero agent filesystem storage limit"),
+            "{error}"
         );
     }
 

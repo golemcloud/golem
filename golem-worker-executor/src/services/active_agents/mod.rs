@@ -1809,10 +1809,6 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
     }
 }
 
-/// Single attempt of the charge-first admission ordering used by
-/// [`ActiveAgents::acquire_with_component_charge`]: reserve the component's
-/// shared module, then admit the worker's own memory once.
-///
 /// Gives the bytes that a component charges for its compiled module: the module size multiplied by
 /// `coefficient`, rounded toward zero. A result above `u64::MAX` gives `u64::MAX`, and a negative
 /// or NaN result gives 0.
@@ -1820,6 +1816,10 @@ fn component_charge_bytes(coefficient: f64, module_bytes: u64) -> u64 {
     (coefficient * module_bytes as f64) as u64
 }
 
+/// Single attempt of the charge-first admission ordering used by
+/// [`ActiveAgents::acquire_with_component_charge`]: reserve the component's
+/// shared module, then admit the worker's own memory once.
+///
 /// Returns the worker's [`MemoryGrant`] and its [`WorkerComponentCharge`], or
 /// `None` if the memory admission is refused (in which case dropping the charge
 /// releases the module again). Exists so the composition of the admission gate
