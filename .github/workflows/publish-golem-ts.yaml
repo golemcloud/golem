@@ -79,6 +79,12 @@ jobs:
 
       - name: Publish all packages
         working-directory: sdks/ts
-        run: pnpm -r publish --access public --no-git-checks
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          case "$VERSION" in
+            *-*) DIST_TAG=next ;;
+            *) DIST_TAG=latest ;;
+          esac
+          pnpm -r publish --access public --no-git-checks --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
