@@ -3,9 +3,10 @@ resolver = "2"
 members = ["."]
 
 [package]
-name = "golem_filesystem_tools"
-version = "0.4.0"
+name = "golem_web_fetch"
+version = "0.1.0"
 edition = "2024"
+license-file = "../../LICENSE"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -16,7 +17,9 @@ lto = true
 strip = "symbols"
 
 [dependencies]
-globset = { version = "0.4.20", default-features = false }
+encoding_rs = "0.8.35"
+futures = "0.3.31"
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
-regex = { version = "1.13.1", default-features = false, features = ["std", "perf", "unicode"] }
-sha2 = "0.10.9"
+html2text = "0.17.1"
+mime = "0.3.17"
+url = "2.5.7"

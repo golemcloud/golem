@@ -279,6 +279,95 @@ fn start_resolution() -> OplogEntry {
     start_named(HostFunctionName::MonotonicClockResolution)
 }
 
+#[test]
+async fn http_body_byte_count_excludes_deleted_reads() {
+    use crate::durable_host::http::inline_retry::count_incoming_body_bytes;
+    use golem_common::model::oplog::HostResponseStreamChunk;
+
+    for (deleted_start, deleted_end) in [(2, 4), (2, 2), (3, 3)] {
+        for external_payload in [false, true] {
+            let oplog: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+            let scope = oplog.add(noop()).await.unwrap();
+            let read = |blocking, batched| OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: Some(scope),
+                function_name: if blocking {
+                    HostFunctionName::HttpTypesIncomingBodyStreamBlockingRead
+                } else {
+                    HostFunctionName::HttpTypesIncomingBodyStreamRead
+                },
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: if batched {
+                    DurableFunctionType::WriteRemoteBatched(Some(scope))
+                } else {
+                    DurableFunctionType::ReadRemote
+                },
+                span_started: None,
+            };
+            let end = |start_index, response| OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index,
+                response: Some(response),
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            };
+            let chunk = |bytes: &[u8]| {
+                OplogPayload::Inline(Box::new(HostResponse::StreamChunk(
+                    HostResponseStreamChunk {
+                        result: Ok(bytes.to_vec()),
+                    },
+                )))
+            };
+            let old_read = oplog.add(read(false, true)).await.unwrap();
+            let old_payload = if external_payload {
+                // There is deliberately no backing payload: skipped history must not fetch it.
+                OplogPayload::External {
+                    payload_id: PayloadId::new(),
+                    md5_hash: vec![],
+                    cached: None,
+                }
+            } else {
+                chunk(b"olddata")
+            };
+            oplog.add(end(old_read, old_payload)).await.unwrap();
+            let region = OplogRegion {
+                start: OplogIndex::from_u64(deleted_start),
+                end: OplogIndex::from_u64(deleted_end),
+            };
+            oplog
+                .add(OplogEntry::jump(None, region.clone()))
+                .await
+                .unwrap();
+            let replay = test_replay_state(
+                test_agent_id(),
+                oplog.clone(),
+                DeletedRegions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+            replay.register_replay_jump(vec![region]).await.unwrap();
+            let skipped_regions = replay.skipped_regions().await.unwrap();
+
+            // These reads are beyond replay_target and must still contribute to the live count.
+            let replacement = oplog.add(read(true, false)).await.unwrap();
+            oplog.add(end(replacement, chunk(b"new"))).await.unwrap();
+            let next_read = oplog.add(read(false, false)).await.unwrap();
+            oplog.add(end(next_read, chunk(b"xy"))).await.unwrap();
+            assert_eq!(
+                count_incoming_body_bytes(&oplog, scope, &skipped_regions)
+                    .await
+                    .unwrap(),
+                5,
+                "deleted region {deleted_start}..={deleted_end}, external={external_payload}"
+            );
+        }
+    }
+}
+
 /// A `ReadLocal` `Start` of `name` with a no-input request; the recorded kind is what matters
 /// to the tests using it, not the durable function type the real host call would record.
 fn start_named(name: HostFunctionName) -> OplogEntry {
