@@ -370,11 +370,14 @@ async function isolate() {
   vi.resetModules();
   const constructed: Constructed[] = [];
   const warmed: string[] = [];
+  const databaseDefaults = {
+    pragmas: { page_count: 1, page_size: 4096, cache_size: -2000 } as Record<string, number>,
+  };
   class FakeDatabaseSync {
     bytes = new Uint8Array();
     inTransaction = false;
     isOpen = true;
-    pragmas: Record<string, number> = { page_count: 1, page_size: 4096, cache_size: -2000 };
+    pragmas: Record<string, number> = { ...databaseDefaults.pragmas };
     returnArrays = false;
     warmUpError: string | undefined = undefined;
     constructor(
@@ -463,6 +466,7 @@ async function isolate() {
     FakeStatementSync,
     existingFiles,
     existsSync,
+    databaseDefaults,
     constructed,
     warmed,
     serializeDatabaseSync,
@@ -701,6 +705,8 @@ describe('snapshot — restore plan', () => {
     expect(fitsInPageCache({ pageCount: 99, pageSize: 4096, cacheSize: 100 })).toBe(true);
     expect(fitsInPageCache({ pageCount: 100, pageSize: 4096, cacheSize: 100 })).toBe(false);
     expect(fitsInPageCache({ pageCount: 1, pageSize: 4096, cacheSize: 0 })).toBe(false);
+    // An empty database never fits, because serializing it writes its first page.
+    expect(fitsInPageCache({ pageCount: 0, pageSize: 4096, cacheSize: -2000 })).toBe(false);
     expect(fitsInPageCache({ pageCount: NaN, pageSize: 4096, cacheSize: -2000 })).toBe(false);
   });
 
@@ -1307,6 +1313,41 @@ describe('snapshot — in-memory and file-backed databases', () => {
       '/data/other.db: SELECT count(*) FROM sqlite_master',
     ]);
     expect(env.serializeDatabaseSync.mock.calls.map(([db]) => db.path)).toEqual(['/data/other.db']);
+  });
+
+  it('reads only the schema of an empty file-backed database', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'EmptyFileDatabase',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => {
+          throw new Error('init must not run on load');
+        },
+        methods: {},
+      });
+    env.select('EmptyFileDatabase');
+    env.databaseDefaults.pragmas = { page_count: 0, page_size: 4096, cache_size: -2000 };
+
+    await env.isolatedGuest.loadSnapshot.load({
+      payload: new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          principal: { tag: 'anonymous' },
+          state: { count: 3 },
+          fileDatabases: { fileDb: '/data/app.db' },
+        }),
+      ),
+      mimeType: 'application/json',
+    });
+
+    expect(env.constructed.map(({ path }) => path)).toEqual(['/data/app.db']);
+    expect(env.warmed).toEqual(['/data/app.db: SELECT count(*) FROM sqlite_master']);
+    expect(env.serializeDatabaseSync).not.toHaveBeenCalled();
   });
 
   it('reads the page cache of a connection that returns rows as arrays', async () => {

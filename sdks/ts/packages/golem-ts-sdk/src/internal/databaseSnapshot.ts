@@ -368,13 +368,15 @@ const SQLITE_PAGE_CACHE_EXTRA_BYTES = 88;
  * all pages. SQLite turns a negative `cache_size` of N KiB into a limit of
  * `floor(N * 1024 / (page_size + extra))` pages and a positive one into that many pages, and it
  * recycles a page before the cache reaches the limit, so it holds at most the limit minus one.
+ * A database without pages does not fit: `sqlite3_serialize` of an empty database writes its
+ * first page, and a load must not change the database file.
  */
 export function fitsInPageCache({ pageCount, pageSize, cacheSize }: PageCache): boolean {
   const limit =
     cacheSize < 0
       ? Math.floor((-cacheSize * 1024) / (pageSize + SQLITE_PAGE_CACHE_EXTRA_BYTES))
       : cacheSize;
-  return pageCount <= limit - 1;
+  return pageCount > 0 && pageCount <= limit - 1;
 }
 
 function pageCacheOf(database: DatabaseSync): PageCache {
