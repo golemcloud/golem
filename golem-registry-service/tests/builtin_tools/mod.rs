@@ -51,16 +51,22 @@ async fn filesystem_artifact_exports_five_closed_world_tools_requiring_filesyste
     let metadata = extract_component_metadata_from_bytes(&wasm, true, true)
         .await
         .unwrap();
-    let expected = ["read-file", "write-file", "edit-file", "ls", "grep"];
+    let expected = [
+        ("read-file", "0.4.0"),
+        ("write-file", "0.4.0"),
+        ("edit-file", "0.4.0"),
+        ("ls", "0.1.0"),
+        ("grep", "0.1.0"),
+    ];
 
     assert_eq!(metadata.tools.len(), expected.len());
-    for name in expected {
+    for (name, version) in expected {
         let tool = metadata
             .tools
             .iter()
             .find(|tool| tool.name() == Some(name))
             .unwrap_or_else(|| panic!("missing filesystem tool '{name}'"));
-        assert_eq!(tool.version, "0.1.0", "{name}");
+        assert_eq!(tool.version, version, "{name}");
         assert!(tool.requires_filesystem, "{name}");
         assert!(
             tool.commands
@@ -270,8 +276,10 @@ async fn changed_component_creates_a_revision_without_repointing_the_old_release
         b"path-policy".len(),
         b"6.1.0",
     );
-    let replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.1.0", b"7.2.0");
-    assert!(replacements > 0);
+    let existing_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.4.0", b"7.2.0");
+    let new_replacements = replace_embedded_tool_versions(&mut first_wasm, b"0.1.0", b"7.2.0");
+    assert!(existing_replacements > 0);
+    assert!(new_replacements > 0);
     assert_filesystem_export_versions(&first_wasm, "7.2.0", "6.1.0").await;
     let mut changed_wasm = first_wasm.clone();
     assert!(replace_embedded_tool_versions(&mut changed_wasm, b"7.2.0", b"7.3.0") > 0);
@@ -358,8 +366,10 @@ async fn same_artifact_adds_missing_middleware_with_complete_metadata_and_is_ret
         b"path-policy".len(),
         b"8.1.0",
     );
-    let replacements = replace_embedded_tool_versions(&mut wasm, b"0.1.0", b"8.2.0");
-    assert!(replacements > 0);
+    let existing_replacements = replace_embedded_tool_versions(&mut wasm, b"0.4.0", b"8.2.0");
+    let new_replacements = replace_embedded_tool_versions(&mut wasm, b"0.1.0", b"8.2.0");
+    assert!(existing_replacements > 0);
+    assert!(new_replacements > 0);
     assert_filesystem_export_versions(&wasm, "8.2.0", "8.1.0").await;
     let artifacts = BTreeMap::from([("filesystem_tools", Arc::new(wasm))]);
     let first = BuiltinExportDescriptor {

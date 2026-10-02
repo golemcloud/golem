@@ -19,7 +19,7 @@ pub struct WriteFileResult {
     pub bytes_written: u64,
 }
 
-#[tool_definition(version = "0.1.0", requires_filesystem = true)]
+#[tool_definition(version = "0.4.0", requires_filesystem = true)]
 pub trait WriteFile {
     /// Creates or replaces a known UTF-8 text file and reports which occurred and the byte count.
     /// The caller must supply the path; this tool does not discover files. Errors identify unsafe

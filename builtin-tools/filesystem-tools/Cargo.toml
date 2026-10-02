@@ -4,7 +4,7 @@ members = ["."]
 
 [package]
 name = "golem_filesystem_tools"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2024"
 
 [lib]

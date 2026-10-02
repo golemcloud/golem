@@ -99,7 +99,6 @@ async fn env_vars(
     low_rpc_calls_plan_id: PlanId,
     otlp: bool,
     builtin_artifact_cache_dir: &Path,
-    filesystem_artifact_sha256: Option<&str>,
 ) -> HashMap<String, String> {
     let builder = EnvVarBuilder::golem_service(verbosity)
         .with_str(
@@ -478,25 +477,6 @@ async fn env_vars(
         .with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
         .with_all(rdb.info().env("golem_registry", rdb_private_connection))
         .with_optional_otlp("registry_service", otlp);
-
-    let builder = match filesystem_artifact_sha256 {
-        Some(sha256) => builder
-            .with_str(
-                "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__FILESYSTEM_TOOLS__URL",
-                "https://builtin-artifacts.invalid/filesystem-tools.wasm",
-            )
-            .with(
-                "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__FILESYSTEM_TOOLS__SHA256",
-                sha256.to_string(),
-            ),
-        None => builder,
-    };
-
-    let builder = if otlp {
-        builder.with_str("GOLEM__BUILTIN_PLUGINS__TYPE", "Enabled")
-    } else {
-        builder
-    };
 
     builder.build()
 }

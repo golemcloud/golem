@@ -39,12 +39,12 @@ provider state.
    committed.
 
 Provisioning is idempotent for identical bytes and an identical exact version. A published system
-release is protected and immutable: repeat startup with the same version only when the artifact and
-metadata are identical. For any changed artifact or metadata, publish a new version; do not replace
-the existing coordinate. New component artifacts start at `0.0.1`. Until an artifact defines a
-separate compatibility policy, increment its patch version for every byte-changing publication;
-artifact versions do not determine the versions of the tools or middlewares exported by the
-component.
+release is protected and immutable. Every byte-changing component publication requires a new
+artifact version; a changed export definition or implementation also requires a new tool or
+middleware version. Unchanged published export coordinates remain attached to their original
+component revision. New component artifacts start at `0.0.1`. Until an artifact defines a separate
+compatibility policy, increment its patch version for every byte-changing publication. Artifact
+versions do not determine the versions of the tools or middlewares exported by the component.
 
 Component-implemented built-ins are grantable registry releases, not ambient tools. A consuming
 manifest must select each exact tool release under `tools.<name>.release` and each middleware
@@ -69,7 +69,7 @@ tools:
     release:
       account: builtin-tool-owner@golem.cloud
       name: read-file
-      version: 0.1.0
+      version: 0.4.0
   middleware:
     path-policy:
       release:
