@@ -59,10 +59,6 @@ fn ranged_object_size(content_range: Option<&str>, start: u64, end: u64) -> Resu
     Ok(total)
 }
 
-const DIRECTORY_MARKER_NAME: &str = "__dir_marker";
-const DIRECTORY_MARKER_METADATA_KEY: &str = "golem-directory-marker";
-const DIRECTORY_MARKER_METADATA_VALUE: &str = "true";
-
 #[derive(Debug)]
 pub struct S3BlobStorage {
     client: aws_sdk_s3::Client,
@@ -166,13 +162,9 @@ impl S3BlobStorage {
         }
     }
 
-    fn listed_path(
-        namespace_root: &str,
-        directory_key: &str,
-        object_key: &str,
-        is_dir_marker: bool,
-    ) -> Option<PathBuf> {
+    fn listed_path(namespace_root: &str, directory_key: &str, object_key: &str) -> Option<PathBuf> {
         let directory_key = directory_key.trim_end_matches('/');
+        let is_dir_marker = object_key.ends_with("/__dir_marker");
         let parent = object_key.rsplit_once('/').map(|(parent, _)| parent);
         let is_nested = parent != Some(directory_key);
 
@@ -297,50 +289,6 @@ impl S3BlobStorage {
         .await?;
 
         Ok(!response.contents().is_empty())
-    }
-
-    async fn is_directory_marker(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        bucket: &str,
-        key: &str,
-    ) -> Result<bool, Error> {
-        let result = with_retries_customized(
-            target_label,
-            op_label,
-            Some(format!("{bucket} - {key}")),
-            &self.config.retries,
-            &(self.client.clone(), bucket, key.to_string()),
-            |(client, bucket, key)| {
-                Box::pin(async move {
-                    client
-                        .head_object()
-                        .bucket(*bucket)
-                        .key(key.clone())
-                        .send()
-                        .await
-                })
-            },
-            Self::is_head_object_error_retriable,
-            Self::head_object_error_as_loggable,
-            false,
-        )
-        .await;
-
-        match result {
-            Ok(output) => Ok(output.metadata().is_some_and(|metadata| {
-                metadata
-                    .get(DIRECTORY_MARKER_METADATA_KEY)
-                    .is_some_and(|value| value == DIRECTORY_MARKER_METADATA_VALUE)
-            })),
-            Err(SdkError::ServiceError(service_error))
-                if matches!(service_error.err(), HeadObjectError::NotFound(_)) =>
-            {
-                Ok(false)
-            }
-            Err(error) => Err(error.into()),
-        }
     }
 
     async fn get_exact_metadata(
@@ -742,7 +690,7 @@ impl BlobStorage for S3BlobStorage {
             return Ok(Some(metadata));
         }
 
-        let marker = join_blob_key(&key, DIRECTORY_MARKER_NAME);
+        let marker = join_blob_key(&key, "__dir_marker");
         Ok(self
             .get_exact_metadata(target_label, op_label, bucket, &marker)
             .await?
@@ -959,7 +907,7 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let key = self.key_of(&namespace, path)?;
-        let marker = join_blob_key(&key, DIRECTORY_MARKER_NAME);
+        let marker = join_blob_key(&key, "__dir_marker");
 
         with_retries_customized(
             target_label,
@@ -973,10 +921,6 @@ impl BlobStorage for S3BlobStorage {
                         .put_object()
                         .bucket(*bucket)
                         .key(marker.clone())
-                        .metadata(
-                            DIRECTORY_MARKER_METADATA_KEY,
-                            DIRECTORY_MARKER_METADATA_VALUE,
-                        )
                         .body(ByteStream::from(Bytes::new()))
                         .send()
                         .await
@@ -1011,13 +955,7 @@ impl BlobStorage for S3BlobStorage {
             let Some(object_key) = object.key() else {
                 continue;
             };
-            let is_directory_marker = object_key.rsplit('/').next() == Some(DIRECTORY_MARKER_NAME)
-                && self
-                    .is_directory_marker(target_label, op_label, bucket, object_key)
-                    .await?;
-            if let Some(path) =
-                Self::listed_path(&namespace_root, &key, object_key, is_directory_marker)
-            {
+            if let Some(path) = Self::listed_path(&namespace_root, &key, object_key) {
                 result.push(path);
             }
         }
@@ -1052,11 +990,7 @@ impl BlobStorage for S3BlobStorage {
             let Some(object_key) = object.key() else {
                 continue;
             };
-            if object_key.rsplit('/').next() == Some(DIRECTORY_MARKER_NAME)
-                && self
-                    .is_directory_marker(target_label, op_label, bucket, object_key)
-                    .await?
-            {
+            if object_key.ends_with("/__dir_marker") {
                 continue;
             }
             let Some(last_modified) = object.last_modified() else {
@@ -1632,7 +1566,6 @@ mod tests {
                 &namespace_root,
                 &directory_key,
                 &format!(r"{directory_key}/animals\cat.png"),
-                false,
             )
             .unwrap()
             .as_os_str(),
@@ -1645,7 +1578,6 @@ mod tests {
                 &namespace_root,
                 &trailing_slash_key,
                 &format!("{directory_key}/cat.png"),
-                false,
             )
             .unwrap()
             .as_os_str(),
@@ -1667,7 +1599,6 @@ mod tests {
                 &namespace_root,
                 &root_key,
                 &format!("{namespace_root}/test-file"),
-                false,
             )
             .unwrap()
             .as_os_str(),

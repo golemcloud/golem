@@ -477,22 +477,20 @@ define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 
 #[test]
 #[test_r::timeout("120s")]
-async fn s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(
+async fn s3_list_blobs_below_ignores_directory_markers(
     #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[tagged_as("cs")] namespace: &BlobStorageNamespace,
 ) {
-    test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(test, namespace)
-        .await;
+    test_s3_list_blobs_below_ignores_directory_markers(test, namespace).await;
 }
 
 #[test]
 #[test_r::timeout("120s")]
-async fn prefixed_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(
+async fn prefixed_s3_list_blobs_below_ignores_directory_markers(
     #[tagged_as("s3_prefixed")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[tagged_as("cs")] namespace: &BlobStorageNamespace,
 ) {
-    test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(test, namespace)
-        .await;
+    test_s3_list_blobs_below_ignores_directory_markers(test, namespace).await;
 }
 
 #[test]
@@ -574,7 +572,7 @@ async fn test_s3_list_blobs_below_includes_namespace_root_object(
     );
 }
 
-async fn test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_markers(
+async fn test_s3_list_blobs_below_ignores_directory_markers(
     test: &Arc<dyn GetBlobStorage + Send + Sync>,
     namespace: &BlobStorageNamespace,
 ) {
@@ -606,16 +604,6 @@ async fn test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_mar
     storage
         .put_raw(
             "recursive_list",
-            "put-marker-named-object",
-            namespace.clone(),
-            &root.join("explicit/__dir_marker"),
-            &[8, 9],
-        )
-        .await
-        .unwrap();
-    storage
-        .put_raw(
-            "recursive_list",
             "put-implicit",
             namespace.clone(),
             &root.join("implicit/deep/object"),
@@ -635,7 +623,6 @@ async fn test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_mar
     assert_eq!(
         blobs,
         vec![
-            (root.join("explicit/__dir_marker"), 2),
             (root.join("explicit/object"), 3),
             (root.join("implicit/deep/object"), 4),
         ]
@@ -651,13 +638,7 @@ async fn test_s3_list_blobs_below_distinguishes_guest_objects_from_directory_mar
         .await
         .unwrap();
     explicit_entries.sort();
-    assert_eq!(
-        explicit_entries,
-        vec![
-            root.join("explicit/__dir_marker"),
-            root.join("explicit/object"),
-        ]
-    );
+    assert_eq!(explicit_entries, vec![root.join("explicit/object")]);
 }
 
 #[test]

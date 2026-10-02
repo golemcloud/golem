@@ -1597,38 +1597,6 @@ mod tests {
     }
 
     #[test]
-    async fn s3_directory_marker_name_remains_available_to_guests() {
-        let blob_store = in_memory_blob_store();
-        let environment_id = EnvironmentId::new();
-        blob_store
-            .create_container(environment_id, "container".to_string())
-            .await
-            .unwrap();
-        let mutation = blob_store
-            .write_data(
-                unlimited_limits(),
-                environment_id,
-                "container",
-                "__dir_marker",
-                &[1],
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(mutation.bytes_delta, 1);
-        assert!(
-            blob_store
-                .has_object(
-                    environment_id,
-                    "container".to_string(),
-                    "__dir_marker".to_string(),
-                )
-                .await
-                .unwrap()
-        );
-    }
-
-    #[test]
     async fn move_to_new_destination_reports_no_deleted_object() {
         let blob_store = in_memory_blob_store();
         let environment_id = EnvironmentId::new();

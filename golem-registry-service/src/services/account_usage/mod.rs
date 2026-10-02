@@ -79,6 +79,54 @@ struct BlobStorageReconciliationState {
     last_success: Option<Instant>,
 }
 
+struct BlobStorageReconciliationGuard {
+    account_id: AccountId,
+    state: Arc<Mutex<HashMap<AccountId, BlobStorageReconciliationState>>>,
+    successful: bool,
+}
+
+impl BlobStorageReconciliationGuard {
+    fn try_start(
+        account_id: AccountId,
+        state: Arc<Mutex<HashMap<AccountId, BlobStorageReconciliationState>>>,
+        interval: Duration,
+    ) -> Option<Self> {
+        {
+            let mut state = state.lock().unwrap();
+            let account = state.entry(account_id).or_default();
+            if account.running
+                || account
+                    .last_success
+                    .is_some_and(|last| last.elapsed() < interval)
+            {
+                return None;
+            }
+            account.running = true;
+        }
+
+        Some(Self {
+            account_id,
+            state,
+            successful: false,
+        })
+    }
+
+    fn mark_successful(&mut self) {
+        self.successful = true;
+    }
+}
+
+impl Drop for BlobStorageReconciliationGuard {
+    fn drop(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        let account = state.entry(self.account_id).or_default();
+        account.running = false;
+        if self.successful {
+            account.last_success = Some(Instant::now());
+        }
+    }
+}
+
 // TODO: do we want to add component max size limit?
 //       if so, probably should be much bigger then the previous 50mb
 impl AccountUsageService {
@@ -115,27 +163,22 @@ impl AccountUsageService {
             return;
         }
 
-        {
-            let mut state = self.blob_storage_reconciliation_state.lock().unwrap();
-            let account = state.entry(account_id).or_default();
-            if account.running
-                || account
-                    .last_success
-                    .is_some_and(|last| last.elapsed() < self.blob_storage_reconciliation_interval)
-            {
-                return;
-            }
-            account.running = true;
-        }
+        let Some(guard) = BlobStorageReconciliationGuard::try_start(
+            account_id,
+            self.blob_storage_reconciliation_state.clone(),
+            self.blob_storage_reconciliation_interval,
+        ) else {
+            return;
+        };
 
         let account_usage_repo = self.account_usage_repo.clone();
         let environment_repo = self.environment_repo.clone();
         let blob_storage = self.blob_storage.clone();
-        let state = self.blob_storage_reconciliation_state.clone();
         let permits = self.blob_storage_reconciliation_permits.clone();
         let mut tasks = self.blob_storage_reconciliation_tasks.lock().unwrap();
         while tasks.try_join_next().is_some() {}
         tasks.spawn(async move {
+            let mut guard = guard;
             let result = async {
                 let _permit = permits.acquire_owned().await.map_err(anyhow::Error::new)?;
                 reconcile_blob_storage_usage(
@@ -148,11 +191,8 @@ impl AccountUsageService {
             }
             .await;
 
-            let mut state = state.lock().unwrap();
-            let account = state.entry(account_id).or_default();
-            account.running = false;
             match result {
-                Ok(()) => account.last_success = Some(Instant::now()),
+                Ok(()) => guard.mark_successful(),
                 Err(error) => tracing::warn!(
                     %account_id,
                     %error,
@@ -663,6 +703,7 @@ mod tests {
     use golem_common::model::account_usage::StorageLimit;
     use golem_service_base::repo::NumericU64;
     use std::collections::BTreeMap;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use test_r::test;
     use uuid::Uuid;
 
@@ -749,6 +790,33 @@ mod tests {
             }));
         }
         Ok(())
+    }
+
+    #[test]
+    fn reconciliation_panic_allows_later_retry() {
+        let state = Arc::new(Mutex::new(HashMap::new()));
+        let account_id = AccountId::new();
+        let guard = BlobStorageReconciliationGuard::try_start(
+            account_id,
+            state.clone(),
+            Duration::from_secs(300),
+        )
+        .unwrap();
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = guard;
+            panic!("simulated reconciliation panic");
+        }));
+        assert!(result.is_err());
+
+        let retry = BlobStorageReconciliationGuard::try_start(
+            account_id,
+            state.clone(),
+            Duration::from_secs(300),
+        );
+        assert!(retry.is_some(), "a panic must not suppress later sweeps");
+        drop(retry);
+        assert!(!state.lock().unwrap().get(&account_id).unwrap().running);
     }
 
     #[test]
