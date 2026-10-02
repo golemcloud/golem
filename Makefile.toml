@@ -1839,7 +1839,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.0\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.1\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
