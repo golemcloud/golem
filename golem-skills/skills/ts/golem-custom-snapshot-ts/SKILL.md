@@ -78,8 +78,7 @@ Typed state snapshotting handles each top-level `DatabaseSync` field of the agen
 The load reads each file-backed database to fill SQLite's page cache:
 
 - The load always reads the schema of the database.
-- When all pages of the database fit in the page cache, the load also reads every page. With the default cache size, the limit is 488 pages of 4 KiB, just under 2 MB.
-- This read costs time and memory up to that size.
+- When all pages of the database fit in the page cache, the load also reads every page. With the default cache size, the limit is 488 pages of 4 KiB, just under 2 MB. This read costs time and memory up to that size.
 - When the database is larger or empty, the load reads only the schema.
 
 ```typescript
@@ -96,15 +95,15 @@ export const NotesAgentImpl = NotesAgent.implement({
 });
 ```
 
-> **Filesystem snapshots are required.** A typed snapshot with a file-backed database relies on the executor's filesystem snapshots. Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. An executor without them keeps its usual behaviour: it does not restore the files that the agent wrote before a snapshot. On such an executor, use an in-memory database or custom `save` and `load` functions. When the database file is missing at its recorded location, the load fails. For an automatic snapshot, the start then falls back to an older snapshot or a full replay.
+> **Filesystem snapshots are required.** A typed snapshot with a file-backed database relies on the executor's filesystem snapshots. Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. An executor without them keeps its usual behavior: it does not restore the files that the agent wrote before a snapshot. On such an executor, use an in-memory database or custom `save` and `load` functions. When the database file is missing at its recorded location, the load fails. For an automatic snapshot, the start then falls back to the previous usable automatic snapshot or a full replay.
 
 Limits:
 
 - The snapshot holds only the main database of a connection. It does not hold databases added with `ATTACH`, or tables in the `temp` schema.
-- The load opens a database again with the default options of `node:sqlite`, for example `readOnly: false` and `timeout: 0`. To use other options, open the database in a custom `load`. The SDK keeps a `DatabaseSync` that `load` returns in a field. It does not open that field again.
+- The load opens a database again with the default options of `node:sqlite`, for example `readOnly: false` and `timeout: 0`. To use other options, open the database in a custom `load`. When `load` returns a `DatabaseSync` in a field, the SDK keeps that database. It does not open another database for that field.
 - A `DatabaseSync` inside a nested object makes the save fail. A `StatementSync`, `Session` or `SQLTagStore` field also makes the save fail. Keep them out of the state, or use custom `save` and `load` functions.
 - The field name of an in-memory database must not contain a double quote, a carriage return, a line feed or a lone UTF-16 surrogate. Such a name makes the save fail. The field name of a file-backed database has no such limit.
-- A start from a snapshot can fall back to an older snapshot or a full replay. This can occur when an invocation that Golem replays after the snapshot reads pages that are not in the page cache. A database that is larger than the page cache can cause this. A database whose pages the agent did not all read can also cause it.
+- A start from an automatic snapshot can fall back to the previous usable automatic snapshot or a full replay. This can occur when the restored connection and the live connection hold different pages in their page caches. A database that is larger than the page cache can cause this. A database whose pages the agent did not all read can also cause it.
 - A reopened connection does not keep connection state. This state includes functions from `db.function()` and `db.aggregate()`, an authorizer, and per-connection PRAGMAs. An agent that needs this state sets it again in a custom `load`.
 
 ## Custom Snapshotting
@@ -167,7 +166,7 @@ save(): Uint8Array | Promise<Uint8Array>
 load(bytes: Uint8Array, context: SnapshotRestoreContext): State | Promise<State>
 ```
 
-A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view. After a custom `load`, the SDK reads the schema of each open `DatabaseSync` field. For a file-backed field, it also reads every page when all pages fit in the page cache.
+A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view. After a custom `load`, the SDK reads the schema of each open database in a `DatabaseSync` field. For a file-backed database, it also reads every page when all pages fit in the page cache.
 
 ## Restoration Is Read-Only
 
