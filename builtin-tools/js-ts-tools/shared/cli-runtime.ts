@@ -123,8 +123,6 @@ export async function runCli(
           throw new Error('the JavaScript runtime does not provide an idle boundary');
         }
         await awaitRuntimeIdle();
-      } else {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     } catch (error) {
       if (error !== capturedExit) {
