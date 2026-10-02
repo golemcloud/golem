@@ -17,6 +17,11 @@
 
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
 use crate::model::EnvironmentId;
+use crate::proto::golem::common::Empty as ProtoEmpty;
+use crate::proto::golem::schema as proto;
+use crate::proto::golem::schema::result_value::Result as ResultBody;
+use crate::proto::golem::schema::schema_type::Body;
+use crate::proto::golem::schema::schema_value::Value as ValueBody;
 use crate::schema::graph::{SchemaGraph, SchemaTypeDef, TypedSchemaValue};
 use crate::schema::metadata::{MetadataEnvelope, Role, TypeId};
 use crate::schema::schema_type::{
@@ -33,11 +38,6 @@ use crate::schema::schema_value::{
 use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
 use crate::schema::stream::SchemaValueStream;
 use chrono::{DateTime, TimeZone, Utc};
-use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
-use golem_api_grpc::proto::golem::schema as proto;
-use golem_api_grpc::proto::golem::schema::result_value::Result as ResultBody;
-use golem_api_grpc::proto::golem::schema::schema_type::Body;
-use golem_api_grpc::proto::golem::schema::schema_value::Value as ValueBody;
 
 // --- small helpers -----------------------------------------------------------
 

@@ -858,7 +858,7 @@ pub(super) fn initial_payload(
             let value =
                 golem_schema::schema::render::from_untrusted_json_value(graph, &graph.root, &json)
                     .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-            let value: golem_api_grpc::proto::golem::schema::SchemaValue = value
+            let value: golem_schema::proto::golem::schema::SchemaValue = value
                 .try_into()
                 .map_err(WorkerExecutorError::invalid_request)?;
             encoded.push(value.encode_to_vec());

@@ -9,7 +9,6 @@ use crate::durable_host::stream_bus::LiveStreamEventPayload;
 use crate::durable_host::stream_transport::{output_stream_pair, test_output_stream_pair};
 use crate::services::oplog::{CommitLevel, DurableStreamOplogRecord};
 use crate::services::rpc::{DurableStreamRemoteError, RpcDemand, RpcError};
-use golem_api_grpc::proto::golem::schema::{ListValue, SchemaValueStreamReference, schema_value};
 use golem_common::base_model::component::{ComponentId, ComponentRevision};
 use golem_common::base_model::durable_stream::{
     AttachmentId, LocalStreamId, LocalStreamReaderId, PersistedInvocationTarget,
@@ -25,6 +24,7 @@ use golem_common::model::agent::InvocationFreshnessDisposition;
 use golem_common::model::invocation_context::TraceId;
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentInvocationPayload, OplogIndex, OwnedAgentId};
+use golem_schema::proto::golem::schema::{ListValue, SchemaValueStreamReference, schema_value};
 use golem_schema::schema::schema_value::UnionValuePayload;
 use golem_schema::schema::tool::compatibility::{
     ProjectionNode, ProjectionPlan, ProjectionStreamHandler, RecordFieldProjection,

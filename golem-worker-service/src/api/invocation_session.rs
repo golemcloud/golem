@@ -26,7 +26,6 @@ use crate::service::worker::{
 };
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
@@ -58,6 +57,7 @@ use golem_common::schema::validation::validate_value;
 use golem_common::schema::{
     BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue, schema_value_to_proto_with_streams,
 };
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -2200,7 +2200,7 @@ fn translate_result(
             use golem_api_grpc::proto::golem::worker::{
                 public_external_tool_result, public_tool_error, public_tool_rpc_error,
             };
-            let decode_typed = |typed: golem_api_grpc::proto::golem::schema::TypedSchemaValue,
+            let decode_typed = |typed: golem_schema::proto::golem::schema::TypedSchemaValue,
                                 state: &mut AdapterState,
                                 mappings: &mut Vec<PublicStreamMapping>|
              -> Result<PublicTypedValue, AdapterError> {
@@ -2811,7 +2811,7 @@ fn channel_for_transport(state: &AdapterState, transport_id: u64) -> Result<u32,
 }
 
 fn required_uuid(
-    value: Option<&golem_api_grpc::proto::golem::common::Uuid>,
+    value: Option<&golem_schema::proto::golem::common::Uuid>,
     name: &str,
 ) -> Result<Uuid, AdapterError> {
     Ok(value
@@ -3037,11 +3037,8 @@ fn bounded_close_reason(reason: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{InvocationSessionTokenConfig, InvocationSessionTokenKeyConfig};
-    use golem_api_grpc::proto::golem::common::{EnvironmentId, Uuid as ProtoUuid};
+    use golem_api_grpc::proto::golem::common::EnvironmentId;
     use golem_api_grpc::proto::golem::component::ComponentId;
-    use golem_api_grpc::proto::golem::schema::{
-        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
-    };
     use golem_api_grpc::proto::golem::worker::{
         AgentId as ProtoAgentId, DurableStreamHandle, IdempotencyKey as ProtoIdempotencyKey,
         InputStreamAck, InvocationStart, ResumeAttach, StreamInvocationIdentity,
@@ -3049,6 +3046,10 @@ mod tests {
     use golem_common::base_model::base64::Base64;
     use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
     use golem_common::schema::{BinaryRestrictions, MetadataEnvelope};
+    use golem_schema::proto::golem::common::Uuid as ProtoUuid;
+    use golem_schema::proto::golem::schema::{
+        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
+    };
     use test_r::test;
 
     fn proto_uuid(value: u64) -> ProtoUuid {

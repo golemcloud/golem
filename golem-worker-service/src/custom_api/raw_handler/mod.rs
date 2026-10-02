@@ -18,7 +18,6 @@ use super::{ResponseBody, RichRequest, RouteExecutionResult};
 use crate::service::worker::WorkerService;
 use bytes::Bytes;
 use futures::StreamExt;
-use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_api_grpc::proto::golem::worker::{
     InvocationContext, InvocationStart, invocation_session_completion, invocation_session_result,
 };
@@ -28,6 +27,7 @@ use golem_common::schema::stream::SchemaValueStream;
 use golem_common::schema::{
     FromSchema, IntoSchema, SchemaGraph, SchemaValue, TypedSchemaValue, try_into_schema_graph,
 };
+use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_schema::schema::protobuf::schema_value_to_proto_with_streams;
 use golem_schema::schema::validation::validate_value;
 use golem_service_base::custom_api::HttpRouterBehaviour;

@@ -24,7 +24,7 @@ golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }

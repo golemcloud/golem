@@ -8,7 +8,6 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity, UpdateMode,
     invocation_request, invocation_response,
@@ -33,6 +32,7 @@ use golem_common::model::{
     OwnedAgentId, PromiseId,
 };
 use golem_common::schema::{FromSchema, SchemaValue};
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
@@ -820,9 +820,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String(value.into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        value.into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],
@@ -1030,7 +1030,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                     panic!("expected typed item")
                 };
                 SchemaValue::try_from(
-                    golem_api_grpc::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
+                    golem_schema::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
                         .unwrap(),
                 )
                 .unwrap()
@@ -1770,9 +1770,9 @@ async fn sliding_expiry_refreshes_are_coalesced(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String("refresh".into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        "refresh".into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],

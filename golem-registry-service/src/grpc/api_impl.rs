@@ -29,7 +29,6 @@ use applying::Apply;
 use async_trait::async_trait;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use golem_api_grpc::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_api_grpc::proto::golem::registry::v1::{
     AuthenticateTokenRequest, AuthenticateTokenResponse, AuthenticateTokenSuccessResponse,
     BatchGetCardsRequest, BatchGetCardsResponse, BatchGetCardsSuccessResponse,
@@ -97,6 +96,7 @@ use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::recorded_grpc_api_request;
+use golem_schema::proto::golem::common::Empty as EmptySuccessResponse;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::environment::EnvironmentState;
 use std::collections::HashMap;

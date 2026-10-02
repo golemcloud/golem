@@ -546,7 +546,7 @@ impl TestDsl for TestWorkerExecutor {
         let agent_id = invocation_agent_id(component, agent_id, idempotency_key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             value.try_into().map_err(anyhow::Error::msg)?;
 
         self.invoke_agent_session(InvocationStart {
@@ -593,7 +593,7 @@ impl TestDsl for TestWorkerExecutor {
         let worker_agent_id = invocation_agent_id(component, agent_id, &key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             value.try_into().map_err(anyhow::Error::msg)?;
 
         let result = self
