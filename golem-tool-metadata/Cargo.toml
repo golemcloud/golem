@@ -3,6 +3,9 @@ name = "golem-tool-metadata"
 version = "0.0.0"
 edition = "2024"
 license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Tool metadata model for Golem agents"
 
 [lib]
 harness = false

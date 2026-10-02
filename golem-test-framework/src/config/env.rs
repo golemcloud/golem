@@ -353,6 +353,8 @@ impl EnvBasedTestDependencies {
                 &config.debug_targets_dirs().join("golem-shard-manager"),
                 &config.golem_repo_root.join("golem-shard-manager"),
                 config.number_of_shards_override,
+                None,
+                false,
                 9021,
                 9020,
                 rdb,

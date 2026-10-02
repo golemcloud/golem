@@ -542,6 +542,16 @@ where
     };
     let outcome = pending.finish().await?;
     if outcome == FinishReplayToLive::Live && role == ReplayToLiveRole::PrimaryAgent {
+        // Publishing live and committing the replay-finalization records form one boundary for
+        // primary accessors. Live durable-call Starts take the same lock, so a sibling cannot
+        // expose target-only effects before an automatic update has succeeded or failed.
+        let boundary_lock = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .card_event_boundary_lock
+                .clone()
+        });
+        let _boundary_guard = boundary_lock.lock_owned().await;
         process_pending_replay_events_access(store, get_ctx).await?;
     }
     Ok(outcome)
@@ -560,6 +570,13 @@ where
 {
     let outcome = pending.finish().await?;
     if outcome == FinishReplayToLive::Live && primary_runtime {
+        let boundary_lock = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .card_event_boundary_lock
+                .clone()
+        });
+        let _boundary_guard = boundary_lock.lock_owned().await;
         process_pending_replay_events_access(store, get_ctx).await?;
     }
     Ok(outcome)
@@ -1287,6 +1304,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let is_live =
             store.with(|mut access| get_ctx(access.data_mut()).state.durable_call_is_live());
         if !is_live {
+            let boundary_lock = store.with(|mut access| {
+                get_ctx(access.data_mut())
+                    .state
+                    .card_event_boundary_lock
+                    .clone()
+            });
+            let _boundary_guard = boundary_lock.lock_owned().await;
             process_pending_replay_events_access(store, get_ctx).await?;
         }
         let prepared = store.with(|mut access| {
@@ -1423,7 +1447,15 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 ))
             };
         }
+        let boundary_lock = store.with(|mut access| {
+            get_ctx(access.data_mut())
+                .state
+                .card_event_boundary_lock
+                .clone()
+        });
+        let _boundary_guard = boundary_lock.lock_owned().await;
         process_pending_replay_events_access(store, get_ctx).await?;
+        drop(_boundary_guard);
         let mut prepared = store.with(|mut access| {
             let ctx = get_ctx(access.data_mut());
             Self::prepare_access_start(ctx, function_type, claim_options, custom_invocation_scope)
@@ -1855,6 +1887,18 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         F: AsyncFnOnce(AccessStartContext) -> Result<Pair::Req, WorkerExecutorError>,
     {
+        if prepared.is_live && !prepared.unpersisted {
+            let _boundary_guard = lock_synchronized_card_event_boundary_access(store, get_ctx)
+                .await
+                .map_err(|err| {
+                    (
+                        err,
+                        AccessStartCleanup {
+                            atomic_lease: prepared.atomic_lease.clone(),
+                        },
+                    )
+                })?;
+        }
         let mut live_call_permit = prepared.live_call_permit.take();
         let starts_scope = opens_accessor_scope(
             prepared.retry.function_type(),

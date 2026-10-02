@@ -1,8 +1,14 @@
 /** Effect-native reflection for ambient Golem tools. @since 1.6.0 */
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Core from "golem:core/types@2.0.0"
-import { Effect, Exit, Scope, Stream } from "effect"
-import { createToolClientRuntime, isRpcError, type ToolRuntimeError } from "./BridgeTool.js"
+import { Effect, Result, Scope, Stream } from "effect"
+import {
+  collectToolInvocation,
+  createToolClientRuntime,
+  isRpcError,
+  type CollectedToolInvocation,
+  type ToolRuntimeError,
+} from "./BridgeTool.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
   cloneSchemaValue,
@@ -56,59 +62,23 @@ export interface ReflectedToolFailure {
 
 /** A scoped command invocation with independent outputs and structured result. @since 1.6.0 @category streams */
 export interface StartedToolInvocation<A, E = never> {
-  readonly stdout: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
-  readonly stderr: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
+  readonly stdout?: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
+  readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E> | ToolReflectionError>
   readonly cancel: Effect.Effect<void>
   readonly collect: Effect.Effect<
-    { readonly result: A; readonly stdout: Uint8Array; readonly stderr: Uint8Array },
-    ToolRuntimeError<E> | ToolReflectionError
+    CollectedToolInvocation<A, ToolRuntimeError<E> | ToolReflectionError, ToolRuntimeError<never>>
   >
 }
 
-const collectResultAndOutputs = <
-  A,
-  ResultError,
-  StdoutError,
-  ResultRequirements,
-  StdoutRequirements,
-  StderrError,
-  StderrRequirements,
->(
-  result: Effect.Effect<A, ResultError, ResultRequirements>,
-  stdout: Stream.Stream<Uint8Array, StdoutError, StdoutRequirements>,
-  stderr: Stream.Stream<Uint8Array, StderrError, StderrRequirements>,
-): Effect.Effect<
-  { readonly result: A; readonly stdout: Uint8Array; readonly stderr: Uint8Array },
-  ResultError | StdoutError | StderrError,
-  ResultRequirements | StdoutRequirements | StderrRequirements
-> =>
-  Effect.scoped(
-    Effect.all(
-      [
-        Effect.exit(result),
-        Effect.exit(Stream.runCollect(stdout)),
-        Effect.exit(Stream.runCollect(stderr)),
-      ],
-      { concurrency: "unbounded" },
-    ),
-  ).pipe(
-    Effect.flatMap(
-      ([resultExit, stdoutExit, stderrExit]): Effect.Effect<
-        { readonly result: A; readonly stdout: Uint8Array; readonly stderr: Uint8Array },
-        ResultError | StdoutError | StderrError
-      > => {
-        if (Exit.isFailure(resultExit)) return Effect.failCause(resultExit.cause)
-        if (Exit.isFailure(stdoutExit)) return Effect.failCause(stdoutExit.cause)
-        if (Exit.isFailure(stderrExit)) return Effect.failCause(stderrExit.cause)
-        return Effect.succeed({
-          result: resultExit.value,
-          stdout: concatBytes(stdoutExit.value),
-          stderr: concatBytes(stderrExit.value),
-        })
-      },
-    ),
-  )
+const resultFromCollected = <A, ResultError, OutputError>(
+  collected: CollectedToolInvocation<A, ResultError, OutputError>,
+): Effect.Effect<A, ResultError | OutputError> => {
+  if (Result.isFailure(collected.result)) return Effect.fail(collected.result.failure)
+  if (Result.isFailure(collected.stdout)) return Effect.fail(collected.stdout.failure)
+  if (Result.isFailure(collected.stderr)) return Effect.fail(collected.stderr.failure)
+  return Effect.succeed(collected.result.success)
+}
 
 /** A callable command in a discovered tool snapshot. @since 1.6.0 @category models */
 export class ToolCommand {
@@ -357,8 +327,8 @@ export class ToolCommand {
         command.stdout !== undefined,
         command.stderr !== undefined,
       )
-      const stdout = started.stdout ?? Stream.empty
-      const stderr = started.stderr ?? Stream.empty
+      const stdout = started.stdout
+      const stderr = started.stderr
       const result = started.result.pipe(
         Effect.mapError((error) => command.mapFailure(error)),
         Effect.flatMap((terminal) => {
@@ -387,7 +357,7 @@ export class ToolCommand {
           )
         }),
       )
-      const collect = collectResultAndOutputs(result, stdout, stderr)
+      const collect = collectToolInvocation(result, stdout, stderr)
       return { stdout, stderr, result, cancel: started.cancel, collect }
     })
   }
@@ -417,7 +387,7 @@ export class ToolCommand {
                 }),
           ),
         )
-        const collect = collectResultAndOutputs(result, started.stdout, started.stderr)
+        const collect = collectToolInvocation(result, started.stdout, started.stderr)
         return {
           stdout: started.stdout,
           stderr: started.stderr,
@@ -438,7 +408,7 @@ export class ToolCommand {
     return Effect.scoped(
       this.startValue(input, stdin).pipe(
         Effect.flatMap((started) => started.collect),
-        Effect.map((v) => v.result),
+        Effect.flatMap(resultFromCollected),
       ),
     )
   }
@@ -696,10 +666,10 @@ export class DynamicToolClient {
         withStdout,
         withStderr,
       )
-      const stdout = started.stdout ?? Stream.empty
-      const stderr = started.stderr ?? Stream.empty
+      const stdout = started.stdout
+      const stderr = started.stderr
       const result = started.result.pipe(Effect.map((terminal) => terminal.result))
-      const collect = collectResultAndOutputs(result, stdout, stderr)
+      const collect = collectToolInvocation(result, stdout, stderr)
       return { stdout, stderr, result, cancel: started.cancel, collect }
     })
   }
@@ -713,7 +683,7 @@ export class DynamicToolClient {
     return Effect.scoped(
       this.start(path, input, stdin).pipe(
         Effect.flatMap((started) => started.collect),
-        Effect.map((collected) => collected.result),
+        Effect.flatMap(resultFromCollected),
       ),
     )
   }
@@ -883,16 +853,6 @@ function valueMatches(value: SchemaValue, expected: SchemaValue): boolean {
     default:
       return false
   }
-}
-
-function concatBytes(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
-  const result = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
-  let offset = 0
-  for (const chunk of chunks) {
-    result.set(chunk, offset)
-    offset += chunk.length
-  }
-  return result
 }
 
 function freezeJson<T extends JsonValue>(value: T): T {

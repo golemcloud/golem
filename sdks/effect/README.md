@@ -3,8 +3,7 @@
 Effect-native TypeScript SDK for Golem 1.6 agents. It uses Effect 4 schemas and effects while
 targeting Golem's WASI Preview 3 agent, tool, and tool-middleware contracts.
 
-> The package currently uses Effect 4 beta APIs. Keep the `effect` version generated for an
-> application aligned with the SDK.
+> Keep the `effect` version generated for an application aligned with the SDK.
 
 ## Install and define an agent
 
@@ -274,7 +273,7 @@ scope. Normal typed agent clients remain available inside handlers:
 
 ```ts
 import { Effect, Layer } from "effect"
-import { HttpRouter as Routes, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { HttpRouter as Routes, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { Http, HttpRouter } from "@golemcloud/effect-golem"
 
 const routes = Layer.mergeAll(

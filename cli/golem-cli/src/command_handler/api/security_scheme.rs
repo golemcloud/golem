@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
+use crate::command::api::security_scheme::{ApiSecuritySchemeSubcommand, LoginModeArg};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
@@ -30,6 +30,7 @@ use golem_client::model::{SecuritySchemeCreation, SecuritySchemeDto, SecuritySch
 use golem_common::base_model::api;
 use golem_common::model::Empty;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::security_scheme::{AuthorizationCodePkceConfig, SecuritySchemeLogin};
 use golem_common::model::security_scheme::{Provider, ProviderKind, SecuritySchemeName};
 use std::sync::Arc;
 
@@ -54,6 +55,9 @@ impl ApiSecuritySchemeCommandHandler {
                 scope,
                 redirect_url,
                 update_existing,
+                login_mode,
+                frontend_redirect_uri,
+                frontend_origin,
             } => {
                 self.cmd_create(
                     security_scheme_name,
@@ -65,6 +69,9 @@ impl ApiSecuritySchemeCommandHandler {
                     scope,
                     redirect_url,
                     update_existing,
+                    login_mode,
+                    frontend_redirect_uri,
+                    frontend_origin,
                 )
                 .await
             }
@@ -80,6 +87,9 @@ impl ApiSecuritySchemeCommandHandler {
                 client_secret,
                 scope,
                 redirect_url,
+                login_mode,
+                frontend_redirect_uri,
+                frontend_origin,
             } => {
                 let provider = match provider_type.map(ProviderKind::from) {
                     Some(kind) => Some(match kind {
@@ -110,6 +120,7 @@ impl ApiSecuritySchemeCommandHandler {
                     client_secret,
                     scope,
                     redirect_url,
+                    login_configuration(login_mode, frontend_redirect_uri, frontend_origin, true)?,
                 )
                 .await
             }
@@ -131,7 +142,18 @@ impl ApiSecuritySchemeCommandHandler {
         scopes: Vec<String>,
         redirect_url: String,
         update_existing: bool,
+        login_mode: LoginModeArg,
+        frontend_redirect_uris: Vec<String>,
+        frontend_origins: Vec<String>,
     ) -> anyhow::Result<()> {
+        let login = login_configuration(
+            Some(login_mode),
+            frontend_redirect_uris,
+            frontend_origins,
+            false,
+        )?
+        .expect("create login mode is always present");
+
         let provider_type = match provider_kind {
             ProviderKind::Google => Provider::Google(Empty {}),
             ProviderKind::Facebook => Provider::Facebook(Empty {}),
@@ -179,6 +201,7 @@ impl ApiSecuritySchemeCommandHandler {
                             client_secret: Some(client_secret),
                             redirect_url: Some(redirect_url),
                             scopes: Some(scopes),
+                            login: Some(login),
                         },
                     )
                     .await
@@ -196,6 +219,7 @@ impl ApiSecuritySchemeCommandHandler {
                             client_secret,
                             redirect_url,
                             scopes,
+                            login,
                         },
                     )
                     .await;
@@ -286,6 +310,7 @@ impl ApiSecuritySchemeCommandHandler {
         client_secret: Option<String>,
         scopes: Option<Vec<String>>,
         redirect_url: Option<String>,
+        login: Option<SecuritySchemeLogin>,
     ) -> anyhow::Result<()> {
         let scheme = self.resolve_scheme_by_name(&security_scheme_name).await?;
 
@@ -302,6 +327,7 @@ impl ApiSecuritySchemeCommandHandler {
                     client_secret,
                     redirect_url,
                     scopes,
+                    login,
                 },
             )
             .await
@@ -355,5 +381,40 @@ impl ApiSecuritySchemeCommandHandler {
             })?;
 
         Ok(())
+    }
+}
+
+fn login_configuration(
+    mode: Option<LoginModeArg>,
+    redirect_uris: Vec<String>,
+    origins: Vec<String>,
+    update: bool,
+) -> anyhow::Result<Option<SecuritySchemeLogin>> {
+    match mode {
+        Some(LoginModeArg::Cookie) => {
+            if !redirect_uris.is_empty() || !origins.is_empty() {
+                bail!(
+                    "frontend redirect URIs and origins are only valid for authorization-code-pkce mode"
+                );
+            }
+            Ok(Some(SecuritySchemeLogin::Cookie(Empty {})))
+        }
+        Some(LoginModeArg::AuthorizationCodePkce) => {
+            if redirect_uris.is_empty() || origins.is_empty() {
+                bail!(
+                    "authorization-code-pkce mode requires --frontend-redirect-uri and --frontend-origin"
+                );
+            }
+            Ok(Some(SecuritySchemeLogin::AuthorizationCodePkce(
+                AuthorizationCodePkceConfig {
+                    redirect_uris,
+                    origins,
+                },
+            )))
+        }
+        None if update && (!redirect_uris.is_empty() || !origins.is_empty()) => {
+            bail!("--frontend-redirect-uri and --frontend-origin require --login-mode")
+        }
+        None => Ok(None),
     }
 }

@@ -2530,7 +2530,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2568,6 +2569,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2622,7 +2626,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2655,6 +2660,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2695,7 +2703,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2728,6 +2737,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2742,7 +2754,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "id": {
@@ -2772,9 +2785,54 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
+    },
+    "SecuritySchemeLogin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Cookie"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "redirectUris",
+            "origins"
+          ],
+          "properties": {
+            "type": {
+              "const": "AuthorizationCodePkce"
+            },
+            "redirectUris": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "origins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SecuritySchemeProvider": {
       "oneOf": [
@@ -5038,36 +5096,61 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
           "properties": {
             "type": { "const": "PendingUpdate" },
             "timestamp": { "type": "string" },
-            "targetRevision": { "type": "integer", "minimum": 0 }
+            "targetRevision": { "type": "integer", "minimum": 0 },
+            "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "mode": { "$ref": "#/definitions/AgentUpdateMode" },
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
           },
           "additionalProperties": false
         },
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
           "properties": {
             "type": { "const": "SuccessfulUpdate" },
             "timestamp": { "type": "string" },
-            "targetRevision": { "type": "integer", "minimum": 0 }
+            "targetRevision": { "type": "integer", "minimum": 0 },
+            "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "mode": { "$ref": "#/definitions/AgentUpdateMode" },
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
           },
           "additionalProperties": false
         },
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
           "properties": {
             "type": { "const": "FailedUpdate" },
             "timestamp": { "type": "string" },
             "targetRevision": { "type": "integer", "minimum": 0 },
-            "details": { "type": ["string", "null"] }
+            "details": { "type": ["string", "null"] },
+            "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "mode": { "$ref": "#/definitions/AgentUpdateMode" },
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
           },
           "additionalProperties": false
         }
       ]
+    },
+    "AgentUpdateMode": {
+      "type": "string",
+      "enum": ["automatic", "manual"]
+    },
+    "SnapshotAssistedUpdateMetadata": {
+      "type": "object",
+      "required": ["sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex", "snapshotRevision", "ineligibilityReason"],
+      "properties": {
+        "sourceComponentRevision": { "type": "integer", "minimum": 0 },
+        "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 },
+        "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 },
+        "snapshotRevision": { "type": ["integer", "null"], "minimum": 0 },
+        "ineligibilityReason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
     },
     "AgentResourceDescription": {
       "type": "object",
@@ -5381,20 +5464,20 @@
     },
     "PublicOplogEntryPendingUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision", "description"],
-      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" } },
+      "required": ["type", "timestamp", "targetRevision", "description", "updateAttemptIndex"],
+      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" }, "updateAttemptIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntrySuccessfulUpdate": {
       "type": "object",
       "required": ["type", "timestamp", "targetRevision", "newComponentSize", "newActivePlugins"],
-      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } } },
+      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntryFailedUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision"],
-      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] } },
+      "required": ["type", "timestamp", "targetRevision", "updateAttemptIndex"],
+      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "updateAttemptIndex": { "type": ["integer", "null"], "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryGrowMemory": {
@@ -5752,8 +5835,21 @@
     "PublicUpdateDescription": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "Automatic" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "SnapshotAssistedAutomatic" } }, "additionalProperties": false },
         { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false }
       ]
+    },
+    "PublicSnapshotAssistedUpdateDetails": {
+      "type": "object",
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicFailedSnapshotAssistedUpdateDetails": {
+      "type": "object",
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 }, "ineligibilityReason": { "type": ["string", "null"] } },
+      "additionalProperties": false
     },
     "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },
     "PublicSnapshotData": {

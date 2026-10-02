@@ -13,10 +13,12 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord,
-    DurableStreamSessionIndex, ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey,
-    InvocationResultMembership, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SuccessfulUpdateRecord, Timestamp,
+    AuthoritativeSnapshot, AuthoritativeSnapshotKind, DurableStreamSessionIndex,
+    ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    RetryConfig, RetryPolicyState, SnapshotAssistedUpdateSelection, SuccessfulUpdateRecord,
+    Timestamp,
 };
 use golem_common::serialization::{deserialize, try_deserialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -325,7 +327,7 @@ where
         &region_entries,
     );
 
-    if baseline_is_invalidated(&baseline, &skipped_regions) {
+    if baseline_is_invalidated(&baseline, &deleted_regions, &skipped_regions) {
         return Ok(None);
     }
     baseline.deleted_regions = deleted_regions;
@@ -521,7 +523,8 @@ fn update_status_with_new_entries_internal(
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if validate_baseline && baseline_is_invalidated(&last_known, &skipped_regions) {
+    if validate_baseline && baseline_is_invalidated(&last_known, &deleted_regions, &skipped_regions)
+    {
         return Ok(None);
     }
 
@@ -536,9 +539,16 @@ fn update_status_with_new_entries_internal(
     )?))
 }
 
-fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &DeletedRegions) -> bool {
-    if !skipped_regions.is_in_deleted_region(baseline.oplog_idx) {
-        return false;
+fn baseline_is_invalidated(
+    baseline: &AgentStatusRecord,
+    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
+) -> bool {
+    // A baseline taken inside a region a later revert deleted still carries folded state from
+    // entries that no longer exist, even when the baseline's own skipped coverage hides that
+    // region in the comparison below.
+    if deleted_regions.is_in_deleted_region(baseline.oplog_idx) {
+        return true;
     }
 
     let baseline_without_overrides = if baseline.skipped_regions.is_overridden() {
@@ -556,6 +566,15 @@ fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &Delet
         skipped_regions.clone()
     };
     new_without_overrides != baseline_without_overrides
+        && new_without_overrides.regions().any(|new_region| {
+            if new_region.start > baseline.oplog_idx {
+                return false;
+            }
+            let relevant_end = new_region.end.min(baseline.oplog_idx);
+            !baseline_without_overrides.regions().any(|old_region| {
+                old_region.start <= new_region.start && old_region.end >= relevant_end
+            })
+        })
 }
 
 fn update_status_with_precomputed_regions(
@@ -581,8 +600,12 @@ fn update_status_with_precomputed_regions(
             &new_entries,
         );
 
-    let pending_invocations =
-        calculate_pending_invocations(last_known.pending_invocations, &new_entries);
+    let initial_pending_invocations = last_known.pending_invocations.clone();
+    let pending_invocations = calculate_pending_invocations(
+        last_known.pending_invocations,
+        &last_known.pending_updates,
+        &new_entries,
+    );
     let pending_card_events =
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
@@ -641,7 +664,8 @@ fn update_status_with_precomputed_regions(
         component_revision,
         component_size,
         component_revision_for_replay,
-        last_manual_update_snapshot_index,
+        component_revision_start_index,
+        authoritative_snapshot,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
@@ -652,10 +676,12 @@ fn update_status_with_precomputed_regions(
         last_known.component_revision,
         last_known.component_size,
         last_known.component_revision_for_replay,
-        last_known.last_manual_update_snapshot_index,
+        last_known.component_revision_start_index,
+        last_known.authoritative_snapshot,
         last_known.last_automatic_snapshot_index,
         last_known.last_automatic_snapshot_timestamp,
         last_known.last_automatic_snapshot_component_revision,
+        initial_pending_invocations,
         &deleted_regions,
         &new_entries,
     );
@@ -722,8 +748,9 @@ fn update_status_with_precomputed_regions(
         revoked_cards,
         deleted_regions,
         component_revision_for_replay,
+        component_revision_start_index,
         current_retry_state,
-        last_manual_update_snapshot_index,
+        authoritative_snapshot,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,
@@ -1108,12 +1135,22 @@ fn calculate_skipped_regions_with_deleted_regions(
                     .build(),
                 )
             }
-            OplogEntry::SuccessfulUpdate { .. } => {
+            OplogEntry::SuccessfulUpdate {
+                snapshot_assisted_details,
+                ..
+            } => {
                 if let Some(ovrd) = skipped_override {
                     for region in ovrd.into_regions() {
                         skipped_builder.add(region);
                     }
                     skipped_override = None;
+                }
+                if let Some(details) = snapshot_assisted_details
+                    && !ignored_snapshot_update_region.is_some_and(|region| region.contains(*idx))
+                {
+                    skipped_builder.add(OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=details.snapshot_index,
+                    ));
                 }
             }
             OplogEntry::FailedUpdate { .. } => {
@@ -1191,9 +1228,14 @@ fn manual_update_target_revision_of(
 
 fn calculate_pending_invocations(
     initial: Vec<PendingInvocationRef>,
+    initial_pending_updates: &VecDeque<PendingUpdateRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<PendingInvocationRef> {
     let mut result = initial;
+    let mut pending_update_attempts: VecDeque<_> = initial_pending_updates
+        .iter()
+        .map(|update| (update.target_revision, update.admission_index))
+        .collect();
     for (oplog_idx, entry) in entries {
         // Here we are handling two categories of oplog entries:
         // - "input" entries adding items to pending queues (PendingAgentInvocation, PendingUpdate)
@@ -1242,19 +1284,61 @@ fn calculate_pending_invocations(
                 result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
             }
             OplogEntry::PendingUpdate {
-                description:
-                    UpdateDescription::SnapshotBased {
-                        target_revision, ..
-                    },
+                description,
+                update_attempt_index,
                 ..
-            } => result.retain(|invocation| {
-                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
-            }),
+            } => {
+                let target_revision = *description.target_revision();
+                let admission_index = update_attempt_index.unwrap_or(*oplog_idx);
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && pending_update_attempts.front().is_some_and(
+                        |(pending_target, pending_admission)| {
+                            *pending_target == target_revision
+                                && *pending_admission == admission_index
+                        },
+                    );
+                if !refines_automatic_admission {
+                    pending_update_attempts.push_back((target_revision, admission_index));
+                }
+                if matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && let Some(position) = result
+                        .iter()
+                        .position(|invocation| invocation.oplog_index == admission_index)
+                {
+                    result.remove(position);
+                }
+            }
             OplogEntry::FailedUpdate {
+                target_revision,
+                update_attempt_index,
+                ..
+            } => {
+                if update_attempt_index.is_some_and(|attempt_index| {
+                    pending_update_attempts
+                        .front()
+                        .is_some_and(|(_, pending_index)| *pending_index == attempt_index)
+                }) || (update_attempt_index.is_none()
+                    && pending_update_attempts
+                        .front()
+                        .is_some_and(|(pending_target, _)| pending_target == target_revision))
+                {
+                    pending_update_attempts.pop_front();
+                } else if let Some(position) = result.iter().position(|invocation| {
+                    update_attempt_index
+                        .is_some_and(|attempt_index| invocation.oplog_index == attempt_index)
+                }) {
+                    result.remove(position);
+                }
+            }
+            OplogEntry::SuccessfulUpdate {
                 target_revision, ..
-            } => result.retain(|invocation| {
-                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
-            }),
+            } if pending_update_attempts
+                .front()
+                .is_some_and(|(pending_target, _)| pending_target == target_revision) =>
+            {
+                pending_update_attempts.pop_front();
+            }
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
@@ -1508,10 +1592,12 @@ fn calculate_update_fields(
     initial_revision: ComponentRevision,
     initial_component_size: u64,
     initial_component_revision_for_replay: ComponentRevision,
-    initial_last_manual_update_snapshot_index: Option<OplogIndex>,
+    initial_component_revision_start_index: OplogIndex,
+    initial_authoritative_snapshot: Option<AuthoritativeSnapshot>,
     initial_last_automatic_snapshot_index: Option<OplogIndex>,
     initial_last_automatic_snapshot_timestamp: Option<Timestamp>,
     initial_last_automatic_snapshot_component_revision: Option<ComponentRevision>,
+    initial_pending_invocations: Vec<PendingInvocationRef>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
@@ -1521,7 +1607,8 @@ fn calculate_update_fields(
     ComponentRevision,
     u64,
     ComponentRevision,
-    Option<OplogIndex>,
+    OplogIndex,
+    Option<AuthoritativeSnapshot>,
     Option<OplogIndex>,
     Option<Timestamp>,
     Option<ComponentRevision>,
@@ -1532,13 +1619,56 @@ fn calculate_update_fields(
     let mut revision = initial_revision;
     let mut size = initial_component_size;
     let mut component_revision_for_replay = initial_component_revision_for_replay;
-    let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
+    let mut component_revision_start_index = initial_component_revision_start_index;
+    let mut authoritative_snapshot = initial_authoritative_snapshot;
     let mut last_automatic_snapshot_index = initial_last_automatic_snapshot_index;
     let mut last_automatic_snapshot_timestamp = initial_last_automatic_snapshot_timestamp;
     let mut last_automatic_snapshot_component_revision =
         initial_last_automatic_snapshot_component_revision;
+    let mut manual_update_admissions: VecDeque<_> = initial_pending_invocations
+        .into_iter()
+        .filter(|invocation| invocation.manual_update_target_revision.is_some())
+        .collect();
 
     for (oplog_idx, entry) in entries {
+        match entry {
+            OplogEntry::PendingAgentInvocation {
+                timestamp, payload, ..
+            } => {
+                if let Some(target_revision) = manual_update_target_revision_of(payload) {
+                    manual_update_admissions.push_back(PendingInvocationRef {
+                        timestamp: *timestamp,
+                        oplog_index: *oplog_idx,
+                        idempotency_key: None,
+                        manual_update_target_revision: Some(target_revision),
+                    });
+                }
+            }
+            OplogEntry::PendingUpdate {
+                update_attempt_index: Some(update_attempt_index),
+                ..
+            } => {
+                if let Some(position) = manual_update_admissions
+                    .iter()
+                    .position(|invocation| invocation.oplog_index == *update_attempt_index)
+                {
+                    manual_update_admissions.remove(position);
+                }
+            }
+            OplogEntry::FailedUpdate {
+                update_attempt_index: Some(update_attempt_index),
+                ..
+            } if deleted_regions.is_in_deleted_region(*oplog_idx) => {
+                if let Some(position) = manual_update_admissions
+                    .iter()
+                    .position(|invocation| invocation.oplog_index == *update_attempt_index)
+                {
+                    manual_update_admissions.remove(position);
+                }
+            }
+            _ => {}
+        }
+
         // Skipping entries in deleted regions (by revert)
         if deleted_regions.is_in_deleted_region(*oplog_idx) {
             continue;
@@ -1548,62 +1678,141 @@ fn calculate_update_fields(
             OplogEntry::Create { parameters, .. } => {
                 revision = parameters.component_revision;
                 component_revision_for_replay = parameters.component_revision;
+                component_revision_start_index = *oplog_idx;
                 size = parameters.component_size;
             }
             OplogEntry::PendingUpdate {
                 timestamp,
                 description,
+                update_attempt_index,
                 ..
             } => {
                 let kind = match description {
                     UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
+                    UpdateDescription::SnapshotAssistedAutomatic {
+                        source_component_revision,
+                        source_revision_start_index,
+                        snapshot_index,
+                        snapshot_revision,
+                        ..
+                    } => PendingUpdateKind::SnapshotAssistedAutomatic {
+                        source_component_revision: *source_component_revision,
+                        source_revision_start_index: *source_revision_start_index,
+                        selection: SnapshotAssistedUpdateSelection::Selected {
+                            snapshot_index: *snapshot_index,
+                            snapshot_revision: *snapshot_revision,
+                        },
+                    },
                     UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
                 };
-                pending_updates.push_back(PendingUpdateRef {
-                    timestamp: *timestamp,
-                    oplog_index: *oplog_idx,
-                    target_revision: *description.target_revision(),
-                    kind,
-                });
+                let admission_index = update_attempt_index.unwrap_or(*oplog_idx);
+                let target_revision = *description.target_revision();
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && pending_updates.front().is_some_and(|pending| {
+                        pending.admission_index == admission_index
+                            && pending.target_revision == target_revision
+                            && pending.oplog_index == pending.admission_index
+                            && pending.kind == PendingUpdateKind::Automatic
+                    });
+                if refines_automatic_admission {
+                    let pending = pending_updates
+                        .front_mut()
+                        .expect("refining an existing queue-head admission");
+                    pending.oplog_index = *oplog_idx;
+                    pending.kind = kind;
+                } else if update_attempt_index.is_none()
+                    || matches!(description, UpdateDescription::SnapshotBased { .. })
+                {
+                    pending_updates.push_back(PendingUpdateRef {
+                        timestamp: *timestamp,
+                        oplog_index: *oplog_idx,
+                        admission_index,
+                        target_revision,
+                        kind,
+                    });
+                }
             }
             OplogEntry::FailedUpdate {
                 timestamp,
                 target_revision,
                 details,
+                snapshot_assisted_details,
+                update_attempt_index,
+                ..
             } => {
+                let matches_pending = pending_updates.front().is_some_and(|pending| {
+                    update_attempt_index
+                        .is_some_and(|attempt_index| pending.admission_index == attempt_index)
+                        || (update_attempt_index.is_none()
+                            && pending.target_revision == *target_revision)
+                });
+                let applied_update = if matches_pending {
+                    pending_updates.pop_front()
+                } else {
+                    manual_update_admissions
+                        .iter()
+                        .position(|invocation| {
+                            update_attempt_index.is_some_and(|attempt_index| {
+                                invocation.oplog_index == attempt_index
+                            })
+                        })
+                        .and_then(|position| manual_update_admissions.remove(position))
+                        .map(|invocation| PendingUpdateRef {
+                            timestamp: invocation.timestamp,
+                            oplog_index: invocation.oplog_index,
+                            admission_index: invocation.oplog_index,
+                            target_revision: *target_revision,
+                            kind: PendingUpdateKind::SnapshotBased,
+                        })
+                };
                 failed_updates.push(FailedUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     details: details.clone(),
+                    pending_update: applied_update,
+                    snapshot_assisted_details: snapshot_assisted_details.clone(),
                 });
-                pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
                 target_revision,
                 new_component_size,
+                snapshot_assisted_details,
                 ..
             } => {
+                let applied_update = pending_updates.pop_front();
                 successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
+                    pending_update: applied_update.clone(),
+                    snapshot_assisted_details: snapshot_assisted_details.clone(),
                 });
                 revision = *target_revision;
+                component_revision_start_index = *oplog_idx;
                 size = *new_component_size;
 
-                let applied_update = pending_updates.pop_front();
                 last_automatic_snapshot_index = None;
                 last_automatic_snapshot_timestamp = None;
                 last_automatic_snapshot_component_revision = None;
 
-                if let Some(PendingUpdateRef {
+                if let Some(details) = snapshot_assisted_details {
+                    component_revision_for_replay = details.source_component_revision;
+                    authoritative_snapshot = Some(AuthoritativeSnapshot {
+                        index: details.snapshot_index,
+                        kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
+                    });
+                } else if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased,
                     oplog_index: applied_update_oplog_index,
                     ..
                 }) = applied_update
                 {
                     component_revision_for_replay = *target_revision;
-                    last_manual_update_snapshot_index = Some(applied_update_oplog_index);
+                    authoritative_snapshot = Some(AuthoritativeSnapshot {
+                        index: applied_update_oplog_index,
+                        kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    });
                 }
             }
             OplogEntry::Snapshot { timestamp, .. } => {
@@ -1621,7 +1830,8 @@ fn calculate_update_fields(
         revision,
         size,
         component_revision_for_replay,
-        last_manual_update_snapshot_index,
+        component_revision_start_index,
+        authoritative_snapshot,
         last_automatic_snapshot_index,
         last_automatic_snapshot_timestamp,
         last_automatic_snapshot_component_revision,

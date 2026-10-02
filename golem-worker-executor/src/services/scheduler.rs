@@ -1802,7 +1802,7 @@ mod tests {
             self.inserted_actions.lock().unwrap().push(action.to_vec());
             let remaining =
                 self.transient_failures
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
             if remaining.is_ok() {
                 return Err(SchedulerStorageError::Transient(
                     "simulated pool timeout".to_string(),

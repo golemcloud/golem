@@ -15,8 +15,9 @@
 //! Transport conversion for the Worker's domain stream-slot operations.
 
 use crate::worker;
-use golem_api_grpc::proto::golem::{common, workerexecutor::v1 as proto};
+use golem_api_grpc::proto::golem::workerexecutor::v1 as proto;
 use golem_common::model::durable_stream::{StreamOffset, StreamSessionExpiryPolicy};
+use golem_schema::proto::golem::common::Empty;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 impl From<worker::CreateStreamSessionResult> for proto::CreateStreamSessionSuccess {
@@ -36,7 +37,7 @@ fn expiry_policy_to_proto(value: StreamSessionExpiryPolicy) -> proto::StreamSess
     use proto::stream_session_expiry_policy::Kind;
     proto::StreamSessionExpiryPolicy {
         kind: Some(match value {
-            StreamSessionExpiryPolicy::None => Kind::None(common::Empty {}),
+            StreamSessionExpiryPolicy::None => Kind::None(Empty {}),
             StreamSessionExpiryPolicy::Sliding { ttl_seconds } => Kind::TtlSeconds(ttl_seconds),
             StreamSessionExpiryPolicy::Absolute { expires_at_millis } => {
                 Kind::ExpiresAtMillis(expires_at_millis)
@@ -217,10 +218,10 @@ impl From<worker::AppendToStreamSlotResult> for proto::AppendToStreamSlotRespons
                 worker::AppendStreamSlotOutcome::SequenceGap { expected, received } => {
                     Outcome::SequenceGap(proto::AppendSequenceGap { expected, received })
                 }
-                worker::AppendStreamSlotOutcome::Closed => Outcome::Closed(common::Empty {}),
-                worker::AppendStreamSlotOutcome::NotFound => Outcome::NotFound(common::Empty {}),
-                worker::AppendStreamSlotOutcome::Gone => Outcome::Gone(common::Empty {}),
-                worker::AppendStreamSlotOutcome::ReadOnly => Outcome::ReadOnly(common::Empty {}),
+                worker::AppendStreamSlotOutcome::Closed => Outcome::Closed(Empty {}),
+                worker::AppendStreamSlotOutcome::NotFound => Outcome::NotFound(Empty {}),
+                worker::AppendStreamSlotOutcome::Gone => Outcome::Gone(Empty {}),
+                worker::AppendStreamSlotOutcome::ReadOnly => Outcome::ReadOnly(Empty {}),
             }),
             invocation_key: result.invocation_key.map(Into::into),
             expiry_policy: result.expiry_policy.map(expiry_policy_to_proto),
@@ -460,19 +461,19 @@ mod tests {
         for (domain, expected) in [
             (
                 worker::AppendStreamSlotOutcome::Closed,
-                Outcome::Closed(common::Empty {}),
+                Outcome::Closed(Empty {}),
             ),
             (
                 worker::AppendStreamSlotOutcome::NotFound,
-                Outcome::NotFound(common::Empty {}),
+                Outcome::NotFound(Empty {}),
             ),
             (
                 worker::AppendStreamSlotOutcome::Gone,
-                Outcome::Gone(common::Empty {}),
+                Outcome::Gone(Empty {}),
             ),
             (
                 worker::AppendStreamSlotOutcome::ReadOnly,
-                Outcome::ReadOnly(common::Empty {}),
+                Outcome::ReadOnly(Empty {}),
             ),
         ] {
             assert_eq!(

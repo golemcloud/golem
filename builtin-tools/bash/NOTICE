@@ -1,0 +1,17 @@
+The shell command drivers and HTTP helpers are derived from clank.sh
+(https://github.com/Aditya1404Sal/clank.sh), revision
+2b4024a25bab5b9e046090152f87b13ea666cc69.
+
+Copyright 2026 John A. De Goes
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+This port changes session management, tool integration and state handling for
+Golem's execution-only Bash tool. Clank's AI and human-workflow features are
+not included.
+
+Brush and Coreutils remain separate dependencies at the immutable revisions
+recorded in Cargo.toml and Cargo.lock, under their respective licenses.
+sed is uutils sed (https://github.com/uutils/sed, MIT) and jq's engine is jaq
+(https://github.com/01mf02/jaq, MIT), used at the forked revisions recorded in Cargo.toml and
+Cargo.lock under their respective licenses.
+

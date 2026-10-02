@@ -1,0 +1,188 @@
+{
+ "cases": {
+  "traps: DEBUG runs before each command": {
+   "script": "696a461104825805",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "debug: x=1\ndebug: echo $x\n1\ndebug: trap - DEBUG\nquiet\n"
+   }
+  },
+  "traps: ERR is not inherited by -exec children": {
+   "script": "befecf7af5e0e6b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "traps: ERR is not inherited by functions without errtrace": {
+   "script": "aabe094563ef44af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\nerr\nin-f\n"
+   }
+  },
+  "traps: ERR runs for a failing command": {
+   "script": "dd8f5a50229afffb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err 1\nafter\n"
+   }
+  },
+  "traps: EXIT in a subshell": {
+   "script": "c3cdd59cfb356190",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in\nsub\nout\n"
+   }
+  },
+  "traps: EXIT replaced and cleared": {
+   "script": "c5a696598c782f95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "traps: EXIT runs on exit and sees its status": {
+   "script": "affd97d1ceef4a1d",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nbye 3\n"
+   }
+  },
+  "traps: EXIT runs when the script ends": {
+   "script": "05bad23ff017d33c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\nthere\nbye\n"
+   }
+  },
+  "traps: EXIT sees the final variable values": {
+   "script": "227f2d1fbca546bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x=6\n"
+   }
+  },
+  "traps: EXIT trap in a function runs at script end": {
+   "script": "8f64ac0f0251d28e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nexiting\n"
+   }
+  },
+  "traps: RETURN runs when a function returns": {
+   "script": "2c78f4cced43c6f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nreturning\nafter\n"
+   }
+  },
+  "traps: exit inside the EXIT trap sets the status": {
+   "script": "da40f411b825ca5e",
+   "status": 7,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "traps: exit status inside EXIT trap": {
+   "script": "de2e059dea096877",
+   "status": 5,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exit with 5\n"
+   }
+  },
+  "traps: find -exec children skip the caller's EXIT trap": {
+   "script": "44565351ab3af26a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\nbye\n"
+   }
+  },
+  "traps: sh -c runs its own EXIT trap": {
+   "script": "f155b9a0781b7ca1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\ninner\nouter\n"
+   }
+  },
+  "traps: trap -p and -l": {
+   "script": "834ddcaa07eb85fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo e' EXIT\nstatus=0\n"
+   }
+  },
+  "traps: trap on an invalid signal": {
+   "script": "99a8f657b7f5c96c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: NOSUCH: invalid signal specification\nbash: line 1: trap: 99: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "traps: xargs children skip the caller's EXIT trap": {
+   "script": "28e8c8fa8dfacfbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\nbye\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

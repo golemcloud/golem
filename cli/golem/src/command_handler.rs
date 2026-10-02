@@ -23,9 +23,11 @@ use golem_cli::fs;
 use golem_cli::log::{LogColorize, log_warn_action};
 use golem_cli::model::app::ResolvedLocalServer;
 use golem_worker_executor::services::golem_config::ResourceUsageMeteringConfig;
+use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::debug;
+use tokio::task::JoinSet;
+use tracing::{debug, info, warn};
 
 use crate::compat::map_local_server_startup_error;
 use crate::launch::{LaunchArgs, StartupPorts, launch_golem_services};
@@ -55,9 +57,24 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     clean_data_dir(&ctx, &data_dir).await?;
                 };
 
-                let (mut join_set, startup_ports) = launch_golem_services(&launch_args)
-                    .await
-                    .map_err(|err| map_local_server_startup_error(err, &data_dir))?;
+                // A single pinned signal future is shared by both phases below, so the
+                // handlers are installed once and a signal arriving between the two
+                // select! blocks is not lost.
+                let shutdown = shutdown_signal();
+                tokio::pin!(shutdown);
+
+                let launch_result = tokio::select! {
+                    res = launch_golem_services(&launch_args) => Some(res),
+                    _ = &mut shutdown => None,
+                };
+
+                let Some(launch_result) = launch_result else {
+                    info!("Received shutdown signal during startup, stopping Golem server");
+                    return Ok(());
+                };
+
+                let (mut join_set, startup_ports, worker_shutdown) =
+                    launch_result.map_err(|err| map_local_server_startup_error(err, &data_dir))?;
 
                 // Subdomains of the manifest's built-in local environments are expanded from
                 // the `localServer` ports or their defaults, so the check applies whenever the
@@ -67,11 +84,24 @@ impl CommandHandlerHooks for ServerCommandHandler {
                     warn_on_subdomain_port_mismatches(ctx.manifest_local_server(), &startup_ports);
                 }
 
-                while let Some(res) = join_set.join_next().await {
-                    res??;
-                }
+                let run_result = tokio::select! {
+                    res = async {
+                        while let Some(res) = join_set.join_next().await {
+                            res??;
+                        }
+                        Ok::<(), anyhow::Error>(())
+                    } => Some(res),
+                    _ = &mut shutdown => None,
+                };
 
-                Ok(())
+                match run_result {
+                    Some(res) => res,
+                    None => {
+                        info!("Received shutdown signal, stopping Golem server");
+                        shutdown_golem_services(&mut join_set, &worker_shutdown).await;
+                        Ok(())
+                    }
+                }
             }
             ServerSubcommand::Clean => {
                 let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
@@ -84,7 +114,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
         let args = RunArgs::default().with_env_overrides()?;
         let data_dir = default_data_dir()?;
 
-        let (mut join_set, _) = launch_golem_services(&LaunchArgs {
+        let (mut join_set, _, _) = launch_golem_services(&LaunchArgs {
             system_memory_override: args.system_memory_override,
             router_addr: args.router_addr().to_string(),
             router_port: args.router_port(),
@@ -118,6 +148,20 @@ impl CommandHandlerHooks for ServerCommandHandler {
     fn override_pretty_mode() -> bool {
         true
     }
+}
+
+async fn shutdown_golem_services(
+    join_set: &mut JoinSet<anyhow::Result<()>>,
+    worker_shutdown: &Shutdown,
+) {
+    worker_shutdown.cancel();
+    if !worker_shutdown.wait_for_tracked(SHUTDOWN_GRACE).await {
+        warn!(
+            grace = ?SHUTDOWN_GRACE,
+            "Background tasks did not finish within the shutdown grace period"
+        );
+    }
+    join_set.shutdown().await;
 }
 
 fn default_data_dir() -> anyhow::Result<PathBuf> {
@@ -333,14 +377,59 @@ async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<(
         .map_err(|err| anyhow!("Failed cleaning data dir ({}): {}", data_dir.display(), err))
 }
 
+/// Resolves when the process receives a shutdown request.
+///
+/// Handlers must be installed explicitly: as PID 1 in a container the kernel
+/// does not apply default signal dispositions, so without this the standalone
+/// server cannot be stopped by SIGINT/SIGTERM (e.g. Ctrl+C or `docker stop`).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = sigint.recv() => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use golem_cli::model::app_raw::LocalServer;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
 
     fn local_server(value: LocalServer) -> ResolvedLocalServer {
         ResolvedLocalServer::from_raw_with_base_dir(&value, Path::new("/tmp/test-app"))
+    }
+
+    #[test]
+    async fn server_shutdown_waits_for_tracked_cleanup() {
+        let shutdown = Shutdown::new();
+        let cleanup_finished = Arc::new(AtomicBool::new(false));
+        let cleanup_finished_clone = cleanup_finished.clone();
+        let shutdown_token = shutdown.token();
+        shutdown.spawn(async move {
+            shutdown_token.cancelled().await;
+            tokio::task::yield_now().await;
+            cleanup_finished_clone.store(true, Ordering::Release);
+        });
+
+        shutdown_golem_services(&mut JoinSet::new(), &shutdown).await;
+
+        assert!(cleanup_finished.load(Ordering::Acquire));
     }
 
     #[test]

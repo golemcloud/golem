@@ -6,13 +6,13 @@
 //
 //     http://license.golem.cloud/LICENSE
 
-use golem_api_grpc::proto::golem::schema::{ListValue, SchemaValue, schema_value};
 use golem_api_grpc::proto::golem::worker::input_stream_item;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRequest,
     ResumeAttach, StreamCancelReason, StreamMappingRole, invocation_request,
     invocation_session_result,
 };
+use golem_schema::proto::golem::schema::{ListValue, SchemaValue, schema_value};
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
 use tokio::sync::OwnedSemaphorePermit;

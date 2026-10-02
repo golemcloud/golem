@@ -46,7 +46,7 @@ use golem_shard_manager::quota::resource_definition_fetcher::FetchError;
 use golem_shard_manager::quota::{
     EtcdQuotaRepo, QuotaError, QuotaLease, QuotaRepo, QuotaService, ResourceDefinitionFetcher,
 };
-use golem_shard_manager::{ExternalRevision, NO_REVISION};
+use golem_shard_manager::{ExternalRevision, NO_REVISION, ReadRetry};
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
@@ -1260,6 +1260,7 @@ async fn three_leases(
 fn reader_with_a_write_between_pages(
     client: etcd_client::Client,
     fence: golem_shard_manager::LeaderFence,
+    read_retry: ReadRetry,
     writer: Arc<dyn QuotaRepo>,
     definition: &ResourceDefinition,
     guarded_by: ExternalRevision,
@@ -1269,7 +1270,7 @@ fn reader_with_a_write_between_pages(
     let written = Arc::new(AtomicI64::new(NO_REVISION));
     let definition = definition.clone();
     let written_at = written.clone();
-    let reader = EtcdQuotaRepo::new(client, fence).with_read_pages(2, move || {
+    let reader = EtcdQuotaRepo::new(client, fence, read_retry).with_read_pages(2, move || {
         let (writer, definition, fired, written_at, compact) = (
             writer.clone(),
             definition.clone(),
@@ -1321,6 +1322,7 @@ async fn a_read_spanning_pages_sees_one_revision(etcd: &Arc<DockerEtcd>) {
     let (reader, written) = reader_with_a_write_between_pages(
         store.client().await,
         fence,
+        store.read_retry(),
         writer,
         &definition,
         before,
@@ -1365,6 +1367,7 @@ async fn a_read_whose_revision_is_compacted_starts_over(etcd: &Arc<DockerEtcd>) 
     let (reader, written) = reader_with_a_write_between_pages(
         store.client().await,
         fence,
+        store.read_retry(),
         writer,
         &definition,
         before,

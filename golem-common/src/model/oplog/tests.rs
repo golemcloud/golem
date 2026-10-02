@@ -45,9 +45,10 @@ use crate::model::oplog::{
     OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
-    PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
-    PublicQueuedCardEvent, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
+    PublicEntityInvocationContext, PublicEntityInvocationOperation,
+    PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
+    PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
     PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome, PublicSpanStarted,
     PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
     QueuedCardEvent, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
@@ -1299,6 +1300,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
             mime_type: "application/octet-stream".to_string(),
@@ -1316,6 +1318,7 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -1338,6 +1341,12 @@ fn successful_update_serialization_poem_serde_equivalence() {
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
         }]),
+        snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: OplogIndex::from_u64(3),
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1352,6 +1361,14 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: Some("test".to_string()),
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
+        snapshot_assisted_details: Some(PublicFailedSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: Some(OplogIndex::from_u64(3)),
+            ineligibility_reason: None,
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1366,6 +1383,8 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: None,
+        update_attempt_index: None,
+        snapshot_assisted_details: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

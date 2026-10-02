@@ -412,11 +412,21 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target revision:   {}",
                     format_id(&params.target_revision),
                 ));
+                logln(format!(
+                    "{pad}update attempt:    {}",
+                    format_id(&params.update_attempt_index),
+                ));
                 match &params.description {
                     PublicUpdateDescription::Automatic(_) => {
                         logln(format!(
                             "{pad}type:              {}",
                             format_id("automatic")
+                        ));
+                    }
+                    PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+                        logln(format!(
+                            "{pad}type:              {}",
+                            format_id("snapshot assisted automatic")
                         ));
                     }
                     PublicUpdateDescription::SnapshotBased(inner_params) => {
@@ -441,6 +451,16 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target revision:   {}",
                     format_id(&params.target_revision),
                 ));
+                if let Some(details) = &params.snapshot_assisted_details {
+                    logln(format!(
+                        "{pad}source revision:   {}",
+                        format_id(&details.source_component_revision),
+                    ));
+                    logln(format!(
+                        "{pad}snapshot index:    {}",
+                        format_id(&details.snapshot_index),
+                    ));
+                }
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
@@ -461,8 +481,37 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}target revision:   {}",
                     format_id(&params.target_revision),
                 ));
+                if let Some(update_attempt_index) = params.update_attempt_index {
+                    logln(format!(
+                        "{pad}update attempt:    {}",
+                        format_id(&update_attempt_index),
+                    ));
+                }
                 if let Some(details) = &params.details {
                     logln(format!("{pad}error:             {}", format_error(details)));
+                }
+                if let Some(details) = &params.snapshot_assisted_details {
+                    logln(format!(
+                        "{pad}pending update:    {}",
+                        format_id(&details.pending_update_index)
+                    ));
+                    logln(format!(
+                        "{pad}source revision:   {}",
+                        format_id(&details.source_component_revision)
+                    ));
+                    logln(format!(
+                        "{pad}revision start:    {}",
+                        format_id(&details.source_revision_start_index)
+                    ));
+                    if let Some(snapshot_index) = details.snapshot_index {
+                        logln(format!(
+                            "{pad}snapshot index:   {}",
+                            format_id(&snapshot_index)
+                        ));
+                    }
+                    if let Some(reason) = &details.ineligibility_reason {
+                        logln(format!("{pad}ineligible:        {reason}"));
+                    }
                 }
             }
             PublicOplogEntry::GrowMemory(params) => {

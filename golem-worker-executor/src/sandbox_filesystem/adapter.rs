@@ -1243,7 +1243,10 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                                 "read range overflow",
                             )
                         })?;
+                        #[cfg(unix)]
                         let count = file.read_at(&mut buffer[read..], offset)?;
+                        #[cfg(windows)]
+                        let count = file.seek_read(&mut buffer[read..], offset)?;
                         if count == 0 {
                             break;
                         }
@@ -1339,7 +1342,13 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 NativeOperation::Write(transfer_size),
                 move || {
                     match placement {
-                        SandboxWritePlacement::At(offset) => file.write_at(&bytes, offset),
+                        SandboxWritePlacement::At(offset) => {
+                            #[cfg(unix)]
+                            let result = file.write_at(&bytes, offset);
+                            #[cfg(windows)]
+                            let result = file.seek_write(&bytes, offset);
+                            result
+                        }
                         SandboxWritePlacement::Append => {
                             let mut file = file.as_ref().try_clone()?.into_std();
                             file.seek(SeekFrom::End(0))?;

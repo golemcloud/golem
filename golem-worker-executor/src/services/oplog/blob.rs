@@ -27,6 +27,7 @@ use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, ShardEpoch};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
+    blob_file_name_to_string, join_blob_key,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -215,16 +216,20 @@ impl OplogArchiveService for BlobOplogArchiveService {
             paths
                 .into_iter()
                 .map(|path| {
-                    let agent_name = path.file_name().unwrap().to_str().unwrap();
-                    OwnedAgentId {
+                    let agent_name = blob_file_name_to_string(&path).map_err(|err| {
+                        WorkerExecutorError::unknown(format!(
+                            "Failed to extract agent name from blob path {path:?}: {err}"
+                        ))
+                    })?;
+                    Ok(OwnedAgentId {
                         environment_id: *environment_id,
                         agent_id: AgentId {
                             component_id: *component_id,
-                            agent_id: agent_name.to_string(),
+                            agent_id: agent_name,
                         },
-                    }
+                    })
                 })
-                .collect()
+                .collect::<Result<Vec<_>, WorkerExecutorError>>()?
         } else {
             Vec::new()
         };
@@ -509,18 +514,18 @@ impl BlobOplogArchive {
     }
 
     pub(crate) fn path_to_oplog_index(path: &Path) -> OplogArchiveResult<OplogIndex> {
-        path.file_name()
-            .and_then(|s| s.to_str())
+        blob_file_name_to_string(path)
+            .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .map(OplogIndex::from_u64)
             .ok_or_else(|| format!("failed to parse oplog index from path: {path:?}"))
     }
 
     pub(crate) fn oplog_index_to_path(&self, idx: OplogIndex) -> PathBuf {
-        let mut path = PathBuf::new();
-        path.push(self.owned_agent_id.agent_name());
-        path.push(idx.to_string());
-        path
+        PathBuf::from(join_blob_key(
+            &self.owned_agent_id.agent_name(),
+            &idx.to_string(),
+        ))
     }
 
     // Fetch a range of entries from the storage. At most one chunk of data will be returned,
@@ -857,12 +862,7 @@ impl OplogArchive for BlobOplogArchive {
 
         let to_drop = idx_to_drop
             .iter()
-            .map(|idx| {
-                let mut path = PathBuf::new();
-                path.push(self.owned_agent_id.agent_name());
-                path.push(idx.to_string());
-                path
-            })
+            .map(|idx| self.oplog_index_to_path(*idx))
             .collect::<Vec<_>>();
 
         let ns = BlobStorageNamespace::CompressedOplog {

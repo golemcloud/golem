@@ -22,7 +22,7 @@ worker-executor = [ "dep:wasmtime", "dep:wasmtime-wasi" ]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-mcp-import = { workspace = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["protobuf"] }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -91,6 +91,7 @@ tonic = { workspace = true, features = [ "_tls-any" ] }
 tonic-tracing-opentelemetry = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
+typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }

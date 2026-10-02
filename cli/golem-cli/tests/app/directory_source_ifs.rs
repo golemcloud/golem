@@ -39,6 +39,12 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
         "removed seed\n",
     )
     .unwrap();
+    fs::create_dir_all(ctx.cwd_path_join(Path::new("scratch").join("component"))).unwrap();
+    fs::write_str(
+        ctx.cwd_path_join(Path::new("scratch").join("component").join("nested.txt")),
+        "component seed\n",
+    )
+    .unwrap();
 
     fs::write_str(
         ctx.cwd_path_join(Path::new("src").join("ifs-probe-agent.ts")),
@@ -128,6 +134,10 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
             components:
               test-app-directory-source-ifs:ts-main:
                 templates: ts
+                files:
+                - sourcePath: ./scratch/component
+                  targetPath: /component-workspace
+                  permissions: read-only
 
             agents:
               IfsProbeAgent:
@@ -143,6 +153,7 @@ async fn directory_source_ifs_deploys_and_updates_for_ts_agent_workspace(_tracin
 
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains("/component-workspace/nested.txt:"));
     assert!(outputs.stdout_contains("/workspace/.keep:"));
 
     fs::write_str(

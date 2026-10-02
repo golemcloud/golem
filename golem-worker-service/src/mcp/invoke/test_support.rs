@@ -344,7 +344,7 @@ pub(crate) struct RecordedInvocationContext {
 struct RecordingWorkerClient {
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
     prepared_agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
         golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
     >>>,
@@ -477,8 +477,8 @@ impl WorkerClient for RecordingWorkerClient {
         _: bool,
         _: EnvironmentId,
         _: AuthCtx,
-    ) -> WorkerResult<()> {
-        unimplemented!()
+    ) -> WorkerResult<OplogIndex> {
+        Ok(OplogIndex::INITIAL)
     }
 
     async fn get_oplog(
@@ -621,7 +621,7 @@ impl WorkerClient for RecordingWorkerClient {
         &self,
         agent_id: &AgentId,
         _: Option<String>,
-        method_params: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_params: Option<golem_schema::proto::golem::schema::SchemaValue>,
         _: i32,
         _: Option<::prost_types::Timestamp>,
         _: IdempotencyKey,
@@ -734,7 +734,7 @@ pub(crate) struct InvocationHarness {
     pub(crate) account_email: AccountEmail,
     pub(crate) file_reads: Arc<FileReadMock>,
     agent_ids: Arc<Mutex<Vec<AgentId>>>,
-    method_params: Arc<Mutex<Vec<Option<golem_api_grpc::proto::golem::schema::SchemaValue>>>>,
+    method_params: Arc<Mutex<Vec<Option<golem_schema::proto::golem::schema::SchemaValue>>>>,
     durable_stream_controls: Arc<Mutex<Vec<
         golem_api_grpc::proto::golem::workerexecutor::v1::DurableStreamAttachmentControlRequest,
     >>>,

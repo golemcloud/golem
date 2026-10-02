@@ -24,8 +24,8 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
-use std::path::Component;
 use std::path::{Path, PathBuf};
+use typed_path::{Utf8UnixComponent, Utf8UnixPath, Utf8UnixPathBuf};
 
 pub mod fs;
 pub mod memory;
@@ -159,6 +159,40 @@ pub trait BlobStorage: Debug + Send + Sync {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, Error>;
+
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        let mut pending = vec![path.to_path_buf()];
+        let mut blobs = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in self
+                .list_dir(target_label, op_label, namespace.clone(), &directory)
+                .await?
+            {
+                match self
+                    .exists(target_label, op_label, namespace.clone(), &entry)
+                    .await?
+                {
+                    ExistsResult::File => {
+                        if let Some(metadata) = self
+                            .get_metadata(target_label, op_label, namespace.clone(), &entry)
+                            .await?
+                        {
+                            blobs.push((entry, metadata));
+                        }
+                    }
+                    ExistsResult::Directory => pending.push(entry),
+                    ExistsResult::DoesNotExist => {}
+                }
+            }
+        }
+        Ok(blobs)
+    }
 
     /// Deletes the directory at the path and all the entries below it, at any depth.
     ///
@@ -387,6 +421,17 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
+    pub async fn list_blobs_below(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        self.record("list_blobs_below");
+        self.storage
+            .list_blobs_below(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
     pub async fn delete_dir(
         &self,
         namespace: BlobStorageNamespace,
@@ -510,20 +555,27 @@ pub struct BlobMetadata {
     pub size: u64,
 }
 
+fn unix_blob_path(path: &Path) -> Result<&Utf8UnixPath, Error> {
+    path.to_str()
+        .map(Utf8UnixPath::new)
+        .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+}
+
 pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
+    let path = unix_blob_path(path)?;
     if path.is_absolute() {
         return Err(anyhow!("Blob path must be relative: {path:?}"));
     }
 
     for component in path.components() {
         match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir => {
+            Utf8UnixComponent::Normal(_) | Utf8UnixComponent::CurDir => {}
+            Utf8UnixComponent::ParentDir => {
                 return Err(anyhow!(
                     "Blob path cannot contain parent traversal: {path:?}"
                 ));
             }
-            Component::RootDir | Component::Prefix(_) => {
+            Utf8UnixComponent::RootDir => {
                 return Err(anyhow!("Blob path must be relative: {path:?}"));
             }
         }
@@ -537,30 +589,106 @@ pub(crate) fn validate_relative_blob_path(path: &Path) -> Result<(), Error> {
 /// A path is at the root when it has no name in it. An empty path is at the root, and so is a
 /// path that only has `.` in it.
 pub(crate) fn blob_path_is_root(path: &Path) -> bool {
-    !path
-        .components()
-        .any(|component| matches!(component, Component::Normal(_)))
+    unix_blob_path(path).is_ok_and(|path| {
+        !path
+            .components()
+            .any(|component| matches!(component, Utf8UnixComponent::Normal(_)))
+    })
 }
 
-pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, Error> {
-    path.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
+pub fn blob_path_to_string(path: &Path) -> Result<String, Error> {
+    Ok(unix_blob_path(path)?.normalize().into_string())
+}
+
+pub fn join_blob_key(parent: &str, child: &str) -> String {
+    let mut path = Utf8UnixPathBuf::from(parent);
+    path.push(child);
+    path.into_string()
+}
+
+/// Joins two guest-provided blob path segments using contract-defined Unix semantics.
+///
+/// Both segments must be relative and traversal-free. Windows prefixes and backslashes remain
+/// ordinary name characters on every host.
+pub fn join_blob_path(parent: &str, child: &str) -> Result<PathBuf, Error> {
+    let parent = Path::new(parent);
+    let child = Path::new(child);
+    validate_relative_blob_path(parent)?;
+    validate_relative_blob_path(child)?;
+
+    let parent = unix_blob_path(parent)?;
+    let child = unix_blob_path(child)?;
+    Ok(PathBuf::from(parent.join(child).as_str()))
 }
 
 pub(crate) fn blob_parent_to_string(path: &Path) -> Result<String, Error> {
-    match path.parent() {
-        Some(parent) => blob_path_to_string(parent),
-        None => Ok(String::new()),
-    }
+    Ok(unix_blob_path(path)?
+        .normalize()
+        .parent()
+        .map(|parent| parent.as_str().to_string())
+        .unwrap_or_default())
 }
 
-pub(crate) fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
-    path.file_name()
+pub fn blob_file_name_to_string(path: &Path) -> Result<String, Error> {
+    unix_blob_path(path)?
+        .normalize()
+        .file_name()
+        .map(ToString::to_string)
         .ok_or_else(|| anyhow!("Path must have a file name: {path:?}"))
-        .and_then(|name| {
-            name.to_str()
-                .map(|s| s.to_string())
-                .ok_or_else(|| anyhow!("Blob path must be valid UTF-8: {path:?}"))
-        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        blob_file_name_to_string, blob_parent_to_string, blob_path_to_string, join_blob_path,
+        validate_relative_blob_path,
+    };
+    use std::path::Path;
+    use test_r::test;
+
+    #[test]
+    fn join_blob_path_uses_contract_separator() {
+        assert_eq!(
+            join_blob_path("photos", "animals/cat.png")
+                .unwrap()
+                .as_os_str(),
+            "photos/animals/cat.png"
+        );
+        assert_eq!(
+            join_blob_path("", "cat.png").unwrap().as_os_str(),
+            "cat.png"
+        );
+        assert_eq!(
+            join_blob_path("photos/", "cat.png").unwrap().as_os_str(),
+            "photos/cat.png"
+        );
+    }
+
+    #[test]
+    fn join_blob_path_does_not_replace_parent() {
+        let windows_absolute_name = join_blob_path("photos", r"C:\cats\kitten.png").unwrap();
+        assert_eq!(
+            windows_absolute_name.as_os_str(),
+            r"photos/C:\cats\kitten.png"
+        );
+        assert!(validate_relative_blob_path(&windows_absolute_name).is_ok());
+
+        assert!(join_blob_path("photos", "/cats/kitten.png").is_err());
+        assert!(join_blob_path("photos", "../kitten.png").is_err());
+    }
+
+    #[test]
+    fn blob_path_components_use_contract_separator() {
+        let path = Path::new(r"photos/animals\cat.png");
+        assert_eq!(blob_parent_to_string(path).unwrap(), "photos");
+        assert_eq!(blob_file_name_to_string(path).unwrap(), r"animals\cat.png");
+    }
+
+    #[test]
+    fn blob_path_identity_normalizes_current_directory_components() {
+        assert_eq!(
+            blob_path_to_string(Path::new("./photos/./cat.png")).unwrap(),
+            "photos/cat.png"
+        );
+    }
 }

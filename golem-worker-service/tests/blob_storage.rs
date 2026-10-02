@@ -338,6 +338,18 @@ impl BlobStorage for S3BlobStorageWithS3Mock {
             .await
     }
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        self.storage
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
     async fn delete_dir(
         &self,
         target_label: &'static str,
@@ -462,6 +474,172 @@ fn custom_storage() -> BlobStorageNamespace {
 
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
+
+#[test]
+#[test_r::timeout("120s")]
+async fn s3_list_blobs_below_ignores_directory_markers(
+    #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_ignores_directory_markers(test, namespace).await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn prefixed_s3_list_blobs_below_ignores_directory_markers(
+    #[tagged_as("s3_prefixed")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_ignores_directory_markers(test, namespace).await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn s3_list_blobs_below_includes_namespace_root_object(
+    #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_includes_namespace_root_object(test, namespace).await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn prefixed_s3_list_blobs_below_includes_namespace_root_object(
+    #[tagged_as("s3_prefixed")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_includes_namespace_root_object(test, namespace).await;
+}
+
+async fn test_s3_list_blobs_below_includes_namespace_root_object(
+    test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    storage
+        .put_raw(
+            "root_object_inventory",
+            "put-root",
+            namespace.clone(),
+            Path::new(""),
+            &[1, 2, 3, 4, 5],
+        )
+        .await
+        .unwrap();
+
+    for expected_size in [5, 5] {
+        let blobs = storage
+            .list_blobs_below(
+                "root_object_inventory",
+                "list",
+                namespace.clone(),
+                Path::new(""),
+            )
+            .await
+            .unwrap();
+        assert!(
+            blobs.iter().any(|(path, metadata)| {
+                path.as_os_str().is_empty() && metadata.size == expected_size
+            }),
+            "namespace-root object must contribute to recursive inventory: {blobs:?}"
+        );
+    }
+
+    storage
+        .put_raw(
+            "root_object_inventory",
+            "replace-root",
+            namespace.clone(),
+            Path::new(""),
+            &[0; 10],
+        )
+        .await
+        .unwrap();
+    let replaced = storage
+        .list_blobs_below(
+            "root_object_inventory",
+            "list-replaced",
+            namespace.clone(),
+            Path::new(""),
+        )
+        .await
+        .unwrap();
+    assert!(
+        replaced
+            .iter()
+            .any(|(path, metadata)| path.as_os_str().is_empty() && metadata.size == 10),
+        "replacement bytes at the namespace root must remain in inventory: {replaced:?}"
+    );
+}
+
+async fn test_s3_list_blobs_below_ignores_directory_markers(
+    test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let root = Path::new("recursive-list");
+    storage
+        .create_dir("recursive_list", "create-root", namespace.clone(), root)
+        .await
+        .unwrap();
+    storage
+        .create_dir(
+            "recursive_list",
+            "create-explicit",
+            namespace.clone(),
+            &root.join("explicit"),
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "recursive_list",
+            "put-explicit",
+            namespace.clone(),
+            &root.join("explicit/object"),
+            &[1, 2, 3],
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "recursive_list",
+            "put-implicit",
+            namespace.clone(),
+            &root.join("implicit/deep/object"),
+            &[4, 5, 6, 7],
+        )
+        .await
+        .unwrap();
+
+    let mut blobs = storage
+        .list_blobs_below("recursive_list", "list", namespace.clone(), root)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(path, metadata)| (path, metadata.size))
+        .collect::<Vec<_>>();
+    blobs.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        blobs,
+        vec![
+            (root.join("explicit/object"), 3),
+            (root.join("implicit/deep/object"), 4),
+        ]
+    );
+
+    let mut explicit_entries = storage
+        .list_dir(
+            "recursive_list",
+            "list-explicit",
+            namespace.clone(),
+            &root.join("explicit"),
+        )
+        .await
+        .unwrap();
+    explicit_entries.sort();
+    assert_eq!(explicit_entries, vec![root.join("explicit/object")]);
+}
 
 #[test]
 #[test_r::timeout("120s")]
@@ -973,7 +1151,7 @@ async fn create_delete_exists_dir_and_file(
             "create_delete_exists_dir_and_file",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file"),
+            &join_blob_path("test-dir", "test-file").unwrap(),
             &Bytes::from("test-data"),
         )
         .await
@@ -992,7 +1170,7 @@ async fn create_delete_exists_dir_and_file(
             "create_delete_exists_dir_and_file",
             "exists-3",
             namespace.clone(),
-            &path.join("test-file"),
+            &join_blob_path("test-dir", "test-file").unwrap(),
         )
         .await
         .unwrap();
@@ -1039,7 +1217,7 @@ async fn list_dir(
             "list_dir",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file1"),
+            &join_blob_path("test-dir", "test-file1").unwrap(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -1049,7 +1227,7 @@ async fn list_dir(
             "list_dir",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file2"),
+            &join_blob_path("test-dir", "test-file2").unwrap(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -1059,7 +1237,7 @@ async fn list_dir(
             "list_dir",
             "create-dir",
             namespace.clone(),
-            &path.join("inner-dir"),
+            &join_blob_path("test-dir", "inner-dir").unwrap(),
         )
         .await
         .unwrap();
@@ -1098,7 +1276,7 @@ async fn delete_many(
             "delete_many",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file1"),
+            &join_blob_path("test-dir", "test-file1").unwrap(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -1108,7 +1286,7 @@ async fn delete_many(
             "delete_many",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file2"),
+            &join_blob_path("test-dir", "test-file2").unwrap(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -1118,7 +1296,7 @@ async fn delete_many(
             "delete_many",
             "put-raw",
             namespace.clone(),
-            &path.join("test-file3"),
+            &join_blob_path("test-dir", "test-file3").unwrap(),
             &Bytes::from("test-data3"),
         )
         .await
@@ -1128,7 +1306,7 @@ async fn delete_many(
             "delete_many",
             "create-dir",
             namespace.clone(),
-            &path.join("inner-dir"),
+            &join_blob_path("test-dir", "inner-dir").unwrap(),
         )
         .await
         .unwrap();
@@ -1137,7 +1315,10 @@ async fn delete_many(
             "delete_many",
             "delete-many",
             namespace.clone(),
-            &[path.join("test-file1"), path.join("test-file3")],
+            &[
+                join_blob_path("test-dir", "test-file1").unwrap(),
+                join_blob_path("test-dir", "test-file3").unwrap(),
+            ],
         )
         .await
         .unwrap();
@@ -1313,7 +1494,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "put-raw",
             namespace.clone(),
-            &path1.join("test-file1"),
+            &join_blob_path("test-dir", "test-file1").unwrap(),
             &Bytes::from("test-data1"),
         )
         .await
@@ -1323,7 +1504,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "put-raw",
             namespace.clone(),
-            &path1.join("test-file2"),
+            &join_blob_path("test-dir", "test-file2").unwrap(),
             &Bytes::from("test-data2"),
         )
         .await
@@ -1333,7 +1514,7 @@ async fn list_dir_same_prefix(
             "list_dir_same_prefix",
             "create-dir",
             namespace.clone(),
-            &path1.join("inner-dir"),
+            &join_blob_path("test-dir", "inner-dir").unwrap(),
         )
         .await
         .unwrap();
@@ -1363,14 +1544,13 @@ async fn delete_dir_must_not_delete_siblings(
     let storage = test.get_blob_storage().await;
 
     let dir_a = Path::new("dir-a");
-    let dir_b = Path::new("dir-b");
 
     storage
         .put_raw(
             "delete_dir_must_not_delete_siblings",
             "put-a",
             namespace.clone(),
-            &dir_a.join("file-a"),
+            &join_blob_path("dir-a", "file-a").unwrap(),
             &Bytes::from("data-a"),
         )
         .await
@@ -1381,7 +1561,7 @@ async fn delete_dir_must_not_delete_siblings(
             "delete_dir_must_not_delete_siblings",
             "put-b",
             namespace.clone(),
-            &dir_b.join("file-b"),
+            &join_blob_path("dir-b", "file-b").unwrap(),
             &Bytes::from("data-b"),
         )
         .await
@@ -1402,7 +1582,7 @@ async fn delete_dir_must_not_delete_siblings(
             "delete_dir_must_not_delete_siblings",
             "get-b",
             namespace.clone(),
-            &dir_b.join("file-b"),
+            &join_blob_path("dir-b", "file-b").unwrap(),
         )
         .await
         .unwrap();
@@ -1454,6 +1634,168 @@ async fn reject_parent_traversal_in_put_raw(
 
 #[test]
 #[tracing::instrument]
+async fn filesystem_backslash_is_not_a_contract_path_separator(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let directory = Path::new("photos");
+    let object = Path::new(r"photos/animals\cat.png");
+
+    storage
+        .put_raw(
+            "backslash_is_not_a_contract_path_separator",
+            "put-raw",
+            namespace.clone(),
+            object,
+            &Bytes::from("payload"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .list_dir(
+                "backslash_is_not_a_contract_path_separator",
+                "list-dir",
+                namespace.clone(),
+                directory,
+            )
+            .await
+            .unwrap(),
+        vec![object.to_path_buf()]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn filesystem_codec_preserves_long_and_casefold_colliding_names(
+    #[tagged_as("fs")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let directory = Path::new("photos");
+    let long_name = "a".repeat(255);
+    let objects = [
+        join_blob_path("photos", "AAA").unwrap(),
+        join_blob_path("photos", "AA[").unwrap(),
+        join_blob_path("photos", &long_name).unwrap(),
+    ];
+
+    for (index, object) in objects.iter().enumerate() {
+        storage
+            .put_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "put-raw",
+                namespace.clone(),
+                object,
+                index.to_string().as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let copy_source = join_blob_path("photos", "copy-source").unwrap();
+    let move_source = join_blob_path("photos", "move-source").unwrap();
+    let copy_destination = join_blob_path("photos", &"b".repeat(121)).unwrap();
+    let move_destination = join_blob_path("photos", &"c".repeat(255)).unwrap();
+    storage
+        .put_raw(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "put-copy-source",
+            namespace.clone(),
+            &copy_source,
+            b"copy",
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "put-move-source",
+            namespace.clone(),
+            &move_source,
+            b"move",
+        )
+        .await
+        .unwrap();
+    storage
+        .copy(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "copy",
+            namespace.clone(),
+            &copy_source,
+            &copy_destination,
+        )
+        .await
+        .unwrap();
+    storage
+        .r#move(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "move",
+            namespace.clone(),
+            &move_source,
+            &move_destination,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .get_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "get-copy-destination",
+                namespace.clone(),
+                &copy_destination,
+            )
+            .await
+            .unwrap(),
+        Some(b"copy".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "get-move-destination",
+                namespace.clone(),
+                &move_destination,
+            )
+            .await
+            .unwrap(),
+        Some(b"move".to_vec())
+    );
+    assert_eq!(
+        storage
+            .get_raw(
+                "filesystem_codec_preserves_long_and_casefold_colliding_names",
+                "get-move-source",
+                namespace.clone(),
+                &move_source,
+            )
+            .await
+            .unwrap(),
+        None
+    );
+
+    let mut listed = storage
+        .list_dir(
+            "filesystem_codec_preserves_long_and_casefold_colliding_names",
+            "list-dir",
+            namespace.clone(),
+            directory,
+        )
+        .await
+        .unwrap();
+    listed.sort();
+
+    let mut expected = objects.to_vec();
+    expected.extend([copy_source, copy_destination, move_destination]);
+    expected.sort();
+    assert_eq!(listed, expected);
+}
+
+#[test]
+#[tracing::instrument]
 async fn delete_dir_escapes_like_wildcards(
     #[tagged_as("sqlite")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
@@ -1461,14 +1803,13 @@ async fn delete_dir_escapes_like_wildcards(
     let storage = test.get_blob_storage().await;
 
     let wildcard_dir = Path::new("dir%name");
-    let sibling_dir = Path::new("dirXname");
 
     storage
         .put_raw(
             "delete_dir_escapes_like_wildcards",
             "put-a",
             namespace.clone(),
-            &wildcard_dir.join("file-a"),
+            &join_blob_path("dir%name", "file-a").unwrap(),
             &Bytes::from("data-a"),
         )
         .await
@@ -1479,7 +1820,7 @@ async fn delete_dir_escapes_like_wildcards(
             "delete_dir_escapes_like_wildcards",
             "put-b",
             namespace.clone(),
-            &sibling_dir.join("file-b"),
+            &join_blob_path("dirXname", "file-b").unwrap(),
             &Bytes::from("data-b"),
         )
         .await
@@ -1500,7 +1841,7 @@ async fn delete_dir_escapes_like_wildcards(
             "delete_dir_escapes_like_wildcards",
             "get-b",
             namespace.clone(),
-            &sibling_dir.join("file-b"),
+            &join_blob_path("dirXname", "file-b").unwrap(),
         )
         .await
         .unwrap();
@@ -1627,7 +1968,7 @@ async fn clear_then_list_objects(
             "clear_then_list_objects",
             "put-raw-1",
             namespace.clone(),
-            &container.join("obj1"),
+            &join_blob_path("my-container", "obj1").unwrap(),
             &Bytes::from("data1"),
         )
         .await
@@ -1637,7 +1978,7 @@ async fn clear_then_list_objects(
             "clear_then_list_objects",
             "put-raw-2",
             namespace.clone(),
-            &container.join("obj2"),
+            &join_blob_path("my-container", "obj2").unwrap(),
             &Bytes::from("data2"),
         )
         .await

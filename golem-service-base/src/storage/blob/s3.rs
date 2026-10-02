@@ -16,7 +16,7 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace,
-    ExistsResult, blob_path_is_root, blob_path_to_string, validate_range,
+    ExistsResult, blob_path_is_root, blob_path_to_string, join_blob_key, validate_range,
     validate_relative_blob_path,
 };
 use anyhow::{Error, anyhow, ensure};
@@ -124,41 +124,19 @@ impl S3BlobStorage {
         }
     }
 
-    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> PathBuf {
-        match namespace {
+    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> String {
+        let namespace_prefix = match namespace {
             BlobStorageNamespace::CompilationCache { environment_id }
             | BlobStorageNamespace::CustomStorage { environment_id }
             | BlobStorageNamespace::InitialAgentFiles { environment_id }
-            | BlobStorageNamespace::Components { environment_id } => {
-                let environment_id_string = environment_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    Path::new(&environment_id_string).to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(environment_id_string)
-                        .to_path_buf()
-                }
-            }
+            | BlobStorageNamespace::Components { environment_id } => environment_id.to_string(),
             BlobStorageNamespace::OplogPayload {
                 environment_id,
                 agent_id,
                 agent_mode,
             } => {
-                let environment_id_string = environment_id.to_string();
-                let agent_id_string = agent_id.to_string();
                 let mode = super::agent_mode_prefix(*agent_mode);
-                if self.config.object_prefix.is_empty() {
-                    Path::new(mode)
-                        .join(environment_id_string)
-                        .join(agent_id_string)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(mode)
-                        .join(environment_id_string)
-                        .join(agent_id_string)
-                        .to_path_buf()
-                }
+                format!("{mode}/{environment_id}/{agent_id}")
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
@@ -166,23 +144,42 @@ impl S3BlobStorage {
                 agent_mode,
                 ..
             } => {
-                let environment_id_string = environment_id.to_string();
-                let component_id_string = component_id.to_string();
                 let mode = super::agent_mode_prefix(*agent_mode);
-                if self.config.object_prefix.is_empty() {
-                    Path::new(mode)
-                        .join(environment_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(mode)
-                        .join(environment_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                }
+                format!("{mode}/{environment_id}/{component_id}")
             }
+        };
+
+        join_blob_key(&self.config.object_prefix, &namespace_prefix)
+    }
+
+    fn key_of(&self, namespace: &BlobStorageNamespace, path: &Path) -> Result<String, Error> {
+        let namespace_root = self.prefix_of(namespace);
+        let path = blob_path_to_string(path)?;
+        if path.is_empty() {
+            Ok(namespace_root)
+        } else {
+            Ok(join_blob_key(&namespace_root, &path))
         }
+    }
+
+    fn listed_path(namespace_root: &str, directory_key: &str, object_key: &str) -> Option<PathBuf> {
+        let directory_key = directory_key.trim_end_matches('/');
+        let is_dir_marker = object_key.ends_with("/__dir_marker");
+        let parent = object_key.rsplit_once('/').map(|(parent, _)| parent);
+        let is_nested = parent != Some(directory_key);
+
+        let listed_key = if is_nested {
+            is_dir_marker.then_some(parent?)
+        } else if is_dir_marker {
+            None
+        } else {
+            Some(object_key)
+        }?;
+
+        listed_key
+            .strip_prefix(namespace_root)
+            .and_then(|path| path.strip_prefix('/'))
+            .map(PathBuf::from)
     }
 
     fn encode_copy_source_key(key: &str) -> String {
@@ -203,22 +200,21 @@ impl S3BlobStorage {
         target_label: &'static str,
         op_label: &'static str,
         bucket: &str,
-        prefix: &Path,
+        prefix: &str,
     ) -> Result<Vec<Object>, Error> {
         let mut result = Vec::new();
         let mut cont: Option<String> = None;
-        let prefix_str = blob_path_to_string(prefix)?;
-        let prefix_with_slash = if prefix_str.ends_with('/') {
-            prefix_str.clone()
+        let prefix_with_slash = if prefix.ends_with('/') {
+            prefix.to_string()
         } else {
-            format!("{prefix_str}/")
+            format!("{prefix}/")
         };
 
         loop {
             let response = with_retries_customized(
                 target_label,
                 op_label,
-                Some(format!("{bucket} - {prefix_str}")),
+                Some(format!("{bucket} - {prefix}")),
                 &self.config.retries,
                 &(self.client.clone(), bucket, prefix_with_slash.clone(), cont),
                 |(client, bucket, prefix, cont)| {
@@ -257,19 +253,18 @@ impl S3BlobStorage {
         target_label: &'static str,
         op_label: &'static str,
         bucket: &str,
-        prefix: &Path,
+        prefix: &str,
     ) -> Result<bool, Error> {
-        let prefix_str = blob_path_to_string(prefix)?;
-        let prefix_with_slash = if prefix_str.ends_with('/') {
-            prefix_str.clone()
+        let prefix_with_slash = if prefix.ends_with('/') {
+            prefix.to_string()
         } else {
-            format!("{prefix_str}/")
+            format!("{prefix}/")
         };
 
         let response = with_retries_customized(
             target_label,
             op_label,
-            Some(format!("{bucket} - {prefix_str}")),
+            Some(format!("{bucket} - {prefix}")),
             &self.config.retries,
             &(self.client.clone(), bucket, prefix_with_slash),
             |(client, bucket, prefix)| {
@@ -294,6 +289,55 @@ impl S3BlobStorage {
         .await?;
 
         Ok(!response.contents().is_empty())
+    }
+
+    async fn get_exact_metadata(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        bucket: &str,
+        key: &str,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        let result = with_retries_customized(
+            target_label,
+            op_label,
+            Some(format!("{bucket} - {key:?}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key.to_string()),
+            |(client, bucket, key)| {
+                Box::pin(async move {
+                    client
+                        .head_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .send()
+                        .await
+                })
+            },
+            Self::is_head_object_error_retriable,
+            Self::head_object_error_as_loggable,
+            false,
+        )
+        .await;
+
+        match result {
+            Ok(result) => Ok(Some(BlobMetadata {
+                size: result.content_length().unwrap_or_default().max(0) as u64,
+                last_modified_at: Timestamp::from(
+                    result
+                        .last_modified
+                        .unwrap()
+                        .to_millis()
+                        .expect("failed to convert date-time value to millis")
+                        as u64,
+                ),
+            })),
+            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
+                HeadObjectError::NotFound(_) => Ok(None),
+                err => Err(err.into()),
+            },
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn is_get_object_error_retriable(
@@ -409,15 +453,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -459,15 +502,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -526,7 +568,7 @@ impl BlobStorage for S3BlobStorage {
             .checked_add(length - 1)
             .ok_or_else(|| anyhow!("Blob range overflow"))?;
         let bucket = self.bucket_of(&namespace);
-        let key = blob_path_to_string(&self.prefix_of(&namespace).join(path))?;
+        let key = self.key_of(&namespace, path)?;
         let result = with_retries_customized(
             target_label,
             op_label,
@@ -590,15 +632,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<Vec<u8>>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         let result = with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -641,93 +682,22 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<Option<BlobMetadata>, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
-        let op_id = format!("{bucket} - {key:?}");
-
-        let file_head_result = with_retries_customized(
-            target_label,
-            op_label,
-            Some(op_id.clone()),
-            &self.config.retries,
-            &(self.client.clone(), bucket, key_str.clone()),
-            |(client, bucket, key)| {
-                Box::pin(async move {
-                    client
-                        .head_object()
-                        .bucket(*bucket)
-                        .key(key.clone())
-                        .send()
-                        .await
-                })
-            },
-            Self::is_head_object_error_retriable,
-            Self::head_object_error_as_loggable,
-            false,
-        )
-        .await;
-        match file_head_result {
-            Ok(result) => Ok(Some(BlobMetadata {
-                size: result.content_length().unwrap_or_default() as u64,
-                last_modified_at: Timestamp::from(
-                    result
-                        .last_modified
-                        .unwrap()
-                        .to_millis()
-                        .expect("failed to convert date-time value to millis")
-                        as u64,
-                ),
-            })),
-            Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
-                HeadObjectError::NotFound(_) => {
-                    let marker = key.join("__dir_marker");
-                    let marker_str = blob_path_to_string(&marker)?;
-                    let dir_marker_head_result = with_retries_customized(
-                        target_label,
-                        op_label,
-                        Some(op_id),
-                        &self.config.retries,
-                        &(self.client.clone(), bucket, marker_str),
-                        |(client, bucket, marker)| {
-                            Box::pin(async move {
-                                client
-                                    .head_object()
-                                    .bucket(*bucket)
-                                    .key(marker.clone())
-                                    .send()
-                                    .await
-                            })
-                        },
-                        Self::is_head_object_error_retriable,
-                        Self::head_object_error_as_loggable,
-                        false,
-                    )
-                    .await;
-                    match dir_marker_head_result {
-                        Ok(result) => Ok(Some(BlobMetadata {
-                            size: 0,
-                            last_modified_at: Timestamp::from(
-                                result
-                                    .last_modified
-                                    .unwrap()
-                                    .to_millis()
-                                    .expect("failed to convert date-time value to millis")
-                                    as u64,
-                            ),
-                        })),
-                        Err(SdkError::ServiceError(service_error)) => {
-                            match service_error.into_err() {
-                                HeadObjectError::NotFound(_) => Ok(None),
-                                err => Err(err.into()),
-                            }
-                        }
-                        Err(err) => Err(err.into()),
-                    }
-                }
-                err => Err(err.into()),
-            },
-            Err(err) => Err(err.into()),
+        let key = self.key_of(&namespace, path)?;
+        if let Some(metadata) = self
+            .get_exact_metadata(target_label, op_label, bucket, &key)
+            .await?
+        {
+            return Ok(Some(metadata));
         }
+
+        let marker = join_blob_key(&key, "__dir_marker");
+        Ok(self
+            .get_exact_metadata(target_label, op_label, bucket, &marker)
+            .await?
+            .map(|metadata| BlobMetadata {
+                size: 0,
+                ..metadata
+            }))
     }
 
     async fn put_raw(
@@ -740,8 +710,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
         let bytes = Bytes::copy_from_slice(data);
 
         with_retries_customized(
@@ -749,7 +718,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, bytes),
+            &(self.client.clone(), bucket, key.clone(), bytes),
             |(client, bucket, key, bytes)| {
                 Box::pin(async move {
                     client
@@ -780,8 +749,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         fn go<'a>(
             args: &'a (
@@ -828,7 +796,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str, stream),
+            &(self.client.clone(), bucket, key.clone(), stream),
             go,
             |err| err.is_retriable(Self::is_put_object_error_retriable),
             SdkErrorOrCustomError::as_loggable,
@@ -849,15 +817,14 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -888,13 +855,11 @@ impl BlobStorage for S3BlobStorage {
             validate_relative_blob_path(path)?;
         }
         let bucket = self.bucket_of(&namespace);
-        let prefix = self.prefix_of(&namespace);
-
+        let namespace_root = self.prefix_of(&namespace);
         let to_delete = paths
             .iter()
             .map(|path| {
-                let key = prefix.join(path);
-                let key = blob_path_to_string(&key)?;
+                let key = self.key_of(&namespace, path)?;
                 ObjectIdentifier::builder()
                     .key(key)
                     .build()
@@ -905,7 +870,7 @@ impl BlobStorage for S3BlobStorage {
         with_retries_customized(
             target_label,
             op_label,
-            Some(format!("{bucket} - {prefix:?}")),
+            Some(format!("{bucket} - {namespace_root:?}")),
             &self.config.retries,
             &(self.client.clone(), bucket, to_delete),
             |(client, bucket, to_delete)| {
@@ -941,16 +906,15 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<(), Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let marker = key.join("__dir_marker");
-        let marker_str = blob_path_to_string(&marker)?;
+        let key = self.key_of(&namespace, path)?;
+        let marker = join_blob_key(&key, "__dir_marker");
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, marker_str),
+            &(self.client.clone(), bucket, marker),
             |(client, bucket, marker)| {
                 Box::pin(async move {
                     client
@@ -981,35 +945,77 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
         let namespace_root = self.prefix_of(&namespace);
-        let key = namespace_root.join(path);
+        let key = self.key_of(&namespace, path)?;
 
-        Ok(self
+        let objects = self
             .list_objects(target_label, op_label, bucket, &key)
-            .await?
-            .iter()
-            .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
-            .filter_map(|path| {
-                let is_dir_marker =
-                    path.file_name().and_then(|s| s.to_str()) == Some("__dir_marker");
-                let is_nested = path.parent() != Some(&key);
-                if is_nested {
-                    if is_dir_marker {
-                        path.parent().map(|p| p.to_path_buf())
-                    } else {
-                        None
-                    }
-                } else if is_dir_marker {
-                    None
-                } else {
-                    Some(path)
-                }
-            })
-            .filter_map(|path| {
-                path.strip_prefix(&namespace_root)
-                    .ok()
-                    .map(|p| p.to_path_buf())
-            })
-            .collect::<Vec<_>>())
+            .await?;
+        let mut result = Vec::new();
+        for object in objects {
+            let Some(object_key) = object.key() else {
+                continue;
+            };
+            if let Some(path) = Self::listed_path(&namespace_root, &key, object_key) {
+                result.push(path);
+            }
+        }
+        Ok(result)
+    }
+
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        validate_relative_blob_path(path)?;
+        let bucket = self.bucket_of(&namespace);
+        let namespace_root = self.prefix_of(&namespace);
+        let prefix = self.key_of(&namespace, path)?;
+
+        let mut result = Vec::new();
+        if blob_path_is_root(path)
+            && let Some(metadata) = self
+                .get_exact_metadata(target_label, op_label, bucket, &namespace_root)
+                .await?
+        {
+            result.push((PathBuf::new(), metadata));
+        }
+
+        let objects = self
+            .list_objects(target_label, op_label, bucket, &prefix)
+            .await?;
+        for object in objects {
+            let Some(object_key) = object.key() else {
+                continue;
+            };
+            if object_key.ends_with("/__dir_marker") {
+                continue;
+            }
+            let Some(last_modified) = object.last_modified() else {
+                continue;
+            };
+            let Some(path) = object_key
+                .strip_prefix(&namespace_root)
+                .and_then(|path| path.strip_prefix('/'))
+            else {
+                continue;
+            };
+            result.push((
+                PathBuf::from(path),
+                BlobMetadata {
+                    size: object.size().unwrap_or_default().max(0) as u64,
+                    last_modified_at: Timestamp::from(
+                        last_modified
+                            .to_millis()
+                            .expect("failed to convert date-time value to millis")
+                            as u64,
+                    ),
+                },
+            ));
+        }
+        Ok(result)
     }
 
     async fn delete_dir(
@@ -1026,7 +1032,7 @@ impl BlobStorage for S3BlobStorage {
         }
 
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
+        let key = self.key_of(&namespace, path)?;
 
         let to_delete = self
             .list_objects(target_label, op_label, bucket, &key)
@@ -1081,8 +1087,7 @@ impl BlobStorage for S3BlobStorage {
     ) -> Result<ExistsResult, Error> {
         validate_relative_blob_path(path)?;
         let bucket = self.bucket_of(&namespace);
-        let key = self.prefix_of(&namespace).join(path);
-        let key_str = blob_path_to_string(&key)?;
+        let key = self.key_of(&namespace, path)?;
         let op_id = format!("{bucket} - {key:?}");
 
         let file_head_result = with_retries_customized(
@@ -1090,7 +1095,7 @@ impl BlobStorage for S3BlobStorage {
             op_label,
             Some(op_id.clone()),
             &self.config.retries,
-            &(self.client.clone(), bucket, key_str.clone()),
+            &(self.client.clone(), bucket, key.clone()),
             |(client, bucket, key)| {
                 Box::pin(async move {
                     client
@@ -1110,14 +1115,13 @@ impl BlobStorage for S3BlobStorage {
             Ok(_) => Ok(ExistsResult::File),
             Err(SdkError::ServiceError(service_error)) => match service_error.into_err() {
                 HeadObjectError::NotFound(_) => {
-                    let marker = key.join("__dir_marker");
-                    let marker_str = blob_path_to_string(&marker)?;
+                    let marker = join_blob_key(&key, "__dir_marker");
                     let dir_marker_head_result = with_retries_customized(
                         target_label,
                         op_label,
                         Some(op_id),
                         &self.config.retries,
-                        &(self.client.clone(), bucket, marker_str),
+                        &(self.client.clone(), bucket, marker),
                         |(client, bucket, marker)| {
                             Box::pin(async move {
                                 client
@@ -1177,18 +1181,21 @@ impl BlobStorage for S3BlobStorage {
         validate_relative_blob_path(from)?;
         validate_relative_blob_path(to)?;
         let bucket = self.bucket_of(&namespace);
-        let from_key = self.prefix_of(&namespace).join(from);
-        let to_key = self.prefix_of(&namespace).join(to);
-        let from_key_str = blob_path_to_string(&from_key)?;
-        let to_key_str = blob_path_to_string(&to_key)?;
-        let encoded_from_key = Self::encode_copy_source_key(&from_key_str);
+        let from_key = self.key_of(&namespace, from)?;
+        let to_key = self.key_of(&namespace, to)?;
+        let encoded_from_key = Self::encode_copy_source_key(&from_key);
 
         with_retries_customized(
             target_label,
             op_label,
             Some(format!("{bucket} - {from_key:?} -> {to_key:?}")),
             &self.config.retries,
-            &(self.client.clone(), bucket, encoded_from_key, to_key_str),
+            &(
+                self.client.clone(),
+                bucket,
+                encoded_from_key,
+                to_key.clone(),
+            ),
             |(client, bucket, encoded_from_key, to_key)| {
                 Box::pin(async move {
                     client
@@ -1306,7 +1313,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::extract::State;
-    use axum::http::{Response, StatusCode};
+    use axum::http::{Response, StatusCode, Uri};
     use axum::routing::put;
     use golem_common::model::RetryConfig;
     use golem_common::model::environment::EnvironmentId;
@@ -1336,11 +1343,17 @@ mod tests {
     #[derive(Clone)]
     struct PutServerState {
         bodies: Arc<Mutex<Vec<Bytes>>>,
+        uris: Arc<Mutex<Vec<Uri>>>,
         statuses: Arc<Mutex<Vec<StatusCode>>>,
     }
 
-    async fn handle_put(State(state): State<PutServerState>, body: Bytes) -> Response<Body> {
+    async fn handle_put(
+        State(state): State<PutServerState>,
+        uri: Uri,
+        body: Bytes,
+    ) -> Response<Body> {
         state.bodies.lock().unwrap().push(body);
+        state.uris.lock().unwrap().push(uri);
         let status = state.statuses.lock().unwrap().remove(0);
         let body = if status.is_success() {
             Body::empty()
@@ -1361,11 +1374,14 @@ mod tests {
     ) -> (
         S3BlobStorage,
         Arc<Mutex<Vec<Bytes>>>,
+        Arc<Mutex<Vec<Uri>>>,
         tokio::task::JoinHandle<()>,
     ) {
         let bodies = Arc::new(Mutex::new(Vec::new()));
+        let uris = Arc::new(Mutex::new(Vec::new()));
         let state = PutServerState {
             bodies: bodies.clone(),
+            uris: uris.clone(),
             statuses: Arc::new(Mutex::new(statuses)),
         };
         let app = Router::new().fallback(put(handle_put)).with_state(state);
@@ -1413,6 +1429,7 @@ mod tests {
                 config,
             },
             bodies,
+            uris,
             server,
         )
     }
@@ -1420,7 +1437,7 @@ mod tests {
     #[test]
     #[timeout("10s")]
     async fn put_raw_golem_retries_preserve_nonempty_payload() {
-        let (storage, bodies, server) = test_storage(vec![
+        let (storage, bodies, _, server) = test_storage(vec![
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::OK,
@@ -1455,7 +1472,7 @@ mod tests {
     #[test]
     #[timeout("10s")]
     async fn put_raw_golem_retries_preserve_empty_payload_and_final_error() {
-        let (storage, bodies, server) = test_storage(vec![
+        let (storage, bodies, _, server) = test_storage(vec![
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::INTERNAL_SERVER_ERROR,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1480,6 +1497,112 @@ mod tests {
         assert_eq!(
             bodies.lock().unwrap().as_slice(),
             [Bytes::new(), Bytes::new(), Bytes::new()]
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn put_raw_percent_encodes_backslash_in_request_path() {
+        let (storage, _, uris, server) = test_storage(vec![StatusCode::OK]).await;
+        let environment_id =
+            EnvironmentId(uuid::Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap());
+
+        let result = storage
+            .put_raw(
+                "test",
+                "put_raw",
+                BlobStorageNamespace::CustomStorage { environment_id },
+                Path::new(r"photos/animals\cat.png"),
+                b"payload",
+            )
+            .await;
+        server.abort();
+
+        result.unwrap();
+        assert_eq!(
+            uris.lock().unwrap().as_slice(),
+            [
+                format!("/custom-data/{environment_id}/photos/animals%5Ccat.png?x-id=PutObject")
+                    .parse::<Uri>()
+                    .unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn storage_keys_use_contract_separator() {
+        let (mut storage, _, _, server) = test_storage(vec![]).await;
+        storage.config.object_prefix = "root/prefix".to_string();
+        let namespace = BlobStorageNamespace::CustomStorage {
+            environment_id: EnvironmentId(
+                uuid::Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
+            ),
+        };
+
+        let key = storage
+            .key_of(&namespace, Path::new(r"photos/animals\cat.png"))
+            .unwrap();
+        server.abort();
+
+        assert_eq!(
+            key,
+            r"root/prefix/4c8c5ff4-2a42-4e81-ac48-e63005f609fd/photos/animals\cat.png"
+        );
+        assert_eq!(
+            storage
+                .key_of(
+                    &namespace,
+                    &crate::storage::blob::join_blob_path("photos", "cat.png").unwrap()
+                )
+                .unwrap(),
+            "root/prefix/4c8c5ff4-2a42-4e81-ac48-e63005f609fd/photos/cat.png"
+        );
+
+        let namespace_root = storage.prefix_of(&namespace);
+        let directory_key = storage.key_of(&namespace, Path::new("photos")).unwrap();
+        assert_eq!(
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &directory_key,
+                &format!(r"{directory_key}/animals\cat.png"),
+            )
+            .unwrap()
+            .as_os_str(),
+            r"photos/animals\cat.png"
+        );
+
+        let trailing_slash_key = storage.key_of(&namespace, Path::new("photos/")).unwrap();
+        assert_eq!(
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &trailing_slash_key,
+                &format!("{directory_key}/cat.png"),
+            )
+            .unwrap()
+            .as_os_str(),
+            "photos/cat.png"
+        );
+        assert_eq!(
+            join_blob_key(&trailing_slash_key, "__dir_marker"),
+            format!("{directory_key}/__dir_marker")
+        );
+        let root_key = storage.key_of(&namespace, Path::new("")).unwrap();
+        assert_eq!(root_key, namespace_root);
+        assert_eq!(
+            join_blob_key(&root_key, "__dir_marker"),
+            format!("{namespace_root}/__dir_marker")
+        );
+
+        assert_eq!(
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &root_key,
+                &format!("{namespace_root}/test-file"),
+            )
+            .unwrap()
+            .as_os_str(),
+            "test-file"
         );
     }
 }
