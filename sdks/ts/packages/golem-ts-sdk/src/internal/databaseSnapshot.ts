@@ -370,9 +370,16 @@ function pageCacheOf(database: DatabaseSync): PageCache {
   };
 }
 
+/**
+ * Reads the value of `PRAGMA name`. The row is an array when the connection was opened with
+ * `returnArrays: true`, and an object keyed by the column name otherwise.
+ */
 function pragmaNumber(database: DatabaseSync, name: string): number {
-  const row = database.prepare(`PRAGMA ${name}`).get() as Record<string, unknown> | undefined;
-  return Number(row?.[name]);
+  const row: unknown = database.prepare(`PRAGMA ${name}`).get();
+  if (Array.isArray(row)) {
+    return Number(row[0]);
+  }
+  return Number((row as Record<string, unknown> | undefined)?.[name]);
 }
 
 /**

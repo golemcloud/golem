@@ -375,6 +375,7 @@ async function isolate() {
     inTransaction = false;
     isOpen = true;
     pragmas: Record<string, number> = { page_count: 1, page_size: 4096, cache_size: -2000 };
+    returnArrays = false;
     constructor(
       readonly path: string,
       options?: unknown,
@@ -389,7 +390,7 @@ async function isolate() {
       return {
         get: () => {
           if (pragma !== undefined) {
-            return { [pragma]: this.pragmas[pragma] };
+            return this.returnArrays ? [this.pragmas[pragma]] : { [pragma]: this.pragmas[pragma] };
           }
           warmed.push(`${this.path}: ${sql}`);
           return undefined;
@@ -1294,6 +1295,46 @@ describe('snapshot — in-memory and file-backed databases', () => {
       '/data/other.db: SELECT count(*) FROM sqlite_master',
     ]);
     expect(env.serializeDatabaseSync.mock.calls.map(([db]) => db.path)).toEqual(['/data/other.db']);
+  });
+
+  it('reads the page cache of a connection that returns rows as arrays', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'ArrayRowsDatabase',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => ({ count: 0 }),
+        methods: {},
+        snapshot: {
+          load() {
+            const fileDb = new env.FakeDatabaseSync('/data/app.db');
+            fileDb.returnArrays = true;
+            const largeDb = new env.FakeDatabaseSync('/data/other.db');
+            largeDb.returnArrays = true;
+            largeDb.pragmas = { page_count: 489, page_size: 4096, cache_size: -2000 };
+            return { count: 8, fileDb, largeDb };
+          },
+        },
+      });
+    env.select('ArrayRowsDatabase');
+
+    await env.isolatedGuest.loadSnapshot.load({
+      payload: new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          principal: { tag: 'anonymous' },
+          state: { count: 8 },
+          fileDatabases: {},
+        }),
+      ),
+      mimeType: 'application/json',
+    });
+
+    expect(env.serializeDatabaseSync.mock.calls.map(([db]) => db.path)).toEqual(['/data/app.db']);
   });
 
   it('warms a database once when a custom load puts it in two fields', async () => {

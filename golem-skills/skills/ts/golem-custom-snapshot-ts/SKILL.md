@@ -160,7 +160,7 @@ save(): Uint8Array | Promise<Uint8Array>
 load(bytes: Uint8Array, context: SnapshotRestoreContext): State | Promise<State>
 ```
 
-A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view. After a custom `load`, the SDK reads the schema of each open `DatabaseSync` field, and for a file-backed one every page.
+A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view. After a custom `load`, the SDK reads the schema of each open `DatabaseSync` field, and for a file-backed one every page when all its pages stay in the page cache.
 
 ## Restoration Is Read-Only
 
