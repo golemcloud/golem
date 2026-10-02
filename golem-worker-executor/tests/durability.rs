@@ -17,7 +17,6 @@ use crate::filesystem_snapshots::{InvocationShape, invocation_shape};
 use axum::Router;
 use axum::extract::Query;
 use axum::routing::{any, get};
-use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{GolemUserPrincipal, Principal};
@@ -1864,6 +1863,8 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
     #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use futures::StreamExt as _;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1916,7 +1917,7 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
 
     drop(executor);
     let executor = start(deps, &context).await?;
-    let events = executor.capture_output(&worker_id).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
 
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
@@ -1925,7 +1926,7 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
 
     let failures: Vec<(OplogIndex, String)> = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio_stream::wrappers::UnboundedReceiverStream::new(events)
+        futures::stream::poll_fn(|context| events.poll_recv(context))
             .filter_map(|event| std::future::ready(AgentEvent::try_from(event).ok()))
             .take_while(|event| {
                 std::future::ready(!matches!(event, AgentEvent::InvocationFinished { .. }))
