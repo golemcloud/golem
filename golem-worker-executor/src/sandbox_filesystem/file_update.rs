@@ -104,7 +104,7 @@ fn create_staging_dir(
     let staging = tempfile::Builder::new()
         .prefix(".golem-file-update-")
         .tempdir_in(root)?;
-    if let QuotaAuthority::Project { project_id, .. } = quota_authority {
+    if let QuotaAuthority::Project { .. } = quota_authority {
         #[cfg(target_os = "linux")]
         xfs::assign_project(&File::open(staging.path())?, project_id)?;
         #[cfg(not(target_os = "linux"))]

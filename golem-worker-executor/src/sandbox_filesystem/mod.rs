@@ -949,7 +949,7 @@ impl SandboxFilesystem {
     pub(crate) async fn observe_allocation(
         &self,
     ) -> Result<Option<FilesystemAllocation>, FilesystemStorageError> {
-        let QuotaAuthority::Project { project_id, .. } = self.quota_authority else {
+        let QuotaAuthority::Project { .. } = self.quota_authority else {
             return Ok(None);
         };
         #[cfg(target_os = "linux")]
@@ -980,11 +980,11 @@ impl SandboxFilesystem {
 
     pub(crate) async fn install_limits(
         &self,
-        limits: FilesystemLimits,
+        _limits: FilesystemLimits,
     ) -> Result<InstalledLimits, FilesystemStorageError> {
         let QuotaAuthority::Project {
-            project_id,
-            filesystem_block_bytes,
+            project_id: _,
+            filesystem_block_bytes: _,
         } = self.quota_authority
         else {
             return Err(FilesystemStorageError::verification(
@@ -1082,7 +1082,7 @@ fn copy_file_blocking(
             unmanaged::copy_file(materialization_root, source, target, read_only)
         }
         FileCopyMode::Reflink => {
-            let QuotaAuthority::Project { project_id, .. } = quota_authority else {
+            let QuotaAuthority::Project { .. } = quota_authority else {
                 unreachable!("reflink copy requires project quota authority")
             };
             #[cfg(target_os = "linux")]
@@ -1098,7 +1098,7 @@ fn copy_file_blocking(
 fn copy_file_at_blocking(
     copy_mode: FileCopyMode,
     quota_authority: QuotaAuthority,
-    materialization_root: &Path,
+    _materialization_root: &Path,
     source: &Path,
     destination_directory: &cap_std::fs::Dir,
     destination: &Path,
@@ -1109,7 +1109,7 @@ fn copy_file_at_blocking(
             unmanaged::copy_file_at(destination_directory, source, destination, read_only)
         }
         FileCopyMode::Reflink => {
-            let QuotaAuthority::Project { project_id, .. } = quota_authority else {
+            let QuotaAuthority::Project { .. } = quota_authority else {
                 unreachable!("reflink copy requires project quota authority")
             };
             #[cfg(target_os = "linux")]
