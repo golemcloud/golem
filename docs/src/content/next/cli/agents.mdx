@@ -246,3 +246,37 @@ If an invocation is enqueued for an agent, but it has not been started yet, it c
 ```shell copy
 golem agent cancel-invocation 'CounterAgent("my-counter")' my-key
 ```
+
+## Shell access: `golem ssh`
+
+When the built-in bash tool is bound to an agent, `golem ssh` opens a command prompt on that agent. Each command you type is one call of the tool's `run` operation, the same call `golem tool invoke --agent <AGENT> bash -- run` makes:
+
+```shell copy
+golem ssh 'MyAgent("m1")'
+```
+
+The prompt shows the agent, the directory the last command ended in and, when it was not zero, the last exit status. Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line being typed.
+
+<Callout type="info">
+Every command runs in a fresh shell. Only the directory a command ends in carries over to the next one; variables, functions, aliases, shell options and `$?` do not. Write anything that must last to the agent's files, for example a file you `source`.
+</Callout>
+
+Waiting at the prompt holds nothing open on the agent, so its other methods and tools keep running. If the directory the session is in is removed, the next command is refused before it runs and the session continues from the directory it started in.
+
+To run one script and exit with its status, pass `-c`. Standard output and standard error carry exactly what the script wrote:
+
+```shell copy
+golem ssh 'MyAgent("m1")' -c 'ls -l /data'
+```
+
+Exit status 255 means the script did not run: the agent or the binding was not found, access was denied, the tool refused the call, or the call failed. A script that exits with 255 itself is reported the same way, so check standard error to tell them apart. When standard input is not a terminal, each input line is one command and no prompt is shown.
+
+The tool returns the script's output as text: bytes that are not valid UTF-8 are replaced with `�`, so use `golem ssh` for text and move binary files through the agent's file system instead.
+
+Other options:
+
+- `--cwd DIR` starts in `DIR` instead of the agent's starting directory.
+- `--timeout SECONDS` stops any command still running after that many seconds.
+- `--tool NAME` uses another binding whose `run` operation matches bash's; the default is `bash`.
+
+Pressing Ctrl+C while a command runs stops waiting for it and ends the session with status 130. The command may still be running on the agent; `golem ssh` prints its idempotency key and the `golem tool invoke --lookup` command that fetches its result later. If the connection fails before the result arrives, the command may or may not have run, so `golem ssh` prints the same lookup command and ends the session with status 255 instead of continuing from a directory it no longer knows.
