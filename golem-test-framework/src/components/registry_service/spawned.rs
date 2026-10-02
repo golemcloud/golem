@@ -170,6 +170,7 @@ fn prepopulate_builtin_artifact_cache(repository_root: &Path, cache_dir: &Path) 
         ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
         ("otlp_exporter", "plugins/otlp-exporter.wasm"),
         ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+        ("web_fetch", "builtin-tools/web-fetch.wasm"),
     ];
 
     std::fs::create_dir_all(cache_dir).expect("failed to create built-in artifact test cache");
