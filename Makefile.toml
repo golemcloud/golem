@@ -1756,7 +1756,20 @@ for artifact_id in ${artifact_ids}
         mv ${temporary} ${cached}
     end
 
-    cp ${cached} ${destination}
+    preserve_local = set false
+    if equals ${artifact_id} filesystem_tools
+        if is_path_exists ${destination}
+            local_sha256 = sha256sum ${destination}
+            if not equals ${local_sha256} ${sha256}
+                preserve_local = set true
+            end
+        end
+    end
+    if ${preserve_local}
+        echo "preserving locally built filesystem-tools artifact at ${destination}"
+    else
+        cp ${cached} ${destination}
+    end
 end
 release --recursive ${lock}
 echo "downloaded checksum-pinned built-in artifacts into ${cache_dir}"
@@ -1794,7 +1807,7 @@ elif equals ${component} filesystem-tools
     build_task = set build-filesystem-tools
     wasm = set builtin-tools/filesystem-tools.wasm
     artifact_id = set filesystem_tools
-    exports_json = set "{\"tools\":[\"read-file@0.1.0\",\"write-file@0.1.0\",\"edit-file@0.1.0\",\"ls@0.1.0\",\"grep@0.1.0\"]}"
+    exports_json = set "{\"tools\":[\"read-file@0.1.0\",\"write-file@0.1.0\",\"edit-file@0.1.0\",\"ls@0.1.0\",\"grep@0.1.0\"],\"middlewares\":[\"path-policy@0.1.0\"]}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} javascript-tools
