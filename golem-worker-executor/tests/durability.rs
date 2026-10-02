@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::filesystem_snapshots::{InvocationShape, invocation_shape};
 use axum::Router;
 use axum::extract::Query;
 use axum::routing::{any, get};
@@ -20,8 +21,8 @@ use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{GolemUserPrincipal, Principal};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
-    PublicOplogEntryWithIndex, PublicSnapshotData,
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+    PublicSnapshotData,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
@@ -1849,14 +1850,21 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     Ok(())
 }
 
+/// On an executor without filesystem snapshots, the periodic snapshots of `SqliteSnapshotAgent`
+/// have no filesystem snapshot name, so a start from one of them finds no file at the recorded
+/// locations of its file-backed databases. The start tries the newest periodic snapshot and the
+/// usable one before it; both loads fail, and the start replays the whole oplog, which rebuilds
+/// the databases.
 #[test]
 #[tracing::instrument]
-async fn ts_sqlite_multipart_snapshot_recovery(
+async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_full_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use futures::StreamExt as _;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1864,17 +1872,13 @@ async fn ts_sqlite_multipart_snapshot_recovery(
         .component_dep(&context.default_environment_id, constructor_parameter_echo)
         .store()
         .await?;
-    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-recovery");
+    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-no-filesystem-snapshots");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Insert data into both databases and set a label
     executor
         .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("banana"))
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
@@ -1882,195 +1886,34 @@ async fn ts_sqlite_multipart_snapshot_recovery(
     executor
         .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
         .await?;
-
     let state_before = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
 
-    let state_before_str = state_before.clone().into_typed::<String>()?;
-    let state_before_json: serde_json::Value = serde_json::from_str(&state_before_str)?;
-    assert_eq!(state_before_json["label"], "after-init");
-    assert_eq!(
-        state_before_json["items"],
-        serde_json::json!(["apple", "banana"])
-    );
-    assert_eq!(state_before_json["logs"], serde_json::json!(["started"]));
-
-    // Verify multipart snapshots exist in the oplog
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let snapshots: Vec<_> = oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Snapshot(params) => Some(params.clone()),
+            PublicOplogEntry::Snapshot(snapshot) => {
+                Some((entry.oplog_index, snapshot.filesystem_snapshot.clone()))
+            }
             _ => None,
         })
         .collect();
     assert!(
-        !snapshots.is_empty(),
-        "Expected at least one snapshot before restart"
+        snapshots.len() >= 2,
+        "fewer than two periodic snapshots before the restart: {snapshots:?}"
     );
-
-    // Verify snapshots are multipart with the expected structure
-    let last_snapshot = snapshots.last().unwrap();
-    match &last_snapshot.data {
-        PublicSnapshotData::Multipart(multipart) => {
-            assert!(
-                multipart.mime_type.starts_with("multipart/mixed"),
-                "Expected multipart/mixed mime type, got '{}'",
-                multipart.mime_type
-            );
-
-            // Should have a state part (JSON) and two db parts
-            let state_parts: Vec<_> = multipart
-                .parts
-                .iter()
-                .filter(|p| p.name == "state")
-                .collect();
-            assert_eq!(state_parts.len(), 1, "Expected exactly one 'state' part");
-            match &state_parts[0].data {
-                MultipartPartData::Json(json) => {
-                    let state = json
-                        .data
-                        .get("state")
-                        .expect("State JSON should contain 'state' envelope");
-                    assert!(
-                        state.get("label").is_some(),
-                        "State JSON 'state' should contain 'label'"
-                    );
-                }
-                other => panic!("Expected JSON data for state part, got {:?}", other),
-            }
-
-            let db_parts: Vec<_> = multipart
-                .parts
-                .iter()
-                .filter(|p| p.name.starts_with("db:"))
-                .collect();
-            assert_eq!(
-                db_parts.len(),
-                2,
-                "Expected 2 database parts (memDb and fileDb), got {}",
-                db_parts.len()
-            );
-
-            for db_part in &db_parts {
-                assert_eq!(db_part.content_type, "application/x-sqlite3");
-                match &db_part.data {
-                    MultipartPartData::Raw(raw) => {
-                        assert!(
-                            !raw.data.is_empty(),
-                            "Database part '{}' should not be empty",
-                            db_part.name
-                        );
-                    }
-                    other => panic!(
-                        "Expected Raw data for db part '{}', got {:?}",
-                        db_part.name, other
-                    ),
-                }
-            }
-        }
-        other => panic!(
-            "Expected Multipart snapshot but got {:?}",
-            std::mem::discriminant(other)
-        ),
-    }
-
-    // Restart the executor — this triggers snapshot-based recovery
-    drop(executor);
-    let executor = start(deps, &context).await?;
-    let mut events = executor.capture_output(&worker_id).await?;
-
-    // Verify state is preserved after recovery
-    let state_after = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
-    assert_snapshot_recovery_loaded(&mut events).await;
-
-    assert_eq!(
-        state_before, state_after,
-        "Agent state (including SQLite databases) should be preserved across restart"
-    );
-
-    // Add more data after recovery to verify databases are functional
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("cherry"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("recovered"))
-        .await?;
-
-    let state_after_more = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
-
-    let state_after_str = state_after_more.into_typed::<String>()?;
-    let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
-    assert_eq!(state_after_json["label"], "after-init");
-    assert_eq!(
-        state_after_json["items"],
-        serde_json::json!(["apple", "banana", "cherry"])
-    );
-    assert_eq!(
-        state_after_json["logs"],
-        serde_json::json!(["started", "recovered"])
-    );
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
-    drop(executor);
-    Ok(())
-}
-
-/// `SqliteSnapshotAgent` snapshots every second invocation (the constructor counts as one), so the
-/// final `getState` below is recorded after the last snapshot and gets replayed on top of the
-/// restored SQLite databases after the restart. Reading the file-backed database from the restored
-/// connection must issue the same host calls as the live connection did, otherwise the replayed tail
-/// diverges from the oplog.
-#[test]
-#[tracing::instrument]
-async fn ts_sqlite_snapshot_recovery_replays_invocations_after_the_snapshot(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
-    let component = executor
-        .component_dep(&context.default_environment_id, constructor_parameter_echo)
-        .store()
-        .await?;
-    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-tail-replay");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
-        .await?;
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
-        .await?;
-    let state_before = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
-
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let last_snapshot_position = oplog
-        .iter()
-        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
-        .expect("Expected a snapshot before restart");
     assert!(
-        oplog[last_snapshot_position..]
-            .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
-        "Expected an invocation recorded after the last snapshot"
+        snapshots.iter().all(|(_, name)| name.is_none()),
+        "a periodic snapshot has a filesystem snapshot name: {snapshots:?}"
     );
+    let newest_two: Vec<OplogIndex> = snapshots
+        .iter()
+        .rev()
+        .take(2)
+        .map(|(index, _)| *index)
+        .collect();
 
     drop(executor);
     let executor = start(deps, &context).await?;
@@ -2079,31 +1922,44 @@ async fn ts_sqlite_snapshot_recovery_replays_invocations_after_the_snapshot(
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
-    assert_snapshot_recovery_loaded(&mut events).await;
+    assert_eq!(state_before, state_after);
 
-    assert_eq!(
-        state_before, state_after,
-        "Agent state should be preserved by the snapshot and the replayed tail"
-    );
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("recovered"))
-        .await?;
-    let state_after_more = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
-
-    let state_after_str = state_after_more.into_typed::<String>()?;
-    let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
-    assert_eq!(state_after_json["label"], "after-init");
-    assert_eq!(state_after_json["items"], serde_json::json!(["apple"]));
-    assert_eq!(
-        state_after_json["logs"],
-        serde_json::json!(["started", "recovered"])
+    let failures: Vec<(OplogIndex, String)> = tokio::time::timeout(
+        Duration::from_secs(10),
+        futures::stream::poll_fn(|context| events.poll_recv(context))
+            .filter_map(|event| std::future::ready(AgentEvent::try_from(event).ok()))
+            .take_while(|event| {
+                std::future::ready(!matches!(event, AgentEvent::InvocationFinished { .. }))
+            })
+            .filter_map(|event| {
+                std::future::ready(match event {
+                    AgentEvent::SnapshotRecoveryFailed {
+                        snapshot_index,
+                        error,
+                        ..
+                    } => Some((snapshot_index, error)),
+                    AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
+                        panic!("the snapshot at {snapshot_index} loaded without its database file")
+                    }
+                    _ => None,
+                })
+            })
+            .collect(),
+    )
+    .await?;
+    let failed_indexes: Vec<OplogIndex> = failures.iter().map(|(index, _)| *index).collect();
+    assert_eq!(failed_indexes, newest_two);
+    assert!(
+        failures.iter().all(|(_, error)| error.contains("fileDb")
+            && error.contains("no database file at /tmp/sqlite-snapshot-test.db")),
+        "{failures:?}"
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-
+    assert_eq!(
+        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        InvocationShape::settled()
+    );
     drop(executor);
     Ok(())
 }

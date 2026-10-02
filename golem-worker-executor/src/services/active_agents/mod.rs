@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use tracing::{Instrument, debug, info};
+use tracing::{Instrument, debug, info, warn};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
@@ -648,6 +648,16 @@ impl InvocationLoops {
         self.tracker.close();
         self.tracker.wait().await;
     }
+}
+
+/// The number of refused admission attempts of one worker start between two warnings. With the
+/// default retry delay of 500 ms, the first warning comes after about 10 s of waiting, and one
+/// more comes every 10 s while the wait goes on.
+const ADMISSION_REFUSALS_PER_WARNING: u32 = 20;
+
+/// Whether `acquire_memory` logs a warning after its `refusals`-th refused attempt.
+fn admission_wait_warns(refusals: u32) -> bool {
+    refusals.is_multiple_of(ADMISSION_REFUSALS_PER_WARNING)
 }
 
 /// Holds owner-keyed active agent groups.
@@ -1384,11 +1394,21 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let Some(admission) = &self.admission else {
             return MemoryGrant::inert(memory);
         };
+        let mut refusals: u32 = 0;
         loop {
             // Evicts idle-then-warm when real headroom is short; rejects (and we
             // back off) when it cannot make room rather than risking the limit.
             if let Some(grant) = admission.admit(memory, &self.eviction_source()).await {
                 return grant;
+            }
+            refusals = refusals.saturating_add(1);
+            if admission_wait_warns(refusals) {
+                warn!(
+                    requested = memory,
+                    refusals,
+                    retry_delay_ms = self.acquire_retry_delay.as_millis(),
+                    "Memory admission keeps refusing a worker start"
+                );
             }
             debug!("Measured headroom insufficient for {memory}, backing off and retrying");
             tokio::time::sleep(self.acquire_retry_delay).await;

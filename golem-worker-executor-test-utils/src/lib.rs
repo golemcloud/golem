@@ -3275,43 +3275,9 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         initial_files_service: Arc<InitialAgentFilesService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<TestWorkerCtx>>> {
-        // The in-process test harness shares its process (and RSS) with the test
-        // framework and other services, so a process-RSS probe cannot isolate
-        // this executor's footprint. Disable measured admission for ordinary
-        // tests. When a test pins a memory limit via system_memory_override,
-        // keep admission enabled but give the gate a fixed probe reporting that
-        // limit with zero current usage, so admission is decided solely on the
-        // granted accounting (exact and process-isolated) against the pinned
-        // limit. The usable_ratio (worker_memory_ratio) still applies.
-        match golem_config.memory.system_memory_override {
-            Some(limit) => Ok(Arc::new(
-                ActiveAgents::new_with_probe(
-                    Box::new(FixedProbe::new(limit, 0)),
-                    &golem_config.active_agents,
-                    &golem_config.memory,
-                    &golem_config.filesystem_storage,
-                    initial_files_service,
-                    &golem_config.agent_status_flush,
-                    shutdown_token,
-                )
-                .await?,
-            )),
-            None => {
-                let mut memory_config = golem_config.memory.clone();
-                memory_config.enable_measured_admission = false;
-                Ok(Arc::new(
-                    ActiveAgents::new(
-                        &golem_config.active_agents,
-                        &memory_config,
-                        &golem_config.filesystem_storage,
-                        initial_files_service,
-                        &golem_config.agent_status_flush,
-                        shutdown_token,
-                    )
-                    .await?,
-                ))
-            }
-        }
+        Ok(Arc::new(
+            in_process_active_agents(golem_config, initial_files_service, shutdown_token).await?,
+        ))
     }
 
     fn create_shard_service(&self) -> Arc<dyn ShardService> {
@@ -3525,6 +3491,47 @@ struct ProductionContextTestServerBootstrap {
     >,
 }
 
+/// Builds the active agents of an executor that runs in the test process.
+///
+/// The test process shares its RSS with the test framework, the other services and every other
+/// test, so a process-RSS probe cannot see this executor's footprint. Measured admission is off
+/// for ordinary tests. A test that pins a limit with `system_memory_override` keeps admission,
+/// with a fixed probe that reports that limit and no usage, so admission depends only on the
+/// granted accounting against the pinned limit; `worker_memory_ratio` still applies.
+async fn in_process_active_agents<Ctx: WorkerCtx>(
+    golem_config: &GolemConfig,
+    initial_files_service: Arc<InitialAgentFilesService>,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<ActiveAgents<Ctx>> {
+    Ok(match golem_config.memory.system_memory_override {
+        Some(limit) => {
+            ActiveAgents::new_with_probe(
+                Box::new(FixedProbe::new(limit, 0)),
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                initial_files_service,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )
+            .await?
+        }
+        None => {
+            let mut memory_config = golem_config.memory.clone();
+            memory_config.enable_measured_admission = false;
+            ActiveAgents::new(
+                &golem_config.active_agents,
+                &memory_config,
+                &golem_config.filesystem_storage,
+                initial_files_service,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )
+            .await?
+        }
+    })
+}
+
 #[async_trait]
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
@@ -3536,15 +3543,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>> {
         let active_agents = Arc::new(
-            ActiveAgents::new(
-                &golem_config.active_agents,
-                &golem_config.memory,
-                &golem_config.filesystem_storage,
-                initial_files_service,
-                &golem_config.agent_status_flush,
-                shutdown_token,
-            )
-            .await?,
+            in_process_active_agents(golem_config, initial_files_service, shutdown_token).await?,
         );
         let _ = self.active_agents.set(active_agents.clone());
         Ok(active_agents)

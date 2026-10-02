@@ -32,6 +32,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
+import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
@@ -800,10 +801,28 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const { data: agentSnapshot, mimeType } = await initializedAgent.agent.saveSnapshot();
+  const saved = await initializedAgent.agent.saveSnapshot();
   const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
 
+  if (saved.kind === 'custom') {
+    // Custom snapshot: version-2 binary envelope with principal. A custom save owns its
+    // databases, so it has no file-backed databases to record.
+    const principalJson = JSON.stringify(serializedPrincipal);
+    const principalBytes = new TextEncoder().encode(principalJson);
+
+    const totalLength = 1 + 4 + principalBytes.length + saved.data.length;
+    const fullSnapshot = new Uint8Array(totalLength);
+    const view = new DataView(fullSnapshot.buffer);
+    view.setUint8(0, 2); // version
+    view.setUint32(1, principalBytes.length, false); // big-endian
+    fullSnapshot.set(principalBytes, 5);
+    fullSnapshot.set(saved.data, 5 + principalBytes.length);
+
+    return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
+  }
+
+  const { data: agentSnapshot, mimeType, fileDatabases } = saved;
   if (mimeType.startsWith('multipart/mixed')) {
     // Multipart snapshot: the state JSON part already contains agent properties.
     // We need to inject version and principal into the state part.
@@ -820,7 +839,12 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     }
 
     const stateJson = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    const envelope = { version: 1, principal: serializedPrincipal, state: stateJson };
+    const envelope = {
+      version: 1,
+      principal: serializedPrincipal,
+      state: stateJson,
+      fileDatabases,
+    };
     parts[stateIdx] = {
       ...parts[stateIdx],
       body: new TextEncoder().encode(JSON.stringify(envelope)),
@@ -832,28 +856,15 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
       mimeType: `multipart/mixed; boundary=${newBoundary}`,
     };
   } else if (mimeType === 'application/json') {
-    // JSON snapshot: wrap in envelope { version, principal, state }
+    // JSON snapshot: wrap in envelope { version, principal, state, fileDatabases }
     const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
-    const envelope = { version: 1, principal: serializedPrincipal, state };
+    const envelope = { version: 1, principal: serializedPrincipal, state, fileDatabases };
     return {
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
       mimeType: 'application/json',
     };
-  } else {
-    // Binary snapshot: version-2 binary envelope with principal
-    const principalJson = JSON.stringify(serializedPrincipal);
-    const principalBytes = new TextEncoder().encode(principalJson);
-
-    const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
-    const fullSnapshot = new Uint8Array(totalLength);
-    const view = new DataView(fullSnapshot.buffer);
-    view.setUint8(0, 2); // version
-    view.setUint32(1, principalBytes.length, false); // big-endian
-    fullSnapshot.set(principalBytes, 5);
-    fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
-
-    return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
+  throw new Error(`Unexpected typed snapshot type ${mimeType}`);
 }
 
 async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
@@ -873,7 +884,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
-  let databases: Array<{ name: string; bytes: Uint8Array }> = [];
+  let databases: SnapshotDatabases = { inMemory: [], fileDatabases: {} };
 
   const decodeJsonEnvelope = (data: Uint8Array, description: string) => {
     const envelope = JSON.parse(new TextDecoder().decode(data));
@@ -914,15 +925,14 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
-    databases = parts
-      .filter((part) => part.name.startsWith('db:'))
-      .map((part) => ({ name: part.name.slice(3), bytes: part.body }));
+    databases = decodeSnapshotDatabases(parts, envelope, 'multipart state part');
   } else if (snapshot.mimeType === 'application/json') {
-    // JSON snapshot: unwrap envelope { version, principal, state }
+    // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
+    databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
   } else {
     // Custom binary snapshot with version envelope
     if (bytes.byteLength < 1) {

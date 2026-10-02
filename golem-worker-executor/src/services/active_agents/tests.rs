@@ -1,3 +1,4 @@
+use super::admission_wait_warns;
 use super::component_charge_bytes;
 use super::concurrent_agents_scheduler::ConcurrentAgentsScheduler;
 use super::concurrent_agents_semaphore::ConcurrentAgentsSemaphore;
@@ -1515,4 +1516,14 @@ fn component_charge_bytes_scales_the_module_size_by_the_coefficient() {
             "coefficient {coefficient} on {module_bytes} bytes"
         );
     });
+}
+
+#[test]
+fn admission_wait_warns_once_per_twenty_refusals() {
+    let warnings: Vec<u32> = (1..=60)
+        .filter(|refusals| admission_wait_warns(*refusals))
+        .collect();
+    assert_eq!(warnings, vec![20, 40, 60]);
+    assert!(!admission_wait_warns(1));
+    assert!(!admission_wait_warns(19));
 }

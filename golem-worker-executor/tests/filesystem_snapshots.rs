@@ -16,12 +16,15 @@
 //! agent across a restart, and a restart from a snapshot gives the files that a full replay gives.
 
 use crate::Tracing;
+use crate::durability::assert_snapshot_recovery_loaded;
 use anyhow::anyhow;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
-use golem_common::model::oplog::{OplogEntry, OplogPayload, PublicOplogEntry};
+use golem_common::model::oplog::{
+    MultipartPartData, OplogEntry, OplogPayload, PublicOplogEntry, PublicSnapshotData,
+};
 use golem_common::model::{AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
@@ -46,6 +49,10 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(
     #[tagged_as("initial_file_system")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("constructor_parameter_echo")]
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
@@ -1018,22 +1025,35 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
 
 /// The shape of the invocation entries of an oplog after a restart.
 #[derive(Debug, PartialEq, Eq)]
-struct InvocationShape {
+pub(crate) struct InvocationShape {
     /// Each idempotency key whose invocation has no `AgentInvocationFinished`, or more than one.
-    not_finished_once: Box<[Box<str>]>,
+    pub(crate) not_finished_once: Box<[Box<str>]>,
     /// The index of each durable-call `Start` without an `End` or a `Cancelled`.
-    starts_without_terminal: Box<[u64]>,
+    pub(crate) starts_without_terminal: Box<[u64]>,
     /// The index of each durable-call `Start`, `End` or `Cancelled` in a gap between
     /// invocations: after an `AgentInvocationFinished` and before the next
     /// `AgentInvocationStarted`, or the end.
-    durable_calls_between_invocations: Box<[u64]>,
+    pub(crate) durable_calls_between_invocations: Box<[u64]>,
     /// The number of finished `apply` invocations.
-    applied: usize,
+    pub(crate) applied: usize,
+}
+
+impl InvocationShape {
+    /// The shape of a settled oplog without `apply` invocations: each invocation finished once,
+    /// each durable call ended, and no durable call between invocations.
+    pub(crate) fn settled() -> Self {
+        Self {
+            not_finished_once: Box::default(),
+            starts_without_terminal: Box::default(),
+            durable_calls_between_invocations: Box::default(),
+            applied: 0,
+        }
+    }
 }
 
 /// Reads the shape of the invocation entries of `oplog`, whose first entry is at index 1. An
 /// `AgentInvocationFinished` belongs to the `AgentInvocationStarted` before it.
-fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
+pub(crate) fn invocation_shape(oplog: &[OplogEntry]) -> InvocationShape {
     let (finished, _) = oplog.iter().fold(
         (std::collections::BTreeMap::<String, usize>::new(), None),
         |(mut finished, current), entry| match entry {
@@ -2917,6 +2937,255 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
     assert!(
         took < Duration::from_secs(10),
         "the update ended after {took:?}"
+    );
+    Ok(())
+}
+
+/// Waits until the oplog of `worker_id` holds, after its last `AgentInvocationFinished`, a
+/// snapshot record with a name, and a confirmation of that name. The caller calls it after an
+/// invocation that ends at a snapshot boundary, so the record is the snapshot of that invocation,
+/// and no snapshot record is waiting for its upload when the wait ends.
+async fn newest_snapshot_confirmed(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<()> {
+    eventually(Duration::from_secs(30), || async {
+        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        let after_last_invocation = oplog
+            .iter()
+            .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .map_or(&oplog[..], |last| &oplog[last..]);
+        let newest = after_last_invocation
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Snapshot(snapshot) => snapshot.filesystem_snapshot.clone(),
+                _ => None,
+            });
+        Ok(newest.filter(|name| {
+            oplog.iter().any(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::SnapshotConfirmed(confirmed)
+                        if &confirmed.filesystem_snapshot == name
+                )
+            })
+        }))
+    })
+    .await
+    .map(|_| ())
+}
+
+/// The state that `getState` of `SqliteSnapshotAgent` gives.
+async fn sqlite_state(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent: &ParsedAgentId,
+) -> anyhow::Result<serde_json::Value> {
+    let state = executor
+        .invoke_and_await_agent(component, agent, "getState", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    Ok(serde_json::from_str(&state)?)
+}
+
+/// `SqliteSnapshotAgent` holds an in-memory database, a file-backed database at an absolute path
+/// and a file-backed database at a relative path. The snapshot holds the bytes of the in-memory
+/// database and the locations of the file-backed ones. After a restart the filesystem snapshot
+/// gives back the database files, the typed load opens them again at their locations, and the
+/// agent has all its rows.
+#[test]
+#[timeout("4m")]
+async fn ts_sqlite_snapshot_keeps_in_memory_databases_and_restores_file_databases_from_the_filesystem_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent = agent_id!("SqliteSnapshotAgent", "sqlite-recovery");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
+        .await?;
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("banana"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
+        .await?;
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("after-init"))
+        .await?;
+    let before = sqlite_state(&executor, &component, &agent).await?;
+    assert_eq!(
+        before,
+        serde_json::json!({
+            "label": "after-init",
+            "items": ["apple", "banana"],
+            "logs": ["started"],
+            "notes": ["started"],
+        })
+    );
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let multipart = oplog
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Snapshot(snapshot) => Some(snapshot.data.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("no snapshot record before the restart"))?;
+    let PublicSnapshotData::Multipart(multipart) = multipart else {
+        return Err(anyhow!("the snapshot is not multipart: {multipart:?}"));
+    };
+    let names: Vec<&str> = multipart.parts.iter().map(|part| &*part.name).collect();
+    assert_eq!(names, vec!["state", "db:memDb"]);
+    assert_eq!(multipart.parts[1].content_type, "application/x-sqlite3");
+    let MultipartPartData::Raw(memory_database) = &multipart.parts[1].data else {
+        return Err(anyhow!("the db:memDb part is not raw bytes"));
+    };
+    assert!(
+        !memory_database.data.is_empty(),
+        "the db:memDb part is empty"
+    );
+    let MultipartPartData::Json(envelope) = &multipart.parts[0].data else {
+        return Err(anyhow!("the state part is not JSON"));
+    };
+    let file_databases = envelope
+        .data
+        .get("fileDatabases")
+        .ok_or_else(|| anyhow!("the envelope has no fileDatabases: {:?}", envelope.data))?;
+    assert_eq!(
+        file_databases["fileDb"],
+        serde_json::json!("/tmp/sqlite-snapshot-test.db")
+    );
+    let relative = file_databases["relativeDb"]
+        .as_str()
+        .ok_or_else(|| anyhow!("no location for relativeDb: {file_databases:?}"))?;
+    assert!(
+        relative.starts_with('/') && relative.ends_with("/sqlite-relative-test.db"),
+        "the location of relativeDb is {relative}"
+    );
+
+    executor.release().await?;
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let after = sqlite_state(&executor, &component, &agent).await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    assert_eq!(after, before);
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("cherry"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("recovered"))
+        .await?;
+    assert_eq!(
+        sqlite_state(&executor, &component, &agent).await?,
+        serde_json::json!({
+            "label": "after-init",
+            "items": ["apple", "banana", "cherry"],
+            "logs": ["started", "recovered"],
+            "notes": ["started", "recovered"],
+        })
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        InvocationShape::settled()
+    );
+    Ok(())
+}
+
+/// `SqliteSnapshotAgent` takes a snapshot after every second invocation (the constructor counts
+/// as one), so the `getState` below is recorded after the last snapshot and is replayed after the
+/// restart. The typed load opens the file-backed databases again on the files that the filesystem
+/// snapshot gave back, and the replayed `getState` must make the same filesystem host calls as
+/// the live one did, so the snapshot recovery succeeds without a fall back to a full replay.
+#[test]
+#[timeout("4m")]
+async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent = agent_id!("SqliteSnapshotAgent", "sqlite-tail-replay");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
+        .await?;
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("after-init"))
+        .await?;
+    newest_snapshot_confirmed(&executor, &worker_id).await?;
+    let before = sqlite_state(&executor, &component, &agent).await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let last_snapshot = oplog
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+        .ok_or_else(|| anyhow!("no snapshot record before the restart"))?;
+    assert!(
+        oplog[last_snapshot..]
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
+        "no invocation is recorded after the last snapshot"
+    );
+
+    executor.release().await?;
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let mut events = executor.capture_output(&worker_id).await?;
+
+    let after = sqlite_state(&executor, &component, &agent).await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    assert_eq!(after, before);
+
+    executor
+        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("recovered"))
+        .await?;
+    assert_eq!(
+        sqlite_state(&executor, &component, &agent).await?,
+        serde_json::json!({
+            "label": "after-init",
+            "items": ["apple"],
+            "logs": ["started", "recovered"],
+            "notes": ["started", "recovered"],
+        })
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        InvocationShape::settled()
     );
     Ok(())
 }
