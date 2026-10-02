@@ -1304,7 +1304,10 @@ pub mod oplog {
         static ref OPLOG_EPOCH_FENCE_TOTAL: CounterVec = register_counter_vec!(
             "oplog_epoch_fence_total",
             "Oplog operations checked against the shard epoch: `op` is `record` for an open \
-             recording its epoch and `append` for a write, `outcome` is `accepted` or `refused`",
+             recording its epoch, `append` for a write and `drop_prefix` for a trim after \
+             archiving, and `archive_record`, `archive_append`, `archive_drop_prefix` and \
+             `archive_delete_empty` for the same on a compressed archive level; `outcome` is \
+             `accepted` or `refused`",
             &["op", "outcome"]
         )
         .unwrap();

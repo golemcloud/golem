@@ -136,7 +136,7 @@ async fn append_worker(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
 ) {
-    let archive = service.open(owned_agent_id, agent_mode).await;
+    let archive = service.open(owned_agent_id, agent_mode, None).await;
     archive
         .append(&[(
             OplogIndex::INITIAL,
