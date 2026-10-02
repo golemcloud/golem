@@ -262,19 +262,51 @@ pub(crate) fn kept_rejections(
     status: &AgentStatusRecord,
     rejected: impl IntoIterator<Item = OplogIndex>,
 ) -> BTreeSet<OplogIndex> {
-    let candidates = [
-        status
-            .last_automatic_snapshot
-            .as_ref()
-            .map(|last| last.index),
-        status
-            .previous_usable_automatic_snapshot
-            .as_ref()
-            .map(|previous| previous.index),
-    ];
+    let candidates = start_candidates(status).map(|candidate| candidate.map(|(index, _)| index));
     rejected
         .into_iter()
         .filter(|index| candidates.contains(&Some(*index)))
+        .collect()
+}
+
+/// The two automatic snapshot records that a start can select: the last one and the newest
+/// usable one before it, with their filesystem snapshot names. The result is not filtered by
+/// revision, by pending update or by exclusion. [`kept_rejections`] uses it too.
+pub(crate) fn start_candidates(
+    status: &AgentStatusRecord,
+) -> [Option<(OplogIndex, Option<&FilesystemSnapshotName>)>; 2] {
+    [
+        status
+            .last_automatic_snapshot
+            .as_ref()
+            .map(|last| (last.index, last.files.name())),
+        status
+            .previous_usable_automatic_snapshot
+            .as_ref()
+            .map(|previous| (previous.index, previous.filesystem_snapshot.as_ref())),
+    ]
+}
+
+/// The update snapshot names that a valid cut of the agent can still make a baseline: the names
+/// of the successful updates and of the pending updates in the status. A revert rebuilds the
+/// status, so the names of updates in its dropped region are not in it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn update_names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapshotName]> {
+    status
+        .successful_updates
+        .iter()
+        .filter_map(|update| update.filesystem_snapshot.clone())
+        .chain(
+            status
+                .pending_updates
+                .iter()
+                .filter_map(|update| match &update.kind {
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot,
+                    } => filesystem_snapshot.clone(),
+                    PendingUpdateKind::Automatic => None,
+                }),
+        )
         .collect()
 }
 
@@ -291,7 +323,7 @@ fn component_revision_for_replay(
                 .pending_updates
                 .front()
                 .and_then(|update| match update.kind {
-                    PendingUpdateKind::SnapshotBased => Some(update.target_revision),
+                    PendingUpdateKind::SnapshotBased { .. } => Some(update.target_revision),
                     PendingUpdateKind::Automatic => None,
                 })
                 .unwrap_or(status.component_revision_for_replay)
@@ -304,6 +336,7 @@ fn component_revision_for_replay(
 mod tests {
     use super::*;
     use golem_common::model::PendingUpdateRef;
+    use golem_common::model::SuccessfulUpdateRecord;
     use golem_common::model::Timestamp;
     use golem_common::model::oplog::FilesystemSnapshotName;
     use test_r::test;
@@ -534,7 +567,9 @@ mod tests {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(11),
             target_revision: revision(4),
-            kind: PendingUpdateKind::SnapshotBased,
+            kind: PendingUpdateKind::SnapshotBased {
+                filesystem_snapshot: None,
+            },
         });
         let unavailable = HashSet::new();
 
@@ -566,6 +601,97 @@ mod tests {
                 start_candidate(&unconfirmed, filter(&unavailable)),
             ],
             [Some(name), None, None, None]
+        );
+    }
+
+    #[test]
+    fn the_start_candidates_are_the_last_and_the_previous_usable_record() {
+        let last = FilesystemSnapshotName::periodic();
+        let previous = FilesystemSnapshotName::periodic();
+        let both = status(Some(last.clone()), false, Some(Some(previous.clone())));
+        let nameless = status(None, true, Some(None));
+        let last_only = status(Some(last.clone()), true, None);
+
+        assert_eq!(
+            [
+                start_candidates(&both),
+                start_candidates(&nameless),
+                start_candidates(&last_only),
+                start_candidates(&AgentStatusRecord::default()),
+            ],
+            [
+                [
+                    Some((OplogIndex::from_u64(10), Some(&last))),
+                    Some((OplogIndex::from_u64(5), Some(&previous)))
+                ],
+                [
+                    Some((OplogIndex::from_u64(10), None)),
+                    Some((OplogIndex::from_u64(5), None))
+                ],
+                [Some((OplogIndex::from_u64(10), Some(&last))), None],
+                [None, None],
+            ]
+        );
+    }
+
+    fn successful_update(
+        index: u64,
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
+    ) -> SuccessfulUpdateRecord {
+        SuccessfulUpdateRecord {
+            timestamp: Timestamp::from(1_000),
+            target_revision: revision(2),
+            oplog_index: OplogIndex::from_u64(index),
+            filesystem_snapshot,
+        }
+    }
+
+    fn pending_update(index: u64, kind: PendingUpdateKind) -> PendingUpdateRef {
+        PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(index),
+            target_revision: revision(3),
+            kind,
+        }
+    }
+
+    #[test]
+    fn update_names_in_use_are_the_successful_and_pending_update_names() {
+        let first = FilesystemSnapshotName::update();
+        let second = FilesystemSnapshotName::update();
+        let pending = FilesystemSnapshotName::update();
+        let status = AgentStatusRecord {
+            successful_updates: vec![
+                successful_update(3, Some(first.clone())),
+                successful_update(5, None),
+                successful_update(7, None),
+                successful_update(9, Some(second.clone())),
+            ],
+            pending_updates: [
+                pending_update(10, PendingUpdateKind::Automatic),
+                pending_update(
+                    11,
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot: Some(pending.clone()),
+                    },
+                ),
+                pending_update(
+                    12,
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot: None,
+                    },
+                ),
+            ]
+            .into(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            [
+                update_names_in_use(&status),
+                update_names_in_use(&AgentStatusRecord::default())
+            ],
+            [Box::from([first, second, pending]), Box::from([])]
         );
     }
 

@@ -2148,6 +2148,10 @@ pub struct SuccessfulUpdateRecord {
     /// The index of the `SuccessfulUpdate` entry. It orders the update against other entries,
     /// which the timestamps of different executors cannot do.
     pub oplog_index: OplogIndex,
+    /// The filesystem snapshot of the applied snapshot-based update. `None` for an automatic
+    /// update, for an update without a filesystem capture, and when no pending update was in
+    /// front of the queue.
+    pub filesystem_snapshot: Option<FilesystemSnapshotName>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -2786,11 +2790,30 @@ pub struct PendingCardEventRef {
     pub event: QueuedCardEvent,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum PendingUpdateKind {
     Automatic,
-    SnapshotBased,
+    SnapshotBased {
+        /// The filesystem snapshot that the executor captured with the application snapshot.
+        /// `None` means that the executor made no filesystem capture.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
+    },
+}
+
+impl PendingUpdateKind {
+    /// The kind of the pending update that `description` describes.
+    pub fn of(description: &oplog::UpdateDescription) -> Self {
+        match description {
+            oplog::UpdateDescription::Automatic { .. } => Self::Automatic,
+            oplog::UpdateDescription::SnapshotBased {
+                filesystem_snapshot,
+                ..
+            } => Self::SnapshotBased {
+                filesystem_snapshot: filesystem_snapshot.clone(),
+            },
+        }
+    }
 }
 
 /// A lightweight reference to a pending update whose full description is stored in the oplog.

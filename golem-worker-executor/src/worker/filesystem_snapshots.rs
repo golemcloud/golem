@@ -1301,6 +1301,7 @@ mod tests {
                 timestamp: Timestamp::from(millis),
                 target_revision: ComponentRevision::new(revision).unwrap(),
                 oplog_index: OplogIndex::from_u64(index),
+                filesystem_snapshot: None,
             };
         // The update to revision 3 applies the pending record at index 7 on an executor whose
         // clock is behind: its timestamp is earlier than the pending record, and its index is

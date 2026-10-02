@@ -3277,6 +3277,7 @@ mod tests {
             timestamp: Timestamp::from(1_700_000_001_000u64),
             target_revision: ComponentRevision::new(3).unwrap(),
             oplog_index: OplogIndex::from_u64(6),
+            filesystem_snapshot: Some(golem_common::model::oplog::FilesystemSnapshotName::update()),
         });
         status
     }

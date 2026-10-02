@@ -9087,7 +9087,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
         }
         if let Some(pending_update) = pending_update
-            && pending_update.kind == PendingUpdateKind::SnapshotBased
+            && matches!(pending_update.kind, PendingUpdateKind::SnapshotBased { .. })
             && Some(pending_update.oplog_index) != status.last_manual_update_snapshot_index
         {
             self.preflight_snapshot_update_payload(pending_update.oplog_index)
@@ -11374,7 +11374,7 @@ impl RunningWorker {
                         "Attempting {} update from {} to revision {target_revision}",
                         match update.kind {
                             PendingUpdateKind::Automatic => "automatic",
-                            PendingUpdateKind::SnapshotBased => "snapshot based",
+                            PendingUpdateKind::SnapshotBased { .. } => "snapshot based",
                         },
                         worker_metadata.last_known_status.component_revision
                     );

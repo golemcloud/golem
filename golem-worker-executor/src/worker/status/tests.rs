@@ -17,6 +17,7 @@ use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
+use crate::worker::snapshot_selection::update_names_in_use;
 use crate::worker::status::{
     calculate_last_known_status, calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
@@ -2046,6 +2047,89 @@ async fn two_successful_manual_updates() {
 }
 
 #[test]
+async fn a_revert_across_an_update_drops_its_name_from_the_status() {
+    let k1 = IdempotencyKey::fresh();
+    let name = FilesystemSnapshotName::update();
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: Some(name.clone()),
+    };
+
+    let updated = TestCase::builder(1)
+        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            k1,
+            ComponentRevision::INITIAL,
+        )
+        .pending_update(&update, |_| {})
+        .successful_update(update, 2000, &HashSet::new());
+    let before_revert = updated.previous_status_record.clone();
+    let test_case = updated.revert(OplogIndex::from_u64(3)).build();
+    let after_revert = test_case.entries.last().unwrap().expected_status.clone();
+
+    assert_eq!(
+        before_revert
+            .successful_updates
+            .iter()
+            .map(|update| update.filesystem_snapshot.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(name.clone())]
+    );
+    assert_eq!(
+        (
+            update_names_in_use(&before_revert),
+            before_revert.last_manual_update_snapshot_index
+        ),
+        (Box::from([name]), Some(OplogIndex::from_u64(4)))
+    );
+    assert_eq!(
+        (
+            update_names_in_use(&after_revert),
+            after_revert.last_manual_update_snapshot_index
+        ),
+        (Box::from([]), None)
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+fn a_successful_update_without_a_pending_update_has_no_name_and_no_baseline() {
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(2),
+        OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            100,
+            None,
+            HashSet::new(),
+        ),
+    )]);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(1),
+            ..AgentStatusRecord::default()
+        },
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        status
+            .successful_updates
+            .iter()
+            .map(|update| (update.oplog_index, update.filesystem_snapshot.clone()))
+            .collect::<Vec<_>>(),
+        vec![(OplogIndex::from_u64(2), None)]
+    );
+    assert_eq!(status.last_manual_update_snapshot_index, None);
+}
+
+#[test]
 async fn multiple_reverts() {
     let k1 = IdempotencyKey::fresh();
     let k2 = IdempotencyKey::fresh();
@@ -3234,15 +3318,11 @@ impl TestCaseBuilder {
         let entry = OplogEntry::pending_update(update_description.clone()).rounded();
         let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
         self.add(entry.clone(), move |mut status| {
-            let kind = match update_description {
-                UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
-                UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
-            };
             status.pending_updates.push_back(PendingUpdateRef {
                 timestamp: entry.timestamp(),
                 oplog_index: oplog_idx,
                 target_revision: *update_description.target_revision(),
-                kind,
+                kind: PendingUpdateKind::of(update_description),
             });
 
             if !status.pending_invocations.is_empty() {
@@ -3283,6 +3363,13 @@ impl TestCaseBuilder {
                 timestamp: entry.timestamp(),
                 target_revision: *update_description.target_revision(),
                 oplog_index: status.oplog_idx,
+                filesystem_snapshot: match &update_description {
+                    UpdateDescription::SnapshotBased {
+                        filesystem_snapshot,
+                        ..
+                    } => filesystem_snapshot.clone(),
+                    UpdateDescription::Automatic { .. } => None,
+                },
             });
             status.component_size = new_component_size;
             status.component_revision = *update_description.target_revision();
