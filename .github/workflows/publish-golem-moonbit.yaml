@@ -41,6 +41,10 @@ jobs:
           sed -i "s/^version = \".*\"$/version = \"$VERSION\"/" moon.mod
           test "$(grep -Fxc "version = \"$VERSION\"" moon.mod)" -eq 1
 
+      - name: Update MoonBit workspace dependencies
+        run: moon update
+        working-directory: sdks/moonbit
+
       - name: Install Golem MoonBit wit-bindgen
         run: ./scripts/install-wit-bindgen.sh
         working-directory: sdks/moonbit/golem_sdk
@@ -56,10 +60,6 @@ jobs:
       - name: Test SDK
         run: ./scripts/run-sdk-tests.sh
         working-directory: sdks/moonbit/golem_sdk
-
-      - name: Install tools dependencies
-        run: moon update
-        working-directory: sdks/moonbit/golem_sdk_tools
 
       - name: Check tools
         run: moon check cmd lib
