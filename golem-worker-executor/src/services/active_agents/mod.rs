@@ -266,7 +266,19 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             "Selecting owner failure for entity fence"
         );
         tool_operations.select_owner_failure(failure).await;
-        tool_operations.close_failed_attachments();
+        self.close_entity_admission();
+    }
+
+    pub(crate) async fn fence_entity_bodies_for_unload(&self) {
+        self.execution().tool_operations().fence_for_unload().await;
+        self.close_entity_admission();
+        self.drain_fenced_entity_bodies().await;
+    }
+
+    fn close_entity_admission(&self) {
+        self.execution()
+            .tool_operations()
+            .close_failed_attachments();
         {
             let entities = self.entities.lock().unwrap();
             self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);

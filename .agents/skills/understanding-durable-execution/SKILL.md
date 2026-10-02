@@ -317,6 +317,12 @@ The invocation loop remains the sole primary-Store owner. Tests in
 admission teardown and monitor driver in both fence orders, then verify one pending invocation
 executes after physical unload and reconstruction.
 
+Ordinary nonterminal unload closes tool/entity admission and drains physical ownership without
+electing a synthetic lifecycle failure. The operation owner retains that closed admission separately
+from its first selected Trap, Infrastructure or real Lifecycle cause. A later stop during unloaded
+OOM backoff can therefore elect its exact accepted kind without clearing the old physical fence,
+cleanup or selected invocation outcome. The exact owner-kind guard still rejects real conflicts.
+
 Monthly acceptance rejects further proposals once a terminal stop is claimed, under the existing
 interrupt and admission locks. The same active window can keep accounting during retirement, but
 later ticks or applied updates cannot replace the accepted monthly kind/reason or queue another
@@ -663,8 +669,14 @@ updates; an executor restart or shard move is not a request to resume them. If t
 has already unloaded (for example during OOM backoff), the retiring owner must commit an unclaimed
 terminal interrupt and notify invocation waiters before removal; no Store remains to do it. A
 terminal interrupt already claimed by the invocation loop is not recorded again, and a completed
-or failed invocation is not overwritten. Test:
-`tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart`.
+or failed invocation is not overwritten. A claim retains its exact request, so teardown cannot
+requeue that same cause. A distinct terminal following a completed Restart keeps its own queue
+demand while the original publication stays Restart. Normal loop stop or joined owner retirement
+commits the unclaimed status marker once, including an outer-loop concurrent-permit wait with no
+new Store or permit. A Suspend already committed by admission is not appended again. Loop stop
+never claims a terminal merely to discard it. Tests:
+`tests/scalability.rs::interrupt_during_oom_backoff_is_durable_before_restart` and
+`tests/resource_limits.rs::concurrent_agent_limit_restarted_waiter_stops_without_permit`.
 
 `recover_immediately` selects `Restart` for Running, Suspended and Retrying workers. It never
 turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop

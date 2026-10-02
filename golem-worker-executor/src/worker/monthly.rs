@@ -887,7 +887,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     #[cfg(feature = "test-utils")]
     pub(crate) async fn wait_teardown_fence_for_test(
         &self,
-        proposed: &crate::durable_host::tool::operation::OwnerFailureWinner,
+        proposed: Option<&crate::durable_host::tool::operation::OwnerFailureWinner>,
         final_interrupt: Option<InterruptKind>,
     ) {
         let gate = self
@@ -927,7 +927,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn terminal_stop_claimed_for_test(&self) -> bool {
         matches!(
             *self.interrupt_signal.lock().await,
-            super::WorkerInterruptState::TerminalClaimed
+            super::WorkerInterruptState::TerminalClaimed(_)
         )
     }
 
@@ -1339,7 +1339,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let admission = self.stop_progress.lock().unwrap();
                 // Monthly observations cannot reopen a terminal stop already claimed by this execution.
                 if !admission.retired
-                    && !matches!(*interrupts, super::WorkerInterruptState::TerminalClaimed)
+                    && !matches!(*interrupts, super::WorkerInterruptState::TerminalClaimed(_))
                     && interrupts.queue(PendingWorkerInterrupt {
                         kind,
                         reacquire_permits: false,

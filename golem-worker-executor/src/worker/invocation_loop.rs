@@ -873,23 +873,21 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .retired_for_lost_shard()
                     .then_some(InterruptKind::ShardLost)
                     .or(terminal_interrupt)
-                    .map(OwnerFailureWinner::Lifecycle)
-                    .unwrap_or_else(|| {
-                        OwnerFailureWinner::Lifecycle(
-                            InterruptKind::Interrupt(Timestamp::now_utc()),
-                        )
-                    });
+                    .map(OwnerFailureWinner::Lifecycle);
                 #[cfg(feature = "test-utils")]
                 self.parent
-                    .wait_teardown_fence_for_test(&owner_failure, final_interrupt)
+                    .wait_teardown_fence_for_test(owner_failure.as_ref(), final_interrupt)
                     .await;
                 let owner_failure = match terminal_interrupt {
-                    Some(kind) => OwnerFailureWinner::Lifecycle(
+                    Some(kind) => Some(OwnerFailureWinner::Lifecycle(
                         self.parent.terminal_teardown_cause(kind).await,
-                    ),
+                    )),
                     None => owner_failure,
                 };
-                active_agent.fence_entity_bodies(owner_failure).await;
+                match owner_failure {
+                    Some(failure) => active_agent.fence_entity_bodies(failure).await,
+                    None => active_agent.fence_entity_bodies_for_unload().await,
+                }
             }
             // Tests can shorten the deadline and pause filesystem cleanup to exercise late
             // completion; without a hook, the normal unload timing is unchanged.
@@ -1220,6 +1218,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         startup_failure: Option<WorkerExecutorError>,
         pending_live_invocations: PendingLiveInvocationDisposition,
     ) {
+        if !self.parent.state_actor.lifecycle_is_closed()
+            && let Err(error) = self.parent.commit_pending_terminal_stop().await
+        {
+            self.stop_cleanup_failed(error).await;
+            return;
+        }
         self.parent.complete_startup(
             self.start_attempt,
             Err(startup_failure.clone().unwrap_or_else(|| {
@@ -1233,18 +1237,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .await
         {
             let failure = if self.parent.retired_for_lost_shard() {
-                OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
+                Some(OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost))
             } else {
-                startup_failure.clone().map_or_else(
-                    || {
-                        OwnerFailureWinner::Lifecycle(
-                            InterruptKind::Interrupt(Timestamp::now_utc()),
-                        )
-                    },
-                    OwnerFailureWinner::Infrastructure,
-                )
+                startup_failure
+                    .clone()
+                    .map(OwnerFailureWinner::Infrastructure)
             };
-            active_agent.fence_entity_bodies(failure).await;
+            match failure {
+                Some(failure) => active_agent.fence_entity_bodies(failure).await,
+                None => active_agent.fence_entity_bodies_for_unload().await,
+            }
         }
         self.parent
             .stop_internal(

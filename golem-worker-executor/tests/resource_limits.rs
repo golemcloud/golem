@@ -19,6 +19,7 @@ use axum::Router;
 use axum::routing::get;
 use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
+use golem_service_base::error::worker_executor::InterruptKind;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
@@ -646,36 +647,90 @@ async fn concurrent_agent_limit_restarted_waiter_stops_without_permit(
             .await?;
         tokio::time::timeout(Duration::from_secs(10), polling.notified()).await?;
 
-        let permit_executor = executor.clone();
-        let permit_component_id = component.id;
-        let permit_waiter = tokio::spawn(async move {
-            permit_executor
-                .acquire_account_concurrent_agent_permit(golem_common::model::AgentId {
-                    component_id: permit_component_id,
-                    agent_id: agent_id!("Counter", "restart-waiter-permit-holder").to_string(),
-                })
-                .await
-        });
-        // Let the holder enter the scheduler's FIFO before restart releases the
-        // caller's permit, so the restarted caller is forced to wait behind it.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let owned = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let worker = executor
+            .production_active_agent(&owned)
+            .await
+            .unwrap()
+            .primary();
+        let generation = worker.resident_generation_for_test();
+        let acquisitions = worker.permit_acquisitions_for_test();
+        let finished = executor
+            .search_oplog(&worker_id, "AgentInvocationFinished")
+            .await?
+            .len();
+        let permit_waiter =
+            executor.acquire_account_concurrent_agent_permit(golem_common::model::AgentId {
+                component_id: component.id,
+                agent_id: agent_id!("Counter", "restart-waiter-permit-holder").to_string(),
+            });
+        tokio::pin!(permit_waiter);
+        // Poll the FIFO waiter before Restart releases the running owner's permit.
+        tokio::select! {
+            biased;
+            _ = &mut permit_waiter => panic!("holder acquired the running owner's permit"),
+            _ = tokio::task::yield_now() => {}
+        }
 
         executor.simulated_crash(&worker_id).await?;
-        let held_permit = tokio::time::timeout(Duration::from_secs(5), permit_waiter)
+        let held_permit = tokio::time::timeout(Duration::from_secs(5), &mut permit_waiter)
             .await
-            .map_err(|_| anyhow::anyhow!("permit holder did not acquire after restart"))??;
+            .map_err(|_| anyhow::anyhow!("permit holder did not acquire after restart"))?;
+        worker.join_accepted_stops_for_test().await?;
+        assert!(worker.has_unload_cleanup_for_test());
+        assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
+        assert_eq!(
+            worker.owner_stop_for_test().await,
+            Some(InterruptKind::Restart)
+        );
+        assert_eq!(worker.resident_generation_for_test(), generation);
+        assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+        assert!(!worker.concurrent_agent_permit_is_held().await);
 
         if delete {
             tokio::time::timeout(Duration::from_secs(5), executor.delete_worker(&worker_id))
                 .await
                 .map_err(|_| anyhow::anyhow!("delete waited for the held permit"))??;
         } else {
-            tokio::time::timeout(Duration::from_secs(5), executor.interrupt(&worker_id))
+            let (_, entered, release) = worker.pause_next_stop_driver_for_test();
+            let interrupt = tokio::spawn({
+                let executor = executor.clone();
+                let worker_id = worker_id.clone();
+                async move { executor.interrupt(&worker_id).await }
+            });
+            entered.await?;
+            assert!(matches!(
+                worker.pending_stop_for_test().await,
+                Some(InterruptKind::Interrupt(_))
+            ));
+            assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
+            release.send(false).unwrap();
+            tokio::time::timeout(Duration::from_secs(5), interrupt)
                 .await
-                .map_err(|_| anyhow::anyhow!("interrupt waited for the held permit"))??;
+                .map_err(|_| anyhow::anyhow!("interrupt waited for the held permit"))???;
             executor
                 .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(5))
                 .await?;
+            assert_eq!(
+                executor
+                    .search_oplog(&worker_id, "Interrupted")
+                    .await?
+                    .len(),
+                1
+            );
+            assert_eq!(
+                executor
+                    .search_oplog(&worker_id, "AgentInvocationFinished")
+                    .await?
+                    .len(),
+                finished
+            );
+            assert_eq!(worker.frozen_stop_for_test(), Some(InterruptKind::Restart));
+            assert_eq!(worker.resident_generation_for_test(), generation);
+            assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
+            assert!(!worker.concurrent_agent_permit_is_held().await);
+            worker.retained_cleanup_for_test().await?;
+            assert_eq!(worker.pending_stop_for_test().await, None);
         }
 
         drop(held_permit);

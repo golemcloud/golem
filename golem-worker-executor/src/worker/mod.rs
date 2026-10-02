@@ -1891,47 +1891,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ))
             .await;
         } else if interrupt.is_some() {
-            let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
-            if let Some(pending) = pending {
-                let status = self.get_attached_last_known_status().await;
-                if matches!(
-                    status.status,
-                    AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Suspended
-                ) {
-                    let entry = match pending.kind {
-                        InterruptKind::Interrupt(_) => Some(OplogEntry::interrupted()),
-                        InterruptKind::Suspend(_) => Some(OplogEntry::suspend()),
-                        // The oplog is the shard's new owner's to write.
-                        InterruptKind::ShardLost => None,
-                        InterruptKind::Restart | InterruptKind::Jump => {
-                            unreachable!("only terminal interrupts can be claimed")
-                        }
-                    };
-                    if let Some(entry) = entry {
-                        // Refused, the shard moved during this retirement: nothing is cached for
-                        // the invocation the new owner resumes, and its waiters are sent there.
-                        if let Err(error) = self.add_and_commit_oplog(entry).await {
-                            let fence = match error {
-                                OplogError::Fenced(fence) => Some(fence),
-                                OplogError::Payload(_) | OplogError::Maintenance(_) => None,
-                            };
-                            self.record_retirement(
-                                InterruptKind::ShardLost,
-                                RetirementReason::Fenced(fence),
-                            );
-                            self.fail_pending_invocations(WorkerExecutorError::runtime(
-                                "Worker ownership has retired",
-                            ))
-                            .await;
-                        } else if matches!(pending.kind, InterruptKind::Interrupt(_))
-                            && let Some(key) = &status.current_idempotency_key
-                        {
-                            self.store_invocation_failure(key, &TrapType::Interrupt(pending.kind))
-                                .await;
-                        }
-                    }
-                }
-            }
+            self.join_stop_progress().await?;
+            self.commit_pending_terminal_stop().await?;
         }
         let mut seal = StopAdmissionSeal::seal(&self.stop_progress, true);
         let stopped = seal.join().await;
@@ -1956,6 +1917,58 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.status_flusher.begin_delete().await;
         self.status_checkpointer.begin_delete().await;
         Ok(())
+    }
+
+    /// Settles a published terminal left after the Store's selected outcome or physical unload.
+    /// A claimed invocation terminal and a completed or failed result are never written again.
+    async fn commit_pending_terminal_stop(&self) -> Result<(), WorkerExecutorError> {
+        if self.retired_for_lost_shard() {
+            return Ok(());
+        }
+        let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
+        let Some(pending) = pending else {
+            return Ok(());
+        };
+        let status = self.get_attached_last_known_status().await;
+        if !matches!(
+            status.status,
+            AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Suspended
+        ) {
+            return Ok(());
+        }
+        let entry = match pending.kind {
+            InterruptKind::Interrupt(_) => OplogEntry::interrupted(),
+            // Admission may have committed Suspend before the later monitor stop was accepted.
+            InterruptKind::Suspend(_) if status.status == AgentStatus::Suspended => return Ok(()),
+            InterruptKind::Suspend(_) => OplogEntry::suspend(),
+            InterruptKind::ShardLost => return Ok(()),
+            InterruptKind::Restart | InterruptKind::Jump => {
+                unreachable!("only terminal interrupts can be claimed")
+            }
+        };
+        match self.add_and_commit_oplog(entry).await {
+            Ok(_) => {
+                if matches!(pending.kind, InterruptKind::Interrupt(_))
+                    && let Some(key) = &status.current_idempotency_key
+                {
+                    self.store_invocation_failure(key, &TrapType::Interrupt(pending.kind))
+                        .await;
+                }
+                Ok(())
+            }
+            Err(OplogError::Fenced(fence)) => {
+                self.record_retirement(
+                    InterruptKind::ShardLost,
+                    RetirementReason::Fenced(Some(fence)),
+                );
+                self.fail_pending_invocations(WorkerExecutorError::runtime(
+                    "Worker ownership has retired",
+                ))
+                .await;
+                Ok(())
+            }
+            Err(error) => Err(WorkerExecutorError::runtime(error.to_string())),
+        }
     }
 
     pub(crate) async fn deletion_owns_retirement(&self) -> bool {
@@ -10124,11 +10137,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         final_state: FinalWorkerState,
         pending_live_invocations: PendingLiveInvocationDisposition,
     ) -> StopResult {
-        if called_from_invocation_loop {
-            // A request accepted after outcome selection still retires this runtime, but must
-            // not survive its retirement and block a later start attempt.
-            self.interrupt_signal.lock().await.claim_pending_terminal();
-        }
         // Temporarily set the instance to unloaded so we can work with the old value.
         // This is not visible to anyone as long as we are holding the lock.
         let runtime = match &mut **instance_guard {
@@ -11463,7 +11471,7 @@ enum WorkerInterruptState {
     /// A terminal request has been taken by the invocation loop and remains authoritative until
     /// that worker generation stops. This prevents a late permit-reacquisition restart from
     /// superseding an interrupt that is already being handled.
-    TerminalClaimed,
+    TerminalClaimed(PendingWorkerInterrupt),
 }
 
 impl PendingWorkerInterrupt {
@@ -11494,11 +11502,13 @@ impl WorkerInterruptState {
 
     fn queue(&mut self, mut interrupt: PendingWorkerInterrupt) -> bool {
         match self {
-            Self::TerminalClaimed if interrupt.is_terminal() => {
+            Self::TerminalClaimed(claimed)
+                if interrupt.is_terminal() && interrupt.kind != claimed.kind =>
+            {
                 *self = Self::Unpublished(interrupt);
                 true
             }
-            Self::TerminalClaimed => false,
+            Self::TerminalClaimed(_) => false,
             Self::Freezing(_) | Self::Pending(_) => false,
             Self::Unpublished(current) if current.is_terminal() => false,
             Self::Unpublished(current) => {
@@ -11535,7 +11545,7 @@ impl WorkerInterruptState {
     fn take(&mut self) -> Option<PendingWorkerInterrupt> {
         match std::mem::take(self) {
             Self::Pending(interrupt) if interrupt.is_terminal() => {
-                *self = Self::TerminalClaimed;
+                *self = Self::TerminalClaimed(interrupt);
                 Some(interrupt)
             }
             Self::Pending(interrupt) => Some(interrupt),
@@ -11554,7 +11564,7 @@ impl WorkerInterruptState {
     }
 
     fn reset_terminal_for_new_generation(&mut self) {
-        if matches!(self, Self::TerminalClaimed) {
+        if matches!(self, Self::TerminalClaimed(_)) {
             *self = Self::Idle;
         }
     }
@@ -14671,6 +14681,33 @@ mod tests {
     }
 
     #[test]
+    fn terminal_teardown_cannot_requeue_its_exact_claimed_cause() {
+        let claimed = PendingWorkerInterrupt {
+            kind: InterruptKind::Suspend(Timestamp::now_utc()),
+            reacquire_permits: false,
+            unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+        };
+        let mut state = WorkerInterruptState::Pending(claimed);
+        assert!(state.claim_pending_terminal().is_some());
+        assert!(!state.queue(claimed));
+        assert!(
+            matches!(state, WorkerInterruptState::TerminalClaimed(pending) if pending.kind == claimed.kind)
+        );
+        assert!(state.claim_pending_terminal().is_none());
+
+        let later = PendingWorkerInterrupt {
+            kind: InterruptKind::Interrupt(Timestamp::now_utc()),
+            unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
+            ..claimed
+        };
+        assert!(state.queue(later));
+        assert!(state.freeze().is_some());
+        state.publish();
+        state.reset_terminal_for_new_generation();
+        assert_eq!(state.claim_pending_terminal().unwrap().kind, later.kind);
+    }
+
+    #[test]
     fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
         let mut state = WorkerInterruptState::Pending(PendingWorkerInterrupt {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
@@ -14678,7 +14715,7 @@ mod tests {
             unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
         });
         assert!(state.take().is_some());
-        assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
+        assert!(matches!(state, WorkerInterruptState::TerminalClaimed(_)));
 
         let delete_interrupt = PendingWorkerInterrupt {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
