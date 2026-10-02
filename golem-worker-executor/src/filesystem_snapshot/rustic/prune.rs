@@ -486,11 +486,18 @@ pub(super) fn next_claim(entries: &[ClaimEntry], now: Timestamp, hold: Duration)
 
 /// Gives the directory of the claims of the ledger: the time of its last prune in milliseconds, or
 /// `none`.
-pub(super) fn claims_directory(ledger: &PruneLedger) -> Box<Path> {
+fn claims_directory(ledger: &PruneLedger) -> Box<Path> {
     let generation = ledger
         .last_prune
         .map_or_else(|| "none".to_string(), |last| last.to_millis().to_string());
     Path::new(CLAIMS_PATH).join(generation).into_boxed_path()
+}
+
+/// Tells whether a claim in the directory belongs to the ledger: the directory is the claim
+/// directory of the time of the last prune in the ledger. Whether marked packs wait for removal
+/// does not count.
+pub(super) fn holds_generation(directory: &Path, ledger: &PruneLedger) -> bool {
+    *claims_directory(ledger) == *directory
 }
 
 /// Lists the claims and the markers in the directory, from their names. A name that does not
@@ -965,11 +972,12 @@ mod tests {
     use super::{
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, ClaimName, FREED_PATH,
         FreedRecord, FreedRecords, LEDGERS_PATH, Lease, ListedFreed, Next, Observed, Percent,
-        PruneLedger, PrunePolicy, claim_hold, claims_directory, keep_claim_fresh, lease_span,
-        list_claims, list_freed_names, marker_path, marker_time, may_be_due, named_bytes,
-        newest_ledger, next, next_claim, old_claim_directories, older_entries, parse_claim_entry,
-        parse_freed, parse_ledger_entry, parse_record, read_ledger, record_content, record_freed,
-        refresh_period, settle, settle_freed, take_claim, write_ledger,
+        PruneLedger, PrunePolicy, claim_hold, claims_directory, holds_generation, keep_claim_fresh,
+        lease_span, list_claims, list_freed_names, marker_path, marker_time, may_be_due,
+        named_bytes, newest_ledger, next, next_claim, old_claim_directories, older_entries,
+        parse_claim_entry, parse_freed, parse_ledger_entry, parse_record, read_ledger,
+        record_content, record_freed, refresh_period, settle, settle_freed, take_claim,
+        write_ledger,
     };
     use crate::filesystem_snapshot::clock::SystemClock;
     use futures::StreamExt;
@@ -1744,6 +1752,24 @@ mod tests {
                 true,
                 true,
             )
+        );
+    }
+
+    #[test]
+    fn a_claim_belongs_to_a_ledger_with_the_same_time_of_the_last_prune() {
+        let directory = claims_directory(&ledger(Some(42), false));
+        let none = claims_directory(&ledger(None, false));
+
+        assert_eq!(
+            [
+                holds_generation(&directory, &ledger(Some(42), false)),
+                holds_generation(&directory, &ledger(Some(42), true)),
+                holds_generation(&directory, &ledger(Some(43), false)),
+                holds_generation(&directory, &ledger(None, false)),
+                holds_generation(&none, &ledger(Some(42), false)),
+                holds_generation(&none, &ledger(None, true)),
+            ],
+            [true, true, false, false, false, true]
         );
     }
 
