@@ -76,10 +76,16 @@ jobs:
           mkdir -p ~/.moon
           echo "{\"username\":\"golemcloud\",\"token\":\"$MOONCAKES_TOKEN\"}" > ~/.moon/credentials.json
 
+      # Publish each module on its own: `moon publish` checks the whole moon.work workspace,
+      # which includes example modules that only compile with generated code.
       - name: Publish golem_sdk
         working-directory: sdks/moonbit/golem_sdk
+        env:
+          MOON_WORK: "off"
         run: moon publish
 
       - name: Publish golem_sdk_tools
         working-directory: sdks/moonbit/golem_sdk_tools
+        env:
+          MOON_WORK: "off"
         run: moon publish
