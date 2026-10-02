@@ -74,6 +74,11 @@ const DATABASE_PART_PREFIX = 'db:';
 const DATABASE_PART_CONTENT_TYPE = 'application/x-sqlite3';
 /** The characters that end the quoted name or the line of a multipart part header. */
 const PART_NAME_BREAKING_CHARACTERS = /["\r\n]/;
+/**
+ * A UTF-16 surrogate without its pair. UTF-8 encoding of the part header turns it into U+FFFD,
+ * so the name would come back as another name.
+ */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 function isDatabaseSync(val: unknown): val is DatabaseSync {
   return val instanceof DatabaseSync;
@@ -113,10 +118,10 @@ export function planDatabases(
       };
     }
     if (field.location === null) {
-      if (PART_NAME_BREAKING_CHARACTERS.test(field.name)) {
+      if (PART_NAME_BREAKING_CHARACTERS.test(field.name) || LONE_SURROGATE.test(field.name)) {
         return {
           tag: 'err',
-          val: `Cannot snapshot in-memory database ${JSON.stringify(field.name)}: its field name contains a double quote, a carriage return or a line feed, which a multipart part name cannot hold. Rename the field.`,
+          val: `Cannot snapshot in-memory database ${JSON.stringify(field.name)}: its field name contains a double quote, a carriage return, a line feed or a lone UTF-16 surrogate, which a multipart part name cannot hold. Rename the field.`,
         };
       }
       inMemory.push(field.name);

@@ -615,7 +615,7 @@ describe('snapshot — database plan', () => {
 
   it('fails on an in-memory field name that a multipart part name cannot hold', async () => {
     const { planDatabases } = await import('../src/internal/databaseSnapshot');
-    for (const name of ['a"b', 'a\rb', 'a\nb']) {
+    for (const name of ['a"b', 'a\rb', 'a\nb', 'db\uD800x', 'db\uDC00x', 'db\uD800']) {
       const plan = planDatabases([{ name, autocommit: true, location: null }]);
       expect(plan).toEqual({
         tag: 'err',
@@ -646,6 +646,14 @@ describe('snapshot — database plan', () => {
     ).toEqual({
       inMemory: [{ name: 'db', bytes: new Uint8Array([1]) }],
       fileDatabases: { other: '/data/app.db' },
+    });
+  });
+
+  it('keeps an in-memory field name with a surrogate pair', async () => {
+    const { planDatabases } = await import('../src/internal/databaseSnapshot');
+    expect(planDatabases([{ name: 'db\uD83D\uDE00', autocommit: true, location: null }])).toEqual({
+      tag: 'ok',
+      val: { inMemory: ['db\uD83D\uDE00'], fileDatabases: {} },
     });
   });
 
