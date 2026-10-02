@@ -359,22 +359,22 @@ fn record_error(source: anyhow::Error) -> Error {
 /// - When the tree is what a start from the initial files gives, the result is
 ///   [`CaptureOutcome::InitialFiles`] with the mark of the tree, and the capture makes no host
 ///   directory. That is true when each declaration is a read-only initial file, each of these
-///   files is the declared initial file with a single name, the tree holds nothing else except the
-///   directories on the way to these files, and no call outside an install put a chosen
-///   modification time at a path. The check does not
-///   compare the modification times of the directories: a time that the kernel gave comes back
-///   from a replay as a new time too.
+///   files is the file of its declaration at its declared path and has a single name, the tree
+///   holds nothing else except the directories on the way to these files, and no call outside an
+///   install put a chosen modification time at a path. The check does not compare the
+///   modification times of the directories: a time that the kernel gave comes back from a replay
+///   as a new time too.
 /// - Otherwise the capture copies the tree. Then it keeps the calls stopped until 20 ms after the
 ///   last call ended, and opens the filesystem again (`finish_transition`). The detection is
 ///   [`ChangeDetection::SizeMtime`] when `since` is a mark of this generation with the times of a
 ///   save, and only calls whose times the kernel gave ran since it. Otherwise it is
 ///   [`ChangeDetection::Full`].
 ///
-/// The capture directory holds `tree/` and `record.json`. The tree is
-/// the whole filesystem minus each read-only initial or entity-provisioned file that has a single
-/// name and is the initial file at its declared path: a regular file with the declared content and
-/// without write permission. The tree holds a file with more than one name once. The record gives
-/// the paths whose bytes the tree leaves out, the hard-link groups and the declarations.
+/// The capture directory holds `tree/` and `record.json`. The tree is the whole filesystem minus
+/// each read-only initial or entity-provisioned file that has a single name and is the file of its
+/// declaration at its declared path: a regular file with the declared content and without write
+/// permission. The tree holds a file with more than one name once. The record gives the paths
+/// whose bytes the tree leaves out, the hard-link groups and the declarations.
 ///
 /// The wait for open calls ends at `wait`. A call that is still open then gives `Busy`, and the
 /// filesystem opens again at once. A guest that keeps such a call can never be captured, but the

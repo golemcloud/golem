@@ -425,7 +425,7 @@ async fn a_deletion_waits_for_a_capture_whose_future_the_caller_dropped() {
 }
 
 #[test]
-async fn capture_leaves_out_the_read_only_files_that_hold_the_initial_file_with_a_single_name() {
+async fn capture_leaves_out_the_read_only_paths_that_hold_the_initial_file_with_a_single_name() {
     let store = InitialFileStore::new().await;
     let read_only = |path: &'static str| {
         let store = &store;
@@ -1381,7 +1381,8 @@ async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone(
         store.prepare(std::slice::from_ref(&installed)).await,
     )
     .await;
-    // The agent removed the initial file, so nothing is at the path that the update changes.
+    // The agent removed the initial file of the old declaration, so nothing is at the path that
+    // the update changes.
     control.push_get_attributes(Err(sandbox_error(
         "get sandbox filesystem path attributes",
         std::io::ErrorKind::NotFound,
@@ -1399,7 +1400,7 @@ async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone(
     match &updated {
         Err(error) => assert_eq!(
             error.to_string(),
-            "the agent filesystem no longer holds the file that Golem installed at config, \
+            "the agent filesystem no longer holds the initial file at config, \
              so the initial files of the agent cannot be installed"
         ),
         Ok(()) => panic!("the update must fail with a conflict"),
@@ -1442,9 +1443,10 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_the_init
                 let resident =
                     scripted_resident(&control, filesystem, store.prepare(&[installed]).await)
                         .await;
-                // The agent removed the initial file and wrote a new file with the declared size
-                // at the path. The new file got the recorded object, and it has write bits. So
-                // only the write bits can show that it is not the initial file.
+                // The agent removed the initial file of the old declaration and wrote a new file
+                // with the declared size at the path. The new file got the recorded object, and it
+                // has write bits. So only the write bits can show that it is not the initial file
+                // of the old declaration.
                 control.push_get_attributes(Ok(file_attributes(7, size, 1, false)));
                 let changes_before =
                     call_count(&control, "seed(") + call_count(&control, "unlink_file(");
@@ -1476,7 +1478,8 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_the_init
                 assert_eq!(
                     call_count(&control, "open("),
                     opens_before,
-                    "{name}: the write bits alone must show that the file is not the initial file"
+                    "{name}: the write bits alone must show that the file is not the initial \
+                     file of the old declaration"
                 );
                 assert!(
                     !filesystem_activity(&resident).has_terminal_failure(),
@@ -3063,7 +3066,8 @@ impl ReferenceModel {
     /// Tells whether `path` holds the old object of a read-only file back: a read-only file with
     /// the size of the read-only declaration `old` and other content, whose object an earlier
     /// install put at `path`. The lifecycle keeps the identity of each read-only file that it
-    /// installs. It must not take that identity for the initial file after the object came back.
+    /// installs. It must not take that identity for the initial file of `old` after the object
+    /// came back.
     fn holds_old_object_back(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
         match (
             old,
@@ -3368,11 +3372,11 @@ impl ReferenceModel {
     /// conflict fails the whole install, changes nothing, and names the first conflicting path.
     ///
     /// Each decision reads the tree as the removals of the install leave it. The install removes
-    /// the initial file where the new declarations do not have its path. So such a file above a
-    /// path does not block the path. A directory at a path that the new declarations have holds
-    /// nothing when every file under it is such a file and every directory in it holds at least one
-    /// object. The install removes the files first, then such directories, then puts the new files
-    /// in place.
+    /// the initial file of the current declaration where the new declarations do not have its path.
+    /// So such a file above a path does not block the path. A directory at a path that the new
+    /// declarations have holds nothing when every file under it is such a file and every directory
+    /// in it holds at least one object. The install removes the files first, then such directories,
+    /// then puts the new files in place.
     fn install_declarations(
         &mut self,
         component: BTreeMap<String, ModelDeclaration>,

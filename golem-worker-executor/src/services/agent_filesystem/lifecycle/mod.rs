@@ -683,12 +683,11 @@ pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
 /// declarations. At a path whose declaration changes, the call expects the initial file of the
 /// current declaration where the current declarations have the path, and nothing where they do
 /// not. It puts the new file there, or removes the initial file of the current declaration. An
-/// empty path that the new declarations do not have stays empty.
-/// Anything else at such a path is a conflict. A conflict fails the call with an
-/// [`Error::InitialFileConflict`] that names the path and what is at it, and changes nothing. A
-/// failure after the plan passes and the sources load invalidates the generation.
-/// Admission errors are immediate, and loading or sandbox failures are produced by the returned
-/// call.
+/// empty path that the new declarations do not have stays empty. Anything else at such a path is a
+/// conflict. A conflict fails the call with an [`Error::InitialFileConflict`] that names the path
+/// and what is at it, and changes nothing. A failure after the plan passes and the sources load
+/// invalidates the generation. Admission errors are immediate, and loading or sandbox failures are
+/// produced by the returned call.
 pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,
     file_loader: Arc<FileLoader>,

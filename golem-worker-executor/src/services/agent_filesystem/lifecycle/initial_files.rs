@@ -54,9 +54,10 @@ impl InitialFileState {
 
 /// A read-only file that the lifecycle installed at a path.
 ///
-/// The identity of the object lets a check of the initial file skip the read of the content. An
-/// agent cannot make a file without write permission, so an object without write permission that
-/// has this identity is the file that the install put at the path.
+/// The identity of the object lets a check whether the path holds the initial file of its
+/// declaration skip the read of the content. An agent cannot make a file without write permission,
+/// so an object without write permission that has this identity is the file that the install put
+/// at the path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct InstalledFile {
     object: SandboxObjectId,
@@ -84,9 +85,11 @@ impl InstalledFile {
 pub(super) enum PathState {
     /// Nothing is at the path, or a directory above the path is missing.
     Absent,
-    /// The path holds the initial file of the old declaration: a regular file with the content of
-    /// that declaration and, where that declaration is read-only, without write permission. Only a
-    /// path that the old declarations have can hold the initial file of the old declaration.
+    /// The path holds the initial file of the old declaration. The initial file of a declaration is
+    /// a regular file at the declared path whose content equals the declaration and that, where the
+    /// declaration is read-only, has no write permission. The check does not ask who put the file
+    /// there. A path that only the new declarations have never has this state, also when it holds
+    /// the content of a new declaration.
     InitialFile,
     /// Another object is at the path.
     Other,
@@ -238,9 +241,10 @@ enum ConflictCause {
 
 /// The first path, in path order, that stopped an install of initial files.
 ///
-/// The message names the path and what is at it, because the agent, and not Golem, put it there.
-/// The install reads the whole tree before its first change, so an install that gives this error
-/// changed nothing, and it succeeds after the path holds what the old declarations left.
+/// The message names the path and what is at it, because the agent, and not an install of initial
+/// files, put it there. The install reads the whole tree before its first change, so an install
+/// that gives this error changed nothing, and it succeeds after the path holds what the old
+/// declarations left.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InitialFileConflict {
     /// The path of the conflict, below the root of the agent filesystem.
@@ -281,7 +285,7 @@ impl Display for InitialFileConflict {
             }
             ConflictCause::Missing => write!(
                 formatter,
-                "the agent filesystem no longer holds the file that Golem installed at {path}"
+                "the agent filesystem no longer holds the initial file at {path}"
             ),
         }?;
         formatter.write_str(", so the initial files of the agent cannot be installed")
@@ -709,8 +713,9 @@ impl PreparedInitialFiles {
 ///
 /// `installed` holds the files that the lifecycle installed for `old`. At each path that `old`
 /// declares, the function checks whether the path holds the initial file of that declaration. A
-/// path that `old` does not declare never holds the initial file of `old`. The function reads no
-/// path whose declarations in `old` and `new` are equal.
+/// path that only `new` declares never gets [`PathState::InitialFile`], also when it holds the
+/// content of the declaration in `new`. The function reads no path whose declarations in `old` and
+/// `new` are equal.
 ///
 /// After all the paths, the function reads each directory that is at a path that `old` does not
 /// declare. Such a path is a path that `new` declares. The read of one directory stops at the first
@@ -777,8 +782,9 @@ pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
 }
 
 /// Tells whether the directory at `path` holds at least one object, and each object under it is
-/// the initial file at a path that `old` declares and `new` does not declare, or a directory that
-/// holds at least one object. `states` gives what is at the paths whose declarations differ.
+/// the initial file of `old` at a path that `old` declares and `new` does not declare, or a
+/// directory that holds at least one object. `states` gives what is at the paths whose
+/// declarations differ.
 ///
 /// The function reads each directory under `path` one time. It stops after the first directory
 /// that holds nothing or an object that does not agree with these conditions.
@@ -822,9 +828,8 @@ async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
     .await
 }
 
-/// Tells whether `object` is the initial file at a path that `old` declares and `new` does not
-/// declare.
-/// `states` gives what is at the paths whose declarations differ.
+/// Tells whether `object` is the initial file of `old` at a path that `old` declares and `new`
+/// does not declare. `states` gives what is at the paths whose declarations differ.
 fn dropped_initial_file(
     object: &Path,
     old: &DeclarationView<'_>,
@@ -865,7 +870,7 @@ pub(super) async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
     closed.map(|()| entries)
 }
 
-/// Tells whether the object at `path`, which `attributes` describe, holds the initial file
+/// Tells whether the object at `path`, which `attributes` describe, is the initial file of
 /// `declared`: a regular file with the declared content and, where the declaration is read-only,
 /// without write permission.
 ///
@@ -887,22 +892,23 @@ pub(super) async fn holds_initial_file<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-/// What the attributes of an object tell about whether it holds a declared initial file.
+/// What the attributes of an object tell about whether it is the initial file of `declared`.
 #[derive(Debug, Eq, PartialEq)]
 enum InitialFileMatch<'a> {
-    /// The object does not hold the initial file.
+    /// The object is not the initial file of `declared`.
     Differs,
-    /// The object holds the initial file.
+    /// The object is the initial file of `declared`.
     Matches,
-    /// The object holds the initial file only when its content has this hash.
+    /// The object is the initial file of `declared` only when its content has this hash.
     MatchesIfContentHash(&'a blake3::Hash),
 }
 
-/// Decides from `attributes` whether the object holds the initial file `declared`.
+/// Decides from `attributes` whether the object is the initial file of `declared`.
 ///
-/// An object that is not a regular file, that has write permission where `declared` is
-/// read-only, or that has another size does not hold it. An object that matches `installed`
-/// holds it. Any other object holds it only when its content has the declared hash.
+/// An object that is not a regular file, that has write permission where `declared` is read-only,
+/// or that has another size is not the initial file of `declared`. An object that matches
+/// `installed` is the initial file of `declared`. Any other object is the initial file of
+/// `declared` only when its content has the declared hash.
 fn initial_file_match<'a>(
     declared: &'a InitialAgentFile,
     installed: Option<&InstalledFile>,
