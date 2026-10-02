@@ -14,14 +14,13 @@
 
 use super::initial_files::{
     DeclarationView, Declarations, InitialFileSources, PathLookup, PathReader, RetryPreparation,
-    declaration_view, declarations_of, directory_entries, holds_golem_file, install, observe,
+    declaration_view, declarations_of, directory_entries, holds_initial_file, install, observe,
     sandbox_path, seed_with_retry, validate_compatible,
 };
 use super::*;
 use crate::sandbox_filesystem::HostPath;
 use futures::{StreamExt as _, TryStreamExt as _};
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
 use std::ffi::OsStr;
 use std::time::Duration;
 
@@ -36,7 +35,8 @@ pub(crate) trait RestoreTree: Send {
     fn restore(self, into: &Path) -> impl Future<Output = Result<(), RestoreError>> + Send;
 }
 
-impl RestoreTree for Infallible {
+#[cfg(test)]
+impl RestoreTree for std::convert::Infallible {
     async fn restore(self, _into: &Path) -> Result<(), RestoreError> {
         match self {}
     }
@@ -358,23 +358,23 @@ fn record_error(source: anyhow::Error) -> Error {
 ///   [`CaptureOutcome::Unchanged`], and the capture makes no host directory.
 /// - When the tree is what a start from the initial files gives, the result is
 ///   [`CaptureOutcome::InitialFiles`] with the mark of the tree, and the capture makes no host
-///   directory. That is true when
-///   each declaration is a read-only initial file, each of these files is Golem's file with a
-///   single name, the tree holds nothing else except the directories on the way to these files,
-///   and no call outside an install put a chosen modification time at a path. The check does not
-///   compare the modification times of the directories: a time that the kernel gave comes back
-///   from a replay as a new time too.
+///   directory. That is true when each declaration is a read-only initial file, each of these
+///   files is the file of its declaration at its declared path and has a single name, the tree
+///   holds nothing else except the directories on the way to these files, and no call outside an
+///   install put a chosen modification time at a path. The check does not compare the
+///   modification times of the directories: a time that the kernel gave comes back from a replay
+///   as a new time too.
 /// - Otherwise the capture copies the tree. Then it keeps the calls stopped until 20 ms after the
 ///   last call ended, and opens the filesystem again (`finish_transition`). The detection is
 ///   [`ChangeDetection::SizeMtime`] when `since` is a mark of this generation with the times of a
 ///   save, and only calls whose times the kernel gave ran since it. Otherwise it is
 ///   [`ChangeDetection::Full`].
 ///
-/// The capture directory holds `tree/` and `record.json`. The tree is
-/// the whole filesystem minus each read-only initial or entity-provisioned file that has a single
-/// name and is Golem's file at its declared path: a regular file with the declared content and
-/// without write permission. The tree holds a file with more than one name once. The record gives
-/// the paths whose bytes the tree leaves out, the hard-link groups and the declarations.
+/// The capture directory holds `tree/` and `record.json`. The tree is the whole filesystem minus
+/// each read-only initial or entity-provisioned file that has a single name and is the file of its
+/// declaration at its declared path: a regular file with the declared content and without write
+/// permission. The tree holds a file with more than one name once. The record gives the paths
+/// whose bytes the tree leaves out, the hard-link groups and the declarations.
 ///
 /// The wait for open calls ends at `wait`. A call that is still open then gives `Busy`, and the
 /// filesystem opens again at once. A guest that keeps such a call can never be captured, but the
@@ -569,8 +569,8 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-/// Finds the read-only declared paths that hold Golem's file with a single name. A capture leaves
-/// out the bytes of these files. The result is in path order.
+/// Finds the read-only declared paths that hold the declared initial file with a single name. A
+/// capture leaves out the bytes of these files. The result is in path order.
 async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     state: &InitialFileState,
@@ -588,7 +588,7 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
                 let (reader, lookup) = reader.read(sandbox, path).await?;
                 if let PathLookup::Found(attributes) = lookup
                     && attributes.link_count == 1
-                    && holds_golem_file(
+                    && holds_initial_file(
                         sandbox,
                         path,
                         declared,
@@ -925,18 +925,12 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         &HashMap::new(),
     )
     .await?;
-    // The seed into the root keeps the time of the root, and a name that a link or a seed adds to
-    // a directory changes the time of that directory.
-    let changed_directories = std::iter::once(Path::new(""))
-        .chain(
-            link_groups
-                .iter()
-                .flat_map(|group| group.others.iter())
-                .filter_map(|other| other.parent()),
-        )
-        .chain(left_out.iter().filter_map(|path| path.parent()))
-        .collect::<BTreeSet<&Path>>();
-    restore_directory_times(sandbox, &tree, changed_directories).await?;
+    restore_directory_times(
+        sandbox,
+        &tree,
+        directories_with_changed_times(&link_groups, &left_out),
+    )
+    .await?;
     let new = declaration_view([&initial, &provisioned]);
     generation.registry.record_restore(old == new);
     let states = observe(sandbox, &old, &new, &seeded)
@@ -948,6 +942,25 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
         provisioned: Arc::new(provisioned),
         installed,
     })
+}
+
+/// Gives the directories whose modification times a restore sets again: the root, which is the
+/// empty path, and each directory that gets a name from a link of `link_groups` or from a seed of a
+/// path of `left_out`. The seed into the root keeps the time of the root, and a name that a link or
+/// a seed adds to a directory changes the time of that directory.
+fn directories_with_changed_times<'a>(
+    link_groups: &'a [LinkGroup],
+    left_out: &'a [Box<Path>],
+) -> BTreeSet<&'a Path> {
+    std::iter::once(Path::new(""))
+        .chain(
+            link_groups
+                .iter()
+                .flat_map(|group| group.others.iter())
+                .filter_map(|other| other.parent()),
+        )
+        .chain(left_out.iter().filter_map(|path| path.parent()))
+        .collect()
 }
 
 /// Gives `declarations` without the paths `left_out`. Refuses a left-out path that has no read-only
@@ -1035,4 +1048,25 @@ async fn link_other_names<Adapter: SandboxFilesystemAdapter>(
                 .await
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn the_changed_directories_are_the_root_and_the_parents_of_the_links_and_the_left_out_files() {
+        let path = |path: &str| Box::<Path>::from(Path::new(path));
+        let link_groups = [LinkGroup {
+            first: path("a/first"),
+            others: Box::new([path("b/c/second"), path("b/c/third")]),
+        }];
+        let left_out = [path("d/kept")];
+
+        assert_eq!(
+            directories_with_changed_times(&link_groups, &left_out),
+            BTreeSet::from([Path::new(""), Path::new("b/c"), Path::new("d")])
+        );
+    }
 }

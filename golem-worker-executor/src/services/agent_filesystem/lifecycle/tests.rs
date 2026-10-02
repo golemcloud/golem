@@ -8947,3 +8947,12 @@ proptest! {
 // captured tree, and its model of a tree carries them, so all of it is Unix-only.
 #[cfg(unix)]
 mod capture_and_baseline;
+
+#[test]
+fn a_change_of_a_read_only_file_is_refused_and_a_change_of_another_object_is_not() {
+    assert!(matches!(
+        refuse_read_only_change(true),
+        Err(Error::Access(AccessError::NotPermitted))
+    ));
+    assert!(refuse_read_only_change(false).is_ok());
+}

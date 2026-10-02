@@ -54,9 +54,10 @@ impl InitialFileState {
 
 /// A read-only file that the lifecycle installed at a path.
 ///
-/// The identity of the object lets a check of Golem's file skip the read of the content. An agent
-/// cannot make a file without write permission, so an object without write permission that has
-/// this identity is the file that the install put at the path.
+/// The identity of the object lets a check whether the path holds the initial file of its
+/// declaration skip the read of the content. An agent cannot make a file without write permission,
+/// so an object without write permission that has this identity is the file that the install put
+/// at the path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct InstalledFile {
     object: SandboxObjectId,
@@ -84,17 +85,19 @@ impl InstalledFile {
 pub(super) enum PathState {
     /// Nothing is at the path, or a directory above the path is missing.
     Absent,
-    /// The path holds Golem's file of the old declaration: a regular file with the content of that
-    /// declaration and, where that declaration is read-only, without write permission. Only a path
-    /// that the old declarations have can hold Golem's file.
-    Golem,
+    /// The path holds the initial file of the old declaration. The initial file of a declaration is
+    /// a regular file at the declared path whose content equals the declaration and that, where the
+    /// declaration is read-only, has no write permission. The check does not ask who put the file
+    /// there. A path that only the new declarations have never has this state, also when it holds
+    /// the content of a new declaration.
+    InitialFile,
     /// Another object is at the path.
     Other,
     /// An object above the path is not a directory.
     Blocked,
     /// A directory is at a path that the old declarations do not have and the new declarations
-    /// have. Each object under the directory is Golem's file at a path that the new declarations do
-    /// not have, or a directory that holds at least one object.
+    /// have. Each object under the directory is the initial file of the old declaration at a path
+    /// that the new declarations do not have, or a directory that holds at least one object.
     DirectoryOfDroppedFiles,
 }
 
@@ -102,13 +105,13 @@ pub(super) enum PathState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Step<'a> {
     /// Puts the declared file at the path. `placement` is `CreateNew` where the path holds
-    /// nothing, and `Replace` where it holds Golem's file.
+    /// nothing, and `Replace` where it holds the initial file of the old declaration.
     Seed {
         path: &'a Path,
         file: &'a InitialAgentFile,
         placement: SeedPlacement,
     },
-    /// Removes Golem's file from the path.
+    /// Removes the initial file of the old declaration from the path.
     Unlink { path: &'a Path },
     /// Removes the directory at the path after the unlinks of the install make it empty. A seed
     /// then puts a file at the path or above it.
@@ -130,22 +133,22 @@ impl<'a> Step<'a> {
 /// `old` holds the declarations before the install, and `new` the declarations after it. `state`
 /// gives what is at a path.
 ///
-/// A path whose declarations in `old` and `new` are equal keeps what is at it. Two declarations
-/// are equal when their content hash, path, permissions and size are equal. At every other path,
-/// the install expects what `old` left there: Golem's file where `old` declares the path, and
-/// nothing where `old` does not declare it. Read-only and read-write declarations follow the same
-/// rules. Each such path follows one of three rules:
+/// A path whose declarations in `old` and `new` are equal keeps what is at it. Two declarations are
+/// equal when their content hash, path, permissions and size are equal. At every other path, the
+/// install expects what `old` left there: the initial file of `old` where `old` declares the path,
+/// and nothing where `old` does not declare it. Read-only and read-write declarations follow the
+/// same rules. Each such path follows one of three rules:
 ///
 /// 1. A path that holds what the install expects gets what `new` declares. The new file goes on a
-///    path that holds nothing, or in place of Golem's file. Golem's file goes away where `new` does
-///    not declare the path.
+///    path that holds nothing, or in place of the initial file of `old`. The initial file of `old`
+///    goes away where `new` does not declare the path.
 /// 2. A path that holds nothing, and that `new` does not declare, stays as it is.
 /// 3. Anything else at the path is a conflict.
 ///
-/// The rules read the tree as the removals of the install leave it. Golem's file that the install
-/// removes does not block a path under it, so that path holds nothing. A directory of Golem's
-/// files that the install removes also holds nothing: the install removes that directory, and the
-/// directories in it, after the files and before the seeds.
+/// The rules read the tree as the removals of the install leave it. The initial file of `old` that
+/// the install removes does not block a path under it, so that path holds nothing. A directory of
+/// initial files of `old` that the install removes also holds nothing: the install removes that
+/// directory, and the directories in it, after the files and before the seeds.
 ///
 /// The result gives the steps in path order, or the conflict of the first path in path order
 /// that has one.
@@ -170,7 +173,8 @@ pub(super) fn plan<'a>(
         .into_iter()
         .try_fold(Vec::new(), |mut steps, path| {
             let observed = state(path);
-            // Only Golem's file can be unlinked, so an unlinked ancestor is the object that blocks.
+            // Only the initial file of the old declaration can be unlinked, so an unlinked ancestor
+            // is the object that blocks.
             let resolved = match observed {
                 PathState::Blocked
                     if path
@@ -237,9 +241,10 @@ enum ConflictCause {
 
 /// The first path, in path order, that stopped an install of initial files.
 ///
-/// The message names the path and what is at it, because the agent, and not Golem, put it there.
-/// The install reads the whole tree before its first change, so an install that gives this error
-/// changed nothing, and it succeeds after the path holds what the old declarations left.
+/// The message names the path and what is at it, because the agent, and not an install of initial
+/// files, put it there. The install reads the whole tree before its first change, so an install
+/// that gives this error changed nothing, and it succeeds after the path holds what the old
+/// declarations left.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InitialFileConflict {
     /// The path of the conflict, below the root of the agent filesystem.
@@ -250,7 +255,7 @@ pub(crate) struct InitialFileConflict {
 
 impl InitialFileConflict {
     /// The path of the conflict, below the root of the agent filesystem.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
@@ -280,7 +285,7 @@ impl Display for InitialFileConflict {
             }
             ConflictCause::Missing => write!(
                 formatter,
-                "the agent filesystem no longer holds the file that Golem installed at {path}"
+                "the agent filesystem no longer holds the initial file at {path}"
             ),
         }?;
         formatter.write_str(", so the initial files of the agent cannot be installed")
@@ -322,8 +327,8 @@ fn rule<'a>(
     match (old, new, state) {
         (old, new, _) if old == new => Decision::Keep,
         (None, Some(new), PathState::Absent) => Decision::Seed(new, SeedPlacement::CreateNew),
-        (Some(_), Some(new), PathState::Golem) => Decision::Seed(new, SeedPlacement::Replace),
-        (Some(_), None, PathState::Golem) => Decision::Unlink,
+        (Some(_), Some(new), PathState::InitialFile) => Decision::Seed(new, SeedPlacement::Replace),
+        (Some(_), None, PathState::InitialFile) => Decision::Unlink,
         (_, None, PathState::Absent) => Decision::Keep,
         _ => Decision::Conflict,
     }
@@ -707,14 +712,15 @@ impl PreparedInitialFiles {
 /// Finds what is at each path whose declaration differs between `old` and `new`.
 ///
 /// `installed` holds the files that the lifecycle installed for `old`. At each path that `old`
-/// declares, the function checks whether the path holds Golem's file of that declaration. A path
-/// that `old` does not declare never holds Golem's file. The function reads no path whose
-/// declarations in `old` and `new` are equal.
+/// declares, the function checks whether the path holds the initial file of that declaration. A
+/// path that only `new` declares never gets [`PathState::InitialFile`], also when it holds the
+/// content of the declaration in `new`. The function reads no path whose declarations in `old` and
+/// `new` are equal.
 ///
 /// After all the paths, the function reads each directory that is at a path that `old` does not
 /// declare. Such a path is a path that `new` declares. The read of one directory stops at the first
-/// object that is not Golem's file at a path that `new` does not declare, and at the first
-/// directory that holds nothing.
+/// object that is not the initial file of `old` at a path that `new` does not declare, and at the
+/// first directory that holds nothing.
 pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     old: &DeclarationView<'a>,
@@ -738,7 +744,7 @@ pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
                     (PathLookup::Absent, _) => PathState::Absent,
                     (PathLookup::Blocked, _) => PathState::Blocked,
                     (PathLookup::Found(attributes), Some(declared)) => {
-                        if holds_golem_file(
+                        if holds_initial_file(
                             sandbox,
                             path,
                             declared,
@@ -747,7 +753,7 @@ pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
                         )
                         .await?
                         {
-                            PathState::Golem
+                            PathState::InitialFile
                         } else {
                             PathState::Other
                         }
@@ -776,8 +782,9 @@ pub(super) async fn observe<'a, Adapter: SandboxFilesystemAdapter>(
 }
 
 /// Tells whether the directory at `path` holds at least one object, and each object under it is
-/// Golem's file at a path that `old` declares and `new` does not declare, or a directory that holds
-/// at least one object. `states` gives what is at the paths whose declarations differ.
+/// the initial file of `old` at a path that `old` declares and `new` does not declare, or a
+/// directory that holds at least one object. `states` gives what is at the paths whose
+/// declarations differ.
 ///
 /// The function reads each directory under `path` one time. It stops after the first directory
 /// that holds nothing or an object that does not agree with these conditions.
@@ -797,7 +804,7 @@ async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
         let agrees = !entries.is_empty()
             && entries.iter().all(|entry| {
                 entry.kind == SandboxObjectKind::Directory
-                    || dropped_golem_file(&directory.join(&entry.name), old, new, states)
+                    || dropped_initial_file(&directory.join(&entry.name), old, new, states)
             });
         // A directory that does not agree ends the read, so no other directory is read.
         let pending = if agrees {
@@ -821,9 +828,9 @@ async fn holds_only_dropped_files<Adapter: SandboxFilesystemAdapter>(
     .await
 }
 
-/// Tells whether `object` is Golem's file at a path that `old` declares and `new` does not declare.
-/// `states` gives what is at the paths whose declarations differ.
-fn dropped_golem_file(
+/// Tells whether `object` is the initial file of `old` at a path that `old` declares and `new`
+/// does not declare. `states` gives what is at the paths whose declarations differ.
+fn dropped_initial_file(
     object: &Path,
     old: &DeclarationView<'_>,
     new: &DeclarationView<'_>,
@@ -831,7 +838,7 @@ fn dropped_golem_file(
 ) -> bool {
     old.contains_key(object)
         && !new.contains_key(object)
-        && states.get(object) == Some(&PathState::Golem)
+        && states.get(object) == Some(&PathState::InitialFile)
 }
 
 /// Lists the entries of the directory at the root-relative `path`, without following a final
@@ -863,31 +870,60 @@ pub(super) async fn directory_entries<Adapter: SandboxFilesystemAdapter>(
     closed.map(|()| entries)
 }
 
-/// Tells whether the object at `path`, which `attributes` describe, is Golem's file of the
-/// declaration `declared`: a regular file with the declared content and, where the declaration is
-/// read-only, without write permission.
+/// Tells whether the object at `path`, which `attributes` describe, is the initial file of
+/// `declared`: a regular file with the declared content and, where the declaration is read-only,
+/// without write permission.
 ///
 /// `installed` is the file that the lifecycle installed at the path, where it recorded one. An
 /// object that matches it needs no read of its content.
-pub(super) async fn holds_golem_file<Adapter: SandboxFilesystemAdapter>(
+pub(super) async fn holds_initial_file<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
     declared: &InitialAgentFile,
     installed: Option<&InstalledFile>,
     attributes: &SandboxAttributes,
 ) -> Result<bool, FilesystemStorageError> {
+    match initial_file_match(declared, installed, attributes) {
+        InitialFileMatch::Differs => Ok(false),
+        InitialFileMatch::Matches => Ok(true),
+        InitialFileMatch::MatchesIfContentHash(expected) => content_hash(sandbox, path)
+            .await
+            .map(|hash| hash == *expected),
+    }
+}
+
+/// What the attributes of an object tell about whether it is the initial file of `declared`.
+#[derive(Debug, Eq, PartialEq)]
+enum InitialFileMatch<'a> {
+    /// The object is not the initial file of `declared`.
+    Differs,
+    /// The object is the initial file of `declared`.
+    Matches,
+    /// The object is the initial file of `declared` only when its content has this hash.
+    MatchesIfContentHash(&'a blake3::Hash),
+}
+
+/// Decides from `attributes` whether the object is the initial file of `declared`.
+///
+/// An object that is not a regular file, that has write permission where `declared` is read-only,
+/// or that has another size is not the initial file of `declared`. An object that matches
+/// `installed` is the initial file of `declared`. Any other object is the initial file of
+/// `declared` only when its content has the declared hash.
+fn initial_file_match<'a>(
+    declared: &'a InitialAgentFile,
+    installed: Option<&InstalledFile>,
+    attributes: &SandboxAttributes,
+) -> InitialFileMatch<'a> {
     let read_only = declared.permissions == AgentFilePermissions::ReadOnly;
     if attributes.kind != SandboxObjectKind::File
         || (read_only && !attributes.read_only)
         || attributes.size != declared.size
     {
-        Ok(false)
+        InitialFileMatch::Differs
     } else if installed.is_some_and(|installed| installed.matches(attributes)) {
-        Ok(true)
+        InitialFileMatch::Matches
     } else {
-        content_hash(sandbox, path)
-            .await
-            .map(|hash| hash == *declared.content_hash.0.as_blake3_hash())
+        InitialFileMatch::MatchesIfContentHash(declared.content_hash.0.as_blake3_hash())
     }
 }
 
@@ -1043,16 +1079,9 @@ pub(super) async fn provision<Adapter: SandboxFilesystemAdapter>(
     let _update = generation.initial_file_updates.lock().await;
     let requested = declarations_of(files, "materialize unique entity-provisioned file target")?;
     let state = Arc::clone(&generation.initial_files.lock().unwrap());
-    validate_compatible(&declaration_view([&requested]), &state.declarations())?;
-    let provisioned = state
-        .provisioned
-        .iter()
-        .chain(&requested)
-        .map(|(path, file)| (Arc::clone(path), Arc::clone(file)))
-        .collect::<Declarations>();
-    if provisioned == *state.provisioned {
+    let Some(provisioned) = provisioned_after(&state, &requested)? else {
         return Ok(());
-    }
+    };
     let new = declaration_view([&*state.initial, &provisioned]);
     let installed = install_resident(generation, sources, &state, &new).await?;
     *generation.initial_files.lock().unwrap() = Arc::new(InitialFileState {
@@ -1061,6 +1090,23 @@ pub(super) async fn provision<Adapter: SandboxFilesystemAdapter>(
         installed,
     });
     Ok(())
+}
+
+/// Gives the provisioned declarations of `state` with `requested` added, or `None` when `state`
+/// already has each declaration of `requested`. Refuses a declaration of `requested` that
+/// describes another file than `state` declares at its path.
+fn provisioned_after(
+    state: &InitialFileState,
+    requested: &Declarations,
+) -> Result<Option<Declarations>, Error> {
+    validate_compatible(&declaration_view([requested]), &state.declarations())?;
+    let provisioned = state
+        .provisioned
+        .iter()
+        .chain(requested)
+        .map(|(path, file)| (Arc::clone(path), Arc::clone(file)))
+        .collect::<Declarations>();
+    Ok((provisioned != *state.provisioned).then_some(provisioned))
 }
 
 /// Installs `new` over the files of `state` in a generation that the agent uses.
@@ -1240,5 +1286,106 @@ mod tests {
             kind: SandboxObjectKind::Directory,
             ..attributes(1, true)
         }));
+    }
+
+    fn file_attributes(read_only: bool, size: u64, object: u64) -> SandboxAttributes {
+        SandboxAttributes {
+            kind: SandboxObjectKind::File,
+            link_count: 1,
+            size,
+            accessed: None,
+            modified: None,
+            read_only,
+            object: SandboxObjectId::scripted(object),
+        }
+    }
+
+    #[test]
+    fn initial_file_match_refuses_another_kind_size_or_write_permission_first() {
+        let declared = read_only(4);
+        let installed = InstalledFile::of(&file_attributes(true, 4, 1));
+        let directory = SandboxAttributes {
+            kind: SandboxObjectKind::Directory,
+            ..file_attributes(true, 4, 1)
+        };
+
+        assert_eq!(
+            [
+                initial_file_match(&declared, Some(&installed), &directory),
+                initial_file_match(&declared, Some(&installed), &file_attributes(true, 5, 1)),
+                initial_file_match(&declared, Some(&installed), &file_attributes(false, 4, 1)),
+            ],
+            [
+                InitialFileMatch::Differs,
+                InitialFileMatch::Differs,
+                InitialFileMatch::Differs,
+            ]
+        );
+    }
+
+    #[test]
+    fn initial_file_match_takes_the_installed_file_and_asks_for_the_hash_otherwise() {
+        let declared = read_only(4);
+        let writable = read_write(4);
+        let installed = InstalledFile::of(&file_attributes(true, 4, 1));
+        let hash = declared.content_hash.0.as_blake3_hash();
+
+        assert_eq!(
+            [
+                initial_file_match(&declared, Some(&installed), &file_attributes(true, 4, 1)),
+                initial_file_match(&declared, Some(&installed), &file_attributes(true, 4, 2)),
+                initial_file_match(&declared, None, &file_attributes(true, 4, 1)),
+                initial_file_match(&writable, None, &file_attributes(false, 4, 1)),
+            ],
+            [
+                InitialFileMatch::Matches,
+                InitialFileMatch::MatchesIfContentHash(hash),
+                InitialFileMatch::MatchesIfContentHash(hash),
+                InitialFileMatch::MatchesIfContentHash(writable.content_hash.0.as_blake3_hash()),
+            ]
+        );
+    }
+
+    fn declared_at(path: &str, file: InitialAgentFile) -> Declarations {
+        Declarations::from([(Arc::<Path>::from(Path::new(path)), Arc::new(file))])
+    }
+
+    #[test]
+    fn provisioning_files_that_the_state_already_declares_is_a_no_op() {
+        let state = InitialFileState {
+            initial: Arc::new(declared_at("initial", read_only(1))),
+            provisioned: Arc::new(declared_at("provisioned", read_only(2))),
+            installed: InstalledFiles::new(),
+        };
+
+        assert_eq!(
+            provisioned_after(&state, &declared_at("provisioned", read_only(2))).unwrap(),
+            None
+        );
+        assert_eq!(
+            provisioned_after(&state, &declared_at("added", read_write(3))).unwrap(),
+            Some(Declarations::from([
+                (
+                    Arc::<Path>::from(Path::new("provisioned")),
+                    Arc::new(read_only(2))
+                ),
+                (
+                    Arc::<Path>::from(Path::new("added")),
+                    Arc::new(read_write(3))
+                ),
+            ]))
+        );
+    }
+
+    #[test]
+    fn provisioning_another_file_at_a_declared_path_is_refused() {
+        let state = InitialFileState {
+            initial: Arc::new(declared_at("initial", read_only(1))),
+            provisioned: Arc::new(declared_at("provisioned", read_only(2))),
+            installed: InstalledFiles::new(),
+        };
+
+        assert!(provisioned_after(&state, &declared_at("initial", read_write(1))).is_err());
+        assert!(provisioned_after(&state, &declared_at("provisioned", read_only(3))).is_err());
     }
 }

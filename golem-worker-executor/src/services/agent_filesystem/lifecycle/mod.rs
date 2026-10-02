@@ -54,7 +54,6 @@ const WRITE_PRESSURE_RECOVERY_TIMEOUT: std::time::Duration = std::time::Duration
 mod baseline;
 mod initial_files;
 
-#[allow(unused_imports)]
 pub(crate) use baseline::{
     CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore,
     RestoreError, RestoreTree, WholeCapture, capture, capture_whole, materialize_baseline,
@@ -681,14 +680,14 @@ pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
 ///
 /// Update handling calls this through a valid generation handle. The call applies the initial-file
 /// rule from the current declarations to the declarations of the new revision and the provisioned
-/// declarations. At a path whose declaration changes, the call expects Golem's file where the
-/// current declarations have the path, and nothing where they do not. It puts the new file there,
-/// or removes Golem's file. An empty path that the new declarations do not have stays empty.
-/// Anything else at such a path is a conflict. A conflict fails the call with an
-/// [`Error::InitialFileConflict`] that names the path and what is at it, and changes nothing. A
-/// failure after the plan passes and the sources load invalidates the generation.
-/// Admission errors are immediate, and loading or sandbox failures are produced by the returned
-/// call.
+/// declarations. At a path whose declaration changes, the call expects the initial file of the
+/// current declaration where the current declarations have the path, and nothing where they do
+/// not. It puts the new file there, or removes the initial file of the current declaration. An
+/// empty path that the new declarations do not have stays empty. Anything else at such a path is a
+/// conflict. A conflict fails the call with an [`Error::InitialFileConflict`] that names the path
+/// and what is at it, and changes nothing. A failure after the plan passes and the sources load
+/// invalidates the generation. Admission errors are immediate, and loading or sandbox failures are
+/// produced by the returned call.
 pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,
     file_loader: Arc<FileLoader>,
@@ -2665,9 +2664,13 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
             continue;
         };
         let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
-        if change.is_some() && opened.is_read_only_file() {
+        if change.is_some()
+            && let Err(refusal) = refuse_read_only_change(opened.is_read_only_file())
+        {
+            // A node of the guest open path closes through `execute_close`, which retries the
+            // close and decides the effect of a failed close on the generation.
             execute_close(Arc::clone(&generation), opened.into_node()).await?;
-            return Err(Error::Access(AccessError::NotPermitted));
+            return Err(refusal);
         }
         if open_returns_directory(options) {
             let directory_key = opened
@@ -2750,9 +2753,18 @@ fn authorize_writable_target<Adapter: SandboxFilesystemAdapter>(
     follow: SandboxFollow,
 ) -> Result<(), Error> {
     match target.is_read_only_file(follow) {
-        Ok(false) => Ok(()),
-        Ok(true) => Err(Error::Access(AccessError::NotPermitted)),
+        Ok(read_only) => refuse_read_only_change(read_only),
         Err(source) => Err(classify_query_error(generation, source)),
+    }
+}
+
+/// Refuses a change to the contents or times of a regular file without write permission.
+/// `read_only` tells whether the object is such a file.
+fn refuse_read_only_change(read_only: bool) -> Result<(), Error> {
+    if read_only {
+        Err(Error::Access(AccessError::NotPermitted))
+    } else {
+        Ok(())
     }
 }
 
@@ -2981,9 +2993,9 @@ async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
         follow: Follow::Yes,
     };
     let opened = execute_open(Arc::clone(generation), target, options).await?;
-    if opened.is_read_only_file() {
-        return Err(Error::Access(AccessError::NotPermitted));
-    }
+    // The node is not registered and is used only in this operation, so a refusal drops it, as
+    // the end of the operation does.
+    refuse_read_only_change(opened.is_read_only_file())?;
     Ok(opened.into_node())
 }
 

@@ -88,8 +88,8 @@ const OWNER_WRITE_BIT: libc::mode_t = 0o200;
 /// Clears bit 0o200 of the file mode creation mask of the process, and keeps the other bits.
 ///
 /// Each file that an agent creates then has write permission for its owner. The initial-file rule
-/// counts a file without write permission at a read-only declared path as Golem's file when its
-/// content equals the declaration, so a file of an agent must always have this permission. The
+/// counts a file without write permission at a read-only declared path as the initial file when
+/// its content equals the declaration, so a file of an agent must always have this permission. The
 /// call is idempotent, and it changes only the owner write bit of the mask.
 ///
 /// On Linux the function reads the current mask from the `Umask:` line of

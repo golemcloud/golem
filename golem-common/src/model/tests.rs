@@ -1624,7 +1624,7 @@ fn an_automatic_snapshot_is_usable_when_confirmed_or_without_a_name() {
             component_revision: ComponentRevision::new(2).unwrap(),
             files,
         }
-        .usable()
+        .into_usable()
         .map(|usable| usable.filesystem_snapshot)
     };
 
@@ -1639,7 +1639,7 @@ fn an_automatic_snapshot_is_usable_when_confirmed_or_without_a_name() {
 }
 
 #[test]
-fn the_files_of_an_automatic_snapshot_give_their_name_and_their_confirmation() {
+fn the_files_of_an_automatic_snapshot_give_their_name() {
     use crate::model::SnapshotFiles;
     let name = crate::model::oplog::FilesystemSnapshotName::periodic();
     let files = [
@@ -1649,14 +1649,8 @@ fn the_files_of_an_automatic_snapshot_give_their_name_and_their_confirmation() {
     ];
 
     assert_eq!(
-        files
-            .each_ref()
-            .map(|files| (files.name().cloned(), files.is_confirmed())),
-        [
-            (None, false),
-            (Some(name.clone()), false),
-            (Some(name), true)
-        ]
+        files.each_ref().map(|files| files.name().cloned()),
+        [None, Some(name.clone()), Some(name)]
     );
 }
 

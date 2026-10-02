@@ -1863,7 +1863,10 @@ enum Restart {
     /// as a start that could not load it does, and the agent loses its periodic snapshots. The
     /// executor restarts on an empty root without periodic snapshots. A record without a
     /// filesystem snapshot name is usable without the store, so only the rejection keeps the
-    /// start from selecting it.
+    /// start from selecting it. The agent stops before the rejection. The executor writes the
+    /// snapshot record of an invocation after the caller gets the result, and a stopped agent
+    /// writes no more records. So the rejection covers each automatic snapshot record that a
+    /// start can select.
     FullReplay,
 }
 
@@ -1912,6 +1915,7 @@ async fn run_history(
     .await?;
     let (agent, mut results) = agent.run_steps(&executor, before).await?;
     if let Restart::FullReplay = restart {
+        agent.stop(&executor, &context).await?;
         let periodic_records = executor
             .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
             .await?

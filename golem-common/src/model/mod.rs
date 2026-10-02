@@ -1375,11 +1375,6 @@ impl SnapshotFiles {
         }
     }
 
-    /// Whether a `SnapshotConfirmed` entry confirmed the named filesystem snapshot.
-    pub fn is_confirmed(&self) -> bool {
-        matches!(self, Self::Confirmed(_))
-    }
-
     /// The files after a `SnapshotConfirmed` entry of `name`: confirmed when the entry names
     /// `name` and is unconfirmed, and unchanged otherwise.
     pub fn confirmed(self, name: &FilesystemSnapshotName) -> Self {
@@ -1391,27 +1386,12 @@ impl SnapshotFiles {
 }
 
 impl AutomaticSnapshot {
-    /// The entry as a baseline of a start, when it is usable, as [`AutomaticSnapshot::usable`]
-    /// gives it, without a copy of its name.
+    /// The entry as a baseline of a start, when it is usable: its filesystem snapshot is
+    /// confirmed, or it names none.
     pub fn into_usable(self) -> Option<UsableAutomaticSnapshot> {
         let filesystem_snapshot = match self.files {
             SnapshotFiles::Unnamed => None,
             SnapshotFiles::Confirmed(name) => Some(name),
-            SnapshotFiles::Unconfirmed(_) => return None,
-        };
-        Some(UsableAutomaticSnapshot {
-            index: self.index,
-            component_revision: self.component_revision,
-            filesystem_snapshot,
-        })
-    }
-
-    /// The entry as a baseline of a start, when it is usable: its filesystem snapshot is
-    /// confirmed, or it names none.
-    pub fn usable(&self) -> Option<UsableAutomaticSnapshot> {
-        let filesystem_snapshot = match &self.files {
-            SnapshotFiles::Unnamed => None,
-            SnapshotFiles::Confirmed(name) => Some(name.clone()),
             SnapshotFiles::Unconfirmed(_) => return None,
         };
         Some(UsableAutomaticSnapshot {

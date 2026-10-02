@@ -425,7 +425,7 @@ async fn a_deletion_waits_for_a_capture_whose_future_the_caller_dropped() {
 }
 
 #[test]
-async fn capture_leaves_out_the_read_only_files_that_hold_golem_s_file_with_a_single_name() {
+async fn capture_leaves_out_the_read_only_paths_that_hold_the_initial_file_with_a_single_name() {
     let store = InitialFileStore::new().await;
     let read_only = |path: &'static str| {
         let store = &store;
@@ -1381,7 +1381,8 @@ async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone(
         store.prepare(std::slice::from_ref(&installed)).await,
     )
     .await;
-    // The agent removed Golem's file, so nothing is at the path that the update changes.
+    // The agent removed the initial file of the old declaration, so nothing is at the path that
+    // the update changes.
     control.push_get_attributes(Err(sandbox_error(
         "get sandbox filesystem path attributes",
         std::io::ErrorKind::NotFound,
@@ -1399,7 +1400,7 @@ async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone(
     match &updated {
         Err(error) => assert_eq!(
             error.to_string(),
-            "the agent filesystem no longer holds the file that Golem installed at config, \
+            "the agent filesystem no longer holds the initial file at config, \
              so the initial files of the agent cannot be installed"
         ),
         Ok(()) => panic!("the update must fail with a conflict"),
@@ -1409,7 +1410,7 @@ async fn an_update_of_a_file_that_the_agent_removed_names_the_file_that_is_gone(
 }
 
 #[test]
-async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_file() {
+async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_the_initial_file() {
     let store = InitialFileStore::new().await;
     let installed = store
         .declare("/config", AgentFilePermissions::ReadOnly, b"installed")
@@ -1421,7 +1422,7 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
         .declare("/config", AgentFilePermissions::ReadWrite, b"installed")
         .await;
     // A name, and the files of an update. Each update must fail with a conflict, because the path
-    // does not hold Golem's file of the old declaration.
+    // does not hold the initial file of the old declaration.
     let cases: [(&'static str, Vec<InitialAgentFile>); 3] = [
         ("a read-only update", vec![changed]),
         ("a read-write update", vec![writable]),
@@ -1442,9 +1443,10 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
                 let resident =
                     scripted_resident(&control, filesystem, store.prepare(&[installed]).await)
                         .await;
-                // The agent removed Golem's file and wrote a new file with the declared size at
-                // the path. The new file got the recorded object, and it has write bits. So only
-                // the write bits can show that it is not Golem's file.
+                // The agent removed the initial file of the old declaration and wrote a new file
+                // with the declared size at the path. The new file got the recorded object, and it
+                // has write bits. So only the write bits can show that it is not the initial file
+                // of the old declaration.
                 control.push_get_attributes(Ok(file_attributes(7, size, 1, false)));
                 let changes_before =
                     call_count(&control, "seed(") + call_count(&control, "unlink_file(");
@@ -1476,7 +1478,8 @@ async fn an_agent_file_with_the_recorded_object_and_write_bits_is_never_golem_s_
                 assert_eq!(
                     call_count(&control, "open("),
                     opens_before,
-                    "{name}: the write bits alone must show that the file is not Golem's file"
+                    "{name}: the write bits alone must show that the file is not the initial \
+                     file of the old declaration"
                 );
                 assert!(
                     !filesystem_activity(&resident).has_terminal_failure(),
@@ -1696,7 +1699,7 @@ fn list_entries(
 
 #[test]
 #[timeout("60s")]
-async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_the_path_is_golem_s_file()
+async fn a_read_only_file_with_the_declared_content_that_the_agent_moves_onto_the_path_is_the_initial_file()
  {
     let agents = UnmanagedAgents::new().await;
     let store = &agents.store;
@@ -2750,14 +2753,36 @@ fn left_out_of(capture: &FilesystemCapture) -> BTreeSet<String> {
         .collect()
 }
 
-/// The number of histories in which the restore property compared the tree with times.
-static TIMES_CHECKS: AtomicUsize = AtomicUsize::new(0);
+/// The checks that one history of the restore property reached.
+#[derive(Clone, Copy, Debug, Default)]
+struct Coverage {
+    /// The property compared the tree with times.
+    times: bool,
+    /// An install of the reference model found the old object of a read-only file back at its
+    /// path, with other content of the declared size.
+    old_object_back: bool,
+    /// The capture found a tree of initial files.
+    initial_files: bool,
+}
 
-/// The number of histories in which an install of the reference model found the old object of a
-/// read-only file back at its path, with other content of the declared size.
-static OLD_OBJECT_BACK_CHECKS: AtomicUsize = AtomicUsize::new(0);
-/// The number of cases in which the capture found a tree of initial files.
-static INITIAL_FILES_CHECKS: AtomicUsize = AtomicUsize::new(0);
+/// The number of histories of one run of the restore property that reached each check.
+#[derive(Clone, Copy, Debug, Default)]
+struct CoverageCounts {
+    times: usize,
+    old_object_back: usize,
+    initial_files: usize,
+}
+
+impl CoverageCounts {
+    /// The counts with the checks of one more history.
+    fn with(self, coverage: Coverage) -> Self {
+        Self {
+            times: self.times + usize::from(coverage.times),
+            old_object_back: self.old_object_back + usize::from(coverage.old_object_back),
+            initial_files: self.initial_files + usize::from(coverage.initial_files),
+        }
+    }
+}
 
 /// Starts an agent from a restore of `snapshot` with the component declarations `files`.
 async fn start_restored(
@@ -2789,7 +2814,6 @@ async fn compare_start_from_initial_files(
     expected: Expected<'_>,
     problems: &mut Vec<String>,
 ) {
-    INITIAL_FILES_CHECKS.fetch_add(1, Ordering::Relaxed);
     let current = declarations_at(&history.initial, before, prefix);
     let agent = agents.agent("initial-files");
     let files = declare_files(&agents.store, &current).await;
@@ -3027,10 +3051,10 @@ impl ReferenceModel {
         self.paths.keys().any(|path| path.starts_with(&prefix))
     }
 
-    /// Tells whether `path` holds Golem's file of the old declaration `old`: a regular file whose
-    /// content equals the declared content and that, where the declaration is read-only, has no
-    /// write permission.
-    fn holds_golem_file(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
+    /// Tells whether `path` holds the initial file of the old declaration `old`: a regular file
+    /// whose content equals the declared content and that, where the declaration is read-only, has
+    /// no write permission.
+    fn holds_initial_file(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
         match (old, self.object_at(path)) {
             (Some(declared), Some(ModelObject::File { content, writable })) => {
                 content[..] == *CONTENTS[declared.content] && !(declared.read_only && *writable)
@@ -3042,7 +3066,8 @@ impl ReferenceModel {
     /// Tells whether `path` holds the old object of a read-only file back: a read-only file with
     /// the size of the read-only declaration `old` and other content, whose object an earlier
     /// install put at `path`. The lifecycle keeps the identity of each read-only file that it
-    /// installs. It must not take that identity for Golem's file after the object came back.
+    /// installs. It must not take that identity for the initial file of `old` after the object
+    /// came back.
     fn holds_old_object_back(&self, path: &str, old: Option<&ModelDeclaration>) -> bool {
         match (
             old,
@@ -3340,18 +3365,18 @@ impl ReferenceModel {
     ///
     /// The rule applies at each path where the two declarations differ, in path order, and an equal
     /// declaration changes nothing. At such a path the install expects what the current
-    /// declarations left there: Golem's file where they declare the path, and nothing where they do
-    /// not. A path that holds what the install expects gets what the new declarations give there:
-    /// the new file, or nothing. A path that holds nothing, and that the new declarations do not
-    /// have, stays as it is. Anything else is a conflict. A conflict fails the whole install,
-    /// changes nothing, and names the first conflicting path.
+    /// declarations left there: the initial file of the current declaration where they declare the
+    /// path, and nothing where they do not. A path that holds what the install expects gets what
+    /// the new declarations give there: the new file, or nothing. A path that holds nothing, and
+    /// that the new declarations do not have, stays as it is. Anything else is a conflict. A
+    /// conflict fails the whole install, changes nothing, and names the first conflicting path.
     ///
     /// Each decision reads the tree as the removals of the install leave it. The install removes
-    /// Golem's file where the new declarations do not have its path. So such a file above a path
-    /// does not block the path. A directory at a path that the new declarations have holds nothing
-    /// when every file under it is such a file and every directory in it holds at least one object.
-    /// The install removes the files first, then such directories, then puts the new files in
-    /// place.
+    /// the initial file of the current declaration where the new declarations do not have its path.
+    /// So such a file above a path does not block the path. A directory at a path that the new
+    /// declarations have holds nothing when every file under it is such a file and every directory
+    /// in it holds at least one object. The install removes the files first, then such directories,
+    /// then puts the new files in place.
     fn install_declarations(
         &mut self,
         component: BTreeMap<String, ModelDeclaration>,
@@ -3379,7 +3404,7 @@ impl ReferenceModel {
                 !new.contains_key(*path)
                     && old
                         .get(*path)
-                        .is_some_and(|previous| self.holds_golem_file(path, Some(previous)))
+                        .is_some_and(|previous| self.holds_initial_file(path, Some(previous)))
             })
             .cloned()
             .collect::<BTreeSet<String>>();
@@ -3392,7 +3417,7 @@ impl ReferenceModel {
             .map(|path| {
                 let empty = self.empty_after_removals(path, new.contains_key(path), &removed);
                 let expected = match old.get(path) {
-                    Some(previous) => self.holds_golem_file(path, Some(previous)),
+                    Some(previous) => self.holds_initial_file(path, Some(previous)),
                     None => empty,
                 };
                 match (expected, new.get(path)) {
@@ -3576,7 +3601,7 @@ impl ReferenceModel {
 /// modification times that a restore keeps must equal the tree of agent B at the capture.
 async fn check_restore_against_replay(
     history: &History,
-) -> Result<(), proptest::test_runner::TestCaseError> {
+) -> Result<Coverage, proptest::test_runner::TestCaseError> {
     let agents = UnmanagedAgents::new().await;
     let capture_at = history.capture;
     let (before, after) = history.steps.split_at(capture_at);
@@ -3629,9 +3654,10 @@ async fn check_restore_against_replay(
                 "step {index} of the replay gave {actual:?}, and the reference model gives {expected:?}"
             ));
         });
-    if model.old_object_back {
-        OLD_OBJECT_BACK_CHECKS.fetch_add(1, Ordering::Relaxed);
-    }
+    let mut coverage = Coverage {
+        old_object_back: model.old_object_back,
+        ..Coverage::default()
+    };
     let model_tree = model.tree();
     if replay_tree != model_tree {
         problems.push(format!(
@@ -3675,7 +3701,10 @@ async fn check_restore_against_replay(
         )
         .await;
         proptest::prop_assert!(problems.is_empty(), "{}", problems.join("\n"));
-        return Ok(());
+        return Ok(Coverage {
+            initial_files: true,
+            ..coverage
+        });
     }
     let snapshot = outcome.map(|outcome| match outcome {
         CaptureOutcome::Captured { capture, .. } => capture,
@@ -3698,7 +3727,7 @@ async fn check_restore_against_replay(
             let current = declarations_at(&history.initial, before, &prefix);
             match start_restored(&agents, "restored", &current, &snapshot).await {
                 (agent, Ok(restored)) => {
-                    TIMES_CHECKS.fetch_add(1, Ordering::Relaxed);
+                    coverage.times = true;
                     let restored_tree = tree_with_times(&agents.root(&agent), &left_out);
                     if restored_tree != captured_tree {
                         problems.push(format!(
@@ -3771,7 +3800,7 @@ async fn check_restore_against_replay(
         }
     }
     proptest::prop_assert!(problems.is_empty(), "{}", problems.join("\n"));
-    Ok(())
+    Ok(coverage)
 }
 
 #[test]
@@ -3797,9 +3826,13 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
         .unwrap();
     let started = Instant::now();
 
+    let counts = std::cell::Cell::new(CoverageCounts::default());
     let result = runner.run(&histories(), |history| {
-        runtime.block_on(check_restore_against_replay(&history))
+        runtime
+            .block_on(check_restore_against_replay(&history))
+            .map(|coverage| counts.set(counts.get().with(coverage)))
     });
+    let counts = counts.get();
 
     let elapsed = started.elapsed();
     eprintln!(
@@ -3807,23 +3840,19 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
          times compared in {} histories, the old object of a read-only file back at its path in {} \
          histories, a tree of initial files in {} histories",
         elapsed / cases.max(1),
-        TIMES_CHECKS.load(Ordering::Relaxed),
-        OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed),
-        INITIAL_FILES_CHECKS.load(Ordering::Relaxed)
+        counts.times,
+        counts.old_object_back,
+        counts.initial_files
     );
     if let Err(error) = result {
         panic!("{error}");
     }
     // A run with fewer histories does not have to reach every case.
     if cases >= RESTORE_PROPERTY_CASES {
+        assert!(counts.times > 0, "no history compared the tree with times");
         assert!(
-            TIMES_CHECKS.load(Ordering::Relaxed) > 0,
-            "TIMES_CHECKS: no history compared the tree with times"
-        );
-        assert!(
-            OLD_OBJECT_BACK_CHECKS.load(Ordering::Relaxed) > 0,
-            "OLD_OBJECT_BACK_CHECKS: no history found the old object of a read-only file back at \
-             its path"
+            counts.old_object_back > 0,
+            "no history found the old object of a read-only file back at its path"
         );
     }
 }

@@ -340,3 +340,52 @@ async fn a_directory_without_an_agent_id_holds_no_archive() {
         )
     );
 }
+
+#[test]
+fn chunk_index_gives_the_index_of_a_chunk_and_none_for_the_agent_id_blob() {
+    use super::{InvalidChunkName, chunk_index};
+    use std::path::Path;
+
+    assert_eq!(
+        [
+            chunk_index(Path::new("directory/17")),
+            chunk_index(Path::new("directory/agent_id")),
+            chunk_index(Path::new("directory/other")),
+        ],
+        [
+            Ok(Some(OplogIndex::from_u64(17))),
+            Ok(None),
+            Err(InvalidChunkName),
+        ]
+    );
+}
+
+/// The directory of an archive holds only the `agent_id` blob and chunks. The listing of the
+/// chunks stops with a panic at any other name, and does not skip it.
+#[test]
+#[should_panic(expected = "failed to parse oplog index from path")]
+async fn the_chunk_listing_refuses_a_name_that_is_not_a_chunk() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let environment_id = EnvironmentId::new();
+    let component_id = ComponentId::new();
+    let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
+    let directory = Path::new(&agent_path_segment(&agent.agent_id)).to_path_buf();
+
+    storage
+        .put_raw(
+            "test",
+            "test",
+            BlobStorageNamespace::CompressedOplog {
+                environment_id,
+                component_id,
+                agent_mode: MODE,
+                level: 0,
+            },
+            &directory.join("not-a-chunk"),
+            b"",
+        )
+        .await
+        .unwrap();
+
+    super::BlobOplogArchive::entries(agent, MODE, storage, 0).await;
+}

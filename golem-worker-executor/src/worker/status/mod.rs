@@ -635,7 +635,7 @@ fn update_status_with_precomputed_regions(
                     | OplogEntry::StreamSession { .. }
             )
         });
-    let (
+    let UpdateFields {
         pending_updates,
         failed_updates,
         successful_updates,
@@ -645,16 +645,18 @@ fn update_status_with_precomputed_regions(
         last_manual_update_snapshot_index,
         last_automatic_snapshot,
         previous_usable_automatic_snapshot,
-    ) = calculate_update_fields(
-        last_known.pending_updates,
-        last_known.failed_updates,
-        last_known.successful_updates,
-        last_known.component_revision,
-        last_known.component_size,
-        last_known.component_revision_for_replay,
-        last_known.last_manual_update_snapshot_index,
-        last_known.last_automatic_snapshot,
-        last_known.previous_usable_automatic_snapshot,
+    } = calculate_update_fields(
+        UpdateFields {
+            pending_updates: last_known.pending_updates,
+            failed_updates: last_known.failed_updates,
+            successful_updates: last_known.successful_updates,
+            component_revision: last_known.component_revision,
+            component_size: last_known.component_size,
+            component_revision_for_replay: last_known.component_revision_for_replay,
+            last_manual_update_snapshot_index: last_known.last_manual_update_snapshot_index,
+            last_automatic_snapshot: last_known.last_automatic_snapshot,
+            previous_usable_automatic_snapshot: last_known.previous_usable_automatic_snapshot,
+        },
         &deleted_regions,
         &new_entries,
     );
@@ -1497,51 +1499,28 @@ fn calculate_export_fork_admissions(
     Ok(admissions)
 }
 
-#[allow(clippy::type_complexity)]
-fn calculate_update_fields(
-    initial_pending_updates: VecDeque<PendingUpdateRef>,
-    initial_failed_updates: Vec<FailedUpdateRecord>,
-    initial_successful_updates: Vec<SuccessfulUpdateRecord>,
-    initial_revision: ComponentRevision,
-    initial_component_size: u64,
-    initial_component_revision_for_replay: ComponentRevision,
-    initial_last_manual_update_snapshot_index: Option<OplogIndex>,
-    initial_last_automatic_snapshot: Option<AutomaticSnapshot>,
-    initial_previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
-    deleted_regions: &DeletedRegions,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (
-    VecDeque<PendingUpdateRef>,
-    Vec<FailedUpdateRecord>,
-    Vec<SuccessfulUpdateRecord>,
-    ComponentRevision,
-    u64,
-    ComponentRevision,
-    Option<OplogIndex>,
-    Option<AutomaticSnapshot>,
-    Option<UsableAutomaticSnapshot>,
-) {
-    let mut pending_updates = initial_pending_updates;
-    let mut failed_updates = initial_failed_updates;
-    let mut successful_updates = initial_successful_updates;
-    let mut revision = initial_revision;
-    let mut size = initial_component_size;
-    let mut component_revision_for_replay = initial_component_revision_for_replay;
-    let mut last_manual_update_snapshot_index = initial_last_manual_update_snapshot_index;
-    let mut last_automatic_snapshot = initial_last_automatic_snapshot;
-    let mut previous_usable_automatic_snapshot = initial_previous_usable_automatic_snapshot;
+/// The fields of the status that the component updates and the automatic snapshot entries decide.
+#[derive(Debug)]
+struct UpdateFields {
+    pending_updates: VecDeque<PendingUpdateRef>,
+    failed_updates: Vec<FailedUpdateRecord>,
+    successful_updates: Vec<SuccessfulUpdateRecord>,
+    component_revision: ComponentRevision,
+    component_size: u64,
+    component_revision_for_replay: ComponentRevision,
+    last_manual_update_snapshot_index: Option<OplogIndex>,
+    last_automatic_snapshot: Option<AutomaticSnapshot>,
+    previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
+}
 
-    for (oplog_idx, entry) in entries {
-        // Skipping entries in deleted regions (by revert)
-        if deleted_regions.is_in_deleted_region(*oplog_idx) {
-            continue;
-        }
-
+impl UpdateFields {
+    /// The fields after the entry `entry` at `oplog_idx`.
+    fn after(mut self, oplog_idx: OplogIndex, entry: &OplogEntry) -> Self {
         match entry {
             OplogEntry::Create { parameters, .. } => {
-                revision = parameters.component_revision;
-                component_revision_for_replay = parameters.component_revision;
-                size = parameters.component_size;
+                self.component_revision = parameters.component_revision;
+                self.component_revision_for_replay = parameters.component_revision;
+                self.component_size = parameters.component_size;
             }
             OplogEntry::PendingUpdate {
                 timestamp,
@@ -1552,9 +1531,9 @@ fn calculate_update_fields(
                     UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
                     UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
                 };
-                pending_updates.push_back(PendingUpdateRef {
+                self.pending_updates.push_back(PendingUpdateRef {
                     timestamp: *timestamp,
-                    oplog_index: *oplog_idx,
+                    oplog_index: oplog_idx,
                     target_revision: *description.target_revision(),
                     kind,
                 });
@@ -1564,12 +1543,12 @@ fn calculate_update_fields(
                 target_revision,
                 details,
             } => {
-                failed_updates.push(FailedUpdateRecord {
+                self.failed_updates.push(FailedUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     details: details.clone(),
                 });
-                pending_updates.pop_front();
+                self.pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
@@ -1577,17 +1556,17 @@ fn calculate_update_fields(
                 new_component_size,
                 ..
             } => {
-                successful_updates.push(SuccessfulUpdateRecord {
+                self.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
-                    oplog_index: *oplog_idx,
+                    oplog_index: oplog_idx,
                 });
-                revision = *target_revision;
-                size = *new_component_size;
+                self.component_revision = *target_revision;
+                self.component_size = *new_component_size;
 
-                let applied_update = pending_updates.pop_front();
-                last_automatic_snapshot = None;
-                previous_usable_automatic_snapshot = None;
+                let applied_update = self.pending_updates.pop_front();
+                self.last_automatic_snapshot = None;
+                self.previous_usable_automatic_snapshot = None;
 
                 if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased,
@@ -1595,8 +1574,8 @@ fn calculate_update_fields(
                     ..
                 }) = applied_update
                 {
-                    component_revision_for_replay = *target_revision;
-                    last_manual_update_snapshot_index = Some(applied_update_oplog_index);
+                    self.component_revision_for_replay = *target_revision;
+                    self.last_manual_update_snapshot_index = Some(applied_update_oplog_index);
                 }
             }
             OplogEntry::Snapshot {
@@ -1607,16 +1586,17 @@ fn calculate_update_fields(
                 // A usable candidate becomes the fallback, also when the new record reuses its
                 // filesystem snapshot name: each record has its own application snapshot, which
                 // can fail to load on its own.
-                if let Some(usable) = last_automatic_snapshot
+                if let Some(usable) = self
+                    .last_automatic_snapshot
                     .take()
                     .and_then(AutomaticSnapshot::into_usable)
                 {
-                    previous_usable_automatic_snapshot = Some(usable);
+                    self.previous_usable_automatic_snapshot = Some(usable);
                 }
-                last_automatic_snapshot = Some(AutomaticSnapshot {
-                    index: *oplog_idx,
+                self.last_automatic_snapshot = Some(AutomaticSnapshot {
+                    index: oplog_idx,
                     timestamp: *timestamp,
-                    component_revision: revision,
+                    component_revision: self.component_revision,
                     files: SnapshotFiles::named(filesystem_snapshot.clone()),
                 });
             }
@@ -1624,8 +1604,8 @@ fn calculate_update_fields(
                 filesystem_snapshot,
                 ..
             } => {
-                last_automatic_snapshot =
-                    last_automatic_snapshot
+                self.last_automatic_snapshot =
+                    self.last_automatic_snapshot
                         .take()
                         .map(|last| AutomaticSnapshot {
                             files: last.files.confirmed(filesystem_snapshot),
@@ -1634,18 +1614,23 @@ fn calculate_update_fields(
             }
             _ => {}
         }
+        self
     }
-    (
-        pending_updates,
-        failed_updates,
-        successful_updates,
-        revision,
-        size,
-        component_revision_for_replay,
-        last_manual_update_snapshot_index,
-        last_automatic_snapshot,
-        previous_usable_automatic_snapshot,
-    )
+}
+
+/// Gives `fields` after each entry of `entries` that is not in a deleted region.
+fn calculate_update_fields(
+    fields: UpdateFields,
+    deleted_regions: &DeletedRegions,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> UpdateFields {
+    entries
+        .iter()
+        // Skipping entries in deleted regions (by revert)
+        .filter(|(oplog_idx, _)| !deleted_regions.is_in_deleted_region(**oplog_idx))
+        .fold(fields, |fields, (oplog_idx, entry)| {
+            fields.after(*oplog_idx, entry)
+        })
 }
 
 fn calculate_invocation_results(
