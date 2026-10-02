@@ -141,12 +141,16 @@ async fn build_service(
         .await,
     );
     let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
-        indexed_storage,
+        indexed_storage.clone(),
         1,
         RetryConfig::default(),
     ));
-    let blob: Arc<dyn OplogArchiveService> =
-        Arc::new(BlobOplogArchiveService::new(blob_storage, 2));
+    let blob: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+        blob_storage,
+        indexed_storage,
+        2,
+        RetryConfig::default(),
+    ));
 
     Arc::new(MultiLayerOplogService::new(
         primary,

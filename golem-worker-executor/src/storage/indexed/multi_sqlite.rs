@@ -120,6 +120,10 @@ impl MultiSqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!("{mode}-compressed-oplog-l{}-", level)
             }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("{mode}-blob-oplog-l{}-", level)
+            }
         }
     }
 
@@ -230,6 +234,18 @@ impl MultiSqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(*agent_mode);
                 format!(
                     "{mode}-compressed-oplog-l{}-{}.db",
+                    level,
+                    self.agent_id_hash(agent_id).await
+                )
+            }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!(
+                    "{mode}-blob-oplog-l{}-{}.db",
                     level,
                     self.agent_id_hash(agent_id).await
                 )

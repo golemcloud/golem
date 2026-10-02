@@ -21,11 +21,12 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor};
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::{BlobStorage, s3};
 use golem_test_framework::components::s3_mock::{DockerS3Mock, S3Mock};
 use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
+use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use pretty_assertions::assert_eq;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -157,14 +158,16 @@ async fn drain(
     environment_id: &EnvironmentId,
     component_id: &ComponentId,
     modes: Option<AgentMode>,
+    page_size: u64,
 ) -> Vec<OwnedAgentId> {
     let mut cursor = ScanCursor::default();
     let mut acc: Vec<OwnedAgentId> = Vec::new();
     loop {
         let (next_cursor, ids) = service
-            .scan_for_component(environment_id, component_id, modes, cursor, 100)
+            .scan_for_component(environment_id, component_id, modes, cursor, page_size)
             .await
             .unwrap();
+        assert!(ids.len() as u64 <= page_size);
         acc.extend(ids);
         if next_cursor.is_finished() {
             break;
@@ -187,7 +190,12 @@ async fn blob_archive_scan_for_component_filters_by_mode(
     let blob_storage = storage.get_blob_storage().await;
 
     // `compressed_oplog_buckets[0]` ("oplog-archive-1") corresponds to level 0.
-    let service = BlobOplogArchiveService::new(blob_storage, 0);
+    let service = BlobOplogArchiveService::new(
+        blob_storage,
+        Arc::new(InMemoryIndexedStorage::new()),
+        0,
+        RetryConfig::default(),
+    );
 
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId::new();
@@ -227,7 +235,8 @@ async fn blob_archive_scan_for_component_filters_by_mode(
             &service,
             &environment_id,
             &component_id,
-            Some(AgentMode::Ephemeral)
+            Some(AgentMode::Ephemeral),
+            100
         )
         .await,
         expected_ephemeral
@@ -237,20 +246,25 @@ async fn blob_archive_scan_for_component_filters_by_mode(
             &service,
             &environment_id,
             &component_id,
-            Some(AgentMode::Durable)
+            Some(AgentMode::Durable),
+            100
         )
         .await,
         expected_durable
     );
     assert_eq!(
-        drain(&service, &environment_id, &component_id, None).await,
+        drain(&service, &environment_id, &component_id, None, 100).await,
+        expected_both
+    );
+    assert_eq!(
+        drain(&service, &environment_id, &component_id, None, 2).await,
         expected_both
     );
 
     // A component with no archived workers yields an empty scan.
     let empty_component_id = ComponentId::new();
     assert_eq!(
-        drain(&service, &environment_id, &empty_component_id, None).await,
+        drain(&service, &environment_id, &empty_component_id, None, 100).await,
         Vec::<OwnedAgentId>::new()
     );
 }

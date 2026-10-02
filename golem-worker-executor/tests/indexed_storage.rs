@@ -3422,3 +3422,121 @@ async fn a_stale_epoch_delete_of_an_emptied_key_deletes_nothing(
         "a refused delete leaves the emptied key in place"
     );
 }
+
+/// A blob manifest level no other test writes to, so a walk over it sees only this test's keys.
+const BLOB_MANIFEST_LEVEL: usize = 95;
+
+async fn scan_all(
+    is: &Arc<dyn IndexedStorage + Send + Sync>,
+    namespace: IndexedStorageMetaNamespace,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut resume = None;
+    loop {
+        let (next, chunk) = is
+            .with("svc", "api")
+            .scan_stable(namespace.clone(), None, resume, 100)
+            .await
+            .unwrap();
+        keys.extend(chunk);
+        match next {
+            Some(next) => resume = Some(next),
+            None => return keys,
+        }
+    }
+}
+
+/// The blob manifest is fenced like every oplog namespace, and its entries, epoch record and scan
+/// are its own: the compressed level with the same agent and level number shares none of them.
+#[test]
+#[tracing::instrument]
+async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let is = is.get_indexed_storage().await;
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "blob-manifest".to_string(),
+    };
+    let manifest = IndexedStorageNamespace::BlobOplogManifest {
+        agent_id: agent_id.clone(),
+        agent_mode: AgentMode::Durable,
+        level: BLOB_MANIFEST_LEVEL,
+    };
+    let compressed = IndexedStorageNamespace::CompressedOpLog {
+        agent_id,
+        agent_mode: AgentMode::Durable,
+        level: BLOB_MANIFEST_LEVEL,
+    };
+    let key = format!("{}-manifest", Uuid::new_v4());
+
+    // The compressed level's record does not stand in for the manifest's.
+    is.set_key_epoch("svc", "api", compressed.clone(), &key, ShardEpoch(9))
+        .await
+        .unwrap();
+    assert_fenced(
+        append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(9))).await,
+        9,
+        None,
+    );
+
+    is.set_key_epoch("svc", "api", manifest.clone(), &key, ShardEpoch(6))
+        .await
+        .unwrap();
+    assert_fenced(
+        append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(5))).await,
+        5,
+        Some(6),
+    );
+    append_fenced(&is, &manifest, &key, &[1, 2], Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    assert_eq!(
+        is.length("svc", "api", manifest.clone(), &key)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        is.length("svc", "api", compressed.clone(), &key)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let manifest_keys = scan_all(
+        &is,
+        IndexedStorageMetaNamespace::BlobOplogManifest {
+            agent_mode: AgentMode::Durable,
+            level: BLOB_MANIFEST_LEVEL,
+        },
+    )
+    .await;
+    assert!(manifest_keys.contains(&key), "{manifest_keys:?}");
+    let compressed_keys = scan_all(
+        &is,
+        IndexedStorageMetaNamespace::CompressedOplog {
+            agent_mode: AgentMode::Durable,
+            level: BLOB_MANIFEST_LEVEL,
+        },
+    )
+    .await;
+    assert!(!compressed_keys.contains(&key), "{compressed_keys:?}");
+
+    // The recorded writer's delete takes the record with the entries.
+    is.delete_with_epoch("svc", "api", manifest.clone(), &key, Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    assert_eq!(
+        is.length("svc", "api", manifest.clone(), &key)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_fenced(
+        append_fenced(&is, &manifest, &key, &[3], Some(ShardEpoch(6))).await,
+        6,
+        None,
+    );
+}
