@@ -843,6 +843,25 @@ test("checkout -b cannot be redirected by a same-named tag", async (t) => {
   );
 });
 
+test("checkout -b switches an unborn repository to the new branch", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "golem-git-unborn-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await git.init({ fs, dir, defaultBranch: "main" });
+  const repo = await repository([dir]);
+
+  const result = await checkoutCommand(repo, "feature", false, undefined, []);
+
+  assert.match(result.summary, /new branch 'feature'/);
+  assert.equal(
+    await git.currentBranch({ fs, dir, fullname: false }),
+    "feature",
+  );
+  await assert.rejects(
+    checkoutCommand(repo, "feature", false, undefined, []),
+    /already exists/,
+  );
+});
+
 test("ordinary checkout resolves a same-named local branch before its tag", async (t) => {
   const dir = await fixture();
   t.after(() => rm(dir, { recursive: true, force: true }));

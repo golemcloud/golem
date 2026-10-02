@@ -674,6 +674,27 @@ function localBranchRef(name: string): string {
   return `refs/heads/${name}`;
 }
 
+function assertValidLocalBranch(name: string): void {
+  // Matches the ref-name validation used by isomorphic-git.
+  const invalid = /(^|[/.])([/.]|$)|^@$|@{|[\x00-\x20\x7f~^:?*[\\]|\.lock(\/|$)/;
+  if (invalid.test(localBranchRef(name))) {
+    throw new Error(`invalid branch name '${name}'`);
+  }
+}
+
+async function unbornHeadBranch(repo: Repository): Promise<string | undefined> {
+  const head = await readFile(path.join(repo.gitdir, "HEAD"), "utf8");
+  const match = /^ref: refs\/heads\/(.+)\n?$/.exec(head);
+  if (!match?.[1]) return undefined;
+  try {
+    await resolveDocumentedRef(repo, "HEAD");
+    return undefined;
+  } catch (error) {
+    if ((error as { code?: string }).code === "NotFoundError") return match[1];
+    throw error;
+  }
+}
+
 async function resolveCommitRef(
   repo: Repository,
   ref: string,
@@ -1030,6 +1051,23 @@ export async function checkoutCommand(
   }
   if (newBranch) {
     if (detach) throw new Error("-b and --detach are mutually exclusive");
+    if (!ref) {
+      const unbornBranch = await unbornHeadBranch(repo);
+      if (unbornBranch) {
+        assertValidLocalBranch(newBranch);
+        if (newBranch === unbornBranch) {
+          throw new Error(`branch '${newBranch}' already exists`);
+        }
+        await fs.promises.writeFile(
+          path.join(repo.gitdir, "HEAD"),
+          `ref: ${localBranchRef(newBranch)}\n`,
+        );
+        return {
+          summary: `switched to a new branch '${newBranch}'`,
+          paths: [],
+        };
+      }
+    }
     const start = ref
       ? await resolveCommitRef(repo, ref)
       : await resolveCommitRef(repo, "HEAD");
