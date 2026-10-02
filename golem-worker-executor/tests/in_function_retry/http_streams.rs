@@ -19,7 +19,9 @@ use golem_common::model::oplog::{
     PublicAgentInvocation, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, IdempotencyKey, RetryConfig, RetryPolicyState};
+use golem_common::model::{
+    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, RetryConfig, RetryPolicyState,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{HttpClientConfig, HttpClientEnabledConfig};
@@ -50,7 +52,7 @@ use super::http_servers::{
     start_gated_partial_response_http_server,
     start_gated_partial_response_http_server_with_resume_send_failures,
     start_partial_response_http_server, start_recovery_gated_partial_response_http_server,
-    start_write_zeroes_validation_server,
+    start_withheld_body_resume_http_server, start_write_zeroes_validation_server,
 };
 
 async fn run_response_body_pool_limit_control(
@@ -160,6 +162,136 @@ async fn http_resuming_response_body_with_two_pool_slots(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     run_response_body_pool_limit_control(2, false, last_unique_id, deps, http_tests).await
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_body_resume_header_wait_observes_interrupt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 2,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+            config.http_client = HttpClientConfig::Enabled(HttpClientEnabledConfig {
+                connect_timeout: Duration::from_secs(30),
+                max_connections_per_host: 1,
+                max_total_connections: 1,
+                ..Default::default()
+            });
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let (port, attempts, requests, mut replacement) =
+        start_withheld_body_resume_http_server().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let authority = format!("127.0.0.1:{port}");
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let invocation_key = IdempotencyKey::fresh();
+
+    let invocation = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent_id,
+        &invocation_key,
+        "get_and_read_body_p2_blocking",
+        data_value!(authority.clone()),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        _ = replacement.accepted() => {}
+        result = &mut invocation => {
+            panic!("invocation completed before replacement headers were withheld: {result:?}")
+        }
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].request_line, "GET / HTTP/1.1");
+        assert_eq!(requests[0].range, None);
+        assert_eq!(requests[1].request_line, "GET / HTTP/1.1");
+        assert_eq!(requests[1].range.as_deref(), Some("bytes=3-"));
+    }
+    assert!(executor.worker_is_loaded(&owned_agent_id).await);
+
+    timeout(Duration::from_secs(2), executor.interrupt(&worker_id))
+        .await
+        .context("interrupt waited for replacement response headers")??;
+    let error = timeout(Duration::from_secs(2), &mut invocation)
+        .await
+        .context("interrupted body read did not return promptly")?
+        .expect_err("interrupted body read must not return an HTTP result");
+    assert!(
+        error.to_string().contains("Interrupted via the Golem API"),
+        "expected lifecycle interruption, got: {error}"
+    );
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(2))
+        .await?;
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+    timeout(Duration::from_secs(2), replacement.peer_closed())
+        .await
+        .context("replacement response owner did not abort its request task")?;
+    assert_eq!(
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?,
+        1
+    );
+
+    executor.resume(&worker_id, false).await?;
+    let resumed = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent_id,
+        &invocation_key,
+        "get_and_read_body_p2_blocking",
+        data_value!(authority),
+    );
+    tokio::pin!(resumed);
+    tokio::select! {
+        _ = replacement.resumed_accepted() => {}
+        result = &mut resumed => {
+            panic!("invocation completed before reconstructed request was gated: {result:?}")
+        }
+    }
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].request_line, "GET / HTTP/1.1");
+        assert_eq!(requests[2].range, None);
+    }
+    replacement.release_resumed();
+    let resumed = timeout(Duration::from_secs(5), &mut resumed)
+        .await
+        .context("interrupted body resume did not reconstruct")??
+        .into_typed::<String>()?;
+    assert_eq!(resumed, "200 resumed-body");
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?,
+        1,
+        "reconstruction must reuse the persisted body retry decision"
+    );
+
+    Ok(())
 }
 
 #[test]
