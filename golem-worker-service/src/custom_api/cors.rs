@@ -49,6 +49,22 @@ pub fn handle_selected_preflight(
     };
     let mut allowed_headers =
         golem_service_base::custom_api::cors_allowed_request_headers(body, parameters, session);
+    if matches!(
+        &selected.route.security,
+        RichRouteSecurity::SecurityScheme(security)
+            if matches!(
+                security.security_scheme.login,
+                golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(_)
+            )
+    ) {
+        allowed_headers.insert(http::header::AUTHORIZATION.as_str().to_string());
+    }
+    if matches!(
+        selected.route.behavior,
+        RichRouteBehaviour::OidcPkceToken(_)
+    ) {
+        allowed_headers.insert(http::header::CONTENT_TYPE.as_str().to_string());
+    }
     match &selected.route.behavior {
         RichRouteBehaviour::CallAgent(agent)
             if agent.route_mode
@@ -461,14 +477,20 @@ fn merge_vary_header(headers: &mut HeaderMap, values: &[&str]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::custom_api::RichSecuritySchemeRouteSecurity;
     use crate::custom_api::model::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
     use golem_common::model::Empty;
     use golem_common::model::account::AccountId;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::security_scheme::{
+        Provider, SecuritySchemeId, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
+    };
+    use golem_service_base::custom_api::SecuritySchemeDetails;
     use golem_service_base::custom_api::{
         CorsOptions, OpenApiSpecBehaviour, OpenApiSpecFormat, OriginPattern, PathSegment,
         RequestBodySchema,
     };
+    use openidconnect::{ClientId, ClientSecret, RedirectUrl};
     use poem::{Body, Request};
     use std::sync::Arc;
     use test_r::test;
@@ -837,6 +859,70 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
         );
+    }
+
+    #[test]
+    fn bearer_route_preflight_allows_authorization_without_authenticating() {
+        let request = Request::builder()
+            .method(Method::OPTIONS)
+            .header(http::header::ORIGIN, "https://frontend.example.com")
+            .header(http::header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+            .header(
+                http::header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "Authorization",
+            )
+            .body(Body::empty());
+        let request = RichRequest::new(request);
+        let mut selected = resolved_route_with_cors(vec![OriginPattern(
+            "https://frontend.example.com".to_string(),
+        )]);
+        Arc::get_mut(&mut selected.route).unwrap().security =
+            RichRouteSecurity::SecurityScheme(RichSecuritySchemeRouteSecurity {
+                security_scheme: Arc::new(SecuritySchemeDetails {
+                    id: SecuritySchemeId::new(),
+                    revision: SecuritySchemeRevision::INITIAL,
+                    name: SecuritySchemeName("frontend".into()),
+                    provider_type: Provider::Google(Empty {}),
+                    client_id: ClientId::new("client".into()),
+                    client_secret: ClientSecret::new("secret".into()),
+                    redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
+                    scopes: vec![],
+                    login: SecuritySchemeLogin::AuthorizationCodePkce(
+                        golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                            redirect_uris: vec!["https://frontend.example.com/callback".into()],
+                            origins: vec!["https://frontend.example.com".into()],
+                        },
+                    ),
+                }),
+            });
+
+        let result = handle_selected_preflight(&request, &selected).unwrap();
+        assert_eq!(result.status, StatusCode::NO_CONTENT);
+        assert_eq!(
+            result.headers[http::header::ACCESS_CONTROL_ALLOW_HEADERS],
+            "authorization"
+        );
+        assert_eq!(
+            result.headers[http::header::ACCESS_CONTROL_ALLOW_ORIGIN],
+            "https://frontend.example.com"
+        );
+
+        let route = Arc::get_mut(&mut selected.route).unwrap();
+        let RichRouteSecurity::SecurityScheme(security) = &mut route.security else {
+            unreachable!()
+        };
+        Arc::get_mut(&mut security.security_scheme).unwrap().login =
+            SecuritySchemeLogin::Cookie(Empty {});
+        let result = handle_selected_preflight(&request, &selected).unwrap();
+        assert_eq!(result.status, StatusCode::FORBIDDEN);
+        assert_eq!(
+            result.headers[http::header::VARY],
+            "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+        );
+
+        Arc::get_mut(&mut selected.route).unwrap().security = RichRouteSecurity::None;
+        let result = handle_selected_preflight(&request, &selected).unwrap();
+        assert_eq!(result.status, StatusCode::FORBIDDEN);
     }
 
     #[test]

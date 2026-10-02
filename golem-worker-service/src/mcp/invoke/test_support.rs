@@ -477,8 +477,8 @@ impl WorkerClient for RecordingWorkerClient {
         _: bool,
         _: EnvironmentId,
         _: AuthCtx,
-    ) -> WorkerResult<()> {
-        unimplemented!()
+    ) -> WorkerResult<OplogIndex> {
+        Ok(OplogIndex::INITIAL)
     }
 
     async fn get_oplog(

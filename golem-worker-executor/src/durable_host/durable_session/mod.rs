@@ -562,7 +562,7 @@ impl StreamSession {
 
     fn allocate_transport_stream_id(&self) -> Result<u64, SessionError> {
         self.next_transport_stream_id
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_add(1)
             })
             .map_err(|_| "durable transport stream id overflow".to_string())

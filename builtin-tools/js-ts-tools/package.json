@@ -1,0 +1,31 @@
+{
+  "name": "golem-builtin-js-ts-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:upstream": "rollup -c rollup.config.mjs && node scripts/build-private-assets.mjs",
+    "compliance:generate": "node scripts/generate-compliance.mjs",
+    "compliance:check": "node scripts/generate-compliance.mjs --check",
+    "smoke:embedded": "node --experimental-strip-types scripts/smoke-embedded.mts npm && node --experimental-strip-types scripts/smoke-embedded.mts tsc",
+    "test:runtime": "node --experimental-strip-types scripts/cli-runtime.test.mts && tsc -p javascript-tools/tsconfig.json --noEmit false --outDir golem-temp/runtime-tests && node --experimental-strip-types scripts/npm-runtime.test.mts && node --experimental-strip-types scripts/private-vfs.test.mts",
+    "typecheck": "tsc -p javascript-tools/tsconfig.json && tsc -p typescript-tools/tsconfig.json",
+    "verify:provenance": "node scripts/verify-provenance.mjs",
+    "verify:release": "npm run verify:provenance && npm run compliance:check"
+  },
+  "dependencies": {
+    "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk",
+    "npm": "10.9.9",
+    "typescript": "5.9.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "28.0.6",
+    "@rollup/plugin-json": "6.1.0",
+    "@rollup/plugin-node-resolve": "16.0.1",
+    "@types/node": "24.3.1",
+    "rollup": "4.50.1",
+    "@rollup/plugin-typescript": "12.1.4",
+    "tslib": "2.8.1",
+    "typescript": "5.9.2"
+  }
+}

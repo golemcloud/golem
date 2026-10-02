@@ -10,6 +10,8 @@ type = "LocalFileSystem"
 [blob_storage.config]
 root = "../data/blob_storage"
 
+[builtin_artifacts.source_overrides]
+
 [builtin_plugins]
 type = "Disabled"
 

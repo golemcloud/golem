@@ -239,7 +239,7 @@ pub struct ReflectedToolInvocation {
   // private fields
 }
 pub fn ReflectedToolInvocation::cancel(Self) -> Unit
-pub async fn ReflectedToolInvocation::collect(Self) -> Result[@tool.CollectedToolInvocation[@schema_model.SchemaValue?], @tool.ToolError[ReflectedToolCustomError]]
+pub async fn ReflectedToolInvocation::collect(Self) -> @tool.CollectedToolInvocation[@schema_model.SchemaValue?, ReflectedToolCustomError]
 pub fn ReflectedToolInvocation::drop(Self) -> Unit
 pub async fn ReflectedToolInvocation::get(Self) -> Result[@schema_model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]]
 pub fn ReflectedToolInvocation::stderr(Self) -> @async-core.Stream[Byte]?

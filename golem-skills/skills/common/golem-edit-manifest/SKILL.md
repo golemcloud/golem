@@ -480,7 +480,32 @@ bridge:
         - MyAgent                    # Agent type name
         - my-app:billing             # Component name (all agents in that component)
       outputDir: ./bridge-sdk/rust
+      additionalDerives:
+        - '^Order.*=PartialEq,Eq'
+        - 'Response$=custom_derive::ApiType'
+      additionalDependencies:
+        anyhow: "1"
+        custom_derive:
+          path: ./crates/custom-derive   # Relative to this manifest file
+          package: custom-derive-macros
+          features: [api]
+          defaultFeatures: false
+        git_derive:
+          git: https://github.com/example/derive-macros
+          tag: v1.2.3                    # Use at most one of branch/tag/rev
 ```
+
+`additionalDerives` entries are `<regex>=Trait,Trait`; every matching final generated Rust type name receives the merged, deduplicated derives. `additionalDependencies` accepts a version string or one source (`version`, `path`, or `git`) plus `package`, `features`, and `defaultFeatures`; git accepts one of `branch`, `tag`, or `rev`. Workspace and optional dependencies are not supported. These Rust-only fields are valid under `bridge.rust.external` and `bridge.rust.internal` for agent bridges only. An internal entry using them must select `agents`; tool bridge generation is unchanged.
+
+The low-level equivalent uses repeatable options and parses each dependency as Cargo TOML:
+
+```shell
+golem generate-bridge --language rust \
+  --derive-rule '^Order.*=PartialEq,Eq' \
+  --rust-dependency 'custom_derive = { package = "custom-derive-macros", path = "./crates/custom-derive", features = ["api"], default-features = false }'
+```
+
+CLI paths are relative to the invocation directory; manifest paths are relative to the directory containing the bridge declaration.
 
 ## Plugin Installations
 

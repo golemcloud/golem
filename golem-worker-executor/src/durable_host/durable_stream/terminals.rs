@@ -555,7 +555,7 @@ impl DurableStreamStore {
     ) -> u64 {
         let registration_id = self
             .next_source_cancellation_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .expect("durable stream source cancellation registration IDs exhausted");

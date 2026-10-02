@@ -217,7 +217,7 @@ impl Fixture {
 
     async fn rotate_scheme(&self) {
         let mut db = self.pool.with_rw("oauth-service-test", "rotate");
-        db.execute(sqlx::query("INSERT INTO security_scheme_revisions SELECT security_scheme_id, revision_id + 1, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted, custom_provider_name, custom_issuer_url FROM security_scheme_revisions WHERE revision_id = 1")).await.unwrap();
+        db.execute(sqlx::query("INSERT INTO security_scheme_revisions (security_scheme_id, revision_id, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted, custom_provider_name, custom_issuer_url, login_config) SELECT security_scheme_id, revision_id + 1, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted, custom_provider_name, custom_issuer_url, login_config FROM security_scheme_revisions WHERE revision_id = 1")).await.unwrap();
         db.execute(sqlx::query(
             "UPDATE security_schemes SET current_revision_id = 2",
         ))

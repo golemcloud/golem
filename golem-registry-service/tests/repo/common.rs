@@ -85,7 +85,7 @@ use golem_registry_service::repo::account_usage::{DbAccountUsageRepo, SetMonthly
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
 use golem_registry_service::repo::component::{ComponentRepo, DbComponentRepo};
-use golem_registry_service::repo::deployment::DbDeploymentRepo;
+use golem_registry_service::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
 use golem_registry_service::repo::environment::{
     DbEnvironmentRepo, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
     EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
@@ -114,7 +114,8 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
-    DeployRepoError, DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
+    CurrentDeploymentExtRevisionRecord, CurrentDeploymentRevisionRecord, DeployRepoError,
+    DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
     DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredToolRecord,
     DeploymentRevisionCreationRecord,
 };
@@ -146,7 +147,7 @@ use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::{DbPlanRepo, PlanRepo};
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
-    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
+    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent, RequiresNotificationSignal,
 };
 use golem_registry_service::repo::tool_middleware_release::{
     DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepoError,
@@ -195,6 +196,90 @@ fn finite_change_value(value: u64) -> AdminResourceGrantChangeValue {
     AdminResourceGrantChangeValue::Finite(FiniteResourceLimit { value })
 }
 // Common test cases -------------------------------------------------------------------------------
+
+trait DeploymentRepoTestExt {
+    async fn deploy_current(
+        &self,
+        deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>;
+
+    async fn set_current_deployment_current(
+        &self,
+        user_account_id: Uuid,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError>;
+}
+
+impl<T: DeploymentRepo + ?Sized> DeploymentRepoTestExt for T {
+    async fn deploy_current(
+        &self,
+        deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
+    {
+        let epoch = self
+            .get_http_routing_epoch(deployment_creation.environment_id)
+            .await?;
+        self.deploy(deployment_creation, version_check, epoch).await
+    }
+
+    async fn set_current_deployment_current(
+        &self,
+        user_account_id: Uuid,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
+        let epoch = self.get_http_routing_epoch(environment_id).await?;
+        self.set_current_deployment(
+            user_account_id,
+            environment_id,
+            deployment_revision_id,
+            epoch,
+        )
+        .await
+    }
+}
+
+fn empty_deployment_creation(
+    environment_id: Uuid,
+    deployment_revision_id: i64,
+    version: &str,
+    user_account_id: Uuid,
+) -> DeploymentRevisionCreationRecord {
+    DeploymentRevisionCreationRecord {
+        environment_id,
+        deployment_revision_id,
+        version: version.into(),
+        hash: SqlBlake3Hash::empty(),
+        components: vec![],
+        http_api_deployments: vec![],
+        mcp_deployments: vec![],
+        compiled_routes: vec![],
+        compiled_mcp: vec![],
+        registered_agent_types: vec![],
+        registered_tools: vec![],
+        agent_tool_bindings: vec![],
+        mcp_imports: vec![],
+        tool_releases: vec![],
+        registered_tool_middlewares: vec![],
+        tool_middleware_chains: vec![],
+        tool_middleware_releases: vec![],
+        universal_tool_middlewares: vec![],
+        tool_compatibility_mode: Default::default(),
+        published_tool_middlewares: vec![],
+        remote_tool_middlewares: vec![],
+        environment_tool_middleware_bindings: BTreeMap::new(),
+        agent_tool_middleware_bindings: BTreeMap::new(),
+        created_agent_secrets: vec![],
+        updated_agent_secrets: vec![],
+        replaced_agent_secrets: vec![],
+        created_resource_definitions: vec![],
+        created_retry_policies: vec![],
+        user_account_id,
+    }
+}
 
 fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
     StoredCard::Concrete(Card {
@@ -8730,7 +8815,7 @@ pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
         })
         .collect();
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             DeploymentRevisionCreationRecord {
                 environment_id: env.revision.environment_id,
                 deployment_revision_id,
@@ -8970,7 +9055,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
         .await
         .unwrap();
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             DeploymentRevisionCreationRecord {
                 environment_id,
                 deployment_revision_id: 1,
@@ -10606,12 +10691,12 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         first_creation.environment_tool_middleware_bindings.clone();
     let expected_agent_middleware_bindings = first_creation.agent_tool_middleware_bindings.clone();
     deps.full_deployment_repo
-        .deploy(first_creation, false)
+        .deploy_current(first_creation, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             deployment_creation(
                 2,
                 component_revision_id,
@@ -10978,7 +11063,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap();
     deps.full_deployment_repo
-        .set_current_deployment(owner_account_id, environment_id, 1)
+        .set_current_deployment_current(owner_account_id, environment_id, 1)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -11026,7 +11111,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     }
 
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             deployment_creation(
                 3,
                 updated_component_revision_id,
@@ -11179,7 +11264,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         remote_binding,
     )];
     deps.full_deployment_repo
-        .deploy(remote_deployment, false)
+        .deploy_current(remote_deployment, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -11253,7 +11338,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     ));
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -11283,7 +11368,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .push("changed-while-de-published".to_string());
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -11329,7 +11414,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     failed_publication.registered_tools[0].owner_account_id = new_repo_uuid();
     assert!(
         deps.full_deployment_repo
-            .deploy(failed_publication, false)
+            .deploy_current(failed_publication, false)
             .await
             .is_err()
     );
@@ -11372,7 +11457,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .unwrap();
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -11491,7 +11576,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     );
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -11534,7 +11619,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         "grants belonging to deleted environments must not constrain live publications"
     );
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             deployment_creation(
                 5,
                 updated_component_revision_id,
@@ -11622,7 +11707,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     ));
 
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             deployment_creation(
                 6,
                 updated_component_revision_id,
@@ -11649,7 +11734,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     assert!(empty_state.tool_bindings.is_empty());
 
     deps.full_deployment_repo
-        .set_current_deployment(owner_account_id, environment_id, 1)
+        .set_current_deployment_current(owner_account_id, environment_id, 1)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -11873,7 +11958,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
     };
 
     deps.full_deployment_repo
-        .deploy(deployment_creation, false)
+        .deploy_current(deployment_creation, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -13162,9 +13247,10 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     let app = deps.create_application(owner.revision.account_id).await;
     let env = deps.create_env(app.revision.application_id).await;
     let domain = format!("{}.example.com", new_repo_uuid());
+    let domain_registration_id = new_repo_uuid();
     domains
         .create(DomainRegistrationRecord {
-            domain_registration_id: new_repo_uuid(),
+            domain_registration_id,
             environment_id: env.revision.environment_id,
             domain: domain.clone(),
             audit: ImmutableAuditFields::new(owner.revision.account_id),
@@ -13239,7 +13325,7 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
             }
         })
         .collect();
-    repo.deploy(
+    repo.deploy_current(
         DeploymentRevisionCreationRecord {
             environment_id: env.revision.environment_id,
             deployment_revision_id: 1,
@@ -13278,7 +13364,11 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     .signal_new_events_available(&deps.test_registry_change_notifier());
     for expected_activation in [1, 2] {
         let activation = repo
-            .set_current_deployment(owner.revision.account_id, env.revision.environment_id, 1)
+            .set_current_deployment_current(
+                owner.revision.account_id,
+                env.revision.environment_id,
+                1,
+            )
             .await
             .unwrap()
             .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -13291,7 +13381,13 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
     assert_eq!(records.len(), 2);
     assert!(!records[0].security_scheme_missing);
     assert!(records[1].security_scheme_missing);
-    let service = DeployedRoutesService::new(repo);
+    assert_eq!(
+        repo.list_active_domains_for_environment(env.revision.environment_id)
+            .await
+            .unwrap(),
+        vec![domain.clone()]
+    );
+    let service = DeployedRoutesService::new(repo.clone());
     let routes = service
         .get_currently_active_compiled_routes(&Domain(domain.clone()))
         .await
@@ -13360,11 +13456,19 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
             "test".into(),
             &openidconnect::RedirectUrl::new("https://example.com/callback".into()).unwrap(),
             &[],
+            &golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {},
+            ),
             golem_common::model::account::AccountId(owner.revision.account_id),
         );
+        let epoch = repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
         schemes
             .create(
                 env.revision.environment_id,
+                epoch,
                 "deleted".into(),
                 revision.clone(),
             )
@@ -13382,8 +13486,12 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
         assert!(routes.security_schemes.contains_key(&id));
         revision.revision_id += 1;
         revision.audit.deleted = true;
+        let epoch = repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
         schemes
-            .delete(env.revision.environment_id, revision)
+            .delete(env.revision.environment_id, epoch, revision)
             .await
             .unwrap()
             .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -13398,4 +13506,400 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
         ));
         assert!(routes.security_schemes.is_empty());
     }
+
+    domains
+        .delete(domain_registration_id, owner.revision.account_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    assert!(
+        repo.list_active_domains_for_environment(env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repo.list_domains_for_deployment(env.revision.environment_id, 1)
+            .await
+            .unwrap(),
+        vec![domain]
+    );
+}
+
+pub async fn test_security_scheme_login_persistence(deps: &Deps) {
+    use golem_common::base_model::Empty;
+    use golem_common::model::security_scheme::{
+        AuthorizationCodePkceConfig, Provider, SecuritySchemeId, SecuritySchemeLogin,
+    };
+    use golem_registry_service::model::security_scheme::SecurityScheme;
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use openidconnect::{RedirectUrl, Scope};
+
+    let repo: Box<dyn SecuritySchemeRepo> = match &deps.test_db {
+        TestDb::Sqlite(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        TestDb::Postgres(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+    };
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let logins = [
+        SecuritySchemeLogin::Cookie(Empty {}),
+        SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec![
+                "https://app.example.test/callback".into(),
+                "http://127.0.0.1:3000/callback".into(),
+            ],
+            origins: vec![
+                "https://app.example.test".into(),
+                "http://127.0.0.1:3000".into(),
+            ],
+        }),
+    ];
+
+    for (index, login) in logins.into_iter().enumerate() {
+        let id = SecuritySchemeId::new();
+        let name = format!("login-persistence-{index}");
+        let revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(Empty {}),
+            "client-id".into(),
+            "client-secret".into(),
+            &RedirectUrl::new("https://service.example.test/auth/callback".into()).unwrap(),
+            &[Scope::new("openid".into())],
+            &login,
+            owner.revision.account_id.into(),
+        );
+
+        let epoch = deps
+            .full_deployment_repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
+        repo.create(env.revision.environment_id, epoch, name.clone(), revision)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+
+        let stored = repo
+            .get_for_environment_and_name(env.revision.environment_id, &name)
+            .await
+            .unwrap()
+            .expect("created security scheme should be readable");
+        let stored: SecurityScheme = stored.try_into().unwrap();
+        assert_eq!(stored.login, login);
+    }
+}
+
+pub async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(deps: &Deps) {
+    use golem_common::base_model::Empty;
+    use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeLogin};
+    use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use openidconnect::RedirectUrl;
+
+    let (deployment_a, security_a): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =
+        match &deps.test_db {
+            TestDb::Sqlite(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+            TestDb::Postgres(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+        };
+    let (deployment_b, security_b): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =
+        match &deps.routing_test_db {
+            TestDb::Sqlite(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+            TestDb::Postgres(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+        };
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let make_revision = |id, revision_id| {
+        let mut revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(Empty {}),
+            "client-id".into(),
+            "client-secret".into(),
+            &RedirectUrl::new("https://service.example.test/auth/callback".into()).unwrap(),
+            &[],
+            &SecuritySchemeLogin::Cookie(Empty {}),
+            owner.revision.account_id.into(),
+        );
+        revision.revision_id = revision_id;
+        if revision_id > 0 {
+            revision.audit = DeletableRevisionAuditFields::new(owner.revision.account_id);
+        }
+        revision
+    };
+
+    // Deployment commits after both services validated epoch 1; the stale scheme update loses.
+    let deploy_wins_env = deps.create_env(app.revision.application_id).await;
+    let deploy_wins_id = SecuritySchemeId::new();
+    let _ = security_a
+        .create(
+            deploy_wins_env.revision.environment_id,
+            0,
+            "auth".into(),
+            make_revision(deploy_wins_id, 0),
+        )
+        .await
+        .unwrap();
+    let shared_epoch = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = deployment_a
+        .deploy(
+            empty_deployment_creation(
+                deploy_wins_env.revision.environment_id,
+                1,
+                "deploy-wins",
+                owner.revision.account_id,
+            ),
+            false,
+            shared_epoch,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        security_b
+            .update(
+                deploy_wins_env.revision.environment_id,
+                shared_epoch,
+                make_revision(deploy_wins_id, 1),
+            )
+            .await,
+        Err(golem_registry_service::repo::model::security_scheme::SecuritySchemeRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment_and_name(deploy_wins_env.revision.environment_id, "auth")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .revision_id,
+        0
+    );
+    assert_eq!(
+        deployment_b
+            .get_currently_deployed_revision(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision_id,
+        1
+    );
+
+    // Scheme update commits after both services validated epoch 1; the stale deployment loses.
+    let scheme_wins_env = deps.create_env(app.revision.application_id).await;
+    let scheme_wins_id = SecuritySchemeId::new();
+    let _ = security_a
+        .create(
+            scheme_wins_env.revision.environment_id,
+            0,
+            "auth".into(),
+            make_revision(scheme_wins_id, 0),
+        )
+        .await
+        .unwrap();
+    let shared_epoch = deployment_a
+        .get_http_routing_epoch(scheme_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_b
+        .update(
+            scheme_wins_env.revision.environment_id,
+            shared_epoch,
+            make_revision(scheme_wins_id, 1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        deployment_a
+            .deploy(
+                empty_deployment_creation(
+                    scheme_wins_env.revision.environment_id,
+                    1,
+                    "scheme-wins",
+                    owner.revision.account_id,
+                ),
+                false,
+                shared_epoch,
+            )
+            .await,
+        Err(DeployRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment_and_name(scheme_wins_env.revision.environment_id, "auth")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .revision_id,
+        1
+    );
+    assert!(
+        deployment_b
+            .get_currently_deployed_revision(scheme_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Activating an older deployment uses the same guard, and a failed write rolls the claim back.
+    let activation_epoch = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = deployment_a
+        .deploy(
+            empty_deployment_creation(
+                deploy_wins_env.revision.environment_id,
+                2,
+                "newer",
+                owner.revision.account_id,
+            ),
+            false,
+            activation_epoch,
+        )
+        .await
+        .unwrap();
+    let stale_activation_epoch = deployment_b
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_a
+        .update(
+            deploy_wins_env.revision.environment_id,
+            stale_activation_epoch,
+            make_revision(deploy_wins_id, 1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        deployment_b
+            .set_current_deployment(
+                owner.revision.account_id,
+                deploy_wins_env.revision.environment_id,
+                1,
+                stale_activation_epoch,
+            )
+            .await,
+        Err(DeployRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        deployment_a
+            .get_currently_deployed_revision(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision_id,
+        2
+    );
+
+    let before_failed_write = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let history_before_failed_write = deployment_a
+        .list_deployment_history(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let outbox_before_failed_write = deps
+        .registry_change_repo
+        .get_latest_event_id()
+        .await
+        .unwrap();
+    assert!(
+        deployment_b
+            .deploy(
+                empty_deployment_creation(
+                    deploy_wins_env.revision.environment_id,
+                    2,
+                    "duplicate-revision",
+                    owner.revision.account_id,
+                ),
+                false,
+                before_failed_write,
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        deployment_a
+            .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap(),
+        before_failed_write
+    );
+    assert_eq!(
+        deployment_a
+            .list_deployment_history(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap(),
+        history_before_failed_write
+    );
+    assert_eq!(
+        deps.registry_change_repo
+            .get_latest_event_id()
+            .await
+            .unwrap(),
+        outbox_before_failed_write
+    );
+
+    // Same-kind stale mutations also conflict, and fresh final state is internally compatible.
+    let same_kind_env = deps.create_env(app.revision.application_id).await;
+    let same_kind_epoch = deployment_a
+        .get_http_routing_epoch(same_kind_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_a
+        .create(
+            same_kind_env.revision.environment_id,
+            same_kind_epoch,
+            "first".into(),
+            make_revision(SecuritySchemeId::new(), 0),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        security_b
+            .create(
+                same_kind_env.revision.environment_id,
+                same_kind_epoch,
+                "second".into(),
+                make_revision(SecuritySchemeId::new(), 0),
+            )
+            .await,
+        Err(golem_registry_service::repo::model::security_scheme::SecuritySchemeRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment(same_kind_env.revision.environment_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        deployment_b
+            .list_active_domains_for_environment(same_kind_env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

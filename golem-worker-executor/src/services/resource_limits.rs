@@ -1233,7 +1233,7 @@ impl AtomicResourceEntry {
         if borrowed > 0 {
             let amt_i64 = borrowed.min(i64::MAX as u64) as i64;
             self.delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |d| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |d| {
                     Some(d.saturating_add(amt_i64))
                 })
                 .ok();
@@ -1496,7 +1496,7 @@ impl AtomicResourceEntry {
             && period == revision_state.current_period
         {
             self.delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                     Some(delta.saturating_add(fuel_delta))
                 })
                 .ok();
@@ -1900,42 +1900,42 @@ impl AtomicResourceEntry {
     ) {
         if captured.update.http_call_count_delta > 0 {
             self.syncing_http_calls
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                     Some(count.saturating_add(captured.update.http_call_count_delta))
                 })
                 .ok();
         }
         if captured.update.rpc_call_count_delta > 0 {
             self.syncing_rpc_calls
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                     Some(count.saturating_add(captured.update.rpc_call_count_delta))
                 })
                 .ok();
         }
         if captured.update.fuel_delta != 0 {
             self.in_flight_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                     Some(delta.saturating_add(captured.update.fuel_delta))
                 })
                 .ok();
         }
         if captured.update.memory_gb_seconds_delta != 0 {
             self.in_flight_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                     Some(delta.saturating_add(captured.update.memory_gb_seconds_delta))
                 })
                 .ok();
         }
         if captured.durable_memory_gb_seconds_delta != 0 {
             self.in_flight_durable_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                     Some(delta.saturating_add(captured.durable_memory_gb_seconds_delta))
                 })
                 .ok();
         }
         if captured.ephemeral_memory_gb_seconds_delta != 0 {
             self.in_flight_ephemeral_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |delta| {
                     Some(delta.saturating_add(captured.ephemeral_memory_gb_seconds_delta))
                 })
                 .ok();
@@ -2093,19 +2093,19 @@ impl AtomicResourceEntry {
         let delivered = gate.in_flight_usage.remove(&generation);
         if let Some(delivered) = delivered {
             self.in_flight_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
                     Some(in_flight.saturating_sub(delivered.usage.fuel as i64))
                 })
                 .ok();
             self.in_flight_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
                     Some(
                         in_flight.saturating_sub(delivered.captured.update.memory_gb_seconds_delta),
                     )
                 })
                 .ok();
             self.in_flight_durable_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
                     Some(
                         in_flight
                             .saturating_sub(delivered.captured.durable_memory_gb_seconds_delta),
@@ -2113,7 +2113,7 @@ impl AtomicResourceEntry {
                 })
                 .ok();
             self.in_flight_ephemeral_memory_gb_seconds_delta
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |in_flight| {
                     Some(
                         in_flight
                             .saturating_sub(delivered.captured.ephemeral_memory_gb_seconds_delta),
@@ -2553,7 +2553,7 @@ impl AtomicResourceEntry {
             return false;
         }
         self.unsynced_http_calls
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |uhc| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |uhc| {
                 Some(uhc.saturating_add(1))
             })
             .ok();
@@ -2569,7 +2569,7 @@ impl AtomicResourceEntry {
             return false;
         }
         self.unsynced_rpc_calls
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |urc| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |urc| {
                 Some(urc.saturating_add(1))
             })
             .ok();
@@ -6981,7 +6981,7 @@ mod tests {
         let moved = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
         entry
             .syncing_http_calls
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |c| {
                 Some(c.saturating_add(moved))
             })
             .ok();
@@ -7010,7 +7010,7 @@ mod tests {
         let moved = entry.unsynced_http_calls.swap(0, Ordering::AcqRel);
         entry
             .syncing_http_calls
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |c| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |c| {
                 Some(c.saturating_add(moved))
             })
             .ok();

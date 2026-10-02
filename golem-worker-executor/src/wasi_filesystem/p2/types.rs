@@ -78,6 +78,37 @@ fn p2_descriptor_guest_path(
         .map_err(|_| FsError::from(ErrorCode::NotPermitted))
 }
 
+fn p2_is_immutable_initial_file(
+    generation_handle: &FilesystemGenerationHandle,
+    guest_path: &CanonicalGuestPath,
+) -> Result<bool, FsError> {
+    let relative_path = guest_path.as_str().strip_prefix('/').unwrap_or_default();
+    agent_filesystem::is_immutable_initial_file(
+        generation_handle,
+        std::path::Path::new(relative_path),
+    )
+    .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
+}
+
+async fn p2_stable_initial_file_stat(
+    interrupt: FilesystemInterruptSignal,
+    call: impl Future<Output = Result<AgentAttributes, AgentFilesystemError>>,
+) -> Result<DescriptorStat, FsError> {
+    let mut stat = observe_filesystem_operation(interrupt, call)
+        .await
+        .map_err(FsError::trap)?
+        .map_err(p2_agent_error)
+        .and_then(p2_agent_stat)
+        .map_err(|error| {
+            FsError::trap(wasmtime::Error::msg(format!(
+                "immutable initial-file stat failed: {error}"
+            )))
+        })?;
+    stat.data_access_timestamp = None;
+    stat.data_modification_timestamp = None;
+    Ok(stat)
+}
+
 async fn authorize_paths<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
@@ -1000,9 +1031,26 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, "")?;
+        let immutable_initial_file = p2_is_immutable_initial_file(&generation_handle, &guest_path)?;
         let _authorization_permit =
             authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let path = descriptor.path().to_path_buf();
+
+        if immutable_initial_file {
+            let call = descriptor
+                .with_node(|node| {
+                    agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
+                        .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
+                })
+                .map_err(|error| {
+                    FsError::trap(wasmtime::Error::msg(format!(
+                        "immutable initial-file stat failed: {error}"
+                    )))
+                })?;
+            let stat = p2_stable_initial_file_stat(self.create_interrupt_signal(), call).await?;
+            self.observe_function_call("filesystem::types::descriptor", "stat");
+            return Ok(stat);
+        }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `DurableCallSession::run`.
@@ -1098,6 +1146,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let immutable_initial_file = p2_is_immutable_initial_file(&generation_handle, &guest_path)?;
         let _authorization_permit =
             authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let full_path = descriptor.path().join(path.clone());
@@ -1107,6 +1156,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         } else {
             agent_filesystem::Follow::No
         };
+
+        if immutable_initial_file {
+            let call = agent_filesystem::attributes(
+                &generation_handle,
+                AgentTarget::Path(&target, follow),
+            )
+            .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
+            .map_err(|error| {
+                FsError::trap(wasmtime::Error::msg(format!(
+                    "immutable initial-file stat-at failed: {error}"
+                )))
+            })?;
+            let stat = p2_stable_initial_file_stat(self.create_interrupt_signal(), call).await?;
+            self.observe_function_call("filesystem::types::descriptor", "stat_at");
+            return Ok(stat);
+        }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `DurableCallSession::run`.
@@ -1501,6 +1566,45 @@ mod tests {
 
     fn error_code<T: std::fmt::Debug>(result: Result<T, FsError>) -> ErrorCode {
         result.unwrap_err().downcast().unwrap()
+    }
+
+    #[test]
+    async fn immutable_initial_file_stat_interrupts_pending_observation() {
+        use golem_service_base::error::worker_executor::InterruptKind;
+
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            p2_stable_initial_file_stat(Box::pin(std::future::ready(kind)), std::future::pending()),
+        )
+        .await
+        .expect("immutable stat must stop observing a pending filesystem call");
+        let error = result.unwrap_err().downcast().unwrap_err();
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+    }
+
+    #[test]
+    async fn immutable_initial_file_stat_prefers_completion_and_clears_timestamps() {
+        use golem_service_base::error::worker_executor::InterruptKind;
+
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let stat = p2_stable_initial_file_stat(
+            Box::pin(std::future::ready(kind)),
+            std::future::ready(Ok(AgentAttributes {
+                kind: ObjectKind::File,
+                link_count: 1,
+                size: 42,
+                accessed: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(123)),
+                modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(456)),
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stat.size, 42);
+        assert_eq!(stat.link_count, 1);
+        assert!(matches!(stat.type_, DescriptorType::RegularFile));
+        assert!(stat.data_access_timestamp.is_none());
+        assert!(stat.data_modification_timestamp.is_none());
     }
 
     #[test]

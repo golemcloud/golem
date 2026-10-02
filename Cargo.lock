@@ -4054,6 +4054,7 @@ dependencies = [
  "conditional-trait-gen",
  "console-subscriber",
  "desert_rust",
+ "fd-lock",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -4064,6 +4065,7 @@ dependencies = [
  "golem-service-base",
  "golem-worker-executor-test-utils",
  "heck",
+ "hex",
  "http 1.5.0",
  "http-body-util",
  "humantime-serde",
@@ -4091,10 +4093,12 @@ dependencies = [
  "reqwest 0.13.4",
  "rustls 0.23.43",
  "sanitize-filename",
+ "semver",
  "serde",
  "serde_json",
  "serde_with",
  "serde_yaml",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "strum_macros",
@@ -4319,6 +4323,8 @@ dependencies = [
  "applying",
  "async-trait",
  "async_zip",
+ "axum",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "clap",
@@ -4330,8 +4336,10 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "heck",
+ "hex",
  "humantime-serde",
  "itertools 0.14.0",
+ "jsonwebtoken",
  "libc",
  "log",
  "opentelemetry 0.30.0",
@@ -4341,6 +4349,7 @@ dependencies = [
  "reqwest 0.13.4",
  "reqwest-middleware",
  "reqwest-tracing",
+ "rsa",
  "serde",
  "serde_json",
  "serde_with",
@@ -4578,6 +4587,7 @@ dependencies = [
  "proptest",
  "prost 0.14.4",
  "prost-types",
+ "redis",
  "regex",
  "reqwest 0.13.4",
  "rmcp",
@@ -11646,9 +11656,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.4"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7b7f29a189990cbe819e7b44c9af6d2f06d0e16e0c56eeccf63feb85d21b4d6"
+checksum = "8755b5e1f2a500d592a85460823f382c4ef4b153e6c43cc10ff0c0dbda326eb0"
 dependencies = [
  "anyhow",
  "camino",

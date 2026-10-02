@@ -154,6 +154,7 @@ impl StructuredOutput for HttpSecuritySchemeListView {
 
 fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
+    let login = serde_json::to_string_pretty(&view.login).expect("login configuration serializes");
 
     fields
         .fmt_field("Name", &view.name.0, format_main_id)
@@ -162,7 +163,8 @@ fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)
         .field("Provider", &view.provider_type)
         .field("Client ID", &view.client_id)
         .field("Redirect URL", &view.redirect_url)
-        .field("Scopes", &view.scopes.join("\n"));
+        .field("Scopes", &view.scopes.join("\n"))
+        .field("Login", &login);
 
     fields.build()
 }
@@ -177,6 +179,7 @@ impl TextOutput for HttpSecuritySchemeListView {
             Column::new("Client ID").fixed(),
             Column::new("Redirect URL"),
             Column::new("Scopes"),
+            Column::new("Login"),
         ]);
         for scheme in &self.security_schemes {
             table.add_row(vec![
@@ -187,6 +190,14 @@ impl TextOutput for HttpSecuritySchemeListView {
                 scheme.client_id.clone(),
                 scheme.redirect_url.clone(),
                 scheme.scopes.join("\n"),
+                match &scheme.login {
+                    golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(_) => {
+                        "Cookie".to_string()
+                    }
+                    golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(_) => {
+                        "AuthorizationCodePkce".to_string()
+                    }
+                },
             ]);
         }
         log_table(table);

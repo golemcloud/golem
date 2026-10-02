@@ -391,7 +391,7 @@ impl LinearMemoryTracker {
         let prepaid = self.inner.pending_growth_prepaid.swap(0, Ordering::AcqRel);
         self.inner
             .startup_bytes_remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 Some(remaining.saturating_add(prepaid))
             })
             .ok();

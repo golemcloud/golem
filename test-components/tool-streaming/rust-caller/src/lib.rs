@@ -49,6 +49,13 @@ pub struct ClockedStreamEvidence {
     pub stream: StreamEvidence,
 }
 
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct CliToolEvidence {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
 #[derive(IntoSchema)]
 struct RawRunInput {
     mode: String,
@@ -253,6 +260,12 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
+    async fn builtin_cli(
+        &self,
+        tool: String,
+        cwd: String,
+        args: Vec<String>,
+    ) -> CliToolEvidence;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
@@ -354,6 +367,16 @@ fn evidence(
     }
 }
 
+fn stream_failure_evidence(error: ByteStreamFailure) -> StreamEvidence {
+    StreamEvidence {
+        output: Vec::new(),
+        chunks_read: 0,
+        bytes_read: 0,
+        output_closed: false,
+        completion: format!("{error:?}"),
+    }
+}
+
 async fn read_all(mut stdout: InputStream) -> Vec<u8> {
     let mut output = Vec::new();
     while let Some(item) = stdout.next().await {
@@ -363,6 +386,17 @@ async fn read_all(mut stdout: InputStream) -> Vec<u8> {
         }
     }
     output
+}
+
+async fn read_output(mut output: InputStream) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    while let Some(item) = output.next().await {
+        match item {
+            Ok(chunk) => bytes.extend(chunk),
+            Err(failure) => return Err(format!("{failure:?}")),
+        }
+    }
+    Ok(bytes)
 }
 
 async fn read_tool_stdout(mut stdout: ToolInvocationOutput) -> Vec<u8> {
@@ -480,6 +514,35 @@ fn raw_filesystem_input(
         },
     );
     golem_rust::encode_typed_schema_value(&value).expect("encode filesystem tool wire input")
+}
+
+fn raw_cli_input(
+    tool: &str,
+    cwd: String,
+    args: Vec<String>,
+) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+    let mut fields = vec![
+        (
+            "args",
+            SchemaType::list(SchemaType::string()),
+            SchemaValue::List {
+                elements: args.into_iter().map(SchemaValue::String).collect(),
+            },
+        ),
+        (
+            "cwd",
+            SchemaType::string(),
+            SchemaValue::String(cwd),
+        ),
+    ];
+    if matches!(tool, "npm" | "npx") {
+        fields.push((
+            "registry",
+            SchemaType::string(),
+            SchemaValue::String("https://registry.npmjs.org/".to_string()),
+        ));
+    }
+    raw_filesystem_input(fields)
 }
 
 async fn invoke_filesystem_tool<T: FromSchema>(
@@ -866,13 +929,18 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .run(mode, input_stream(chunks(input, fragment_size)))
             .await
             .expect("start streaming tool");
-        match invocation.collect().await {
-            Ok(collected) => evidence(
-                Ok(collected.result),
-                collected.stdout.expect("streaming tool has stdout"),
-            ),
-            Err(error) => evidence(Err(error), Vec::new()),
+        let collected = invocation.collect().await;
+        match collected.stderr {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("streaming tool unexpectedly has stderr"),
+            Err(error) => return stream_failure_evidence(error),
         }
+        let output = match collected.stdout {
+            Ok(Some(output)) => output,
+            Ok(None) => panic!("streaming tool has no stdout"),
+            Err(error) => return stream_failure_evidence(error),
+        };
+        evidence(collected.result, output)
     }
 
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence {
@@ -1065,10 +1133,18 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("start large streaming tool")
             .collect()
-            .await
-            .expect("collect large output");
+            .await;
+        large.result.expect("collect large result");
+        assert!(
+            large.stderr.expect("collect large stderr").is_none(),
+            "large tool has no stderr"
+        );
         assert_eq!(
-            large.stdout.expect("large tool has stdout").len(),
+            large
+                .stdout
+                .expect("collect large stdout")
+                .expect("large tool has stdout")
+                .len(),
             512 * 4096
         );
 
@@ -1079,10 +1155,20 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("start early-stdin-close tool")
             .collect()
-            .await
-            .expect("collect early-stdin-close output");
+            .await;
+        ignored.result.expect("collect early-stdin-close result");
+        assert!(
+            ignored
+                .stderr
+                .expect("collect early-stdin-close stderr")
+                .is_none(),
+            "early-stdin-close tool has no stderr"
+        );
         assert_eq!(
-            ignored.stdout.expect("early-stdin-close tool has stdout"),
+            ignored
+                .stdout
+                .expect("collect early-stdin-close stdout")
+                .expect("early-stdin-close tool has stdout"),
             b"stdin-ignored"
         );
         assert!(
@@ -1101,15 +1187,25 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("start early-stdout-close tool")
             .collect()
-            .await
+            .await;
+        let early_stdout_result = early_stdout
+            .result
             .expect("collect early-stdout-close result");
         assert!(
             early_stdout
+                .stderr
+                .expect("collect early-stdout-close stderr")
+                .is_none(),
+            "early-stdout-close tool has no stderr"
+        );
+        assert!(
+            early_stdout
                 .stdout
+                .expect("collect early-stdout-close stdout")
                 .expect("early-stdout-close tool has stdout")
                 .is_empty()
         );
-        assert_eq!(early_stdout.result.chunks_read, 2);
+        assert_eq!(early_stdout_result.chunks_read, 2);
 
         let (mut failed_source, failed_stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
@@ -1126,12 +1222,20 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .is_empty()
         );
         drop(failed_source);
-        let failed_input = failed_input
-            .collect()
-            .await
-            .expect("observe source failure");
+        let failed_input = failed_input.collect().await;
+        failed_input.result.expect("observe source failure");
+        assert!(
+            failed_input
+                .stderr
+                .expect("collect failed-input stderr")
+                .is_none(),
+            "failed-input tool has no stderr"
+        );
         assert_eq!(
-            failed_input.stdout.expect("failed-input tool has stdout"),
+            failed_input
+                .stdout
+                .expect("collect failed-input stdout")
+                .expect("failed-input tool has stdout"),
             b"marker:"
         );
 
@@ -1421,6 +1525,47 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             edit.bytes_before.to_string(),
             edit.bytes_after.to_string(),
         ]
+    }
+
+    async fn builtin_cli(
+        &self,
+        tool: String,
+        cwd: String,
+        args: Vec<String>,
+    ) -> CliToolEvidence {
+        let rpc = ToolRpc::create(&tool).expect("built-in CLI tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let (stderr_target, stderr) = tool_host::create_output();
+        let invoke = rpc.invoke_and_await(
+            Vec::new(),
+            raw_cli_input(&tool, cwd, args),
+            None,
+            Some(stdout_target),
+            Some(stderr_target),
+        );
+        let (result, stdout, stderr) = (invoke, read_output(stdout), read_output(stderr))
+            .join()
+            .await;
+        let result = result.unwrap_or_else(|error| {
+            panic!(
+                "invoke built-in CLI tool '{tool}': {error:?}; stdout={stdout:?}; stderr={stderr:?}"
+            )
+        });
+        let stdout = stdout.unwrap_or_else(|error| panic!("read '{tool}' stdout: {error}"));
+        let stderr = stderr.unwrap_or_else(|error| panic!("read '{tool}' stderr: {error}"));
+        let value = decode_typed_schema_value_owned(
+            result
+                .result
+                .unwrap_or_else(|| panic!("built-in CLI tool '{tool}' returned no result")),
+        )
+        .unwrap_or_else(|error| panic!("decode built-in CLI tool '{tool}' result: {error}"));
+        let exit_code = i32::from_value(value.value())
+            .unwrap_or_else(|error| panic!("convert built-in CLI tool '{tool}' result: {error}"));
+        CliToolEvidence {
+            exit_code,
+            stdout,
+            stderr,
+        }
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {
@@ -1878,10 +2023,19 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("start sibling streaming tool")
             .collect()
-            .await
-            .expect("sibling must remain independent");
+            .await;
+        sibling
+            .result
+            .expect("sibling result must remain independent");
+        assert!(
+            sibling.stderr.expect("collect sibling stderr").is_none(),
+            "sibling tool has no stderr"
+        );
         assert_eq!(
-            sibling.stdout.expect("sibling tool has stdout"),
+            sibling
+                .stdout
+                .expect("collect sibling stdout")
+                .expect("sibling tool has stdout"),
             b"marker:sibling"
         );
 
@@ -2172,16 +2326,27 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .run_capable(path.clone(), input_stream(vec![input.clone()]))
             .await
             .expect("start capable streaming tool");
-        match invocation.collect().await {
-            Ok(collected) => StreamEvidence {
-                output: collected.stdout.expect("capable tool has stdout"),
-                chunks_read: collected.result.chunks_read,
-                bytes_read: collected.result.bytes_read,
-                output_closed: collected.result.output_closed,
+        let collected = invocation.collect().await;
+        match collected.stderr {
+            Ok(None) => {}
+            Ok(Some(_)) => panic!("capable tool unexpectedly has stderr"),
+            Err(error) => return stream_failure_evidence(error),
+        }
+        let output = match collected.stdout {
+            Ok(Some(output)) => output,
+            Ok(None) => panic!("capable tool has no stdout"),
+            Err(error) => return stream_failure_evidence(error),
+        };
+        match collected.result {
+            Ok(result) => StreamEvidence {
+                output,
+                chunks_read: result.chunks_read,
+                bytes_read: result.bytes_read,
+                output_closed: result.output_closed,
                 completion: "ok".to_string(),
             },
             Err(error) => StreamEvidence {
-                output: Vec::new(),
+                output,
                 chunks_read: 0,
                 bytes_read: 0,
                 output_closed: false,
@@ -2196,11 +2361,19 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .await
             .expect("start capable dual-output tool")
             .collect()
-            .await
-            .expect("collect capable dual-output tool");
+            .await;
+        collected
+            .result
+            .expect("collect capable dual-output result");
         vec![
-            collected.stdout.expect("capable dual tool has stdout"),
-            collected.stderr.expect("capable dual tool has stderr"),
+            collected
+                .stdout
+                .expect("collect capable dual-output stdout")
+                .expect("capable dual tool has stdout"),
+            collected
+                .stderr
+                .expect("collect capable dual-output stderr")
+                .expect("capable dual tool has stderr"),
         ]
     }
 
@@ -2403,13 +2576,19 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .dual_reconstruct(checkpoint)
             .await
             .expect("start dual-output reconstruction tool");
-        let collected = invocation
-            .collect()
-            .await
-            .expect("collect dual-output reconstruction tool");
+        let collected = invocation.collect().await;
+        collected
+            .result
+            .expect("collect dual-output reconstruction result");
         vec![
-            collected.stdout.expect("dual-output stdout is attached"),
-            collected.stderr.expect("dual-output stderr is attached"),
+            collected
+                .stdout
+                .expect("collect dual-output reconstruction stdout")
+                .expect("dual-output stdout is attached"),
+            collected
+                .stderr
+                .expect("collect dual-output reconstruction stderr")
+                .expect("dual-output stderr is attached"),
         ]
     }
 
@@ -2531,17 +2710,23 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .dual_pressure(path, input_size, false)
             .await
             .expect("start completed attachment reconstruction operation");
-        let collected = invocation
-            .collect()
-            .await
-            .expect("complete attachment reconstruction operation");
-        assert_eq!(collected.result.bytes_read, input_size);
+        let collected = invocation.collect().await;
+        let result = collected
+            .result
+            .expect("complete attachment reconstruction result");
+        assert_eq!(result.bytes_read, input_size);
         assert_eq!(
-            collected.stdout.expect("capable tool has stdout"),
+            collected
+                .stdout
+                .expect("collect capable tool stdout")
+                .expect("capable tool has stdout"),
             vec![b'o'; input_size as usize]
         );
         assert_eq!(
-            collected.stderr.expect("capable tool has stderr"),
+            collected
+                .stderr
+                .expect("collect capable tool stderr")
+                .expect("capable tool has stderr"),
             vec![b'e'; input_size as usize]
         );
         wait_at_crash_checkpoint("completed-attachment-pressure").await;
@@ -2615,19 +2800,29 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .run_capable(path, input_stream(vec![first, second]))
             .await
             .expect("start clocked capable streaming tool");
-        let collected = invocation
-            .collect()
-            .await
-            .expect("complete clocked capable streaming tool");
+        let collected = invocation.collect().await;
         let after_tool_nanos = started.elapsed().as_nanos() as u64;
+        let result = collected
+            .result
+            .expect("complete clocked capable streaming result");
+        assert!(
+            collected
+                .stderr
+                .expect("collect clocked capable stderr")
+                .is_none(),
+            "clocked capable tool has no stderr"
+        );
         ClockedStreamEvidence {
             before_tool_nanos,
             after_tool_nanos,
             stream: StreamEvidence {
-                output: collected.stdout.expect("capable tool has stdout"),
-                chunks_read: collected.result.chunks_read,
-                bytes_read: collected.result.bytes_read,
-                output_closed: collected.result.output_closed,
+                output: collected
+                    .stdout
+                    .expect("collect clocked capable stdout")
+                    .expect("capable tool has stdout"),
+                chunks_read: result.chunks_read,
+                bytes_read: result.bytes_read,
+                output_closed: result.output_closed,
                 completion: "ok".to_string(),
             },
         }
@@ -2729,15 +2924,24 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .run("nested-principal".to_string(), input_stream(Vec::new()))
             .await
             .expect("start nested principal tool");
-        let collected = invocation
-            .collect()
-            .await
-            .expect("collect nested principal tool");
-        assert_eq!(collected.result.bytes_read, 0);
-        assert!(!collected.result.output_closed);
-        let provider_classes =
-            String::from_utf8(collected.stdout.expect("nested principal tool has stdout"))
-                .expect("principal classes are UTF-8");
+        let collected = invocation.collect().await;
+        let result = collected.result.expect("collect nested principal result");
+        assert_eq!(result.bytes_read, 0);
+        assert!(!result.output_closed);
+        assert!(
+            collected
+                .stderr
+                .expect("collect nested principal stderr")
+                .is_none(),
+            "nested principal tool has no stderr"
+        );
+        let provider_classes = String::from_utf8(
+            collected
+                .stdout
+                .expect("collect nested principal stdout")
+                .expect("nested principal tool has stdout"),
+        )
+        .expect("principal classes are UTF-8");
         let (outer_class, nested_class) = provider_classes
             .split_once(':')
             .expect("provider returns outer and nested principal classes");

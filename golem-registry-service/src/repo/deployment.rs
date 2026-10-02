@@ -71,6 +71,13 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait DeploymentRepo: Send + Sync {
+    async fn get_http_routing_epoch_if_exists(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<i64>>;
+
+    async fn get_http_routing_epoch(&self, environment_id: Uuid) -> RepoResult<i64>;
+
     async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>>;
 
     async fn get_currently_deployed_revision(
@@ -113,12 +120,18 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
+
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>>;
 
     async fn get_active_mcp_for_domain(
         &self,
@@ -131,6 +144,12 @@ pub trait DeploymentRepo: Send + Sync {
         deployment_revision_id: i64,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
+
+    async fn list_domains_for_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<String>>;
 
     async fn get_deployment_agent_type(
         &self,
@@ -227,6 +246,7 @@ pub trait DeploymentRepo: Send + Sync {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError>;
 }
 
@@ -274,6 +294,23 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
 
 #[async_trait]
 impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
+    async fn get_http_routing_epoch_if_exists(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<i64>> {
+        self.repo
+            .get_http_routing_epoch_if_exists(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn get_http_routing_epoch(&self, environment_id: Uuid) -> RepoResult<i64> {
+        self.repo
+            .get_http_routing_epoch(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
     async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>> {
         self.repo
             .get_next_revision_number(environment_id)
@@ -359,6 +396,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
     {
         let span = Self::span_user_and_env(
@@ -366,7 +404,11 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             deployment_creation.environment_id,
         );
         self.repo
-            .deploy(deployment_creation, version_check)
+            .deploy(
+                deployment_creation,
+                version_check,
+                expected_http_routing_epoch,
+            )
             .instrument(span)
             .await
     }
@@ -378,6 +420,16 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         self.repo
             .list_active_compiled_routes_for_domain(domain)
             .instrument(Self::span_domain(domain))
+            .await
+    }
+
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>> {
+        self.repo
+            .list_active_domains_for_environment(environment_id)
+            .instrument(Self::span_env(environment_id))
             .await
     }
 
@@ -408,6 +460,20 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
                 environment_id = %environment_id,
                 deployment_revision_id,
                 domain
+            ))
+            .await
+    }
+
+    async fn list_domains_for_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<String>> {
+        self.repo
+            .list_domains_for_deployment(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_revision(
+                environment_id,
+                deployment_revision_id,
             ))
             .await
     }
@@ -644,9 +710,15 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         self.repo
-            .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
+            .set_current_deployment(
+                user_account_id,
+                environment_id,
+                deployment_revision_id,
+                expected_http_routing_epoch,
+            )
             .instrument(info_span!(
                 SPAN_NAME,
                 user_account_id = %user_account_id,
@@ -695,8 +767,67 @@ impl<DBP: Pool> DbDeploymentRepo<DBP> {
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+impl DbDeploymentRepo<PostgresPool> {
+    async fn claim_http_routing_epoch(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        environment_id: Uuid,
+        expected_epoch: i64,
+    ) -> Result<(), DeployRepoError> {
+        let result = tx
+            .execute(
+                sqlx::query(indoc! { r#"
+                    UPDATE environments
+                    SET http_routing_mutation_epoch = http_routing_mutation_epoch + 1
+                    WHERE environment_id = $1 AND http_routing_mutation_epoch = $2
+                "# })
+                .bind(environment_id)
+                .bind(expected_epoch),
+            )
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(DeployRepoError::ConcurrentModification);
+        }
+        Ok(())
+    }
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
+    async fn get_http_routing_epoch_if_exists(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<i64>> {
+        let row = self
+            .with_ro("get_http_routing_epoch_if_exists")
+            .fetch_optional(
+                sqlx::query(
+                    "SELECT http_routing_mutation_epoch FROM environments WHERE environment_id = $1",
+                )
+                .bind(environment_id),
+            )
+            .await?;
+        row.map(|row| {
+            row.try_get("http_routing_mutation_epoch")
+                .map_err(RepoError::from)
+        })
+        .transpose()
+    }
+
+    async fn get_http_routing_epoch(&self, environment_id: Uuid) -> RepoResult<i64> {
+        let row = self
+            .with_ro("get_http_routing_epoch")
+            .fetch_one(
+                sqlx::query(
+                    "SELECT http_routing_mutation_epoch FROM environments WHERE environment_id = $1",
+                )
+                .bind(environment_id),
+            )
+            .await?;
+        row.try_get("http_routing_mutation_epoch")
+            .map_err(RepoError::from)
+    }
+
     async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>> {
         let current_staged_revision_id_row = self
             .with_ro("deploy - get current staged revision")
@@ -744,7 +875,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 SELECT dr.environment_id, dr.revision_id, dr.version, dr.hash, dr.created_at, dr.created_by
                 FROM current_deployments cd
                 JOIN current_deployment_revisions cdr
-                    ON dr.environment_id = cd.environment_id AND cdr.current_revision_id = cd.current_revision_id
+                    ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
+                JOIN deployment_revisions dr
+                    ON dr.environment_id = cdr.environment_id
+                    AND dr.revision_id = cdr.deployment_revision_id
                 WHERE cd.environment_id = $1
             "#})
                 .bind(environment_id),
@@ -877,6 +1011,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
     {
         if version_check
@@ -898,6 +1033,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     let mut deployment_creation = deployment_creation;
                     let environment_id = deployment_creation.environment_id;
                     let deployment_revision_id = deployment_creation.deployment_revision_id;
+
+                    Self::claim_http_routing_epoch(
+                        tx,
+                        environment_id,
+                        expected_http_routing_epoch,
+                    )
+                    .await?;
 
                     let deployment_revision = Self::create_deployment_revision(
                         tx,
@@ -1269,6 +1411,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
+                        sr.revision_id AS security_scheme_revision_id,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,
@@ -1276,6 +1419,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.scopes AS security_scheme_scopes,
                         sr.custom_provider_name AS security_scheme_custom_provider_name,
                         sr.custom_issuer_url AS security_scheme_custom_issuer_url,
+                        sr.login_config AS security_scheme_login_config,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r
@@ -1324,6 +1468,37 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .await
     }
 
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>> {
+        let rows = self
+            .with_ro("list_active_domains_for_environment")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT DISTINCT r.domain
+                    FROM deployment_compiled_routes r
+                    JOIN current_deployments cd
+                      ON cd.environment_id = r.environment_id
+                    JOIN current_deployment_revisions cdr
+                      ON cdr.environment_id = cd.environment_id
+                      AND cdr.revision_id = cd.current_revision_id
+                      AND cdr.deployment_revision_id = r.deployment_revision_id
+                    JOIN domain_registrations dr
+                      ON dr.environment_id = r.environment_id
+                      AND dr.domain = r.domain
+                      AND dr.deleted_at IS NULL
+                    WHERE r.environment_id = $1
+                    ORDER BY r.domain
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| row.try_get("domain").map_err(RepoError::from))
+            .collect()
+    }
+
     async fn list_compiled_routes_for_domain_and_deployment(
         &self,
         environment_id: Uuid,
@@ -1343,6 +1518,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
+                        sr.revision_id AS security_scheme_revision_id,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,
@@ -1350,13 +1526,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.scopes AS security_scheme_scopes,
                         sr.custom_provider_name AS security_scheme_custom_provider_name,
                         sr.custom_issuer_url AS security_scheme_custom_issuer_url,
+                        sr.login_config AS security_scheme_login_config,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r
 
                     -- parent objects not deleted
                     JOIN environments e
-                      ON e.environment_id = d.environment_id
+                      ON e.environment_id = r.environment_id
                       AND e.deleted_at IS NULL
                     JOIN applications a
                       ON a.application_id = e.application_id
@@ -1386,6 +1563,29 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(domain),
             )
             .await
+    }
+
+    async fn list_domains_for_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<String>> {
+        let rows = self
+            .with_ro("list_domains_for_deployment")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT DISTINCT domain
+                    FROM deployment_compiled_routes
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY domain
+                "# })
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| row.try_get("domain").map_err(RepoError::from))
+            .collect()
     }
 
     async fn get_deployment_agent_type(
@@ -1895,10 +2095,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         let result = self
             .with_tx_err("set_current_deployment", |tx| {
                 Box::pin(async move {
+                    Self::claim_http_routing_epoch(tx, environment_id, expected_http_routing_epoch)
+                        .await?;
+
                     let revision = Self::set_current_deployment_internal(
                         tx,
                         user_account_id,

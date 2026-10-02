@@ -1446,7 +1446,8 @@ pub trait OplogOps: Oplog {
                 let bytes = self.download_payload(payload).await?;
                 Ok(Some((bytes, mime_type)))
             }
-            UpdateDescription::Automatic { .. } => Ok(None),
+            UpdateDescription::Automatic { .. }
+            | UpdateDescription::SnapshotAssistedAutomatic { .. } => Ok(None),
         }
     }
 }

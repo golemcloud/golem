@@ -546,7 +546,7 @@ pub trait WorkerClient: Send + Sync {
         disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()>;
+    ) -> WorkerResult<OplogIndex>;
 
     async fn get_oplog(
         &self,
@@ -1380,7 +1380,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<OplogIndex> {
         let agent_id = agent_id.clone();
         self.call_worker_executor(
             agent_id.clone(),
@@ -1400,8 +1400,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::UpdateWorkerResponse {
-                    result: Some(workerexecutor::v1::update_worker_response::Result::Success(_)),
-                } => Ok(()),
+                    result: Some(workerexecutor::v1::update_worker_response::Result::Success(index)),
+                } => Ok(OplogIndex::from_u64(index)),
                 workerexecutor::v1::UpdateWorkerResponse {
                     result: Some(workerexecutor::v1::update_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
@@ -1409,8 +1409,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             WorkerServiceError::InternalCallError,
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn get_oplog(
@@ -3612,7 +3611,7 @@ mod rejection_mapping_tests {
                 .push(freshness_disposition);
             let routing_miss = self
                 .routing_misses
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                     left.checked_sub(1)
                 })
                 .is_ok();

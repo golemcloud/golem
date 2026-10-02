@@ -187,6 +187,22 @@ impl Services {
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<Self> {
+        Self::new_inner(config, join_set, true).await
+    }
+
+    #[doc(hidden)]
+    pub async fn new_without_component_builtins(
+        config: &RegistryServiceConfig,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+    ) -> anyhow::Result<Self> {
+        Self::new_inner(config, join_set, false).await
+    }
+
+    async fn new_inner(
+        config: &RegistryServiceConfig,
+        join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
+        provision_component_builtins: bool,
+    ) -> anyhow::Result<Self> {
         config.mcp_oauth.validate()?;
         config.mcp_import.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
@@ -406,6 +422,7 @@ impl Services {
 
         let security_scheme_service = Arc::new(SecuritySchemeService::new(
             repos.security_scheme_repo.clone(),
+            repos.deployment_repo.clone(),
             environment_service.clone(),
             registry_change_notifier.clone(),
             config.security_scheme.strict_issuer_url_validation,
@@ -513,35 +530,43 @@ impl Services {
             });
         }
 
-        crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
-            &config.builtin_plugins,
-            builtin_plugin_owner_account_id,
-            &repos.plugin_repo,
-            &auth_service,
-            &application_service,
-            &environment_service,
-            &component_service,
-            &component_write_service,
-            &deployment_service,
-            &deployment_write_service,
-            &plugin_registration_service,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
+        if provision_component_builtins {
+            let artifact_resolver =
+                crate::services::builtin_artifact::BuiltinArtifactResolver::new(
+                    &config.builtin_artifacts,
+                )?;
+            crate::services::builtin_plugin_provisioner::provision_builtin_plugins(
+                &config.builtin_plugins,
+                &artifact_resolver,
+                builtin_plugin_owner_account_id,
+                &repos.plugin_repo,
+                &auth_service,
+                &application_service,
+                &environment_service,
+                &component_service,
+                &component_write_service,
+                &deployment_service,
+                &deployment_write_service,
+                &plugin_registration_service,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to provision built-in plugins: {error}"))?;
 
-        crate::services::builtin_tool_provisioner::provision_builtin_tools(
-            builtin_tool_owner_account_id,
-            &auth_service,
-            &application_service,
-            &environment_service,
-            &component_service,
-            &component_write_service,
-            &deployment_service,
-            &deployment_write_service,
-            &tool_release_service,
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+            crate::services::builtin_tool_provisioner::provision_builtin_tools(
+                &artifact_resolver,
+                builtin_tool_owner_account_id,
+                &auth_service,
+                &application_service,
+                &environment_service,
+                &component_service,
+                &component_write_service,
+                &deployment_service,
+                &deployment_write_service,
+                &tool_release_service,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;
+        }
 
         let builtin_tool_owner = &config.initial_accounts["builtin_tool_owner"];
         native_tool_catalog

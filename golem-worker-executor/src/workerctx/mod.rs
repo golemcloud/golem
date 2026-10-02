@@ -55,7 +55,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
+    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponseEntityInvocation,
+    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
@@ -568,6 +569,8 @@ pub trait UpdateManagement {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
+        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+        update_attempt_index: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when an update attempt succeeded. Fails when the oplog refused to record the
@@ -577,6 +580,7 @@ pub trait UpdateManagement {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
     ) -> Result<(), WorkerExecutorError>;
 }
 

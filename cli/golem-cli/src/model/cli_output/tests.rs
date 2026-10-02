@@ -2318,21 +2318,44 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(17),
             description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: vec![7, 8, 9],
                 mime_type: "application/octet-stream".to_string(),
             }),
+        }),
+        PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(18),
+            description: PublicUpdateDescription::Automatic(Empty {}),
+        }),
+        PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(19),
+            description: PublicUpdateDescription::SnapshotAssistedAutomatic(
+                SnapshotAssistedAutomaticUpdateParameters {},
+            ),
         }),
         PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
             new_component_size: 30,
             new_active_plugins: BTreeSet::from_iter([plugin(1)]),
+            snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
+                pending_update_index: OplogIndex::from_u64(3),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(2),
+            }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(3).unwrap(),
             details: None,
+            update_attempt_index: Some(OplogIndex::from_u64(20)),
+            snapshot_assisted_details: None,
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: timestamp(),
@@ -2492,6 +2515,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(8).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(21),
             description: PublicUpdateDescription::Automatic(Empty {}),
         }),
     ]
@@ -3734,6 +3758,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         target_revision,
                     )
                     .expect("generated revision should be valid"),
+                    pending_update_index: None,
+                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                    snapshot_assisted_details: None,
                 },
             )
         }),
@@ -3745,6 +3772,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         target_revision,
                     )
                     .expect("generated revision should be valid"),
+                    pending_update_index: None,
+                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                    snapshot_assisted_details: None,
                 },
             )
         }),
@@ -3762,6 +3792,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         )
                         .expect("generated revision should be valid"),
                         details,
+                        pending_update_index: None,
+                        mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                        snapshot_assisted_details: None,
                     },
                 )
             }),
@@ -4710,6 +4743,7 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
         arb_small_string(),
         arb_url_string(),
         proptest::collection::vec(arb_small_string(), 0..5),
+        arb_security_scheme_login(),
     )
         .prop_map(
             |(
@@ -4721,6 +4755,7 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
                 client_id,
                 redirect_url,
                 scopes,
+                login,
             )| {
                 golem_client::model::SecuritySchemeDto {
                     id: golem_common::model::security_scheme::SecuritySchemeId(id),
@@ -4734,10 +4769,38 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
                     client_id,
                     redirect_url,
                     scopes,
+                    login,
                 }
             },
         )
         .boxed()
+}
+
+fn arb_security_scheme_login()
+-> BoxedStrategy<golem_common::model::security_scheme::SecuritySchemeLogin> {
+    prop_oneof![
+        Just(
+            golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {}
+            )
+        ),
+        (
+            proptest::collection::vec(arb_url_string(), 1..5),
+            proptest::collection::vec(
+                arb_small_string().prop_map(|subdomain| format!("https://{subdomain}.example.com")),
+                1..5,
+            ),
+        )
+            .prop_map(|(redirect_uris, origins)| {
+                golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(
+                    golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                        redirect_uris,
+                        origins,
+                    },
+                )
+            }),
+    ]
+    .boxed()
 }
 
 fn arb_security_scheme_provider() -> BoxedStrategy<golem_common::model::security_scheme::Provider> {

@@ -13574,6 +13574,21 @@ components:
           format: uint64
         name:
           type: string
+    AuthorizationCodePkceConfig:
+      type: object
+      title: AuthorizationCodePkceConfig
+      required:
+      - redirectUris
+      - origins
+      properties:
+        redirectUris:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
     AutoInjectedKind:
       type: string
       enum:
@@ -20836,6 +20851,7 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+      - login
       properties:
         name:
           type: string
@@ -20851,6 +20867,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
     SecuritySchemeDto:
       type: object
       title: SecuritySchemeDto
@@ -20863,6 +20881,7 @@ components:
       - clientId
       - redirectUrl
       - scopes
+      - login
       properties:
         id:
           type: string
@@ -20885,6 +20904,42 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
+    SecuritySchemeLogin:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SecuritySchemeLogin_Empty'
+      - $ref: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+      discriminator:
+        propertyName: type
+        mapping:
+          Cookie: '#/components/schemas/SecuritySchemeLogin_Empty'
+          AuthorizationCodePkce: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_AuthorizationCodePkceConfig:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AuthorizationCodePkce
+            example: AuthorizationCodePkce
+      - $ref: '#/components/schemas/AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Cookie
+            example: Cookie
+      - $ref: '#/components/schemas/Empty'
     SecuritySchemeUpdate:
       type: object
       title: SecuritySchemeUpdate
@@ -20906,6 +20961,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
     SetAdminResourceGrant:
       type: object
       title: SetAdminResourceGrant
