@@ -788,11 +788,37 @@ async fn a_restore_that_races_a_delete_of_its_name_gives_a_whole_tree_or_nothing
         store.delete(&scope, std::slice::from_ref(&raced))
     );
 
-    deleted.unwrap();
+    let restore = restore.map(|(restored, _)| restored);
+    if let Err(broken) = raced_restore_kept_the_contract(&deleted, &restore, &listing(tree.path()))
+    {
+        panic!("{broken}");
+    }
+}
+
+/// Tells whether a restore that raced a delete of its name kept the contract: the delete succeeds,
+/// and the restore gives the whole saved tree, `NotFound`, `Corrupt` or a retryable `Storage`. The
+/// error says what broke.
+pub(in crate::filesystem_snapshot) fn raced_restore_kept_the_contract(
+    deleted: &Result<(), SnapshotStoreError>,
+    restore: &Result<Vec<Listed>, SnapshotStoreError>,
+    saved: &[Listed],
+) -> Result<(), String> {
+    if let Err(error) = deleted {
+        return Err(format!("the delete gave {error:?}"));
+    }
     match restore {
-        Ok((restored, _)) => assert_eq!(restored, listing(tree.path())),
-        Err(SnapshotStoreError::NotFound | SnapshotStoreError::Corrupt(_)) => {}
-        Err(error) => panic!("the restore gave {error:?}"),
+        Ok(restored) if restored == saved => Ok(()),
+        Ok(restored) => Err(format!(
+            "the restore gave another tree: {restored:?}, not {saved:?}"
+        )),
+        Err(SnapshotStoreError::NotFound | SnapshotStoreError::Corrupt(_)) => Ok(()),
+        // The prune of the delete can remove an index file that the restore listed. The restore
+        // then gives a retryable `Storage`, and a new try gives `NotFound`, because the delete
+        // removed the name.
+        Err(SnapshotStoreError::Storage {
+            retryable: true, ..
+        }) => Ok(()),
+        Err(error) => Err(format!("the restore gave {error:?}")),
     }
 }
 

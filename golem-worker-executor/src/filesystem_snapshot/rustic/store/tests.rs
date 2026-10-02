@@ -5772,6 +5772,7 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
     );
 }
 
+mod race;
 mod sweep;
 
 /// The largest number of steps of one turn. A delete takes at most 21 steps of the protocol, and

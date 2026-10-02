@@ -17,46 +17,22 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct UnmanagedProvisioning {
     deterministic_root: Option<PathBuf>,
-    temporary_host_root: Option<Arc<tempfile::TempDir>>,
     cleanup_retry: RetryConfig,
 }
 
 impl UnmanagedProvisioning {
-    /// Keeps the storage settings. Without a deterministic root, it makes a temporary directory
-    /// that holds the host directories while this provisioning lives.
-    pub(super) fn new(
-        deterministic_root: Option<PathBuf>,
-        cleanup_retry: RetryConfig,
-    ) -> std::io::Result<Self> {
-        let temporary_host_root = match &deterministic_root {
-            Some(_) => None,
-            None => Some(Arc::new(
-                tempfile::Builder::new()
-                    .prefix("golem-host-directories")
-                    .tempdir()?,
-            )),
-        };
-        Ok(Self {
+    /// Keeps the storage settings. Without a deterministic root, each sandbox gets its own
+    /// temporary directory.
+    pub(super) fn new(deterministic_root: Option<PathBuf>, cleanup_retry: RetryConfig) -> Self {
+        Self {
             deterministic_root,
-            temporary_host_root,
             cleanup_retry,
-        })
-    }
-
-    /// The temporary directory that holds the host directories when no root is configured.
-    pub(super) fn temporary_host_root(&self) -> Option<&Arc<tempfile::TempDir>> {
-        self.temporary_host_root.as_ref()
-    }
-
-    /// The directory in which host directories are made.
-    pub(super) fn host_root(&self) -> &Path {
-        match (&self.deterministic_root, &self.temporary_host_root) {
-            (Some(root), _) => root,
-            (None, Some(temporary)) => temporary.path(),
-            (None, None) => {
-                unreachable!("unmanaged provisioning without a root has a temporary host root")
-            }
         }
+    }
+
+    /// The configured root of the sandboxes and the host directories, if one is configured.
+    pub(super) fn deterministic_root(&self) -> Option<&Path> {
+        self.deterministic_root.as_deref()
     }
 
     pub(super) async fn create_fresh(
@@ -170,7 +146,6 @@ impl UnmanagedProvisioning {
                 },
             },
             volume,
-            FileCopyMode::Buffered,
             QuotaAuthority::Unsupported,
             NativeNameModeSource::NativeDetection,
         );

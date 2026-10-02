@@ -83,6 +83,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -735,6 +736,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
@@ -747,6 +749,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             active_agents_config,
             memory_config,
             storage_config,
+            initial_files_service,
             agent_status_flush_config,
             shutdown_token,
         )
@@ -762,10 +765,12 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
-        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config).await?);
+        let agent_filesystems =
+            Arc::new(AgentFilesystems::new(storage_config, initial_files_service).await?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
@@ -833,7 +838,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         component_revision: ComponentRevision,
         component_module_bytes: u64,
     ) -> WorkerComponentCharge {
-        let charge_bytes = (self.component_size_coefficient * component_module_bytes as f64) as u64;
+        let charge_bytes =
+            component_charge_bytes(self.component_size_coefficient, component_module_bytes);
         self.component_charges
             .acquire((component_id, component_revision), charge_bytes)
             .await
@@ -1720,7 +1726,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
             // correct.
             let (component_id, component_revision, module_bytes) =
                 worker.resident_component_charge_requirement().await;
-            let charge_bytes = (component_size_coefficient * module_bytes as f64) as u64;
+            let charge_bytes = component_charge_bytes(component_size_coefficient, module_bytes);
             let component: ComponentChargeKey = (component_id, component_revision);
             let last_changed = worker.last_execution_state_change();
             candidates.push((
@@ -1801,6 +1807,13 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
         )
         .await
     }
+}
+
+/// Gives the bytes that a component charges for its compiled module: the module size multiplied by
+/// `coefficient`, rounded toward zero. A result above `u64::MAX` gives `u64::MAX`, and a negative
+/// or NaN result gives 0.
+fn component_charge_bytes(coefficient: f64, module_bytes: u64) -> u64 {
+    (coefficient * module_bytes as f64) as u64
 }
 
 /// Single attempt of the charge-first admission ordering used by

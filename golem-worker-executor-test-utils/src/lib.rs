@@ -3272,6 +3272,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<TestWorkerCtx>>> {
         // The in-process test harness shares its process (and RSS) with the test
@@ -3289,6 +3290,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                     &golem_config.active_agents,
                     &golem_config.memory,
                     &golem_config.filesystem_storage,
+                    initial_files_service,
                     &golem_config.agent_status_flush,
                     shutdown_token,
                 )
@@ -3302,6 +3304,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
                         &golem_config.active_agents,
                         &memory_config,
                         &golem_config.filesystem_storage,
+                        initial_files_service,
                         &golem_config.agent_status_flush,
                         shutdown_token,
                     )
@@ -3529,6 +3532,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>> {
         let active_agents = Arc::new(
@@ -3536,6 +3540,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
                 &golem_config.active_agents,
                 &golem_config.memory,
                 &golem_config.filesystem_storage,
+                initial_files_service,
                 &golem_config.agent_status_flush,
                 shutdown_token,
             )

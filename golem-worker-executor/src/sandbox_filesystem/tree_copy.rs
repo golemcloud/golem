@@ -225,11 +225,12 @@ pub(super) fn copy_contents(
         &opened
     };
     let entries = list_tree(source, excluded)?;
-    let links = entries
+    let plan = link_plan(&entries);
+    entries
         .iter()
-        .try_fold(CopiedLinks::default(), |links, entry| {
-            links.copy(source, destination, entry, copy_mode)
-        })?;
+        .enumerate()
+        .filter(|(position, _)| plan.copies(*position))
+        .try_for_each(|(_, entry)| copy_out_entry(source, destination, entry, copy_mode))?;
     entries
         .iter()
         .rev()
@@ -241,52 +242,64 @@ pub(super) fn copy_contents(
         &source_metadata.permissions(),
         source_metadata.modified().ok().map(|time| time.into_std()),
     )?;
-    Ok(links.into_groups())
+    Ok(plan.groups)
 }
 
-/// The regular files and symlinks with more than one name that a copy met.
-#[derive(Default)]
-struct CopiedLinks<'a> {
-    /// The position in `groups` of the object with each identity.
-    positions: HashMap<&'a NativeFileIdentity, usize>,
-    /// The copied name of each object, with the other names that the copy met.
-    groups: Vec<(&'a Path, Vec<&'a Path>)>,
+/// Which entries of a listing a copy makes, and the other names of each object that it makes once.
+#[derive(Debug, PartialEq)]
+struct LinkPlan {
+    /// The positions in the listing of the names that the copy does not make, in ascending order.
+    later: Box<[usize]>,
+    /// A group for each object that the listing has at more than one name.
+    groups: Box<[LinkGroup]>,
 }
 
-impl<'a> CopiedLinks<'a> {
-    /// Copies one listed entry, unless it is another name of an object that the copy already
-    /// holds, and gives the state back.
-    fn copy(
-        mut self,
-        source: &cap_std::fs::Dir,
-        destination: &Path,
-        entry: &'a TreeEntry,
-        copy_mode: FileCopyMode,
-    ) -> std::io::Result<Self> {
-        let Some(identity) = &entry.link else {
-            return copy_out_entry(source, destination, entry, copy_mode).map(|()| self);
-        };
-        match self.positions.get(identity) {
-            Some(&position) => self.groups[position].1.push(&entry.relative),
-            None => {
-                copy_out_entry(source, destination, entry, copy_mode)?;
-                self.positions.insert(identity, self.groups.len());
-                self.groups.push((&entry.relative, Vec::new()));
-            }
-        }
-        Ok(self)
+impl LinkPlan {
+    /// Whether the copy makes the entry at `position` in the listing.
+    fn copies(&self, position: usize) -> bool {
+        self.later.binary_search(&position).is_err()
     }
+}
 
-    /// Gives a group for each object that the copy met at more than one name.
-    fn into_groups(self) -> Box<[LinkGroup]> {
-        self.groups
+/// Plans the copy of a listing that holds hard links.
+///
+/// An entry without a link identity is copied. A regular file or a symlink with more than one name
+/// is copied once, at the first name that the listing gives, and its later names go into its
+/// [`LinkGroup`] in the order of the listing. An identity that the listing gives at one name only
+/// gives no group. A listing without hard links allocates nothing for the plan.
+fn link_plan(entries: &[TreeEntry]) -> LinkPlan {
+    let (_, later, groups) = entries.iter().enumerate().fold(
+        (
+            HashMap::<&NativeFileIdentity, usize>::new(),
+            Vec::new(),
+            Vec::<(&Path, Vec<&Path>)>::new(),
+        ),
+        |(mut positions, mut later, mut groups), (position, entry)| {
+            if let Some(identity) = &entry.link {
+                match positions.get(identity) {
+                    Some(&group) => {
+                        groups[group].1.push(&entry.relative);
+                        later.push(position);
+                    }
+                    None => {
+                        positions.insert(identity, groups.len());
+                        groups.push((&entry.relative, Vec::new()));
+                    }
+                }
+            }
+            (positions, later, groups)
+        },
+    );
+    LinkPlan {
+        later: later.into_boxed_slice(),
+        groups: groups
             .into_iter()
             .filter(|(_, others)| !others.is_empty())
             .map(|(first, others)| LinkGroup {
                 first: Box::from(first),
                 others: others.into_iter().map(Box::from).collect(),
             })
-            .collect()
+            .collect(),
     }
 }
 
@@ -373,7 +386,6 @@ fn set_host_directory_attributes(
 /// What a seed entry needs to make objects in one sandbox.
 #[derive(Clone, Copy)]
 pub(super) struct SeedContext {
-    pub(super) mode: FileCopyMode,
     pub(super) quota_authority: QuotaAuthority,
     pub(super) access: SeedAccess,
     pub(super) placement: SeedPlacement,
@@ -436,13 +448,11 @@ fn seed_file(
     let source_file = open_file_nofollow(source_directory, &source.relative)?;
     let mut temporary = CapabilityTempFile::new(parent)?;
     let temporary_file = temporary.as_file().try_clone()?.into_std();
-    match context.mode {
-        FileCopyMode::Buffered => {
+    match reflink_project(context.quota_authority) {
+        None => {
             std::io::copy(&mut &source_file, temporary.as_file_mut())?;
         }
-        FileCopyMode::Reflink => {
-            reflink_into_project(context.quota_authority, &temporary_file, &source_file)?
-        }
+        Some(project_id) => reflink_into_project(project_id, &temporary_file, &source_file)?,
     }
     temporary_file.sync_all()?;
     temporary_file.set_permissions(seeded_permissions(
@@ -452,6 +462,8 @@ fn seed_file(
     if let Some(modified) = source.modified {
         temporary_file.set_modified(modified)?;
     }
+    // `CreateNew` makes the name with one no-clobber call. Its `AlreadyExists` error applies the
+    // `Refuse` row of `placement_action` for every object that is already there, atomically.
     match context.placement {
         SeedPlacement::CreateNew => temporary.persist_noclobber(&name)?,
         SeedPlacement::Replace => temporary.persist_replacing(&name)?,
@@ -462,7 +474,9 @@ fn seed_file(
 /// Makes a symlink to `link_target` at `destination` under `directory`, with the modification
 /// time `modified`.
 ///
-/// A symlink that takes the place of a target is made under a temporary name first.
+/// With `CreateNew`, the symlink is made at its name in one call, and its `AlreadyExists` error
+/// applies the `Refuse` row of [`placement_action`]. A symlink that takes the place of a target is
+/// made under a temporary name first.
 fn seed_symlink(
     directory: &cap_std::fs::Dir,
     destination: &Path,
@@ -477,7 +491,7 @@ fn seed_symlink(
         SeedPlacement::Replace => {
             let temporary = PathBuf::from(format!(".golem-copy-{}", uuid::Uuid::new_v4()));
             make_symlink(parent, link_target, &temporary, modified)
-                .and_then(|()| remove_directory_in_the_way(parent, &name))
+                .and_then(|()| clear_for_replacement(parent, &name))
                 .and_then(|()| parent.rename(&temporary, parent, &name))
                 .inspect_err(|_| {
                     let _ = parent.remove_file(&temporary);
@@ -587,9 +601,11 @@ enum SeededDirectory {
 
 /// Makes the directory at `path` in `directory` for a directory in a seed source.
 ///
-/// A directory that is already there merges under every placement. Another kind of object at the
-/// path follows `placement`: `CreateNew` gives an `AlreadyExists` error, and `Replace` removes the
-/// object and makes the directory.
+/// A free path is made with one call and no check before it. When something is already at the
+/// path, [`placement_action`] decides: a directory merges under every placement, and another kind
+/// of object gives an `AlreadyExists` error with `CreateNew` and is removed with `Replace`. The
+/// removal and the second creation of `Replace` are separate calls, so a concurrent change between
+/// them gives an error.
 fn seed_directory_at(
     directory: &cap_std::fs::Dir,
     path: &Path,
@@ -598,15 +614,96 @@ fn seed_directory_at(
     match directory.create_dir(path) {
         Ok(()) => Ok(SeededDirectory::Made),
         Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
-        Err(error) => match (directory.symlink_metadata(path)?.is_dir(), placement) {
-            (true, _) => Ok(SeededDirectory::Merged),
-            (false, SeedPlacement::CreateNew) => Err(error),
-            (false, SeedPlacement::Replace) => {
-                directory.remove_file(path)?;
-                directory.create_dir(path)?;
-                Ok(SeededDirectory::Made)
+        Err(error) => {
+            let occupant = occupant(&directory.symlink_metadata(path)?);
+            match placement_action(&TreeEntryKind::Directory, occupant, placement) {
+                PlacementAction::Merge => Ok(SeededDirectory::Merged),
+                PlacementAction::Refuse => Err(error),
+                PlacementAction::Overwrite => {
+                    directory.remove_file(path)?;
+                    directory.create_dir(path)?;
+                    Ok(SeededDirectory::Made)
+                }
+                PlacementAction::RemoveDirectory => {
+                    directory.remove_dir_all(path)?;
+                    directory.create_dir(path)?;
+                    Ok(SeededDirectory::Made)
+                }
             }
-        },
+        }
+    }
+}
+
+/// What a seed finds at the target path of an entry, without following a symlink.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Occupant {
+    Directory,
+    Other,
+}
+
+/// What a seed does at a target path that holds an object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlacementAction {
+    /// Puts what is under the source directory into the directory that is there.
+    Merge,
+    /// Changes nothing. The `AlreadyExists` error of the attempt is the result.
+    Refuse,
+    /// Removes the directory that is there with all that is in it, then puts the object there.
+    RemoveDirectory,
+    /// Puts the object in place of the object that is there.
+    Overwrite,
+}
+
+/// Decides what a seed of `source` with `placement` does at a target path that holds `occupant`.
+///
+/// A directory in the source merges into a directory that is there, under every placement.
+/// Otherwise `CreateNew` refuses, and `Replace` takes the place of the object that is there, and
+/// removes a directory that is there with all that is in it first.
+fn placement_action(
+    source: &TreeEntryKind,
+    occupant: Occupant,
+    placement: SeedPlacement,
+) -> PlacementAction {
+    match (source, occupant, placement) {
+        (TreeEntryKind::Directory, Occupant::Directory, _) => PlacementAction::Merge,
+        (_, _, SeedPlacement::CreateNew) => PlacementAction::Refuse,
+        (TreeEntryKind::File | TreeEntryKind::Symlink(_), Occupant::Directory, _) => {
+            PlacementAction::RemoveDirectory
+        }
+        (_, Occupant::Other, SeedPlacement::Replace) => PlacementAction::Overwrite,
+    }
+}
+
+/// Gives what the metadata of an object, read without following a symlink, shows.
+fn occupant(metadata: &cap_std::fs::Metadata) -> Occupant {
+    if metadata.is_dir() {
+        Occupant::Directory
+    } else {
+        Occupant::Other
+    }
+}
+
+/// Clears `name` in `directory` for a rename of a file or a symlink onto it, as
+/// [`placement_action`] decides for a source that is not a directory with `Replace`.
+///
+/// A free name and an object that the rename replaces stay as they are. A directory goes away with
+/// all that is in it. A symlink is not followed. A file and a symlink have the same row in the
+/// table, so the function asks the table for a file.
+pub(super) fn clear_for_replacement(
+    directory: &cap_std::fs::Dir,
+    name: &Path,
+) -> std::io::Result<()> {
+    let found = match directory.symlink_metadata(name) {
+        Ok(metadata) => occupant(&metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    match placement_action(&TreeEntryKind::File, found, SeedPlacement::Replace) {
+        PlacementAction::RemoveDirectory => directory.remove_dir_all(name),
+        PlacementAction::Overwrite => Ok(()),
+        PlacementAction::Merge | PlacementAction::Refuse => {
+            Err(std::io::Error::from(std::io::ErrorKind::AlreadyExists))
+        }
     }
 }
 
@@ -655,15 +752,12 @@ fn seeded_permissions(
     permissions
 }
 
-/// Makes `target` share the extents of `source` in the project of the sandbox.
+/// Makes `target` share the extents of `source` in the project `project_id` of the sandbox.
 fn reflink_into_project(
-    quota_authority: QuotaAuthority,
+    project_id: NonZeroU32,
     target: &File,
     source: &File,
 ) -> std::io::Result<()> {
-    let QuotaAuthority::Project { project_id, .. } = quota_authority else {
-        unreachable!("reflink copy requires project quota authority")
-    };
     #[cfg(target_os = "linux")]
     {
         xfs::reflink_into_project(project_id, target, source)
@@ -836,11 +930,147 @@ mod tests {
 
     fn buffered_seed(placement: SeedPlacement) -> SeedContext {
         SeedContext {
-            mode: FileCopyMode::Buffered,
             quota_authority: QuotaAuthority::Unsupported,
             access: SeedAccess::FromSource,
             placement,
         }
+    }
+
+    /// The rules of the `SeedPlacement` and `SeedEntry` docs, written as a table: the source, what
+    /// is at the target, the action with `CreateNew`, and the action with `Replace`.
+    const PLACEMENT_TABLE: [(&str, Occupant, PlacementAction, PlacementAction); 6] = [
+        (
+            "directory",
+            Occupant::Directory,
+            PlacementAction::Merge,
+            PlacementAction::Merge,
+        ),
+        (
+            "directory",
+            Occupant::Other,
+            PlacementAction::Refuse,
+            PlacementAction::Overwrite,
+        ),
+        (
+            "file",
+            Occupant::Directory,
+            PlacementAction::Refuse,
+            PlacementAction::RemoveDirectory,
+        ),
+        (
+            "file",
+            Occupant::Other,
+            PlacementAction::Refuse,
+            PlacementAction::Overwrite,
+        ),
+        (
+            "symlink",
+            Occupant::Directory,
+            PlacementAction::Refuse,
+            PlacementAction::RemoveDirectory,
+        ),
+        (
+            "symlink",
+            Occupant::Other,
+            PlacementAction::Refuse,
+            PlacementAction::Overwrite,
+        ),
+    ];
+
+    fn source_kind(name: &str) -> TreeEntryKind {
+        match name {
+            "directory" => TreeEntryKind::Directory,
+            "file" => TreeEntryKind::File,
+            _ => TreeEntryKind::Symlink(Box::from(Path::new("target"))),
+        }
+    }
+
+    #[test]
+    fn placement_action_follows_the_seed_placement_table() {
+        PLACEMENT_TABLE
+            .into_iter()
+            .for_each(|(source, occupant, create_new, replace)| {
+                [
+                    (SeedPlacement::CreateNew, create_new),
+                    (SeedPlacement::Replace, replace),
+                ]
+                .into_iter()
+                .for_each(|(placement, expected)| {
+                    assert_eq!(
+                        placement_action(&source_kind(source), occupant, placement),
+                        expected,
+                        "a {source} source on {occupant:?} with {placement:?}"
+                    );
+                });
+            });
+    }
+
+    fn listed(relative: &str, link: Option<&str>) -> TreeEntry {
+        TreeEntry {
+            relative: Box::from(Path::new(relative)),
+            kind: TreeEntryKind::File,
+            permissions: cap_std::fs::Permissions::from_std(
+                std::fs::metadata(std::env::temp_dir())
+                    .unwrap()
+                    .permissions(),
+            ),
+            modified: None,
+            link: link.map(|identity| NativeFileIdentity::Scripted(identity.to_string())),
+        }
+    }
+
+    /// The names that a copy with `plan` makes, in the order of the listing.
+    fn copied_names<'a>(plan: &LinkPlan, entries: &'a [TreeEntry]) -> Vec<&'a str> {
+        entries
+            .iter()
+            .enumerate()
+            .filter(|(position, _)| plan.copies(*position))
+            .map(|(_, entry)| entry.relative.to_str().unwrap())
+            .collect()
+    }
+
+    fn group(first: &str, others: &[&str]) -> LinkGroup {
+        LinkGroup {
+            first: Box::from(Path::new(first)),
+            others: others
+                .iter()
+                .map(|other| Box::from(Path::new(other)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn link_plan_copies_each_object_once_at_its_first_name_and_groups_the_others() {
+        let entries = [
+            listed("a", None),
+            listed("b1", Some("b")),
+            listed("c1", Some("c")),
+            listed("b2", Some("b")),
+            listed("d", Some("d")),
+            listed("e", None),
+            listed("c2", Some("c")),
+            listed("b3", Some("b")),
+        ];
+
+        let plan = link_plan(&entries);
+
+        assert_eq!(copied_names(&plan, &entries), ["a", "b1", "c1", "d", "e"]);
+        assert_eq!(plan.later, Box::from([3, 6, 7]));
+        assert_eq!(
+            plan.groups,
+            Box::from([group("b1", &["b2", "b3"]), group("c1", &["c2"])])
+        );
+    }
+
+    #[test]
+    fn link_plan_of_a_listing_without_links_copies_everything_and_gives_no_group() {
+        let entries = [listed("a", None), listed("b", None)];
+
+        let plan = link_plan(&entries);
+
+        assert_eq!(copied_names(&plan, &entries), ["a", "b"]);
+        assert!(plan.later.is_empty());
+        assert!(plan.groups.is_empty());
     }
 
     #[cfg(unix)]
@@ -1131,6 +1361,51 @@ mod tests {
                 .mode()
                 & 0o777,
             0o750
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_replaces_a_file_with_a_directory_that_has_the_source_attributes() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir(source.path().join("data")).unwrap();
+        std::fs::write(source.path().join("data/file"), b"new").unwrap();
+        std::fs::set_permissions(
+            source.path().join("data"),
+            std::fs::Permissions::from_mode(0o750),
+        )
+        .unwrap();
+        let modified = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        File::open(source.path().join("data"))
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        std::fs::write(destination.path().join("data"), b"old file").unwrap();
+
+        seed_entry(
+            buffered_seed(SeedPlacement::Replace),
+            &open(destination.path()),
+            source.path(),
+            Path::new(""),
+        )
+        .unwrap();
+
+        let made = std::fs::metadata(destination.path().join("data")).unwrap();
+        assert!(made.is_dir(), "the file must give way to the directory");
+        assert_eq!(
+            made.permissions().mode() & 0o777,
+            0o750,
+            "the directory that takes the place of a file must have the mode of its source"
+        );
+        assert_eq!(
+            made.modified().unwrap(),
+            modified,
+            "the directory that takes the place of a file must have the time of its source"
+        );
+        assert_eq!(
+            std::fs::read(destination.path().join("data/file")).unwrap(),
+            b"new"
         );
     }
 
