@@ -7,6 +7,11 @@
       "version": "0.0.1",
       "sha256": "e96aced8d6f3cc662b2b3da5f9fa347232ca52cb9c3872f94c3bea0bf0d5c372"
     },
+    "git_tool": {
+      "component": "git-tool",
+      "version": "0.0.3",
+      "sha256": "1375a84419d21724c3c6c2aaaa9111eaa71dbebed42647f47e5e029010d5c86a"
+    },
     "javascript_tools": {
       "component": "javascript-tools",
       "version": "0.0.7",

@@ -1725,7 +1725,7 @@ if not is_path_exists ${cache_dir}
     mkdir ${cache_dir}
 end
 
-artifact_ids = array filesystem_tools javascript_tools otlp_exporter typescript_tools
+artifact_ids = array filesystem_tools git_tool javascript_tools otlp_exporter typescript_tools
 for artifact_id in ${artifact_ids}
     entry = map_get ${artifacts} ${artifact_id}
     component = map_get ${entry} component
@@ -1737,6 +1737,8 @@ for artifact_id in ${artifact_ids}
 
     if equals ${artifact_id} filesystem_tools
         destination = set builtin-tools/filesystem-tools.wasm
+    elif equals ${artifact_id} git_tool
+        destination = set builtin-tools/git-tool.wasm
     elif equals ${artifact_id} javascript_tools
         destination = set builtin-tools/javascript-tools.wasm
     elif equals ${artifact_id} otlp_exporter

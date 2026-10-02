@@ -96,6 +96,12 @@ static BUILTIN_TOOLS: &[BuiltinToolDescriptor] = &[
         tool_name: "tsc",
         release_version: "5.9.2",
     },
+    BuiltinToolDescriptor {
+        component_name: "git-tool",
+        artifact_id: "git_tool",
+        tool_name: "git",
+        release_version: "0.1.1",
+    },
 ];
 
 #[allow(clippy::too_many_arguments)]

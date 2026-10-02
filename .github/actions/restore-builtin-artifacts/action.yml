@@ -17,6 +17,7 @@ runs:
       shell: bash
       run: |
         cp -v tmp/builtin-artifacts/filesystem-tools.wasm builtin-tools/filesystem-tools.wasm
+        cp -v tmp/builtin-artifacts/git-tool.wasm builtin-tools/git-tool.wasm
         cp -v tmp/builtin-artifacts/javascript-tools.wasm builtin-tools/javascript-tools.wasm
         cp -v tmp/builtin-artifacts/typescript-tools.wasm builtin-tools/typescript-tools.wasm
         cp -v tmp/builtin-artifacts/otlp-exporter.wasm plugins/otlp-exporter.wasm
