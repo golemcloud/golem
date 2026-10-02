@@ -148,6 +148,7 @@ mod abandoned;
 mod claims;
 mod cursor;
 mod resolution;
+mod rollback;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
