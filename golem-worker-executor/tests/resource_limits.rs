@@ -25,7 +25,8 @@ use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
     WorkerExecutorTestDependencies, start_with_concurrent_agent_limit,
-    start_with_invocation_limits, start_with_overrides, start_with_table_limit,
+    start_with_concurrent_agent_limit_and_overrides, start_with_invocation_limits,
+    start_with_overrides, start_with_table_limit,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,6 +56,54 @@ inherit_test_dep!(
     #[tagged_as("large_dynamic_memory")]
     PrecompiledComponent
 );
+
+#[test]
+#[tracing::instrument]
+#[timeout("30s")]
+async fn production_context_memory_admission_is_isolated_from_shared_rss(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    for pinned_limit in [None, Some(32 * 1024 * 1024)] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_concurrent_agent_limit_and_overrides(
+            deps,
+            &context,
+            1,
+            TestExecutorOverrides {
+                configure: Some(Arc::new(move |config| {
+                    config.memory.system_memory_override = pinned_limit;
+                    config.memory.enable_measured_admission = true;
+                    // Zero headroom exposes accidental RSS admission without large allocations.
+                    config.memory.worker_memory_ratio =
+                        if pinned_limit.is_some() { 1.0 } else { 0.0 };
+                    config.memory.component_size_coefficient = 0.0;
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .store()
+            .await?;
+        let worker_id = tokio::time::timeout(
+            Duration::from_secs(10),
+            executor.start_agent(
+                &component.id,
+                agent_id!("Networking", "admission-isolation"),
+            ),
+        )
+        .await
+        .expect("in-process admission must not charge unrelated process RSS")?;
+        executor
+            .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
+            .await?;
+    }
+    Ok(())
+}
 
 /// The `it_agent_counters_release` component has a static function table with
 /// 275 entries. Setting the limit well above that (1000) ensures normal
