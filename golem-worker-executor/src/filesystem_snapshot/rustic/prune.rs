@@ -26,12 +26,13 @@
 
 use super::files::{Lease, SnapshotFiles};
 use crate::filesystem_snapshot::clock::Clock;
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use golem_common::model::Timestamp;
 use golem_service_base::storage::blob::{ListedBlob, PutIfAbsent};
 use std::collections::HashSet;
+use std::future::ready;
 use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -74,12 +75,7 @@ impl Percent {
 /// Tells whether the hold of a claim passed at `now` since the last prune. The time of the last
 /// prune is after its final marker, so the next prune waits a full hold from the newest claim
 /// marker that the last prune wrote. A time more than the margin after `now` counts as missing.
-pub(super) fn hold_passed(
-    ledger: &PruneLedger,
-    now: Timestamp,
-    grace: Duration,
-    deadline: Duration,
-) -> bool {
+fn hold_passed(ledger: &PruneLedger, now: Timestamp, grace: Duration, deadline: Duration) -> bool {
     ledger
         .last_prune
         .filter(|last| !beyond_margin(*last, now))
@@ -94,51 +90,22 @@ fn passed_since(time: Timestamp, now: Timestamp, grace: Duration) -> bool {
             .saturating_add(u64::try_from(grace.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// Tells whether [`prune_due`] needs the size of the repository at `now`. Only freed bytes after
-/// the hold of a claim, without marked packs, need it.
-pub(super) fn needs_repository_size(
+/// Tells whether the freed bytes can make a prune due with the size of the repository: they reach
+/// the threshold share of `repository_bytes`, rounded down to a whole byte, or the last prune
+/// marked packs. A threshold of zero bytes counts as one byte, so a prune never runs for a scope
+/// that freed nothing and marked nothing. The bytes in the names of the records are at least the
+/// settled bytes, so when the named bytes give false, the records need no read.
+fn may_be_due(
     ledger: &PruneLedger,
     freed_bytes: u64,
-    now: Timestamp,
-    grace: Duration,
-    deadline: Duration,
-) -> bool {
-    hold_passed(ledger, now, grace, deadline) && freed_bytes > 0 && !ledger.awaiting_removal
-}
-
-/// Tells whether a prune is due at `now`.
-///
-/// A prune is due when the hold of a claim passed since the last prune, and the freed bytes reach the
-/// threshold share of `repository_bytes`, rounded down to a whole byte, or the last prune marked
-/// packs. A threshold of zero bytes counts as one byte, so a prune never runs for a scope that
-/// freed nothing and marked nothing.
-pub(super) fn prune_due(
-    ledger: &PruneLedger,
-    freed_bytes: u64,
-    now: Timestamp,
-    repository_bytes: u64,
-    threshold: Percent,
-    grace: Duration,
-    deadline: Duration,
-) -> bool {
-    let work = freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal;
-    hold_passed(ledger, now, grace, deadline) && work
-}
-
-/// Tells whether the freed bytes in the names of the records, which are at least the settled
-/// freed bytes, can make a prune due with the size of the repository. When this gives false,
-/// [`prune_due`] gives false for the settled bytes too, so the records need no read.
-pub(super) fn may_be_due(
-    ledger: &PruneLedger,
-    named_bytes: u64,
     repository_bytes: u64,
     threshold: Percent,
 ) -> bool {
-    named_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal
+    freed_bytes >= threshold.of(repository_bytes).max(1) || ledger.awaiting_removal
 }
 
 /// Gives the size of the repository of the scope: the sum of the sizes of its packs.
-pub(super) async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u64> {
+async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u64> {
     Ok(files
         .list_below("list_data", Path::new(DATA_PATH))
         .await?
@@ -149,7 +116,7 @@ pub(super) async fn repository_bytes(files: &SnapshotFiles) -> anyhow::Result<u6
 
 /// Reads a ledger entry name, `<end ms>-<0|1>-<unique part>`, as the time of the prune and whether
 /// it marked packs.
-pub(super) fn parse_ledger_entry(name: &str) -> Option<PruneLedger> {
+fn parse_ledger_entry(name: &str) -> Option<PruneLedger> {
     let mut parts = name.splitn(3, '-');
     let ended = parts.next()?.parse::<u64>().ok()?;
     let awaiting_removal = match parts.next()? {
@@ -174,7 +141,7 @@ fn beyond_margin(time: Timestamp, now: Timestamp) -> bool {
 
 /// Gives the ledger from the listed entries: the entry with the greatest time. A name that does not
 /// parse and a time more than the margin after `now` are left out. No entry gives the default.
-pub(super) fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedger {
+fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedger {
     listed
         .iter()
         .filter_map(|blob| parse_ledger_entry(blob.path.file_name()?.to_str()?))
@@ -189,7 +156,7 @@ pub(super) fn newest_ledger(listed: &[ListedBlob], now: Timestamp) -> PruneLedge
 
 /// Gives the paths of the listed entries whose time is before `ended`, in whole milliseconds as
 /// an entry name holds it.
-pub(super) fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Box<[Box<Path>]> {
+fn older_entries(listed: &[ListedBlob], ended: Timestamp) -> Box<[Box<Path>]> {
     listed
         .iter()
         .filter(|blob| {
@@ -265,31 +232,31 @@ pub(super) async fn remove_older_ledgers(files: &SnapshotFiles, ended: Timestamp
 /// The freed bytes of the settled records, and the paths of those records.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct FreedRecords {
-    pub(super) bytes: u64,
-    pub(super) counted: Box<[Box<Path>]>,
+    bytes: u64,
+    counted: Box<[Box<Path>]>,
 }
 
 /// A record of freed bytes that a delete wrote: its path, the bytes in its name, and the ids of
 /// the snapshot files of that delete, when its content parses.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct FreedRecord {
-    pub(super) path: Box<Path>,
-    pub(super) bytes: u64,
-    pub(super) snapshots: Option<Box<[Box<str>]>>,
+struct FreedRecord {
+    path: Box<Path>,
+    bytes: u64,
+    snapshots: Option<Box<[Box<str>]>>,
 }
 
 /// The directory of the snapshot files of a repository.
 pub(super) const SNAPSHOTS_PATH: &str = "snapshots";
 
 /// Gives the content of a record: the id of each snapshot file of the delete, one on each line.
-pub(super) fn record_content(snapshots: &[Box<str>]) -> String {
+fn record_content(snapshots: &[Box<str>]) -> String {
     snapshots.join("\n")
 }
 
 /// Reads the snapshot ids from the content of a record. Each line must be an id of 64 hex
 /// characters. A content without an id does not parse, because a reader can see a record that a
 /// write has not filled yet.
-pub(super) fn parse_record(content: &[u8]) -> Option<Box<[Box<str>]>> {
+fn parse_record(content: &[u8]) -> Option<Box<[Box<str>]>> {
     let text = std::str::from_utf8(content).ok()?;
     text.lines()
         .filter(|line| !line.is_empty())
@@ -304,7 +271,7 @@ pub(super) fn parse_record(content: &[u8]) -> Option<Box<[Box<str>]>> {
 /// Gives the settled records and the sum of their bytes. A record is settled when it names at
 /// least one snapshot file and none of them exists. Any other record counts as zero bytes and
 /// stays, and so does a record whose content does not parse.
-pub(super) fn settle(records: &[FreedRecord], existing: &HashSet<Box<str>>) -> FreedRecords {
+fn settle(records: &[FreedRecord], existing: &HashSet<Box<str>>) -> FreedRecords {
     let settled = records
         .iter()
         .filter(|record| {
@@ -347,14 +314,14 @@ pub(super) async fn record_freed(
 
 /// A record of freed bytes that a listing found: its path and the bytes in its name.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ListedFreed {
-    pub(super) path: Box<Path>,
-    pub(super) bytes: u64,
+struct ListedFreed {
+    path: Box<Path>,
+    bytes: u64,
 }
 
 /// Lists the names of the records of freed bytes, and reads no content. A name that does not
 /// parse is left out, so it counts as zero bytes and stays.
-pub(super) async fn list_freed_names(files: &SnapshotFiles) -> anyhow::Result<Box<[ListedFreed]>> {
+async fn list_freed_names(files: &SnapshotFiles) -> anyhow::Result<Box<[ListedFreed]>> {
     Ok(files
         .list_below("list_freed", Path::new(FREED_PATH))
         .await?
@@ -370,7 +337,7 @@ pub(super) async fn list_freed_names(files: &SnapshotFiles) -> anyhow::Result<Bo
 }
 
 /// Gives the sum of the bytes in the names of the listed records.
-pub(super) fn named_bytes(listed: &[ListedFreed]) -> u64 {
+fn named_bytes(listed: &[ListedFreed]) -> u64 {
     listed
         .iter()
         .map(|record| record.bytes)
@@ -380,7 +347,7 @@ pub(super) fn named_bytes(listed: &[ListedFreed]) -> u64 {
 /// Reads the listed records of freed bytes, lists the snapshot files one time, and gives the
 /// settled records. A record that a prune deleted after the listing is left out. Without records,
 /// no snapshot file is listed.
-pub(super) async fn settle_freed(
+async fn settle_freed(
     files: &SnapshotFiles,
     listed: &[ListedFreed],
 ) -> anyhow::Result<FreedRecords> {
@@ -519,19 +486,23 @@ pub(super) fn next_claim(entries: &[ClaimEntry], now: Timestamp, hold: Duration)
 
 /// Gives the directory of the claims of the ledger: the time of its last prune in milliseconds, or
 /// `none`.
-pub(super) fn claims_directory(ledger: &PruneLedger) -> Box<Path> {
+fn claims_directory(ledger: &PruneLedger) -> Box<Path> {
     let generation = ledger
         .last_prune
         .map_or_else(|| "none".to_string(), |last| last.to_millis().to_string());
     Path::new(CLAIMS_PATH).join(generation).into_boxed_path()
 }
 
+/// Tells whether a claim in the directory belongs to the ledger: the directory is the claim
+/// directory of the time of the last prune in the ledger. Whether marked packs wait for removal
+/// does not count.
+pub(super) fn belongs_to_ledger(directory: &Path, ledger: &PruneLedger) -> bool {
+    *claims_directory(ledger) == *directory
+}
+
 /// Lists the claims and the markers in the directory, from their names. A name that does not
 /// parse is left out.
-pub(super) async fn list_claims(
-    files: &SnapshotFiles,
-    directory: &Path,
-) -> anyhow::Result<Box<[ClaimEntry]>> {
+async fn list_claims(files: &SnapshotFiles, directory: &Path) -> anyhow::Result<Box<[ClaimEntry]>> {
     Ok(files
         .list_below("list_claims", directory)
         .await?
@@ -585,45 +556,42 @@ pub(super) async fn write_marker(
     Ok(path)
 }
 
-/// Writes a marker of the claim with the number. A write that succeeds and started before the end
-/// of the lease moves the end to `span` after the start of the write, when that is later. A write
-/// that started at or after the end does not move it.
+/// Writes a marker of the claim. A write that succeeds and started before the end of the lease
+/// moves the end to `span` after the start of the write, when that is later. A write that started
+/// at or after the end does not move it.
 async fn write_leased_marker(
     files: &SnapshotFiles,
     op_label: &'static str,
-    directory: &Path,
-    number: u64,
+    claim: &ClaimName,
     lease: &Lease,
     span: Duration,
     clock: &dyn Clock,
 ) -> anyhow::Result<Box<Path>> {
     let (started, time) = marker_time(clock);
-    let marker = write_marker(files, op_label, directory, number, time).await?;
+    let marker = write_marker(files, op_label, &claim.directory, claim.number, time).await?;
     lease.extend_from(started, span);
     Ok(marker)
 }
 
-/// Writes the first marker of the claim with the number at the path `marker`, then takes the
-/// claim, and gives the lease of the prune when this delete holds the claim. The caller makes the
-/// path before the write, so a guard can delete the marker when the delete stops during the write.
-/// A delete that loses the claim deletes its marker. The lease starts with the marker write: it
-/// ends `span` after `started`, the instant that [`marker_time`] gave with the time in the name of
-/// the marker.
+/// Writes the first marker of the claim at the path `marker`, then takes the claim, and tells
+/// whether this delete holds the claim. The caller makes the path and the lease before the write,
+/// so the claim can delete the marker when the delete stops during the write. A delete that loses
+/// the claim tries to delete its marker. A failed delete gives a warning.
 pub(super) async fn take_claim(
     files: &SnapshotFiles,
-    directory: &Path,
-    number: u64,
+    claim: &ClaimName,
     marker: &Path,
-    started: Instant,
-    span: Duration,
-) -> anyhow::Result<Option<Lease>> {
+) -> anyhow::Result<bool> {
     write_marker_at(files, "write_marker", marker).await?;
-    let lease = Lease::until(started + span);
     let written = files
-        .put_if_absent("write_claim", &directory.join(number.to_string()), &[])
+        .put_if_absent(
+            "write_claim",
+            &claim.directory.join(claim.number.to_string()),
+            &[],
+        )
         .await?;
     if written == PutIfAbsent::Written {
-        return Ok(Some(lease));
+        return Ok(true);
     }
     if let Err(error) = files.delete("delete_marker", marker).await {
         warn!(
@@ -631,7 +599,7 @@ pub(super) async fn take_claim(
             "Failed to delete the marker of a prune claim that a filesystem snapshot delete lost"
         );
     }
-    Ok(None)
+    Ok(false)
 }
 
 /// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
@@ -646,87 +614,71 @@ pub(super) fn refresh_period(grace: Duration, deadline: Duration) -> Duration {
     (base / 4).min(lease_span(grace, deadline) / 4)
 }
 
-/// Writes a new marker of the claim with the number at each period, until the caller drops the
-/// future or the operation of the files is cancelled, and adds the path of each written marker to
-/// `written`. A write that succeeds and started before the end of the lease moves the end to
-/// `span` after its start, when that is later. A write that started at or after the end does not
-/// move it. A failed write gives a warning, and the next period tries again.
-pub(super) async fn keep_claim_fresh(
-    files: &SnapshotFiles,
-    directory: &Path,
-    number: u64,
+/// Writes a new marker of the claim at each period, until the caller drops the stream or the
+/// operation of the files is cancelled, and gives the path of each marker whose write succeeded. A
+/// write that succeeds and started before the end of the lease moves the end to `span` after its
+/// start, when that is later. A write that started at or after the end does not move it. A failed
+/// write gives a warning, and the next period tries again.
+pub(super) fn keep_claim_fresh<'a>(
+    files: &'a SnapshotFiles,
+    claim: &'a ClaimName,
     period: Duration,
-    written: &Mutex<Vec<Box<Path>>>,
-    lease: &Lease,
+    lease: &'a Lease,
     span: Duration,
-    clock: &dyn Clock,
-) {
+    clock: &'a dyn Clock,
+) -> impl Stream<Item = Box<Path>> + 'a {
     stream::repeat(())
-        .then(|()| tokio::time::sleep(period))
+        .then(move |()| tokio::time::sleep(period))
         .take_until(files.cancelled())
-        .for_each(|()| async move {
-            let marker = write_leased_marker(
-                files,
-                "refresh_claim",
-                directory,
-                number,
-                lease,
-                span,
-                clock,
+        .then(move |()| write_leased_marker(files, "refresh_claim", claim, lease, span, clock))
+        .filter_map(|written| {
+            ready(
+                written
+                    .inspect_err(|error| {
+                        warn!(
+                            error = %format!("{error:#}"),
+                            "Failed to write a new marker of the prune claim of a filesystem snapshot scope"
+                        )
+                    })
+                    .ok(),
             )
-            .await;
-            match marker {
-                Ok(path) => written
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push(path),
-                Err(error) => warn!(
-                    error = %format!("{error:#}"),
-                    "Failed to write a new marker of the prune claim of a filesystem snapshot scope"
-                ),
-            }
         })
-        .await;
 }
 
 /// Deletes the claim with the number when this delete took it, and then each of its markers by its
 /// path. It tries each delete also when another one fails, and each failure gives a warning. A
 /// claim that stays without its markers is old, and a marker that stays only delays a prune until
 /// its hold passed.
-pub(super) async fn release_claim(
+pub(super) async fn release_claim<'a>(
     files: &SnapshotFiles,
     directory: &Path,
     number: u64,
     claimed: bool,
-    markers: &[Box<Path>],
+    markers: impl IntoIterator<Item = &'a Path>,
 ) {
     let claim = directory.join(number.to_string());
-    stream::iter(
-        claimed
-            .then_some(("delete_claim", claim.as_path()))
-            .into_iter()
-            .chain(
-                markers
-                    .iter()
-                    .map(|marker| ("delete_marker", marker.as_ref())),
-            ),
-    )
-    .for_each(|(op_label, path)| async move {
-        if let Err(error) = files.delete(op_label, path).await {
-            warn!(
-                error = %format!("{error:#}"),
-                "Failed to delete the prune claim of a filesystem snapshot scope"
-            );
-        }
-    })
-    .await;
+    let deletes = claimed
+        .then_some(("delete_claim", claim.as_path()))
+        .into_iter()
+        .chain(markers.into_iter().map(|marker| ("delete_marker", marker)))
+        .collect::<Box<[_]>>();
+    stream::iter(deletes)
+        .for_each(|(op_label, path)| async move {
+            if let Err(error) = files.delete(op_label, path).await {
+                warn!(
+                    error = %format!("{error:#}"),
+                    "Failed to delete the prune claim of a filesystem snapshot scope"
+                );
+            }
+        })
+        .await;
 }
 
 /// Gives the claim directory of each listed path below the directory of all claims whose ledger is
 /// older than the ledger of `ended`: the directory `none`, and each directory whose time is before
 /// `ended`. A newer directory can hold a live claim of a later prune, and a directory whose name is
 /// not a time is not a directory of claims, so both stay.
-pub(super) fn old_claim_directories(
+fn old_claim_directories(
     listed: impl IntoIterator<Item = impl AsRef<Path>>,
     ended: Timestamp,
 ) -> Box<[Box<Path>]> {
@@ -793,6 +745,222 @@ pub(super) async fn remove_old_claims(files: &SnapshotFiles, ended: Timestamp) {
         .await;
 }
 
+/// The values of the prune decision: the grace period of a pack that a prune marks, the deadline
+/// of one storage call, and the share of the size of the repository that freed bytes must reach.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PrunePolicy {
+    pub(super) grace: Duration,
+    pub(super) deadline: Duration,
+    pub(super) threshold: Percent,
+}
+
+/// A claim of a prune: the directory of the claims of its ledger, and its number.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ClaimName {
+    pub(super) directory: Arc<Path>,
+    pub(super) number: u64,
+}
+
+/// A prune that is due: the claim that the delete takes, and the settled records that the prune
+/// counts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DuePrune {
+    pub(super) claim: ClaimName,
+    pub(super) records: FreedRecords,
+}
+
+/// What a delete found on its way to a prune. A field is `None` until its step ran.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Observed {
+    /// The ledger, from the first listing of the ledger entries.
+    ledger: Option<PruneLedger>,
+    /// The records of freed bytes that the listing of their names found.
+    freed: Option<Box<[ListedFreed]>>,
+    /// The size of the repository.
+    size: Option<u64>,
+    /// The settled records.
+    settled: Option<FreedRecords>,
+    /// The entries of the claim directory of the ledger.
+    claims: Option<Box<[ClaimEntry]>>,
+}
+
+/// The next step of a due check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Next {
+    /// List the ledger entries.
+    ListLedgers,
+    /// List the names of the records of freed bytes.
+    ListFreed,
+    /// List the packs for the size of the repository.
+    ListPacks,
+    /// Read the records of freed bytes and list the snapshot files.
+    SettleFreed,
+    /// List the claim directory of the ledger.
+    ListClaims(Box<Path>),
+    /// No prune is due, or another delete holds the claims of the ledger.
+    Stop,
+    /// Take the claim.
+    Claim(ClaimName),
+}
+
+/// What one step of a due check found.
+#[derive(Debug)]
+enum Found {
+    Ledgers(Box<[ListedBlob]>),
+    Freed(Box<[ListedFreed]>),
+    Packs(u64),
+    Settled(FreedRecords),
+    Claims(Box<[ClaimEntry]>),
+}
+
+impl Observed {
+    /// Adds what a step found. The ledger is the newest entry within the margin of `now`.
+    fn with(self, found: Found, now: Timestamp) -> Self {
+        match found {
+            Found::Ledgers(listed) => Self {
+                ledger: Some(newest_ledger(&listed, now)),
+                ..self
+            },
+            Found::Freed(freed) => Self {
+                freed: Some(freed),
+                ..self
+            },
+            Found::Packs(size) => Self {
+                size: Some(size),
+                ..self
+            },
+            Found::Settled(settled) => Self {
+                settled: Some(settled),
+                ..self
+            },
+            Found::Claims(claims) => Self {
+                claims: Some(claims),
+                ..self
+            },
+        }
+    }
+}
+
+/// Decides the next step of a due check from what the delete found, at `now`.
+///
+/// A prune is due when the hold of a claim passed since the last prune, and the settled freed
+/// bytes can make a prune due with the size of the repository (see [`may_be_due`]). The check
+/// reads only what can still make a prune due. Within the hold it reads nothing more. It lists the
+/// packs only when the records name freed bytes and the last prune marked no packs, because marked
+/// packs make a prune due at any size. It reads the records only when the bytes in their names can
+/// make a prune due, or when the last prune marked packs. When a prune is due, the delete takes the
+/// claim that [`next_claim`] chooses from the claims of the ledger, or it stops when another delete
+/// holds them.
+fn next(observed: &Observed, now: Timestamp, policy: &PrunePolicy) -> Next {
+    let Some(ledger) = observed.ledger else {
+        return Next::ListLedgers;
+    };
+    if !hold_passed(&ledger, now, policy.grace, policy.deadline) {
+        return Next::Stop;
+    }
+    let Some(freed) = &observed.freed else {
+        return Next::ListFreed;
+    };
+    let named = named_bytes(freed);
+    if named == 0 && !ledger.awaiting_removal {
+        return Next::Stop;
+    }
+    let size = match observed.size {
+        Some(size) => size,
+        None if !ledger.awaiting_removal => return Next::ListPacks,
+        None => 0,
+    };
+    if !may_be_due(&ledger, named, size, policy.threshold) {
+        return Next::Stop;
+    }
+    let Some(settled) = &observed.settled else {
+        return Next::SettleFreed;
+    };
+    if !may_be_due(&ledger, settled.bytes, size, policy.threshold) {
+        return Next::Stop;
+    }
+    let directory = claims_directory(&ledger);
+    let Some(claims) = &observed.claims else {
+        return Next::ListClaims(directory);
+    };
+    match next_claim(claims, now, claim_hold(policy.grace, policy.deadline)) {
+        ClaimChoice::Claim(number) => Next::Claim(ClaimName {
+            directory: directory.into(),
+            number,
+        }),
+        ClaimChoice::Held => Next::Stop,
+    }
+}
+
+/// Makes the storage calls of the step, and gives what they found. `Stop` and `Claim` make no call
+/// and give `None`.
+async fn observe(
+    files: &SnapshotFiles,
+    observed: &Observed,
+    step: &Next,
+) -> anyhow::Result<Option<Found>> {
+    Ok(Some(match step {
+        Next::ListLedgers => Found::Ledgers(
+            files
+                .list_below("read_ledger", Path::new(LEDGERS_PATH))
+                .await?,
+        ),
+        Next::ListFreed => Found::Freed(list_freed_names(files).await?),
+        Next::ListPacks => Found::Packs(repository_bytes(files).await?),
+        Next::SettleFreed => Found::Settled(
+            settle_freed(files, observed.freed.as_deref().unwrap_or_default()).await?,
+        ),
+        Next::ListClaims(directory) => Found::Claims(list_claims(files, directory).await?),
+        Next::Stop | Next::Claim(_) => return Ok(None),
+    }))
+}
+
+/// The most passes of a due check: one for each kind of listing. These are the ledger entries, the
+/// names of the records, the packs, the records with the snapshot files, and the claims.
+const MOST_PASSES: usize = 5;
+
+/// Tells whether a prune of the scope is due, and which claim the delete takes for it.
+///
+/// Each pass before a stop or a claim makes the storage calls of the step that [`next`] asked for,
+/// if the step needs any, then reads the clock one time, and asks [`next`] again with that reading.
+/// The passes after `Stop` or `Claim` make no call and read no clock. So each comparison with a
+/// time from storage uses a clock reading from after the listing that gave that time. A listing
+/// can take up to one storage call deadline, and a stale reading can put a marker that another host
+/// wrote within the margin beyond the margin. A failed call gives its error.
+pub(super) async fn due_prune(
+    files: &SnapshotFiles,
+    clock: &dyn Clock,
+    policy: &PrunePolicy,
+) -> anyhow::Result<Option<DuePrune>> {
+    let (observed, step) = stream::iter(0..MOST_PASSES)
+        .map(Ok)
+        .try_fold(
+            (Observed::default(), Next::ListLedgers),
+            |(observed, step), _| async move {
+                let Some(found) = observe(files, &observed, &step).await? else {
+                    return Ok((observed, step));
+                };
+                let now = clock.now();
+                let observed = observed.with(found, now);
+                let step = next(&observed, now, policy);
+                anyhow::Ok((observed, step))
+            },
+        )
+        .await?;
+    Ok(match step {
+        Next::Claim(claim) => Some(DuePrune {
+            claim,
+            records: observed.settled.unwrap_or_default(),
+        }),
+        Next::ListLedgers
+        | Next::ListFreed
+        | Next::ListPacks
+        | Next::SettleFreed
+        | Next::ListClaims(_)
+        | Next::Stop => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
@@ -801,13 +969,14 @@ mod tests {
     use super::super::tests::files_of;
     use super::super::tests::scripted::{Script, ScriptedBlobStorage};
     use super::{
-        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, FREED_PATH, FreedRecord,
-        FreedRecords, LEDGERS_PATH, Lease, Percent, PruneLedger, claim_hold, claims_directory,
+        CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, ClaimName, FREED_PATH,
+        FreedRecord, FreedRecords, LEDGERS_PATH, Lease, ListedFreed, Next, Observed, Percent,
+        PruneLedger, PrunePolicy, belongs_to_ledger, claim_hold, claims_directory,
         keep_claim_fresh, lease_span, list_claims, list_freed_names, marker_path, marker_time,
-        may_be_due, named_bytes, needs_repository_size, newest_ledger, next_claim,
-        old_claim_directories, older_entries, parse_claim_entry, parse_freed, parse_ledger_entry,
-        parse_record, prune_due, read_ledger, record_content, record_freed, refresh_period, settle,
-        settle_freed, take_claim, write_ledger,
+        may_be_due, named_bytes, newest_ledger, next, next_claim, old_claim_directories,
+        older_entries, parse_claim_entry, parse_freed, parse_ledger_entry, parse_record,
+        read_ledger, record_content, record_freed, refresh_period, settle, settle_freed,
+        take_claim, write_ledger,
     };
     use crate::filesystem_snapshot::clock::SystemClock;
     use futures::StreamExt;
@@ -848,6 +1017,67 @@ mod tests {
         }
     }
 
+    /// Gives one listed record of freed bytes whose name holds the bytes.
+    fn named(bytes: u64) -> Box<[ListedFreed]> {
+        Box::new([ListedFreed {
+            path: Path::new(FREED_PATH).join(format!("{bytes}-a")).into(),
+            bytes,
+        }])
+    }
+
+    /// Tells whether a prune is due, through [`next`]: the delete found the ledger, a record whose
+    /// name holds the freed bytes, the size of the repository, and settled records with the freed
+    /// bytes. The prune is due when [`next`] then asks for the claims.
+    fn prune_due(
+        ledger: &PruneLedger,
+        freed_bytes: u64,
+        now: Timestamp,
+        repository_bytes: u64,
+        threshold: Percent,
+        grace: Duration,
+        deadline: Duration,
+    ) -> bool {
+        let observed = Observed {
+            ledger: Some(*ledger),
+            freed: Some(named(freed_bytes)),
+            size: Some(repository_bytes),
+            settled: Some(FreedRecords {
+                bytes: freed_bytes,
+                counted: Box::default(),
+            }),
+            claims: None,
+        };
+        let policy = PrunePolicy {
+            grace,
+            deadline,
+            threshold,
+        };
+        matches!(next(&observed, now, &policy), Next::ListClaims(_))
+    }
+
+    /// Tells whether the due check needs the size of the repository, through [`next`]: the delete
+    /// found the ledger and a record whose name holds the freed bytes, and [`next`] then asks for
+    /// the packs.
+    fn needs_repository_size(
+        ledger: &PruneLedger,
+        freed_bytes: u64,
+        now: Timestamp,
+        grace: Duration,
+        deadline: Duration,
+    ) -> bool {
+        let observed = Observed {
+            ledger: Some(*ledger),
+            freed: Some(named(freed_bytes)),
+            ..Observed::default()
+        };
+        let policy = PrunePolicy {
+            grace,
+            deadline,
+            threshold: TEN_PERCENT,
+        };
+        next(&observed, now, &policy) == Next::ListPacks
+    }
+
     fn new_files() -> SnapshotFiles {
         files_over(Arc::new(InMemoryBlobStorage::new()))
     }
@@ -868,6 +1098,157 @@ mod tests {
             DEADLINE,
             cancel,
         )
+    }
+
+    /// The policy of the value tests of the due check: the grace period, the deadline and 10%.
+    const POLICY: PrunePolicy = PrunePolicy {
+        grace: GRACE,
+        deadline: DEADLINE,
+        threshold: TEN_PERCENT,
+    };
+
+    fn settled(bytes: u64) -> FreedRecords {
+        FreedRecords {
+            bytes,
+            counted: Box::default(),
+        }
+    }
+
+    #[test]
+    fn a_due_check_lists_each_kind_once_in_order_and_ends_with_the_claim_after_the_largest() {
+        let now = at(10_000_000);
+        let last = ledger(Some(10_000_000 - HOLD_MILLIS), false);
+        let directory = claims_directory(&last);
+        let ledger_found = Observed {
+            ledger: Some(last),
+            ..Observed::default()
+        };
+        let freed_found = Observed {
+            freed: Some(named(200)),
+            ..ledger_found.clone()
+        };
+        let size_found = Observed {
+            size: Some(1000),
+            ..freed_found.clone()
+        };
+        let settled_found = Observed {
+            settled: Some(settled(150)),
+            ..size_found.clone()
+        };
+        let claims_found = Observed {
+            claims: Some(Box::new([ClaimEntry::Claim(3)])),
+            ..settled_found.clone()
+        };
+
+        assert_eq!(
+            [
+                &Observed::default(),
+                &ledger_found,
+                &freed_found,
+                &size_found,
+                &settled_found,
+                &claims_found,
+            ]
+            .map(|observed| next(observed, now, &POLICY)),
+            [
+                Next::ListLedgers,
+                Next::ListFreed,
+                Next::ListPacks,
+                Next::SettleFreed,
+                Next::ListClaims(directory.clone()),
+                Next::Claim(ClaimName {
+                    directory: directory.into(),
+                    number: 4,
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_due_check_stops_as_soon_as_no_prune_can_be_due_and_reads_no_more() {
+        let now = at(10_000_000);
+        let passed = Some(10_000_000 - HOLD_MILLIS);
+        let observed = |ledger, freed, size, settled, claims| Observed {
+            ledger: Some(ledger),
+            freed: Some(named(freed)),
+            size,
+            settled,
+            claims,
+        };
+        let decide = |observed: Observed| next(&observed, now, &POLICY);
+
+        assert_eq!(
+            [
+                // Within the hold, nothing more is read.
+                decide(Observed {
+                    ledger: Some(ledger(Some(10_000_000 - HOLD_MILLIS + 1), true)),
+                    ..Observed::default()
+                }),
+                // Nothing freed and nothing marked.
+                decide(observed(ledger(passed, false), 0, None, None, None)),
+                // Marked packs need no size, so the records come next.
+                decide(observed(ledger(passed, true), 0, None, None, None)),
+                // The named bytes are below the threshold, so no record is read.
+                decide(observed(ledger(passed, false), 99, Some(1000), None, None)),
+                // The settled bytes are below the threshold.
+                decide(observed(
+                    ledger(passed, false),
+                    200,
+                    Some(1000),
+                    Some(settled(99)),
+                    None
+                )),
+                // A young marker of another delete holds the claims.
+                decide(observed(
+                    ledger(passed, false),
+                    200,
+                    Some(1000),
+                    Some(settled(100)),
+                    Some(Box::new([ClaimEntry::Marker(0, at(10_000_000 - 1))])),
+                )),
+            ],
+            [
+                Next::Stop,
+                Next::Stop,
+                Next::SettleFreed,
+                Next::Stop,
+                Next::Stop,
+                Next::Stop,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_due_check_that_observed_everything_gives_a_claim_or_stops() {
+        // The loop of the due check makes at most one pass for each kind of listing, so `next`
+        // must not ask for a listing again once each one ran.
+        let now = at(10_000_000);
+        let ledgers = [
+            ledger(None, false),
+            ledger(None, true),
+            ledger(Some(10_000_000), false),
+            ledger(Some(10_000_000 - HOLD_MILLIS), true),
+        ];
+        let claims: [Box<[ClaimEntry]>; 2] = [
+            Box::new([]),
+            Box::new([ClaimEntry::Marker(0, at(10_000_000))]),
+        ];
+        let terminal = ledgers.iter().all(|ledger| {
+            [0, 99, 100, 5000].iter().all(|bytes| {
+                claims.iter().all(|claims| {
+                    let observed = Observed {
+                        ledger: Some(*ledger),
+                        freed: Some(named(*bytes)),
+                        size: Some(1000),
+                        settled: Some(settled(*bytes)),
+                        claims: Some(claims.clone()),
+                    };
+                    matches!(next(&observed, now, &POLICY), Next::Stop | Next::Claim(_))
+                })
+            })
+        });
+
+        assert!(terminal);
     }
 
     #[test]
@@ -1199,14 +1580,13 @@ mod tests {
             Duration::from_secs(10),
             keep_claim_fresh(
                 &files,
-                &claims_directory(&ledger(None, false)),
-                0,
+                &claim_zero(),
                 Duration::from_secs(3600),
-                &std::sync::Mutex::default(),
                 &Lease::until(Instant::now()),
                 GRACE,
                 &SystemClock,
-            ),
+            )
+            .collect::<Vec<_>>(),
         )
         .await
         .is_ok();
@@ -1222,22 +1602,25 @@ mod tests {
         lease: &Lease,
         span: Duration,
     ) -> Option<Instant> {
-        let written = std::sync::Mutex::<Vec<Box<Path>>>::default();
-        let directory = claims_directory(&ledger(None, false));
-        tokio::select! {
-            () = keep_claim_fresh(files, &directory, 0, period, &written, lease, span, &SystemClock) => None,
-            ended = async {
-                futures::stream::repeat(())
-                    .then(|()| tokio::time::sleep(Duration::from_millis(5)))
-                    .take_while(|()| {
-                        std::future::ready(
-                            written.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty(),
-                        )
-                    })
-                    .for_each(|()| std::future::ready(()))
-                    .await;
-                Instant::now()
-            } => Some(ended),
+        let claim = claim_zero();
+        std::pin::pin!(keep_claim_fresh(
+            files,
+            &claim,
+            period,
+            lease,
+            span,
+            &SystemClock
+        ))
+        .next()
+        .await
+        .map(|_| Instant::now())
+    }
+
+    /// Gives the claim 0 of the ledger without a prune.
+    fn claim_zero() -> ClaimName {
+        ClaimName {
+            directory: claims_directory(&ledger(None, false)).into(),
+            number: 0,
         }
     }
 
@@ -1338,20 +1721,15 @@ mod tests {
     async fn a_claim_is_taken_after_its_marker_and_a_loser_deletes_its_marker() {
         let files = new_files();
         let directory = claims_directory(&ledger(Some(42), false));
-        let marker = || {
-            let (at, time) = marker_time(&SystemClock);
-            (marker_path(&directory, 0, time), at)
+        let marker = || marker_path(&directory, 0, marker_time(&SystemClock).1);
+        let claim = ClaimName {
+            directory: directory.clone().into(),
+            number: 0,
         };
-        let (first_marker, first_at) = marker();
-        let (second_marker, second_at) = marker();
-        let first = take_claim(&files, &directory, 0, &first_marker, first_at, GRACE)
-            .await
-            .unwrap()
-            .map(|lease| lease.expiry());
-        let again = take_claim(&files, &directory, 0, &second_marker, second_at, GRACE)
-            .await
-            .unwrap()
-            .map(|lease| lease.expiry());
+        let first_marker = marker();
+        let second_marker = marker();
+        let first = take_claim(&files, &claim, &first_marker).await.unwrap();
+        let again = take_claim(&files, &claim, &second_marker).await.unwrap();
         let listed = list_claims(&files, &directory).await.unwrap();
 
         assert_eq!(
@@ -1367,12 +1745,30 @@ mod tests {
             ),
             (
                 "golem/prune-claims/42".to_string(),
-                Some(first_at + GRACE),
-                None,
+                true,
+                false,
                 2,
                 true,
                 true,
             )
+        );
+    }
+
+    #[test]
+    fn a_claim_belongs_to_a_ledger_with_the_same_time_of_the_last_prune() {
+        let directory = claims_directory(&ledger(Some(42), false));
+        let none = claims_directory(&ledger(None, false));
+
+        assert_eq!(
+            [
+                belongs_to_ledger(&directory, &ledger(Some(42), false)),
+                belongs_to_ledger(&directory, &ledger(Some(42), true)),
+                belongs_to_ledger(&directory, &ledger(Some(43), false)),
+                belongs_to_ledger(&directory, &ledger(None, false)),
+                belongs_to_ledger(&none, &ledger(Some(42), false)),
+                belongs_to_ledger(&none, &ledger(None, true)),
+            ],
+            [true, true, false, false, false, true]
         );
     }
 

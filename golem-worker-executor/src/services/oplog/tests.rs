@@ -884,7 +884,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         }
         if self
             .hidden_reads
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .is_ok()
         {
             return Ok(Vec::new());

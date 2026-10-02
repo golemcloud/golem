@@ -2506,7 +2506,7 @@ fn resource_usage_close_deadline() -> Instant {
 
 fn mark_idle(idle_since_millis: &AtomicU64) {
     let now = Timestamp::now_utc().to_millis();
-    let _ = idle_since_millis.fetch_update(Ordering::Release, Ordering::Acquire, |previous| {
+    let _ = idle_since_millis.try_update(Ordering::Release, Ordering::Acquire, |previous| {
         Some(now.max(previous.saturating_add(1)))
     });
 }

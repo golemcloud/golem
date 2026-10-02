@@ -207,7 +207,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
         }
         let failing = self
             .failing_saves
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok();
@@ -277,7 +277,7 @@ impl FilesystemSnapshotStore for ScriptedStore {
         tokio::task::yield_now().await;
         if self
             .failing_deletes
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok()

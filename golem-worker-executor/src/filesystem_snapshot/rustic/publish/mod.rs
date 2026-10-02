@@ -20,11 +20,10 @@
 //! drops, deletes the file again, because a write that the storage received can still complete.
 
 use super::files::SnapshotFiles;
+use super::spawner::Spawner;
 use bytes::Bytes;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
-use tokio::runtime::Handle;
-use tokio_util::task::TaskTracker;
 use tracing::warn;
 
 /// A snapshot file that the backend kept and did not write.
@@ -61,19 +60,17 @@ impl SnapshotStage {
 
 /// Writes the staged file only when its path has no blob, which makes the snapshot visible. The
 /// name is the hash of the content, so a blob at the path is this file. A failed write deletes the
-/// path before the error returns, and a dropped write deletes it in a task of `tracker`. The guard
-/// stays armed until that delete ends, so a publish that is dropped during the delete also deletes
-/// the path in a task of `tracker`.
+/// path before the error returns, and a dropped write deletes it in a task of `spawner`. The guard
+/// keeps its delete until that delete ends, so a publish that is dropped during the delete also
+/// deletes the path in a task of `spawner`.
 pub(super) async fn publish(
     files: &SnapshotFiles,
     staged: &StagedSnapshot,
-    tracker: &TaskTracker,
+    spawner: &Spawner,
 ) -> anyhow::Result<()> {
-    let mut retraction = RetractOnDrop {
-        files: files.clone(),
-        path: staged.path.clone(),
-        tracker: tracker.clone(),
-        armed: true,
+    let mut guard = RetractOnDrop {
+        retraction: Some((files.clone(), staged.path.clone())),
+        spawner: spawner.clone(),
     };
     let written = files
         .put_if_absent("publish", &staged.path, &staged.content)
@@ -81,10 +78,10 @@ pub(super) async fn publish(
     if let Err(error) = written {
         // A write that lost its answer can have landed.
         retract_or_warn(files, &staged.path).await;
-        retraction.armed = false;
+        guard.retraction = None;
         return Err(error);
     }
-    retraction.armed = false;
+    guard.retraction = None;
     Ok(())
 }
 
@@ -103,32 +100,21 @@ async fn retract_or_warn(files: &SnapshotFiles, path: &Path) {
     }
 }
 
-/// Deletes the path in a task of the tracker when it is dropped while it is armed.
+/// Runs its delete in a task of the spawner when it is dropped before the publish took the delete
+/// away.
 struct RetractOnDrop {
-    files: SnapshotFiles,
-    path: Arc<Path>,
-    tracker: TaskTracker,
-    armed: bool,
+    /// The blobs and the path of the file that the delete removes, until the publish ends.
+    retraction: Option<(SnapshotFiles, Arc<Path>)>,
+    spawner: Spawner,
 }
 
 impl Drop for RetractOnDrop {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let files = self.files.clone();
-        let path = self.path.clone();
-        match Handle::try_current() {
-            Ok(runtime) => {
-                self.tracker.spawn_on(
-                    async move { retract_or_warn(&files, &path).await },
-                    &runtime,
-                );
-            }
-            Err(_) => warn!(
-                path = %path.display(),
-                "Failed to delete a dropped filesystem snapshot file, because no runtime runs"
-            ),
+        if let Some((files, path)) = self.retraction.take() {
+            drop(
+                self.spawner
+                    .spawn(async move { retract_or_warn(&files, &path).await }),
+            );
         }
     }
 }
