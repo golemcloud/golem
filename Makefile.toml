@@ -1664,7 +1664,10 @@ script = '''
 exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/git
-exec --fail-on-error npm ci
+exec --fail-on-error npm ci --ignore-scripts --no-audit --no-fund
+exec --fail-on-error npm run verify:release
+exec --fail-on-error npm test
+exec --fail-on-error npm run typecheck
 exec --fail-on-error ${golem} build -P optimized --force-build --yes
 exec --fail-on-error ${golem} exec -P optimized copy
 cd ../..
@@ -1827,8 +1830,16 @@ elif equals ${component} typescript-tools
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
+elif equals ${component} git-tool
+    build_task = set build-git-tool
+    wasm = set builtin-tools/git-tool.wasm
+    artifact_id = set git_tool
+    exports_json = set "{\"tools\":[\"git@0.1.0\"]}"
+    licenses = set builtin-tools/git/licenses/git
+    source_notice = set builtin-tools/git/licenses/SOURCE.md
+    sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, javascript-tools, typescript-tools, git-tool"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD
@@ -1846,18 +1857,28 @@ size = get_file_size ${wasm}
 lock_text = readfile builtin-artifacts.lock.json
 lock = json_parse --collection ${lock_text}
 locked_artifacts = map_get ${lock} artifacts
-locked_entry = map_get ${locked_artifacts} ${artifact_id}
-locked_version = map_get ${locked_entry} version
-locked_sha256 = map_get ${locked_entry} sha256
-same_version = equals ${version} ${locked_version}
-same_bytes = equals ${sha256} ${locked_sha256}
-if ${same_version}
-    if not ${same_bytes}
-        trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
+locked_artifact_ids = map_keys ${locked_artifacts}
+new_artifact = set true
+for locked_artifact_id in ${locked_artifact_ids}
+    if equals ${locked_artifact_id} ${artifact_id}
+        new_artifact = set false
     end
-else
-    if ${same_bytes}
-        trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
+end
+release ${locked_artifact_ids}
+if not ${new_artifact}
+    locked_entry = map_get ${locked_artifacts} ${artifact_id}
+    locked_version = map_get ${locked_entry} version
+    locked_sha256 = map_get ${locked_entry} sha256
+    same_version = equals ${version} ${locked_version}
+    same_bytes = equals ${sha256} ${locked_sha256}
+    if ${same_version}
+        if not ${same_bytes}
+            trigger_error "artifact bytes changed; bump ${component} from ${locked_version} before publishing"
+        end
+    else
+        if ${same_bytes}
+            trigger_error "artifact bytes are unchanged; keep ${component} at ${locked_version}"
+        end
     end
 end
 release --recursive ${lock}

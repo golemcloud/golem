@@ -3,8 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "compliance:generate": "node scripts/generate-compliance.mjs",
+    "compliance:check": "node scripts/generate-compliance.mjs --check",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:provenance": "node scripts/verify-provenance.mjs",
+    "verify:release": "npm run verify:provenance && npm run compliance:check"
   },
   "dependencies": {
     "@golemcloud/golem-ts-sdk": "file:../../sdks/ts/packages/golem-ts-sdk",
