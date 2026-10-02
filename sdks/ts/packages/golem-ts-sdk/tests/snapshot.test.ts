@@ -603,6 +603,31 @@ describe('snapshot — database plan', () => {
     expect(planDatabases([])).toEqual({ tag: 'ok', val: { inMemory: [], fileDatabases: {} } });
   });
 
+  it('fails on an in-memory field name that a multipart part name cannot hold', async () => {
+    const { planDatabases } = await import('../src/internal/databaseSnapshot');
+    for (const name of ['a"b', 'a\rb', 'a\nb']) {
+      const plan = planDatabases([{ name, autocommit: true, location: null }]);
+      expect(plan).toEqual({
+        tag: 'err',
+        val: expect.stringContaining(
+          `Cannot snapshot in-memory database ${JSON.stringify(name)}: its field name contains`,
+        ),
+      });
+    }
+  });
+
+  it('keeps a file-backed field name that a multipart part name cannot hold, as a JSON key', async () => {
+    const { planDatabases, decodeSnapshotDatabases } =
+      await import('../src/internal/databaseSnapshot');
+    const name = 'a"b\r\nc';
+    const plan = planDatabases([{ name, autocommit: true, location: '/data/app.db' }]);
+    if (plan.tag !== 'ok') throw new Error(plan.val);
+    const envelope = JSON.parse(JSON.stringify({ fileDatabases: plan.val.fileDatabases }));
+    expect(decodeSnapshotDatabases([], envelope, 'JSON snapshot').fileDatabases).toEqual({
+      [name]: '/data/app.db',
+    });
+  });
+
   it('fails on an open transaction of any database and names the field', async () => {
     const { planDatabases } = await import('../src/internal/databaseSnapshot');
     for (const location of [null, '/data/app.db']) {
@@ -844,6 +869,25 @@ describe('snapshot — in-memory and file-backed databases', () => {
           )
         : new TextDecoder().decode(resaved.payload);
     expect(resavedEnvelope).toBe(envelope);
+  });
+
+  it('fails the save of an in-memory database whose field name a part name cannot hold', async () => {
+    const env = await isolate();
+    env
+      .isolatedDefineAgent({
+        name: 'QuotedDatabaseName',
+        id: { name: z.string() },
+        snapshotting: { state: z.object({ count: z.number() }) },
+        methods: {},
+      })
+      .implement({
+        init: () => ({ count: 1, ['a"b']: new env.FakeDatabaseSync(':memory:') }),
+        methods: {},
+      });
+
+    await expect(
+      (await env.initiateIsolated('QuotedDatabaseName')).saveSnapshot(),
+    ).rejects.toContain('Cannot snapshot in-memory database "a\\"b": its field name contains');
   });
 
   it('fails the save when a file-backed database has an open transaction', async () => {

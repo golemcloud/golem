@@ -95,6 +95,7 @@ Limits:
 - Only the main database of a connection is in the snapshot. Databases added with `ATTACH` and tables in the `temp` schema are not.
 - The load opens a database again with the default options of `node:sqlite` (for example `readOnly: false`, `timeout: 0`). To use other options, open the database in a custom `load`. The SDK keeps a `DatabaseSync` that `load` returns in a field and does not open that field again.
 - A `DatabaseSync` inside a nested object, and `StatementSync`, `Session` and `SQLTagStore` fields, make the save fail. Keep them out of the state, or use custom `save` and `load` functions.
+- The field name of an in-memory database must not contain a double quote, a carriage return or a line feed; such a name makes the save fail. The field name of a file-backed database has no such limit.
 - A file-backed database that is larger than SQLite's page cache (about 2 MB by default), or one whose pages the agent did not all read, can make a start from a snapshot fall back to an older snapshot or a full replay: this happens when an invocation that is replayed after the snapshot reads pages that are not in the cache.
 - A reopened connection does not keep connection state: functions from `db.function()` and `db.aggregate()`, an authorizer, and per-connection PRAGMAs. An agent that needs them sets them again in a custom `load`.
 

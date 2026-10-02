@@ -72,6 +72,8 @@ export const REOPENED_DATABASE_OPTIONS = {
 const IN_MEMORY_LOCATION = ':memory:';
 const DATABASE_PART_PREFIX = 'db:';
 const DATABASE_PART_CONTENT_TYPE = 'application/x-sqlite3';
+/** The characters that end the quoted name or the line of a multipart part header. */
+const PART_NAME_BREAKING_CHARACTERS = /["\r\n]/;
 
 function isDatabaseSync(val: unknown): val is DatabaseSync {
   return val instanceof DatabaseSync;
@@ -94,8 +96,9 @@ function isInstance(val: unknown, Ctor: Function): boolean {
 
 /**
  * Decides how each database goes into the snapshot. A database with an open transaction fails
- * the save, also when it is file-backed. A database without a location goes in with its bytes.
- * A database with a location goes in with its location only.
+ * the save, also when it is file-backed. A database without a location goes in with its bytes,
+ * as a multipart part named after its field, so a field name that a part name cannot hold fails
+ * the save. A database with a location goes in with its location only, as a JSON key.
  */
 export function planDatabases(
   fields: readonly DatabaseField[],
@@ -110,6 +113,12 @@ export function planDatabases(
       };
     }
     if (field.location === null) {
+      if (PART_NAME_BREAKING_CHARACTERS.test(field.name)) {
+        return {
+          tag: 'err',
+          val: `Cannot snapshot in-memory database ${JSON.stringify(field.name)}: its field name contains a double quote, a carriage return or a line feed, which a multipart part name cannot hold. Rename the field.`,
+        };
+      }
       inMemory.push(field.name);
     } else {
       fileDatabases.push([field.name, field.location]);
