@@ -302,30 +302,6 @@ object GolemServer {
                  deleteRecursive(golemTemp)
                }
              }
-        dataDirAndSha256 <- ZIO.attemptBlocking {
-                              val dataDir = new File(examplesDir.getParentFile, "target/scala-integration/golem-data")
-                              if (dataDir.exists()) {
-                                val paths = java.nio.file.Files.walk(dataDir.toPath)
-                                try {
-                                  paths
-                                    .sorted(java.util.Comparator.reverseOrder())
-                                    .forEach(path => java.nio.file.Files.delete(path))
-                                } finally paths.close()
-                              }
-                              val webFetch =
-                                new File(examplesDir, "../../../builtin-tools/web-fetch.wasm").getCanonicalFile
-                              val digest = java.security.MessageDigest.getInstance("SHA-256")
-                              val sha256 = digest
-                                .digest(java.nio.file.Files.readAllBytes(webFetch.toPath))
-                                .map(byte => f"${byte & 0xff}%02x")
-                                .mkString
-                              val cache = dataDir.toPath.resolve("builtin-artifacts")
-                              java.nio.file.Files.createDirectories(cache)
-                              java.nio.file.Files.copy(webFetch.toPath, cache.resolve(s"$sha256.wasm"))
-                              (dataDir, sha256)
-                            }
-        dataDir           = dataDirAndSha256._1
-        webFetchSha256    = dataDirAndSha256._2
         logFile <- ZIO.attemptBlocking {
                      val file = new File(examplesDir.getParentFile, "target/scala-integration/golem-server.log")
                      java.nio.file.Files.createDirectories(file.toPath.getParent)
@@ -333,24 +309,9 @@ object GolemServer {
                      file
                    }
         process <- ZIO.acquireRelease(
-                     Cmd(
-                       "golem",
-                       "--yes",
-                       "-vvv",
-                       "server",
-                       "run",
-                       "--data-dir",
-                       dataDir.getAbsolutePath,
-                       "--disable-app-manifest-discovery"
-                     )
+                     Cmd("golem", "--yes", "-vvv", "server", "run", "--clean", "--disable-app-manifest-discovery")
                        .workingDirectory(examplesDir)
-                       .env(
-                         buildEnv ++ Map(
-                           "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__WEB_FETCH__URL" ->
-                             "https://github.com/golemcloud/golem-builtins/releases/download/web-fetch-v0.0.1/web-fetch.wasm",
-                           "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__WEB_FETCH__SHA256" -> webFetchSha256
-                         )
-                       )
+                       .env(buildEnv)
                        .redirectErrorStream(true)
                        .stdout(ProcessOutput.FileRedirect(logFile))
                        .run

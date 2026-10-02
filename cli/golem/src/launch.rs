@@ -72,7 +72,6 @@ pub struct LaunchArgs {
     pub data_dir: PathBuf,
     pub agent_filesystem_root: Option<PathBuf>,
     pub resource_usage_metering: ResourceUsageMeteringConfig,
-    pub builtin_artifacts: BuiltinArtifactsConfig,
 }
 
 impl LaunchArgs {
@@ -315,7 +314,7 @@ fn registry_service_config(
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
         builtin_artifacts: BuiltinArtifactsConfig {
             cache_dir: Some(args.data_dir.join("builtin-artifacts")),
-            ..args.builtin_artifacts.clone()
+            ..Default::default()
         },
         security_scheme: golem_registry_service::config::SecuritySchemeConfig {
             strict_issuer_url_validation: false,
@@ -598,7 +597,6 @@ mod tests {
                 data_dir: PathBuf::from("unused"),
                 agent_filesystem_root: None,
                 resource_usage_metering: ResourceUsageMeteringConfig::default(),
-                builtin_artifacts: BuiltinArtifactsConfig::default(),
             };
             let config =
                 worker_executor_config(&args, &shard_manager, &registry, &worker_service).unwrap();

@@ -20,7 +20,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentId, Empty, IdempotencyKey, OplogIndex};
 use golem_registry_service::RegistryService as RegistryServer;
 use golem_registry_service::config::{
-    BuiltinArtifactsConfig, ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
+    ComponentCompilationConfig, LoginConfig, RegistryServiceConfig,
 };
 use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
 use golem_registry_service::repo::registry_change::{
@@ -31,7 +31,6 @@ use golem_service_base::clients::registry::{
 };
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use test_r::{test, timeout};
 use tokio::task::JoinSet;
@@ -79,28 +78,6 @@ async fn start_registry() -> (
         max_connections: 4,
         foreign_keys: true,
     };
-    let builtin_artifacts = BuiltinArtifactsConfig {
-        cache_dir: Some(temp_dir.path().join("builtin-artifacts")),
-        ..Default::default()
-    };
-    let web_fetch =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../builtin-tools/web-fetch.wasm");
-    let web_fetch_sha256 = hex::encode(Sha256::digest(std::fs::read(&web_fetch).unwrap()));
-    let mut builtin_artifacts = builtin_artifacts;
-    builtin_artifacts.source_overrides.insert(
-        "web_fetch".to_string(),
-        golem_registry_service::config::BuiltinArtifactSource {
-            url: "https://github.com/golemcloud/golem-builtins/releases/download/web-fetch-v0.0.1/web-fetch.wasm".to_string(),
-            sha256: Some(web_fetch_sha256.clone()),
-        },
-    );
-    let artifact_cache = builtin_artifacts.cache_dir.as_ref().unwrap();
-    std::fs::create_dir_all(artifact_cache).unwrap();
-    std::fs::copy(
-        web_fetch,
-        artifact_cache.join(format!("{web_fetch_sha256}.wasm")),
-    )
-    .expect("failed to prepopulate the web-fetch artifact cache");
     let config = RegistryServiceConfig {
         grpc: golem_registry_service::config::GrpcApiConfig {
             port: 0,
@@ -110,7 +87,6 @@ async fn start_registry() -> (
         login: LoginConfig::Disabled(Empty {}),
         blob_storage: BlobStorageConfig::default_in_memory(),
         component_compilation: ComponentCompilationConfig::Disabled(Empty {}),
-        builtin_artifacts,
         ..Default::default()
     };
     let mut join_set = JoinSet::new();

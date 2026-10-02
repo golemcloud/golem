@@ -1742,53 +1742,40 @@ for artifact_id in ${artifact_ids}
         destination = set builtin-tools/web-fetch.wasm
     end
 
-    use_local_web_fetch = get_env BUILTIN_USE_LOCAL_WEB_FETCH
-    use_locked_artifact = set true
-    if equals ${artifact_id} web_fetch
-        if equals ${use_local_web_fetch} 1
-            if not is_path_exists ${destination}
-                trigger_error "BUILTIN_USE_LOCAL_WEB_FETCH requires ${destination}"
+    if not is_path_exists ${cached}
+        if is_path_exists ${destination}
+            local_sha256 = sha256sum ${destination}
+            if equals ${local_sha256} ${sha256}
+                cp ${destination} ${cached}
             end
-            use_locked_artifact = set false
         end
     end
 
-    if ${use_locked_artifact}
-        if not is_path_exists ${cached}
-            if is_path_exists ${destination}
-                local_sha256 = sha256sum ${destination}
-                if equals ${local_sha256} ${sha256}
-                    cp ${destination} ${cached}
-                end
-            end
+    if is_path_exists ${cached}
+        actual = sha256sum ${cached}
+        if not equals ${actual} ${sha256}
+            rm ${cached}
         end
-
-        if is_path_exists ${cached}
-            actual = sha256sum ${cached}
-            if not equals ${actual} ${sha256}
-                rm ${cached}
-            end
-        end
-        if not is_path_exists ${cached}
-            temporary = set "${cached}.tmp"
-            if is_path_exists ${temporary}
-                rm ${temporary}
-            end
-            download = exec curl --fail --location --silent --show-error --output ${temporary} ${url}
-            if not equals ${download.code} 0
-                echo ${download.stderr}
-                trigger_error "failed to download built-in artifact '${artifact_id}' from ${url}"
-            end
-            actual = sha256sum ${temporary}
-            if not equals ${actual} ${sha256}
-                rm ${temporary}
-                trigger_error "downloaded built-in artifact '${artifact_id}' has SHA-256 ${actual}, expected ${sha256}"
-            end
-            mv ${temporary} ${cached}
-        end
-
-        cp ${cached} ${destination}
     end
+    if not is_path_exists ${cached}
+        temporary = set "${cached}.tmp"
+        if is_path_exists ${temporary}
+            rm ${temporary}
+        end
+        download = exec curl --fail --location --silent --show-error --output ${temporary} ${url}
+        if not equals ${download.code} 0
+            echo ${download.stderr}
+            trigger_error "failed to download built-in artifact '${artifact_id}' from ${url}"
+        end
+        actual = sha256sum ${temporary}
+        if not equals ${actual} ${sha256}
+            rm ${temporary}
+            trigger_error "downloaded built-in artifact '${artifact_id}' has SHA-256 ${actual}, expected ${sha256}"
+        end
+        mv ${temporary} ${cached}
+    end
+
+    cp ${cached} ${destination}
 end
 release --recursive ${lock}
 echo "downloaded checksum-pinned built-in artifacts into ${cache_dir}"
@@ -2068,7 +2055,7 @@ if ${golem_cli_empty}
     golem_cli = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/release/golem-cli"
     set_env GOLEM_CLI ${golem_cli}
 end
-exec --fail-on-error cargo make build-web-fetch
+exec --fail-on-error cargo make fetch-builtin-artifacts
 cd test-components
 exec --fail-on-error ./build-components.sh benchmarks rebuild
 cd ..

@@ -136,6 +136,7 @@ fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
             ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
             ("otlp_exporter", "plugins/otlp-exporter.wasm"),
             ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+            ("web_fetch", "builtin-tools/web-fetch.wasm"),
         ];
 
         local_artifacts
@@ -1051,20 +1052,6 @@ impl TestContext {
             });
         }
 
-        let repository_root = workspace_path();
-        let web_fetch = repository_root.join("builtin-tools/web-fetch.wasm");
-        let web_fetch_sha256 = sha2::Sha256::digest(std::fs::read(&web_fetch).unwrap())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let artifact_cache = self.data_dir.path().join("builtin-artifacts");
-        std::fs::create_dir_all(&artifact_cache).unwrap();
-        std::fs::copy(
-            web_fetch,
-            artifact_cache.join(format!("{web_fetch_sha256}.wasm")),
-        )
-        .expect("failed to prepopulate the web-fetch artifact cache");
-
         let args = vec![
             "server",
             "run",
@@ -1086,15 +1073,7 @@ impl TestContext {
         command
             .args(&args)
             .current_dir(&self.working_dir)
-            .envs(&self.env)
-            .env(
-                "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__WEB_FETCH__URL",
-                "https://github.com/golemcloud/golem-builtins/releases/download/web-fetch-v0.0.1/web-fetch.wasm",
-            )
-            .env(
-                "GOLEM__BUILTIN_ARTIFACTS__SOURCE_OVERRIDES__WEB_FETCH__SHA256",
-                web_fetch_sha256,
-            );
+            .envs(&self.env);
 
         if let Some(server_log) = &self.server_log {
             println!("{} {}", "> server log file:".bold(), server_log.display());
