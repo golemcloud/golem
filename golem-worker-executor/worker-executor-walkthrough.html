@@ -1899,9 +1899,9 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 <p>Automatic snapshot assistance bounds the <em>historical replay window</em> to the suffix after frozen <code>S</code>; it does not guarantee a wall-clock update bound. Snapshot age, suffix size, compilation, payload I/O and resource admission still matter. Public <code>--await</code> waits for this attempt's terminal <code>SuccessfulUpdate</code> or <code>FailedUpdate</code>, including a repeated request for the same target.</p>
 
 <figure>
-<svg class="dg" viewBox="0 0 900 384" role="img" aria-labelledby="upd-title upd-desc">
-  <title id="upd-title">Automatic update timeline</title>
-  <desc id="upd-desc">A PendingUpdate hint for target revision r2 is appended at entry 70. The worker is unloaded and the outer loop creates a new Store for r2. prepare_instance first tries to load a snapshot baseline in snapshotting mode, which appends and consumes nothing, then resumes replay of the old history against r2. If replay succeeds, a SuccessfulUpdate hint is appended and later reconstructions load r2. If replay fails, a FailedUpdate hint is appended, the retry decision is immediate, and the worker is rebuilt on r1.</desc>
+<svg class="dg" viewBox="0 0 900 414" role="img" aria-labelledby="upd-title upd-desc">
+  <title id="upd-title">Automatic update timeline: full-replay strategy</title>
+  <desc id="upd-desc">The full-replay strategy of a public Automatic update, selected when no eligible periodic snapshot exists. A PendingUpdate hint for target revision r2 is appended at entry 70. When the request reaches the head of the update queue, a correlated entry durably freezes the full-replay choice. The worker is unloaded and the outer loop creates a new Store for r2. prepare_instance first tries to load the authoritative baseline — a manual-update payload or the periodic snapshot promoted by an earlier successful snapshot-assisted update, never an unpromoted periodic snapshot taken under r1 — in snapshotting mode, which appends and consumes nothing, then resumes replay of the remaining old history against r2. If replay succeeds, a SuccessfulUpdate hint is appended and later reconstructions load r2. If replay fails, a FailedUpdate hint is appended, the retry decision is immediate, and the worker is rebuilt on r1.</desc>
   <defs><marker id="arr-up" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--fg-muted)"/></marker></defs>
 
   <rect class="box hint" x="20" y="30" width="200" height="70" rx="6"/>
@@ -1918,7 +1918,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 
   <rect class="box" x="520" y="30" width="360" height="130" rx="6"/>
   <text x="700" y="55" text-anchor="middle" class="title" style="font-size:12px">prepare_instance on r2</text>
-  <text x="535" y="82" class="lbl mono">1. try_load_snapshot(baseline)</text>
+  <text x="535" y="82" class="lbl mono">1. try_load_snapshot(authoritative baseline)</text>
   <text x="555" y="100" class="lbl">snapshotting mode: appends and consumes nothing</text>
   <text x="535" y="126" class="lbl mono">2. resume_replay(old history against r2)</text>
   <text x="555" y="144" class="lbl">every recorded Start must be claimed by r2's guest</text>
@@ -1938,10 +1938,12 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
   <text x="790" y="278" text-anchor="middle" class="lbl">RetryDecision::Immediate</text>
   <text x="790" y="296" text-anchor="middle" class="lbl">rebuild on r1, keep running</text>
 
-  <text x="20" y="350" class="lbl">Automatic snapshots taken under r1 are never used to start r2;</text>
-  <text x="20" y="366" class="lbl">a snapshot taken after the update succeeded is, and it recovers with the updated component.</text>
+  <text x="20" y="350" class="lbl">Full-replay strategy: an unpromoted periodic snapshot taken under r1 is never used to start r2 —</text>
+  <text x="20" y="366" class="lbl">only the authoritative baseline is loaded. A snapshot-assisted update instead loads its selected</text>
+  <text x="20" y="382" class="lbl">periodic S on the target, and its success promotes S to the authoritative baseline.</text>
+  <text x="20" y="398" class="lbl">A periodic snapshot taken after the update succeeded is used by later reconstructions, which recover with the updated component.</text>
 </svg>
-<figcaption>Automatic update: the new revision must prove it can replay the old history before it becomes the durable truth for this agent.</figcaption>
+<figcaption>Automatic update, full-replay strategy: with no eligible periodic snapshot, the new revision must prove it can replay the old history from the authoritative baseline before it becomes the durable truth for this agent.</figcaption>
 </figure>
 
 <h3>Rejecting a bad automatic baseline</h3>

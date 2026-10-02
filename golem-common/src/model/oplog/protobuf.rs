@@ -2879,7 +2879,7 @@ impl TryFrom<PublicAgentInvocation>
                 )
             }
             PublicAgentInvocation::SaveSnapshot(_) => {
-                Invocation::SaveSnapshot(golem_api_grpc::proto::golem::common::Empty {})
+                Invocation::SaveSnapshot(golem_schema::proto::golem::common::Empty {})
             }
             PublicAgentInvocation::LoadSnapshot(load) => {
                 let snapshot_data = match load.snapshot {
@@ -3125,7 +3125,7 @@ impl TryFrom<PublicAgentInvocationResult>
                 ProtoResult::ExternalTool(tool.result.try_into()?)
             }
             PublicAgentInvocationResult::ManualUpdate(_) => {
-                ProtoResult::ManualUpdate(golem_api_grpc::proto::golem::common::Empty {})
+                ProtoResult::ManualUpdate(golem_schema::proto::golem::common::Empty {})
             }
             PublicAgentInvocationResult::LoadSnapshot(fallible) => {
                 ProtoResult::LoadSnapshot(golem_api_grpc::proto::golem::worker::OptionalError {
@@ -3267,7 +3267,7 @@ fn tool_rpc_error_to_proto(
             RpcError::RemoteInternalError(value)
         }
         SerializableToolRpcError::Cancelled => {
-            RpcError::Cancelled(golem_api_grpc::proto::golem::common::Empty {})
+            RpcError::Cancelled(golem_schema::proto::golem::common::Empty {})
         }
         SerializableToolRpcError::ResourceExhausted(value) => RpcError::ResourceExhausted(value),
         SerializableToolRpcError::RemoteToolError(value) => {
@@ -3327,7 +3327,7 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
             PublicUpdateDescription::Automatic(_) => golem_api_grpc::proto::golem::worker::UpdateDescription {
                 description: Some(
                     golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(
-                        golem_api_grpc::proto::golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             },
@@ -3335,7 +3335,7 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
                 golem_api_grpc::proto::golem::worker::UpdateDescription {
                     description: Some(
                         golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotAssistedAutomatic(
-                            golem_api_grpc::proto::golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 }
@@ -3511,7 +3511,7 @@ impl From<PublicOplogEntryAttribution>
 
         let attribution = match value {
             PublicOplogEntryAttribution::Agent(_) => {
-                Attribution::Agent(golem_api_grpc::proto::golem::common::Empty {})
+                Attribution::Agent(golem_schema::proto::golem::common::Empty {})
             }
             PublicOplogEntryAttribution::Entity(context) => Attribution::Entity(context.into()),
         };
@@ -3706,7 +3706,7 @@ impl From<PublicRetryPolicyState> for golem_api_grpc::proto::golem::worker::Retr
         let state = match value {
             PublicRetryPolicyState::Counter(c) => State::Counter(c.count),
             PublicRetryPolicyState::Terminal(_) => {
-                State::Terminal(golem_api_grpc::proto::golem::common::Empty {})
+                State::Terminal(golem_schema::proto::golem::common::Empty {})
             }
             PublicRetryPolicyState::Wrapper(w) => {
                 State::Wrapper(Box::new(RetryPolicyStateWrapper {
@@ -5291,7 +5291,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                     .map(|bytes| crate::serialization::deserialize(&bytes))
                     .collect::<Result<Vec<_>, _>>()?;
                 let original_phantom_id: Option<uuid::Uuid> = p.original_phantom_id.map(|u| {
-                    let proto_uuid: golem_api_grpc::proto::golem::common::Uuid = u;
+                    let proto_uuid: golem_schema::proto::golem::common::Uuid = u;
                     uuid::Uuid::from(proto_uuid)
                 });
                 let instance_id = p.instance_id.ok_or("Missing instance_id")?.into();

@@ -41,7 +41,6 @@ use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::workerctx::WorkerCtx;
 use futures::future::{BoxFuture, try_join_all};
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamHandle as ProtoDurableStreamHandle, DurableStreamMapping,
     InputStreamHighWater as ProtoInputStreamHighWater, InvocationResponse, OutputStreamEnd,
@@ -70,6 +69,7 @@ use golem_common::model::Timestamp;
 use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
 use golem_schema::schema::{SchemaValue, SchemaValueStream, TypedSchemaValue};
@@ -659,7 +659,7 @@ impl StreamSession {
     pub async fn validate_frame(
         &self,
         transport_stream_id: u64,
-        durable_stream_id: Option<golem_api_grpc::proto::golem::common::Uuid>,
+        durable_stream_id: Option<golem_schema::proto::golem::common::Uuid>,
         epoch: u64,
         expected_role: SessionStreamRole,
     ) -> Result<DurableStreamHandle, SessionError> {

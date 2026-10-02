@@ -47,7 +47,6 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, InvocationFailure, InvocationFailureKind,
     InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationStart,
@@ -71,6 +70,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;

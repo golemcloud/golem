@@ -114,10 +114,10 @@ impl From<CachePolicy> for golem_api_grpc::proto::golem::component::CachePolicy 
         Self {
             value: Some(match value {
                 CachePolicy::NoCache(_) => {
-                    Value::NoCache(golem_api_grpc::proto::golem::common::Empty {})
+                    Value::NoCache(golem_schema::proto::golem::common::Empty {})
                 }
                 CachePolicy::UntilWrite(_) => {
-                    Value::UntilWrite(golem_api_grpc::proto::golem::common::Empty {})
+                    Value::UntilWrite(golem_schema::proto::golem::common::Empty {})
                 }
                 CachePolicy::Ttl(ttl) => Value::TtlNanos(ttl.duration_nanos),
             }),
@@ -517,7 +517,7 @@ impl From<HttpMethod> for golem_api_grpc::proto::golem::component::HttpMethod {
                 HttpMethod::Trace(_) => Value::Standard(StandardHttpMethod::Trace.into()),
                 HttpMethod::Patch(_) => Value::Standard(StandardHttpMethod::Patch.into()),
                 HttpMethod::Custom(c) => Value::Custom(c.value),
-                HttpMethod::Any(_) => Value::Any(golem_api_grpc::proto::golem::common::Empty {}),
+                HttpMethod::Any(_) => Value::Any(golem_schema::proto::golem::common::Empty {}),
             }),
         }
     }
@@ -764,7 +764,7 @@ impl From<Principal> for golem_api_grpc::proto::golem::component::Principal {
                 Principal::Agent(v) => Value::Agent(v.into()),
                 Principal::GolemUser(v) => Value::GolemUser(v.into()),
                 Principal::Anonymous(_) => {
-                    Value::Anonymous(golem_api_grpc::proto::golem::common::Empty {})
+                    Value::Anonymous(golem_schema::proto::golem::common::Empty {})
                 }
             }),
         }
@@ -880,7 +880,7 @@ impl From<Snapshotting> for golem_api_grpc::proto::golem::component::Snapshottin
         Self {
             value: Some(match value {
                 Snapshotting::Disabled(_) => {
-                    Value::Disabled(golem_api_grpc::proto::golem::common::Empty {})
+                    Value::Disabled(golem_schema::proto::golem::common::Empty {})
                 }
                 Snapshotting::Enabled(config) => Value::Enabled(config.into()),
             }),
@@ -920,7 +920,7 @@ impl From<SnapshottingConfig> for golem_api_grpc::proto::golem::component::Snaps
         Self {
             value: Some(match value {
                 SnapshottingConfig::Default(_) => {
-                    Value::Default(golem_api_grpc::proto::golem::common::Empty {})
+                    Value::Default(golem_schema::proto::golem::common::Empty {})
                 }
                 SnapshottingConfig::Periodic(periodic) => {
                     Value::PeriodicNanos(periodic.duration_nanos)

@@ -913,7 +913,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(ForkWorkerResponse {
             result: Some(
                 golem::workerexecutor::v1::fork_worker_response::Result::Success(
-                    golem::common::Empty {},
+                    golem_schema::proto::golem::common::Empty {},
                 ),
             ),
         })
@@ -1876,7 +1876,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             GetFileSystemNodeResult::NotFound => GetFileSystemNodeResponse {
                 result: Some(
                     golem::workerexecutor::v1::get_file_system_node_response::Result::NotFound(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             },
@@ -2480,7 +2480,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::DeleteWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::delete_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2558,7 +2558,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::InterruptWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::interrupt_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2594,7 +2594,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::RevokeShardsResponse {
                     result: Some(
                         golem::workerexecutor::v1::revoke_shards_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2630,7 +2630,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::AssignShardsResponse {
                     result: Some(
                         golem::workerexecutor::v1::assign_shards_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2718,7 +2718,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::ResumeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::resume_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2934,7 +2934,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(ForkWorkerResponse {
                 result: Some(
                     golem::workerexecutor::v1::fork_worker_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -2971,7 +2971,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(RevertWorkerResponse {
                 result: Some(
                     golem::workerexecutor::v1::revert_worker_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -3206,7 +3206,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(ActivatePluginResponse {
                 result: Some(
                     golem::workerexecutor::v1::activate_plugin_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -3243,7 +3243,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(DeactivatePluginResponse {
                 result: Some(
                     golem::workerexecutor::v1::deactivate_plugin_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -3384,7 +3384,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
         let result = match result {
             Ok(Some(value)) => Outcome::Success(value.into()),
-            Ok(None) => Outcome::NotFound(golem::common::Empty {}),
+            Ok(None) => Outcome::NotFound(golem_schema::proto::golem::common::Empty {}),
             Err(DurableStreamRemoteError::Other(error)) => Outcome::Failure(error.into()),
             Err(DurableStreamRemoteError::Unavailable) => {
                 return Err(Status::unavailable(
@@ -3476,7 +3476,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match result {
             Ok(_) => record.succeed(Ok(Response::new(ProcessOplogEntriesResponse {
                 result: Some(process_oplog_entries_response::Result::Success(
-                    golem::common::Empty {},
+                    golem_schema::proto::golem::common::Empty {},
                 )),
             }))),
             Err(mut err) => record.fail(
@@ -3508,7 +3508,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match result {
             Ok(()) => record.succeed(Ok(Response::new(DeliverCardTransferResponse {
                 result: Some(deliver_card_transfer_response::Result::Success(
-                    golem::common::Empty {},
+                    golem_schema::proto::golem::common::Empty {},
                 )),
             }))),
             Err(mut error) => record.fail(

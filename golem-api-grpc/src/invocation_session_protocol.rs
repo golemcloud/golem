@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::proto::golem::schema::{SchemaValue, result_value, schema_value};
 use crate::proto::golem::worker::input_stream_item::Payload;
 use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
@@ -23,6 +22,7 @@ use crate::proto::golem::worker::{
     invocation_response, invocation_session_completion, invocation_session_result,
     public_external_tool_result, public_tool_error, public_tool_rpc_error,
 };
+use golem_schema::proto::golem::schema::{SchemaValue, result_value, schema_value};
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -94,9 +94,9 @@ pub struct InvocationSessionState {
     resume_cursors: HashMap<(u64, u64), Option<[u8; 24]>>,
     resume_agent_id: Option<AgentId>,
     resume_environment_id: Option<crate::proto::golem::common::EnvironmentId>,
-    resume_attachment_id: Option<crate::proto::golem::common::Uuid>,
-    resume_attempt_id: Option<crate::proto::golem::common::Uuid>,
-    resume_callee_fingerprint: Option<crate::proto::golem::common::Uuid>,
+    resume_attachment_id: Option<golem_schema::proto::golem::common::Uuid>,
+    resume_attempt_id: Option<golem_schema::proto::golem::common::Uuid>,
+    resume_callee_fingerprint: Option<golem_schema::proto::golem::common::Uuid>,
     resume_accepted_epoch: Option<u64>,
     has_result: bool,
     inputs: HashMap<u64, InputState>,
@@ -1713,7 +1713,7 @@ impl InvocationSessionState {
     fn validate_output_frame(
         &mut self,
         transport_stream_id: u64,
-        durable_stream_id: &Option<crate::proto::golem::common::Uuid>,
+        durable_stream_id: &Option<golem_schema::proto::golem::common::Uuid>,
         durable_offset: &[u8],
         epoch: u64,
     ) -> Result<ValidatedOutputFrame, String> {
@@ -1871,9 +1871,9 @@ fn required_idempotency_key(key: &Option<IdempotencyKey>) -> Result<&str, String
 }
 
 fn required_uuid<'a>(
-    value: &'a Option<crate::proto::golem::common::Uuid>,
+    value: &'a Option<golem_schema::proto::golem::common::Uuid>,
     field: &str,
-) -> Result<&'a crate::proto::golem::common::Uuid, String> {
+) -> Result<&'a golem_schema::proto::golem::common::Uuid, String> {
     let value = value
         .as_ref()
         .ok_or_else(|| format!("{field} is missing"))?;
@@ -2176,14 +2176,15 @@ fn stream_references(value: &SchemaValue) -> Result<Vec<u64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::golem::common::{Empty, EnvironmentId, Uuid};
+    use crate::proto::golem::common::EnvironmentId;
     use crate::proto::golem::component::ComponentId;
-    use crate::proto::golem::schema::{RecordValue, SchemaValueStreamReference};
     use crate::proto::golem::worker::{
         AttachmentRevoked, InputStreamHighWater, InvocationFailure, InvocationRejected,
         InvocationStart, OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeAttach,
         StreamCursor, StreamInvocationIdentity,
     };
+    use golem_schema::proto::golem::common::{Empty, Uuid};
+    use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference};
     use prost::Message;
     use test_r::test;
 
@@ -4091,10 +4092,10 @@ mod tests {
 
     #[test]
     fn external_tool_byte_streams_flow_before_structured_result() {
-        use crate::proto::golem::schema::TypedSchemaValue;
         use crate::proto::golem::worker::{
             ExternalToolInvocation, PublicExternalToolResult, PublicToolInvocationResult,
         };
+        use golem_schema::proto::golem::schema::TypedSchemaValue;
 
         let mut state = InvocationSessionState::default();
         let start = trusted_request(invocation_request::Request::Start(InvocationStart {
@@ -4289,8 +4290,8 @@ mod tests {
 
     #[test]
     fn external_tool_acceptance_rejects_forged_or_colliding_roles() {
-        use crate::proto::golem::schema::TypedSchemaValue;
         use crate::proto::golem::worker::ExternalToolInvocation;
+        use golem_schema::proto::golem::schema::TypedSchemaValue;
 
         let mut start = trusted_request(invocation_request::Request::Start(InvocationStart {
             idempotency_key: key(),

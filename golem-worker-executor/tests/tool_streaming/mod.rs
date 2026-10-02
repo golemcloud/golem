@@ -52,6 +52,7 @@ use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
     TypedSchemaValue, VariantValuePayload, build_input_record,
 };
+use golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache;
 use golem_common::{
     data_value,
     model::{
@@ -81,6 +82,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
+use wasmtime::Engine;
+use wasmtime::component::Component;
 
 mod middleware_acceptance;
 mod moonbit_exports;
@@ -107,6 +110,14 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("typescript_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("git_tool")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("git_network_probe")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -1158,6 +1169,91 @@ async fn invoke_cli_tool(
         )
         .await?
         .into_typed()
+}
+
+async fn invoke_git_tool_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    command: &str,
+    fields: BTreeMap<&str, SchemaValue>,
+) -> anyhow::Result<Option<SchemaValue>> {
+    invoke_git_tool_success_with_key(
+        executor,
+        worker_id,
+        fingerprint,
+        IdempotencyKey::fresh(),
+        principal,
+        definition,
+        command,
+        fields,
+    )
+    .await
+}
+
+async fn invoke_git_tool_success_with_key(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    idempotency_key: IdempotencyKey,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    command: &str,
+    fields: BTreeMap<&str, SchemaValue>,
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command_path = vec![command.to_string()];
+    let command_index = definition
+        .command_index_by_path(&command_path)
+        .ok_or_else(|| anyhow::anyhow!("git command '{command}' does not exist"))?;
+    let model = definition.canonical_input_model(command_index)?;
+    let schema = model.record_schema.clone();
+    let values = model
+        .fields
+        .iter()
+        .map(|field| {
+            fields
+                .get(field.name.as_str())
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing canonical git field '{}'", field.name))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let output = executor
+        .invoke_external_tool(
+            worker_id,
+            fingerprint,
+            idempotency_key,
+            ToolName::try_from("git").unwrap(),
+            command_path,
+            TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+            InvocationContextStack::fresh(),
+            principal,
+            None,
+        )
+        .await?;
+    let AgentInvocationResult::ExternalTool { result } = output.result else {
+        anyhow::bail!("expected git tool result, got {output:?}");
+    };
+    match result {
+        Ok(result) => Ok(result.result.map(|value| value.into_parts().1)),
+        Err(error) => anyhow::bail!("git {command} failed: {error:?}"),
+    }
+}
+
+fn optional_string(value: Option<&str>) -> SchemaValue {
+    SchemaValue::Option {
+        inner: value.map(|value| Box::new(SchemaValue::String(value.to_string()))),
+    }
+}
+
+fn string_list(values: &[&str]) -> SchemaValue {
+    SchemaValue::List {
+        elements: values
+            .iter()
+            .map(|value| SchemaValue::String((*value).to_string()))
+            .collect(),
+    }
 }
 
 fn assert_filesystem_tool_error(
@@ -11737,6 +11833,1296 @@ fs.writeFileSync('invalid.ts', 'const value: number = "wrong";\n');
         assert_eq!(reconstructed.stdout, b"true\n");
         assert!(reconstructed.stderr.is_empty());
     }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let filesystem_component = executor
+        .component_dep(&context.default_environment_id, filesystem_tools)
+        .store()
+        .await?;
+    let git_component = executor
+        .component_dep(&context.default_environment_id, git_tool)
+        .store()
+        .await?;
+    let filesystem_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", filesystem_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let git_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", git_tool.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let git_definition = git_metadata
+        .tools
+        .iter()
+        .find(|definition| definition.name() == Some("git"))
+        .expect("git component exports the git tool")
+        .clone();
+    let filesystem_definitions = filesystem_metadata
+        .tools
+        .iter()
+        .map(|definition| {
+            (
+                ToolName::try_from(definition.name().unwrap()).unwrap(),
+                definition.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut deployment = deployment_state(
+        context.account_id,
+        git_component.id,
+        git_component.revision,
+        "golem:git-tool",
+        "ToolStreamingCaller",
+        git_metadata.tools,
+    );
+    let filesystem_deployment = deployment_state(
+        context.account_id,
+        filesystem_component.id,
+        filesystem_component.revision,
+        "golem:filesystem-tools",
+        "ToolStreamingCaller",
+        filesystem_metadata.tools,
+    );
+    deployment
+        .registered_tools
+        .extend(filesystem_deployment.registered_tools);
+    for (owner, bindings) in filesystem_deployment.tool_bindings {
+        deployment
+            .tool_bindings
+            .entry(owner)
+            .or_default()
+            .extend(bindings);
+    }
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "git-tool-lifecycle");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    let cwd = string_list(&["/workspace/repo"]);
+
+    invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "init",
+        BTreeMap::from([
+            ("working-directory", string_list(&[])),
+            ("directory", optional_string(Some("workspace/repo"))),
+            ("initial-branch", optional_string(Some("main"))),
+        ]),
+    )
+    .await?;
+    for (key, value) in [
+        ("user.name", "Integration Test"),
+        ("user.email", "integration@example.com"),
+    ] {
+        invoke_git_tool_success(
+            &executor,
+            &worker_id,
+            fingerprint,
+            principal.clone(),
+            &git_definition,
+            "config",
+            BTreeMap::from([
+                ("working-directory", cwd.clone()),
+                ("key", SchemaValue::String(key.to_string())),
+                ("value", optional_string(Some(value))),
+                ("local", SchemaValue::Bool(true)),
+            ]),
+        )
+        .await?;
+    }
+    invoke_filesystem_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &filesystem_definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/repo/hello.txt".to_string()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("hello\n".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "add",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("paths", string_list(&["hello.txt"])),
+            ("all", SchemaValue::Bool(false)),
+            ("update", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let commit = invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "commit",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("message", string_list(&["initial"])),
+            ("author", optional_string(None)),
+            ("allow-empty", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record {
+        fields: commit_fields,
+    }) = commit
+    else {
+        anyhow::bail!("git commit returned an unexpected result")
+    };
+    let SchemaValue::String(commit_oid) = &commit_fields[0] else {
+        anyhow::bail!("git commit did not return an object id")
+    };
+    assert_eq!(commit_oid.len(), 40);
+
+    invoke_filesystem_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &filesystem_definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/repo/hello.txt".to_string()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("index\n".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "add",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("paths", string_list(&["hello.txt"])),
+            ("all", SchemaValue::Bool(false)),
+            ("update", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    invoke_filesystem_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &filesystem_definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/repo/hello.txt".to_string()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("worktree\n".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+
+    let index_before_restart = executor
+        .get_file_contents(&worker_id, "/workspace/repo/.git/index")
+        .await?;
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/workspace/repo/.git/index")
+            .await?,
+        index_before_restart,
+        "completed replay must preserve the exact staged index"
+    );
+    let config = invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "config",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("key", SchemaValue::String("user.name".to_string())),
+            ("value", optional_string(None)),
+            ("local", SchemaValue::Bool(true)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record {
+        fields: config_fields,
+    }) = config
+    else {
+        anyhow::bail!("git config returned an unexpected result")
+    };
+    assert_eq!(
+        config_fields[0],
+        SchemaValue::String("user.name".to_string())
+    );
+    assert_eq!(config_fields[1], optional_string(Some("Integration Test")));
+    assert_eq!(config_fields[2], SchemaValue::Bool(false));
+
+    let status = invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "status",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("paths", string_list(&[])),
+            ("short", SchemaValue::Bool(false)),
+            ("porcelain", SchemaValue::String("v1".to_string())),
+            ("null", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record {
+        fields: status_fields,
+    }) = status
+    else {
+        anyhow::bail!("git status returned an unexpected result")
+    };
+    let SchemaValue::List { elements } = &status_fields[0] else {
+        anyhow::bail!("git status did not return an entry list")
+    };
+    assert_eq!(elements.len(), 1);
+    let SchemaValue::Record {
+        fields: status_entry_fields,
+    } = &elements[0]
+    else {
+        anyhow::bail!("git status did not return a status entry")
+    };
+    assert_eq!(
+        status_entry_fields[0],
+        SchemaValue::String("hello.txt".to_string())
+    );
+    assert_eq!(
+        status_entry_fields[3],
+        SchemaValue::String("MM".to_string())
+    );
+    let head: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/workspace/repo/.git/HEAD"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(head, "ref: refs/heads/main\n");
+    let branch_tip: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/workspace/repo/.git/refs/heads/main"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(branch_tip.trim(), commit_oid);
+
+    let log = invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "log",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("ref", optional_string(None)),
+            ("max-count", SchemaValue::F64(1.0)),
+            ("oneline", SchemaValue::Bool(true)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record { fields: log_fields }) = log else {
+        anyhow::bail!("git log returned an unexpected result")
+    };
+    assert_eq!(
+        log_fields[1],
+        SchemaValue::String(format!("{} initial\n", &commit_oid[..7]))
+    );
+
+    let cached_diff = invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "diff",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("from", optional_string(None)),
+            ("to", optional_string(None)),
+            ("paths", string_list(&["hello.txt"])),
+            ("unified", SchemaValue::F64(3.0)),
+            ("cached", SchemaValue::Bool(true)),
+            ("name-only", SchemaValue::Bool(false)),
+            ("stat", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record {
+        fields: cached_diff_fields,
+    }) = cached_diff
+    else {
+        anyhow::bail!("git diff --cached returned an unexpected result")
+    };
+    let SchemaValue::String(cached_patch) = &cached_diff_fields[0] else {
+        anyhow::bail!("git diff --cached did not return a patch")
+    };
+    assert!(cached_patch.contains("-hello\n+index"));
+
+    let diff = invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "diff",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("from", optional_string(None)),
+            ("to", optional_string(None)),
+            ("paths", string_list(&["hello.txt"])),
+            ("unified", SchemaValue::F64(3.0)),
+            ("cached", SchemaValue::Bool(false)),
+            ("name-only", SchemaValue::Bool(false)),
+            ("stat", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record {
+        fields: diff_fields,
+    }) = diff
+    else {
+        anyhow::bail!("git diff returned an unexpected result")
+    };
+    let SchemaValue::String(patch) = &diff_fields[0] else {
+        anyhow::bail!("git diff did not return a patch")
+    };
+    assert!(patch.contains("-index\n+worktree"));
+
+    invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "checkout",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("new-branch", optional_string(Some("persisted-state"))),
+            ("detach", SchemaValue::Bool(false)),
+            ("ref", optional_string(None)),
+            ("paths", string_list(&[])),
+        ]),
+    )
+    .await?;
+    let feature_head: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/workspace/repo/.git/HEAD"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(feature_head, "ref: refs/heads/persisted-state\n");
+    let preserved_worktree: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/workspace/repo/hello.txt"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(preserved_worktree, "worktree\n");
+
+    invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "checkout",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("new-branch", optional_string(None)),
+            ("detach", SchemaValue::Bool(false)),
+            ("ref", optional_string(None)),
+            ("paths", string_list(&["hello.txt"])),
+        ]),
+    )
+    .await?;
+    let restored: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/workspace/repo/hello.txt"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(restored, "index\n");
+
+    invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "checkout",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("new-branch", optional_string(None)),
+            ("detach", SchemaValue::Bool(false)),
+            ("ref", optional_string(Some("main"))),
+            ("paths", string_list(&[])),
+        ]),
+    )
+    .await?;
+    let main_head: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/workspace/repo/.git/HEAD"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(main_head, "ref: refs/heads/main\n");
+    Ok(())
+}
+
+struct GitToolHarness {
+    context: TestContext,
+    environment_state: Arc<TestEnvironmentStateService>,
+    executor: TestWorkerExecutor,
+    caller_component_id: golem_common::model::component::ComponentId,
+    worker_id: golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    git_definition: golem_common::schema::tool::Tool,
+    filesystem_definitions: BTreeMap<ToolName, golem_common::schema::tool::Tool>,
+}
+
+async fn start_git_tool_harness(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    filesystem_tools: &PrecompiledComponent,
+    git_tool: &PrecompiledComponent,
+    instance_name: &str,
+) -> anyhow::Result<GitToolHarness> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let filesystem_component = executor
+        .component_dep(&context.default_environment_id, filesystem_tools)
+        .store()
+        .await?;
+    let git_component = executor
+        .component_dep(&context.default_environment_id, git_tool)
+        .store()
+        .await?;
+    let filesystem_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", filesystem_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let git_metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", git_tool.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let git_definition = git_metadata
+        .tools
+        .iter()
+        .find(|definition| definition.name() == Some("git"))
+        .expect("git component exports the git tool")
+        .clone();
+    let filesystem_definitions = filesystem_metadata
+        .tools
+        .iter()
+        .map(|definition| {
+            (
+                ToolName::try_from(definition.name().unwrap()).unwrap(),
+                definition.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut deployment = deployment_state(
+        context.account_id,
+        git_component.id,
+        git_component.revision,
+        "golem:git-tool",
+        "ToolStreamingCaller",
+        git_metadata.tools,
+    );
+    let filesystem_deployment = deployment_state(
+        context.account_id,
+        filesystem_component.id,
+        filesystem_component.revision,
+        "golem:filesystem-tools",
+        "ToolStreamingCaller",
+        filesystem_metadata.tools,
+    );
+    deployment
+        .registered_tools
+        .extend(filesystem_deployment.registered_tools);
+    for (owner, bindings) in filesystem_deployment.tool_bindings {
+        deployment
+            .tool_bindings
+            .entry(owner)
+            .or_default()
+            .extend(bindings);
+    }
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", instance_name);
+    let worker_id = executor.start_agent(&caller_component.id, agent_id).await?;
+    let fingerprint = executor.get_worker_metadata(&worker_id).await?.fingerprint;
+    let principal = Principal::GolemUser(GolemUserPrincipal {
+        account_id: context.account_id,
+    });
+    Ok(GitToolHarness {
+        context,
+        environment_state,
+        executor,
+        caller_component_id: caller_component.id,
+        worker_id,
+        fingerprint,
+        principal,
+        git_definition,
+        filesystem_definitions,
+    })
+}
+
+async fn initialize_git_harness(harness: &GitToolHarness, branch: &str) -> anyhow::Result<()> {
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "init",
+        BTreeMap::from([
+            ("working-directory", string_list(&[])),
+            ("directory", optional_string(Some("workspace/repo"))),
+            ("initial-branch", optional_string(Some(branch))),
+        ]),
+    )
+    .await?;
+    for (key, value) in [
+        ("user.name", "Recovery Test"),
+        ("user.email", "recovery@example.com"),
+    ] {
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "config",
+            BTreeMap::from([
+                ("working-directory", string_list(&["/workspace/repo"])),
+                ("key", SchemaValue::String(key.to_string())),
+                ("value", optional_string(Some(value))),
+                ("local", SchemaValue::Bool(true)),
+            ]),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+fn git_commit_oid(value: Option<SchemaValue>) -> anyhow::Result<String> {
+    let Some(SchemaValue::Record { fields }) = value else {
+        anyhow::bail!("git commit returned an unexpected result")
+    };
+    let Some(SchemaValue::String(oid)) = fields.first() else {
+        anyhow::bail!("git commit did not return an object id")
+    };
+    Ok(oid.clone())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_git_tool_serializes_filesystem_calls_and_cancels_queued_mutation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let harness = start_git_tool_harness(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        git_tool,
+        "git-tool-concurrency",
+    )
+    .await?;
+    initialize_git_harness(&harness, "main").await?;
+    let cwd = string_list(&["/workspace/repo"]);
+    let cancelled_key = IdempotencyKey::fresh();
+
+    {
+        let mut active_git_gate = harness
+            .executor
+            .gate_next_entity_body_start(&harness.worker_id);
+        let active_git = invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "status",
+            BTreeMap::from([
+                ("working-directory", cwd.clone()),
+                ("paths", string_list(&[])),
+                ("short", SchemaValue::Bool(true)),
+                ("porcelain", SchemaValue::String("v1".to_string())),
+                ("null", SchemaValue::Bool(false)),
+            ]),
+        );
+        tokio::pin!(active_git);
+        tokio::select! {
+            () = active_git_gate.entered() => {}
+            result = &mut active_git => anyhow::bail!("gated git status settled before entering its body: {result:?}"),
+        }
+
+        let filesystem_write = invoke_filesystem_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.filesystem_definitions,
+            "write-file",
+            filesystem_tool_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String("workspace/repo/serialized.txt".to_string()),
+                ),
+                (
+                    "content",
+                    SchemaType::string(),
+                    SchemaValue::String("serialized\n".to_string()),
+                ),
+                (
+                    "create-parent-directories",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(false),
+                ),
+            ]),
+        );
+        tokio::pin!(filesystem_write);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), &mut filesystem_write)
+                .await
+                .is_err(),
+            "filesystem tool must wait behind a filesystem-capable Git body on the same owner"
+        );
+
+        let cancelled_config = invoke_git_tool_success_with_key(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            cancelled_key.clone(),
+            harness.principal.clone(),
+            &harness.git_definition,
+            "config",
+            BTreeMap::from([
+                ("working-directory", cwd.clone()),
+                ("key", SchemaValue::String("user.name".to_string())),
+                ("value", optional_string(Some("Cancelled Name"))),
+                ("local", SchemaValue::Bool(true)),
+            ]),
+        );
+        tokio::pin!(cancelled_config);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), &mut cancelled_config)
+                .await
+                .is_err(),
+            "queued Git config must remain pending behind the active Git body"
+        );
+        assert!(
+            harness
+                .executor
+                .cancel_invocation(&harness.worker_id, &cancelled_key)
+                .await?,
+            "queued Git invocation must be cancellable"
+        );
+        active_git_gate.release();
+        active_git.await?;
+        filesystem_write.await?;
+    }
+
+    let oplog = harness
+        .executor
+        .get_oplog(&harness.worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().any(|entry| {
+        matches!(
+            &entry.entry,
+            PublicOplogEntry::CancelPendingInvocation(params)
+                if params.idempotency_key == cancelled_key
+        )
+    }));
+    assert_eq!(
+        harness
+            .executor
+            .get_file_contents(&harness.worker_id, "/workspace/repo/serialized.txt")
+            .await?
+            .as_ref(),
+        b"serialized\n"
+    );
+    let config = invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal,
+        &harness.git_definition,
+        "config",
+        BTreeMap::from([
+            ("working-directory", cwd),
+            ("key", SchemaValue::String("user.name".to_string())),
+            ("value", optional_string(None)),
+            ("local", SchemaValue::Bool(true)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record { fields }) = config else {
+        anyhow::bail!("git config after cancellation returned an unexpected result")
+    };
+    assert_eq!(fields[1], optional_string(Some("Recovery Test")));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_git_tool_commit_recovers_after_body_before_terminal_and_owners_are_isolated(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let harness = start_git_tool_harness(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        git_tool,
+        "git-tool-crash",
+    )
+    .await?;
+    initialize_git_harness(&harness, "main").await?;
+    let cwd = string_list(&["/workspace/repo"]);
+
+    let baseline_oid = git_commit_oid(
+        invoke_git_tool_success(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            harness.principal.clone(),
+            &harness.git_definition,
+            "commit",
+            BTreeMap::from([
+                ("working-directory", cwd.clone()),
+                ("message", string_list(&["baseline"])),
+                ("author", optional_string(None)),
+                ("allow-empty", SchemaValue::Bool(true)),
+            ]),
+        )
+        .await?,
+    )?;
+    invoke_filesystem_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.filesystem_definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/repo/recovered.txt".to_string()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("recovered\n".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    invoke_git_tool_success(
+        &harness.executor,
+        &harness.worker_id,
+        harness.fingerprint,
+        harness.principal.clone(),
+        &harness.git_definition,
+        "add",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("paths", string_list(&["recovered.txt"])),
+            ("all", SchemaValue::Bool(false)),
+            ("update", SchemaValue::Bool(false)),
+        ]),
+    )
+    .await?;
+
+    let mut completion = harness
+        .executor
+        .gate_next_live_entity_body_completion(&harness.worker_id, "git");
+    let key = IdempotencyKey::fresh();
+    {
+        let mut commit = Box::pin(invoke_git_tool_success_with_key(
+            &harness.executor,
+            &harness.worker_id,
+            harness.fingerprint,
+            key.clone(),
+            harness.principal.clone(),
+            &harness.git_definition,
+            "commit",
+            BTreeMap::from([
+                ("working-directory", cwd.clone()),
+                ("message", string_list(&["survives terminal crash"])),
+                ("author", optional_string(None)),
+                ("allow-empty", SchemaValue::Bool(false)),
+            ]),
+        ));
+        tokio::select! {
+            () = completion.entered() => {}
+            result = &mut commit => anyhow::bail!("git commit settled before its completion checkpoint: {result:?}"),
+        }
+        harness.executor.commit_oplog(&harness.worker_id).await?;
+    }
+    let oplog = harness
+        .executor
+        .get_oplog(&harness.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let entity_start = oplog
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke" => {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("Git commit has an entity Start");
+    assert!(oplog.iter().all(|entry| {
+        !matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == entity_start)
+            && !matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == entity_start)
+    }));
+
+    harness
+        .executor
+        .shutdown_and_wait_for_invocation_loops()
+        .await?;
+    drop(completion);
+    let GitToolHarness {
+        context,
+        environment_state,
+        executor,
+        caller_component_id,
+        worker_id,
+        fingerprint,
+        principal,
+        git_definition,
+        filesystem_definitions,
+    } = harness;
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let recovered_oid = git_commit_oid(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            invoke_git_tool_success_with_key(
+                &executor,
+                &worker_id,
+                fingerprint,
+                key,
+                principal.clone(),
+                &git_definition,
+                "commit",
+                BTreeMap::from([
+                    ("working-directory", cwd.clone()),
+                    ("message", string_list(&["survives terminal crash"])),
+                    ("author", optional_string(None)),
+                    ("allow-empty", SchemaValue::Bool(false)),
+                ]),
+            ),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Git commit recovery timed out"))??,
+    )?;
+    let recovered_ref = String::from_utf8(
+        executor
+            .get_file_contents(&worker_id, "/workspace/repo/.git/refs/heads/main")
+            .await?
+            .to_vec(),
+    )?;
+    assert_eq!(recovered_oid, recovered_ref.trim());
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/workspace/repo/recovered.txt")
+            .await?
+            .as_ref(),
+        b"recovered\n"
+    );
+    let log = invoke_git_tool_success(
+        &executor,
+        &worker_id,
+        fingerprint,
+        principal.clone(),
+        &git_definition,
+        "log",
+        BTreeMap::from([
+            ("working-directory", cwd.clone()),
+            ("ref", optional_string(None)),
+            ("max-count", SchemaValue::F64(2.0)),
+            ("oneline", SchemaValue::Bool(true)),
+        ]),
+    )
+    .await?;
+    let Some(SchemaValue::Record { fields: log_fields }) = log else {
+        anyhow::bail!("git log returned an unexpected result")
+    };
+    let SchemaValue::List { elements } = &log_fields[0] else {
+        anyhow::bail!("git log did not return commits")
+    };
+    assert_eq!(elements.len(), 2);
+    let commit_oids = elements
+        .iter()
+        .map(|entry| match entry {
+            SchemaValue::Record { fields } => match &fields[0] {
+                SchemaValue::String(oid) => Ok(oid.as_str()),
+                _ => anyhow::bail!("log entry did not contain an object id"),
+            },
+            _ => anyhow::bail!("log entry was not a record"),
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    assert_eq!(commit_oids, [recovered_oid.as_str(), baseline_oid.as_str()]);
+
+    let isolated_id = agent_id!("ToolStreamingCaller", "git-tool-other-owner");
+    let isolated_worker = executor
+        .start_agent(&caller_component_id, isolated_id)
+        .await?;
+    let isolated_fingerprint = executor
+        .get_worker_metadata(&isolated_worker)
+        .await?
+        .fingerprint;
+    invoke_git_tool_success(
+        &executor,
+        &isolated_worker,
+        isolated_fingerprint,
+        principal.clone(),
+        &git_definition,
+        "init",
+        BTreeMap::from([
+            ("working-directory", string_list(&[])),
+            ("directory", optional_string(Some("workspace/repo"))),
+            ("initial-branch", optional_string(Some("isolated"))),
+        ]),
+    )
+    .await?;
+    invoke_filesystem_tool_success(
+        &executor,
+        &isolated_worker,
+        isolated_fingerprint,
+        principal,
+        &filesystem_definitions,
+        "write-file",
+        filesystem_tool_input(vec![
+            (
+                "path",
+                SchemaType::string(),
+                SchemaValue::String("workspace/repo/isolated.txt".to_string()),
+            ),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String("isolated\n".to_string()),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(false),
+            ),
+        ]),
+    )
+    .await?;
+    assert!(
+        executor
+            .get_file_contents(&worker_id, "/workspace/repo/isolated.txt")
+            .await
+            .is_err()
+    );
+    assert!(
+        executor
+            .get_file_contents(&isolated_worker, "/workspace/repo/recovered.txt")
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn builtin_git_tool_runtime_provides_wasi_http(
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("git_tool")] git_tool: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let engine = Engine::new(&create_wasmtime_config_without_fs_cache())?;
+    let component = Component::from_file(
+        &engine,
+        deps.component_directory
+            .join(format!("{}.wasm", git_tool.wasm_name)),
+    )?;
+    let imports = component
+        .component_type()
+        .imports(&engine)
+        .map(|(name, _)| name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        imports.iter().any(|name| name.starts_with("wasi:http/")),
+        "Git tool must import wasi:http for all future network transport; imports: {imports:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn git_network_probe_uses_isomorphic_git_web_transport(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("git_network_probe")] probe: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    fn pkt_line(payload: &str) -> String {
+        format!("{:04x}{payload}", payload.len() + 4)
+    }
+
+    let oid = "0123456789abcdef0123456789abcdef01234567";
+    let advertisement = format!(
+        "{}0000{}0000",
+        pkt_line("# service=git-upload-pack\n"),
+        pkt_line(&format!(
+            "{oid} refs/heads/main\0symref=HEAD:refs/heads/main agent=golem-test\n"
+        ))
+    );
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await?;
+    let port = listener.local_addr()?.port();
+    let server = tokio::spawn(async move {
+        let route = Router::new().route(
+            "/repo.git/info/refs",
+            get(move |request: Request| {
+                let advertisement = advertisement.clone();
+                async move {
+                    assert_eq!(request.uri().query(), Some("service=git-upload-pack"));
+                    Response::builder()
+                        .header(
+                            "content-type",
+                            "application/x-git-upload-pack-advertisement",
+                        )
+                        .body(Body::from(advertisement))
+                        .unwrap()
+                }
+            }),
+        );
+        axum::serve(listener, route).await.unwrap();
+    });
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, probe)
+        .store()
+        .await?;
+    let agent_id = agent_id!("GitNetworkProbe", "web-transport");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let refs: Vec<String> = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "discover",
+            data_value!(format!("http://localhost:{port}/repo.git")),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(refs, vec![format!("refs/heads/main {oid}")]);
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    for function_name in ["http::client::send", "http::types::response::consume-body"] {
+        let starts = oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name == function_name)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(starts.len(), 1, "expected one durable {function_name} call");
+        assert!(oplog.iter().any(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == starts[0].oplog_index)
+        }));
+    }
+    assert!(oplog.iter().all(|entry| {
+        !matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.starts_with("sockets::"))
+    }));
+    server.abort();
     Ok(())
 }
 

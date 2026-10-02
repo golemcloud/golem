@@ -7342,12 +7342,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let encoded = prepared.attempt.invocation.invocation_value.as_slice();
-        let typed = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
-            .map_err(|error| {
+        let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(encoded).map_err(
+            |error| {
                 WorkerExecutorError::runtime(format!(
                     "failed to decode persisted durable invocation input: {error}"
                 ))
-            })?;
+            },
+        )?;
         let graph = typed
             .graph
             .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input graph"))?

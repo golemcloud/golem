@@ -23,10 +23,11 @@ use crate::schema::agent::{
 };
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::MetadataEnvelope;
-use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
 use golem_api_grpc::proto::golem::schema as proto;
+use golem_schema::proto::golem::common::Empty as ProtoEmpty;
+use golem_schema::proto::golem::schema::MetadataEnvelope as ProtoMetadataEnvelope;
 
-fn optional_meta(meta: MetadataEnvelope) -> Option<proto::MetadataEnvelope> {
+fn optional_meta(meta: MetadataEnvelope) -> Option<ProtoMetadataEnvelope> {
     if meta.is_empty() {
         None
     } else {
@@ -34,7 +35,7 @@ fn optional_meta(meta: MetadataEnvelope) -> Option<proto::MetadataEnvelope> {
     }
 }
 
-fn meta_from_proto(meta: Option<proto::MetadataEnvelope>) -> Result<MetadataEnvelope, String> {
+fn meta_from_proto(meta: Option<ProtoMetadataEnvelope>) -> Result<MetadataEnvelope, String> {
     match meta {
         None => Ok(MetadataEnvelope::default()),
         Some(m) => m.try_into(),
