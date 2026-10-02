@@ -1174,7 +1174,19 @@ exec --fail-on-error node scripts/sync-reflection-conformance.mjs --check
 description = "Publishes packages to crates.io"
 dependencies = [
     "set-version",
+    "publish-golem-schema-derive",
+    "publish-golem-schema",
 ]
+
+[tasks.publish-golem-schema-derive]
+description = "Publishes golem-schema-derive package to crates.io"
+command = "cargo"
+args = ["publish", "-p", "golem-schema-derive", "--allow-dirty"]
+
+[tasks.publish-golem-schema]
+description = "Publishes golem-schema package to crates.io"
+command = "cargo"
+args = ["publish", "-p", "golem-schema", "--allow-dirty"]
 
 [tasks.set-version]
 description = "Sets the version in all Cargo.toml files to the value of the VERSION environment variable"

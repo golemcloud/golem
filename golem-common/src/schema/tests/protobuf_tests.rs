@@ -48,7 +48,7 @@ proptest! {
     /// discriminator types.
     #[test]
     fn schema_graph_proto_round_trip(graph in schema_graph_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+        let proto: golem_schema::proto::golem::schema::SchemaGraph = graph.clone().into();
         let back: SchemaGraph = proto.try_into().expect("decode");
         prop_assert_eq!(graph, back);
     }
@@ -60,7 +60,7 @@ proptest! {
     /// quantity / secret / quota-token).
     #[test]
     fn schema_value_proto_round_trip(value in schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto: golem_schema::proto::golem::schema::SchemaValue =
             value.clone().try_into().expect("encode");
         let back: SchemaValue = proto.try_into().expect("decode");
         prop_assert!(
@@ -72,7 +72,7 @@ proptest! {
     /// The typed pair (graph + value) round-trips through its protobuf mirror.
     #[test]
     fn typed_schema_value_proto_round_trip(typed in typed_schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::TypedSchemaValue =
+        let proto: golem_schema::proto::golem::schema::TypedSchemaValue =
             typed.clone().try_into().expect("encode");
         let back: TypedSchemaValue = proto.try_into().expect("decode");
         prop_assert_eq!(typed.graph(), back.graph());
@@ -236,7 +236,7 @@ fn permission_card_type_and_value_proto_round_trip() {
     let graph = SchemaGraph::anonymous(SchemaType::permission_card(PermissionCardSpec {
         polymorphic: true,
     }));
-    let graph_proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+    let graph_proto: golem_schema::proto::golem::schema::SchemaGraph = graph.clone().into();
     let graph_back: SchemaGraph = graph_proto.try_into().expect("decode permission-card type");
     assert_eq!(graph, graph_back);
 
@@ -246,7 +246,7 @@ fn permission_card_type_and_value_proto_round_trip() {
         expires_at: Some(chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap()),
         polymorphic: true,
     });
-    let value_proto: golem_api_grpc::proto::golem::schema::SchemaValue = value
+    let value_proto: golem_schema::proto::golem::schema::SchemaValue = value
         .clone()
         .try_into()
         .expect("encode permission-card value");
@@ -262,7 +262,7 @@ fn permission_card_type_and_value_proto_round_trip() {
 fn numeric_restrictions_proto_golden_round_trip() {
     for (label, ty) in crate::schema::tests::golden_numeric_schema_types() {
         let graph = SchemaGraph::anonymous(ty);
-        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+        let proto: golem_schema::proto::golem::schema::SchemaGraph = graph.clone().into();
         let back: SchemaGraph = proto.try_into().expect("decode");
         assert_eq!(graph, back, "proto numeric golden mismatch: {label}");
     }
@@ -287,7 +287,7 @@ fn numeric_empty_restrictions_normalize_to_none_proto() {
             restrictions: Some(empty),
             metadata: MetadataEnvelope::default(),
         });
-        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.into();
+        let proto: golem_schema::proto::golem::schema::SchemaGraph = graph.into();
         let back: SchemaGraph = proto.try_into().expect("decode");
         assert_eq!(back.root.numeric_restrictions(), None);
     }

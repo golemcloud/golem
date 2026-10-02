@@ -44,8 +44,6 @@ mod bit_vec;
 mod bytes;
 #[cfg(feature = "chrono")]
 mod chrono;
-#[cfg(feature = "full")]
-mod full;
 #[cfg(feature = "mac_address")]
 mod mac_address;
 #[cfg(feature = "nonempty_collections")]

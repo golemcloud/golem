@@ -15,7 +15,7 @@
 use crate::config::{RegistryServiceConfig, StaticRegistryServiceConfig};
 use crate::service::ComponentCompilationService;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationService as GrpcCompilationServer;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
@@ -26,6 +26,7 @@ use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::ComponentId;
 use golem_common::recorded_grpc_api_request;
+use golem_schema::proto::golem::common::Empty;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};

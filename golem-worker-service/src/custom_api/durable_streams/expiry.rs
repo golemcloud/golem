@@ -6,10 +6,10 @@
 
 use super::super::{RichRequest, RouteExecutionResult};
 use chrono::{DateTime, SecondsFormat, Utc};
-use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     StreamSessionExpiryPolicy, stream_session_expiry_policy,
 };
+use golem_schema::proto::golem::common::Empty;
 use http::{HeaderName, HeaderValue};
 
 const MAX_CACHE_SECONDS: u64 = 31_536_000;

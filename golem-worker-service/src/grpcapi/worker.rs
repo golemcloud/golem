@@ -19,7 +19,6 @@ use crate::service::worker::{
 };
 use futures::{FutureExt, Stream, StreamExt, stream};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::common::Empty;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     AgentError as GrpcAgentError, CancelInvocationRequest, CancelInvocationResponse,
@@ -49,6 +48,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
 use golem_common::recorded_grpc_api_request;
+use golem_schema::proto::golem::common::Empty;
 use golem_service_base::grpc::proto_agent_id_string;
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
@@ -1315,8 +1315,7 @@ mod protocol_tests {
     use super::{validated_request_tail, validated_response_stream};
     use futures::{FutureExt, StreamExt, stream};
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-    use golem_api_grpc::proto::golem::common::{Empty, EnvironmentId, Uuid};
-    use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
+    use golem_api_grpc::proto::golem::common::EnvironmentId;
     use golem_api_grpc::proto::golem::worker::{
         AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InvocationAccepted,
         InvocationRequest, InvocationResponse, InvocationSessionCompletion,
@@ -1325,6 +1324,8 @@ mod protocol_tests {
         invocation_request, invocation_response, invocation_session_completion,
         invocation_session_result,
     };
+    use golem_schema::proto::golem::common::{Empty, Uuid};
+    use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
     use std::sync::Arc;
     use test_r::test;
     use tonic::Status;

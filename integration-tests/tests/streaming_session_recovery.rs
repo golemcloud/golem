@@ -17,13 +17,13 @@ test_r::enable!();
 #[test_r::sequential]
 mod tests {
     use anyhow::{Context, ensure};
-    use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
     use golem_api_grpc::proto::golem::worker::{ResumeOperation, invocation_session_result};
     use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
     use golem_common::model::{AgentId, PromiseId};
     use golem_common::schema::SchemaValue;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
+    use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
     use golem_test_framework::config::{
         DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
