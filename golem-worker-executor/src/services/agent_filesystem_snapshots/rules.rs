@@ -678,6 +678,11 @@ pub(super) fn has_ended(state: &State, agent: &AgentSnapshots, id: JobId) -> boo
     state.jobs.get(agent).is_none_or(|job| job.id != id)
 }
 
+/// The number of agents with pending or running clean-up work.
+pub(super) fn agents_with_cleanups(state: &State) -> usize {
+    state.cleanups.len()
+}
+
 /// Whether no job runs for `agent`.
 #[cfg(test)]
 pub(super) fn is_free(state: &State, agent: &AgentSnapshots) -> bool {
