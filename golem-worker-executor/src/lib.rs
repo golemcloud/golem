@@ -165,9 +165,9 @@ pub struct RunDetails {
     /// Weak reference to a sentinel inside `All`. When `All` is properly
     /// deallocated, `upgrade()` returns `None`. Used by tests to detect leaks.
     pub leak_detector: std::sync::Weak<()>,
-    /// The worker invocation loops of this executor. They stop at the shutdown signal; an
-    /// in-process restart of the executor over the same storage must wait for them to exit
-    /// before reopening the workers' oplogs.
+    /// The worker and entity tasks of this executor, plus the owner actors they can submit writes
+    /// to. An in-process restart over the same storage must wait for this boundary to drain before
+    /// reopening workers' oplogs.
     pub invocation_loops: InvocationLoops,
 }
 

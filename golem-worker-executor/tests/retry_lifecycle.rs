@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::oplog::{OplogErrorKind, OplogIndex, PublicOplogEntry};
+use golem_common::model::retry_policy::RetryPolicyState;
 use golem_common::model::{
-    AgentStatus, NamedRetryPolicy, Predicate, PredicateValue, RetryConfig, RetryPolicy,
+    AgentId, AgentStatus, NamedRetryPolicy, Predicate, PredicateValue, RetryConfig, RetryPolicy,
 };
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::TestDsl;
@@ -69,11 +71,30 @@ fn time_box_retry_overrides() -> TestExecutorOverrides {
             predicate: Predicate::True,
             policy: RetryPolicy::TimeBox {
                 limit: Duration::from_millis(500),
-                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+                inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(30))),
             },
         }]),
         ..Default::default()
     }
+}
+
+async fn semantic_retry_authorizations(
+    executor: &impl TestDsl,
+    worker_id: &AgentId,
+) -> anyhow::Result<Vec<(OplogIndex, OplogIndex, RetryPolicyState)>> {
+    Ok(executor
+        .get_oplog(worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::Error(params) if params.kind == OplogErrorKind::Invocation => params
+                .retry_policy_state
+                .map(Into::into)
+                .filter(|state: &RetryPolicyState| !state.is_exhausted())
+                .map(|state| (entry.oplog_index, params.retry_from, state)),
+            _ => None,
+        })
+        .collect())
 }
 
 fn streaming_time_box_retry_overrides(path: &str) -> TestExecutorOverrides {
@@ -97,7 +118,7 @@ fn streaming_time_box_retry_overrides(path: &str) -> TestExecutorOverrides {
                 ),
                 policy: RetryPolicy::TimeBox {
                     limit: Duration::from_millis(500),
-                    inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(2))),
+                    inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(30))),
                 },
             },
             NamedRetryPolicy {
@@ -117,47 +138,51 @@ enum StreamingFailure {
     TruncatedResponse,
 }
 
-async fn start_streaming_failure_server(failure: StreamingFailure) -> (u16, Arc<AtomicUsize>) {
+async fn start_streaming_failure_server(
+    failure: StreamingFailure,
+) -> (
+    u16,
+    Arc<AtomicUsize>,
+    tokio_util::task::AbortOnDropHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let requests = Arc::new(AtomicUsize::new(0));
     let requests_in_server = requests.clone();
 
-    tokio::spawn(
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
         async move {
-            loop {
+            'connections: loop {
                 let (mut stream, _) = match listener.accept().await {
                     Ok(connection) => connection,
                     Err(_) => break,
                 };
-                requests_in_server.fetch_add(1, Ordering::SeqCst);
                 let truncated = matches!(failure, StreamingFailure::TruncatedResponse);
-                tokio::spawn(async move {
-                    let mut request = Vec::new();
-                    let mut buffer = [0u8; 1024];
-                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        let read = stream.read(&mut buffer).await.unwrap_or(0);
-                        if read == 0 {
-                            return;
-                        }
-                        request.extend_from_slice(&buffer[..read]);
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).await.unwrap_or(0);
+                    if read == 0 {
+                        continue 'connections;
                     }
-                    if truncated {
-                        let _ = stream
-                            .write_all(
-                                b"HTTP/1.1 200 OK\r\ncontent-length: 1024\r\n\
-                                  connection: close\r\n\r\npartial",
-                            )
-                            .await;
-                        let _ = stream.flush().await;
-                    }
-                });
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                requests_in_server.fetch_add(1, Ordering::SeqCst);
+                if truncated {
+                    let _ = stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 1024\r\n\
+                              connection: close\r\n\r\npartial",
+                        )
+                        .await;
+                    let _ = stream.flush().await;
+                }
             }
         }
         .in_current_span(),
-    );
+    ));
 
-    (port, requests)
+    (port, requests, server)
 }
 
 async fn assert_streaming_time_box_handoff(
@@ -173,7 +198,7 @@ async fn assert_streaming_time_box_handoff(
     let context = TestContext::new(last_unique_id);
     let executor =
         start_with_overrides(deps, &context, streaming_time_box_retry_overrides(path)).await?;
-    let (port, requests) = start_streaming_failure_server(failure).await;
+    let (port, requests, _server) = start_streaming_failure_server(failure).await;
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
         .store()
@@ -200,18 +225,31 @@ async fn assert_streaming_time_box_handoff(
     executor
         .wait_for_status(&worker_id, AgentStatus::Retrying, Duration::from_secs(20))
         .await?;
+    let authorizations_before_crash = semantic_retry_authorizations(&executor, &worker_id).await?;
+    assert_eq!(
+        authorizations_before_crash.len(),
+        1,
+        "the initial streaming failure must authorize exactly one semantic retry"
+    );
+    assert_eq!(authorizations_before_crash[0].2.retry_count(), 1);
+    let requests_before_crash = requests.load(Ordering::SeqCst);
     tokio::time::sleep(Duration::from_millis(750)).await;
     executor.simulated_crash(&worker_id).await?;
 
-    let result = tokio::time::timeout(Duration::from_millis(1_500), invocation).await??;
+    let result = invocation.await?;
     assert_eq!(
         result.is_err(),
         expect_invocation_error,
         "unexpected invocation result after the retry policy was exhausted: {result:?}"
     );
     assert!(
-        requests.load(Ordering::SeqCst) >= 2,
-        "trap recovery must reissue the failed HTTP request"
+        requests.load(Ordering::SeqCst) > requests_before_crash,
+        "reconstruction must reach the HTTP server after the crash"
+    );
+    assert_eq!(
+        semantic_retry_authorizations(&executor, &worker_id).await?,
+        authorizations_before_crash,
+        "reconstruction must not authorize or charge another semantic retry"
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
@@ -330,15 +368,25 @@ async fn time_box_elapsed_budget_survives_reconstruction(
     executor
         .wait_for_status(&worker_id, AgentStatus::Retrying, Duration::from_secs(20))
         .await?;
+    let authorizations_before_crash = semantic_retry_authorizations(&executor, &worker_id).await?;
+    assert_eq!(
+        authorizations_before_crash.len(),
+        1,
+        "the initial failure must authorize exactly one semantic retry"
+    );
+    assert_eq!(authorizations_before_crash[0].2.retry_count(), 1);
     tokio::time::sleep(Duration::from_millis(750)).await;
     executor.simulated_crash(&worker_id).await?;
 
-    // A reset budget would authorize another attempt after the configured two-second delay.
-    // Completing sooner proves reconstruction gave up against the original elapsed budget.
-    let result = tokio::time::timeout(Duration::from_millis(1_500), invocation).await??;
+    let result = invocation.await?;
     assert!(
         result.is_err(),
         "the failing invocation must exhaust its time box"
+    );
+    assert_eq!(
+        semantic_retry_authorizations(&executor, &worker_id).await?,
+        authorizations_before_crash,
+        "reconstruction must not authorize or charge another semantic retry"
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;

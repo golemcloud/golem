@@ -205,7 +205,7 @@ async fn executor_shutdown_drains_deferred_ephemeral_archive() {
         },
     );
     shutdown.cancel();
-    loops.wait_for_exit().await;
+    loops.wait_for_exit().await.unwrap();
     assert!(producer.ensure_healthy().is_err());
     assert!(slot.retain_response().is_err());
 }

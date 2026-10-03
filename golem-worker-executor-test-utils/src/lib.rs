@@ -108,7 +108,9 @@ use golem_worker_executor::preview2::golem::agent::host::{
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
-use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoops};
+use golem_worker_executor::services::active_agents::{
+    ActiveAgents, CompletedReconstructionTaskHook, InvocationLoops,
+};
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -192,7 +194,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
-use tracing::{Level, debug, info, warn};
+use tracing::{Level, debug, info};
 use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
@@ -582,6 +584,72 @@ mod hosted_descriptor_tests {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompletedReconstructionExecutorPhase {
+    Supervisor,
+    MonitorFailureCallback,
+}
+
+pub struct CompletedReconstructionExecutorPhaseGate {
+    entered: tokio::sync::oneshot::Receiver<()>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CompletedReconstructionExecutorPhaseGate {
+    pub async fn entered(&mut self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        (&mut self.entered).await
+    }
+
+    pub fn was_dropped(&self) -> bool {
+        self.dropped.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+struct TestCompletedReconstructionTaskHook {
+    phase: CompletedReconstructionExecutorPhase,
+    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+struct CompletedReconstructionHookDrop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for CompletedReconstructionHookDrop {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+#[async_trait]
+impl CompletedReconstructionTaskHook for TestCompletedReconstructionTaskHook {
+    async fn supervisor_pending(&self) {
+        if self.phase == CompletedReconstructionExecutorPhase::Supervisor {
+            let _drop = CompletedReconstructionHookDrop(self.dropped.clone());
+            self.entered
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(())
+                .unwrap();
+            std::future::pending::<()>().await;
+        }
+    }
+
+    async fn monitor_failure_pending(&self) {
+        if self.phase == CompletedReconstructionExecutorPhase::MonitorFailureCallback {
+            let _drop = CompletedReconstructionHookDrop(self.dropped.clone());
+            self.entered
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(())
+                .unwrap();
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
@@ -597,6 +665,7 @@ pub struct TestWorkerExecutor {
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
     /// cache) alive, and to read per-agent instance load counts.
     additional_test_deps: AdditionalTestDeps,
+    production_additional_deps: Option<NoAdditionalDeps>,
     services: Option<golem_worker_executor::services::All<TestWorkerCtx>>,
     production_active_agents:
         Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
@@ -676,7 +745,8 @@ impl TestWorkerExecutor {
             self._run_details.invocation_loops.wait_for_exit(),
         )
         .await
-        .map_err(|_| anyhow!("executor invocation loops did not retire within 10s"))
+        .map_err(|_| anyhow!("executor tasks did not retire within 10s"))?
+        .map_err(anyhow::Error::msg)
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
@@ -921,7 +991,11 @@ impl TestWorkerExecutor {
     }
 
     pub fn set_worker_deletion_hook(&self, hook: Arc<dyn WorkerDeletionHook>) {
-        self.additional_test_deps.set_worker_deletion_hook(hook);
+        self.additional_test_deps
+            .set_worker_deletion_hook(hook.clone());
+        if let Some(additional_deps) = &self.production_additional_deps {
+            additional_deps.set_worker_deletion_hook(hook);
+        }
     }
 
     /// Rejects one linear-memory growth after the next RPC creation completes.
@@ -1203,6 +1277,31 @@ impl TestWorkerExecutor {
             .await
     }
 
+    pub async fn active_entity_fence_generation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> Option<u64> {
+        Some(
+            self.additional_test_deps
+                .active_agents
+                .get()?
+                .try_get_active_agent(owned_agent_id)
+                .await?
+                .entity_fence_generation_for_test(),
+        )
+    }
+
+    pub async fn advance_entity_fence_generation_for_test(&self, owned_agent_id: &OwnedAgentId) {
+        self.additional_test_deps
+            .active_agents
+            .get()
+            .expect("active agents are initialized")
+            .try_get_active_agent(owned_agent_id)
+            .await
+            .expect("active agent is present")
+            .advance_entity_fence_generation_for_test();
+    }
+
     pub async fn store_component_with_id(
         &self,
         name: &str,
@@ -1416,6 +1515,25 @@ impl TestWorkerExecutor {
     ) -> EntityReconstructionBodyGateHandle {
         self.additional_test_deps
             .gate_next_completed_entity_reconstruction(agent_id.clone())
+    }
+
+    pub fn gate_completed_reconstruction_executor_phase(
+        &self,
+        phase: CompletedReconstructionExecutorPhase,
+    ) -> CompletedReconstructionExecutorPhaseGate {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self._run_details
+            .invocation_loops
+            .set_completed_reconstruction_hook(Arc::new(TestCompletedReconstructionTaskHook {
+                phase,
+                entered: std::sync::Mutex::new(Some(entered_tx)),
+                dropped: dropped.clone(),
+            }));
+        CompletedReconstructionExecutorPhaseGate {
+            entered: entered_rx,
+            dropped,
+        }
     }
 
     /// Reports destruction of this agent's entity Store contexts, keyed by durable Start.
@@ -1900,28 +2018,26 @@ impl TestContext {
 
     /// Waits until the workers of every shut-down executor previously started on this context
     /// stopped executing. Executors that are still running are left alone.
-    async fn wait_for_shut_down_executors(&self) {
-        let previous = std::mem::take(&mut *self.executor_invocation_loops.lock().unwrap());
-        let mut still_running = Vec::new();
-        for loops in previous {
+    async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
+        let previous = self.executor_invocation_loops.lock().unwrap().clone();
+        let mut drained = Vec::new();
+        for loops in &previous {
             if !loops.is_shut_down() {
-                still_running.push(loops);
                 continue;
             }
-            if tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
+            let result = tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
                 .await
-                .is_err()
-            {
-                warn!(
-                    "Invocation loops of a previous executor did not exit within 10s; \
-                     starting the next executor over the same storage anyway"
-                );
-            }
+                .map_err(|_| anyhow!(
+                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage"
+                ))?;
+            result.map_err(anyhow::Error::msg)?;
+            drained.push(loops.clone());
         }
         self.executor_invocation_loops
             .lock()
             .unwrap()
-            .extend(still_running);
+            .retain(|loops| !drained.iter().any(|drained| loops.same_executor(drained)));
+        Ok(())
     }
 
     fn register_executor(&self, invocation_loops: InvocationLoops) {
@@ -2220,7 +2336,7 @@ async fn start_executor_with_config(
     let additional_test_deps = AdditionalTestDeps::new();
     let services = Arc::new(Mutex::new(None));
 
-    context.wait_for_shut_down_executors().await;
+    context.wait_for_shut_down_executors().await?;
     let details = run(
         config,
         prometheus.clone(),
@@ -2259,6 +2375,7 @@ async fn start_executor_with_config(
                 client,
                 context: context.clone(),
                 additional_test_deps,
+                production_additional_deps: None,
                 services: services.lock().unwrap().take(),
                 production_active_agents: None,
                 concurrent_resource_entry: None,
@@ -3581,6 +3698,7 @@ struct ProductionContextTestServerBootstrap {
     active_agents: Arc<
         std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     >,
+    additional_deps: NoAdditionalDeps,
 }
 
 #[async_trait]
@@ -3671,7 +3789,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> NoAdditionalDeps {
-        NoAdditionalDeps {}
+        self.additional_deps.clone()
     }
 
     fn create_direct_invocation_auth_service(
@@ -3834,12 +3952,15 @@ async fn run_production_context_bootstrap(
     let mut join_set = tokio::task::JoinSet::new();
 
     let active_agents = Arc::new(std::sync::OnceLock::new());
+    let additional_deps = NoAdditionalDeps::new();
+    context.wait_for_shut_down_executors().await?;
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
             wrap_rpc: overrides.wrap_rpc,
             active_agents: active_agents.clone(),
+            additional_deps: additional_deps.clone(),
         },
         config,
         prometheus.clone(),
@@ -3848,6 +3969,7 @@ async fn run_production_context_bootstrap(
         false,
     )
     .await?;
+    context.register_executor(details.invocation_loops.clone());
 
     let grpc_port = details.grpc_port;
     let leak_detector = details.leak_detector.clone();
@@ -3879,6 +4001,7 @@ async fn run_production_context_bootstrap(
                 // use `production_active_agents`; the remaining test-context-only
                 // helpers see empty additional dependencies.
                 additional_test_deps: AdditionalTestDeps::new(),
+                production_additional_deps: Some(additional_deps),
                 services: None,
                 production_active_agents: Some(
                     active_agents
@@ -4717,6 +4840,12 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
+    fn executor_shutdown_handle(
+        &self,
+    ) -> golem_worker_executor::services::oplog::OplogShutdownHandle {
+        self.oplog.executor_shutdown_handle()
+    }
+
     fn retire(&self) {
         self.oplog.retire();
     }

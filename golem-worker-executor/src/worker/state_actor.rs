@@ -525,13 +525,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         worker
                             .memory_limit_interrupt_queued
                             .store(false, Ordering::Release);
-                        if memory.exceeds_current_limit() {
-                            worker
+                        if memory.exceeds_current_limit()
+                            && let Err(error) = worker
                                 .set_interrupting_for(
                                     InterruptKind::Suspend(Timestamp::now_utc()),
                                     UnloadReason::MemoryLimit,
                                 )
-                                .await;
+                                .await
+                        {
+                            tracing::error!(%error, "Failed to establish memory-limit suspension");
                         }
                     }
                 }

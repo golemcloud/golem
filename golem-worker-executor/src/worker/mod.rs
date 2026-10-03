@@ -61,7 +61,7 @@ use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, SnapshotSource, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::active_agents::{
-    MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
+    ActiveAgent, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
 };
 use crate::services::agent_filesystem::{
     AccessMode, FilesystemGenerationHandle, Follow, ObjectKind, OpenOptions, PathTarget,
@@ -545,6 +545,14 @@ pub enum WorkerDeletionStage {
     CacheRemoved,
 }
 
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerLifecycleEstablishmentStage {
+    QueuedBeforeFence,
+    FencedBeforeDrain,
+    ReplacementBeforeReopen,
+}
+
 /// Test-harness coordination at retryable worker-deletion stage boundaries.
 #[doc(hidden)]
 #[async_trait::async_trait]
@@ -565,6 +573,17 @@ pub trait WorkerDeletionHook: Send + Sync {
     }
 
     async fn before_filesystem_cleanup(&self, _owned_agent_id: &OwnedAgentId) {}
+
+    async fn before_owner_retirement_complete(&self, _owned_agent_id: &OwnedAgentId) {}
+
+    async fn before_lifecycle_establishment_stage(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _stage: WorkerLifecycleEstablishmentStage,
+    ) {
+    }
+
+    async fn before_invocation_terminal_selection(&self, _owned_agent_id: &OwnedAgentId) {}
 
     async fn before_stage(
         &self,
@@ -698,6 +717,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
+    interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
     infrastructure_recovery_retry_config: RetryConfig,
     infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
@@ -1468,6 +1488,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .is_some_and(|worker| std::ptr::eq(worker.as_ref(), self))
     }
 
+    pub(crate) async fn active_agent_for_this_owner(&self) -> Option<Arc<ActiveAgent<Ctx>>> {
+        self.active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await
+            .filter(|active_agent| std::ptr::eq(active_agent.primary().as_ref(), self))
+    }
+
     /// Interrupts and retires this worker as its owner - an environment deletion, or its shard
     /// moving to another executor (`ShardLost`) - draining it and dropping it from `ActiveAgents`.
     /// Idempotent and shared: a second caller while retirement is already in flight awaits the
@@ -1486,7 +1513,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // stop or this generation is no longer the cached one. The ack is not awaited: a
             // caller blocking on it would panic if the worker was already stopping.
             self.set_interrupting_for(InterruptKind::ShardLost, UnloadReason::ShardLost)
-                .await;
+                .await?;
         }
         // A deletion that already failed on the lost shard holds the cache entry with nothing
         // running, and nothing here can finish it any more. Checked on every call rather than in
@@ -1522,6 +1549,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         worker
                             .quiesce_for_owner_retirement(Some(interrupt), forwarding.as_deref())
                             .await?;
+                        if let Some(hook) = Ctx::worker_deletion_hook(&worker.extra_deps()) {
+                            hook.before_owner_retirement_complete(&worker.owned_agent_id)
+                                .await;
+                        }
                         worker.remove_from_active_agents().await;
                         *cleanup = OwnerCleanupState::Retired;
                         worker.retirement_result()
@@ -1543,13 +1574,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn quiesce_for_owner_retirement(
-        &self,
+        self: &Arc<Self>,
         interrupt: Option<InterruptKind>,
         forwarding: Option<&ForwardingOplog>,
     ) -> Result<(), WorkerExecutorError> {
         let retirement = self.retire_durable_stream_producer();
         if let Some(interrupt) = interrupt {
-            self.set_interrupting(interrupt).await;
+            self.set_interrupting(interrupt).await?;
         }
         let unload_reason = interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt);
         self.stop_internal(
@@ -1579,6 +1610,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else if interrupt.is_some() {
             let pending = self.interrupt_signal.lock().await.claim_pending_terminal();
             if let Some(pending) = pending {
+                pending.establishment.wait().await?;
                 let status = self.get_attached_last_known_status().await;
                 if matches!(
                     status.status,
@@ -2192,7 +2224,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .shared();
                     *instance = WorkerInstance::Initializing(completion.clone());
                     let worker = self.clone();
-                    tokio::spawn(async move {
+                    let invocation_loops = self.active_agents().invocation_loops();
+                    let construction = async move {
                         let result = crate::worker::invocation::with_invocation_stack(build).await;
                         let published = result.as_ref().map(|_| ()).map_err(Clone::clone);
                         let mut instance = worker.instance.lock().await;
@@ -2215,7 +2248,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if resolved {
                             worker.retire_if_shard_left_during_construction().await;
                         }
-                    });
+                    };
+                    if !invocation_loops.spawn_construction(construction) {
+                        *instance = WorkerInstance::Unresolved;
+                        return (
+                            false,
+                            Err(WorkerExecutorError::runtime(
+                                "Worker initialization rejected because its executor is stopping",
+                            )),
+                        );
+                    }
                     (true, completion)
                 }
                 WorkerInstance::Initializing(completion) => (false, completion.clone()),
@@ -2458,6 +2500,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Arc::clone(&resource_entry),
             execution_status.clone(),
         ));
+        deps.active_agents()
+            .invocation_loops()
+            .register_owner_oplog(oplog.clone());
 
         let worker = ResolvedWorkerData {
             parsed_agent_id: owner_context.agent().cloned(),
@@ -2484,6 +2529,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
+            interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
             infrastructure_recovery_retry_config: deps.config().retry.clone(),
             infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
@@ -2946,10 +2992,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
     /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
-        let active_agent = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await;
+        let active_agent = self.active_agent_for_this_owner().await;
         let reopen_entity_generation = match active_agent.as_ref() {
             Some(active_agent) => match active_agent.try_fence_idle_entity_bodies() {
                 Some(reopen_generation) => reopen_generation,
@@ -3162,7 +3205,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             info!(agent_id = %self.owned_agent_id, "Fencing worker execution for deletion");
             self.set_interrupting_internal(interrupt_kind, false, UnloadReason::Deleting, true)
-                .await;
+                .await?;
             self.complete_deletion_stage(WorkerDeletionStage::ExecutionFenced)
                 .await;
         }
@@ -3863,7 +3906,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
     ///   automatically resumed when the worker is needed again. This only works if the worker context
     ///   supports recovering workers.
-    pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
+    pub async fn set_interrupting(
+        self: &Arc<Self>,
+        interrupt_kind: InterruptKind,
+    ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
         self.set_interrupting_internal(
             interrupt_kind,
             false,
@@ -3874,13 +3920,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn set_interrupting_internal(
-        &self,
+        self: &Arc<Self>,
         interrupt_kind: InterruptKind,
         reacquire_permits: bool,
         unload_reason: UnloadReason,
         allow_deleting: bool,
-    ) -> Option<Receiver<()>> {
-        if !self
+    ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
+        let Some(establishment) = self
             .queue_interrupt(
                 interrupt_kind,
                 reacquire_permits,
@@ -3888,30 +3934,106 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 allow_deleting,
             )
             .await
-        {
-            return None;
-        }
-        let active_agent = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await
-            .filter(|active_agent| std::ptr::eq(active_agent.primary().as_ref(), self));
-        if let Some(active_agent) = &active_agent {
-            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
-            active_agent
-                .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
-                .await;
-        }
-        let receiver = self.notify_queued_interrupt(interrupt_kind).await;
-        if let Some(active_agent) = active_agent {
-            active_agent.drain_fenced_entity_bodies().await;
-        }
-        debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
-        receiver
+        else {
+            return Ok(None);
+        };
+        let worker = self.clone();
+        let completion = establishment.clone();
+        let result = tokio::spawn(async move {
+            if establishment.wait_for_predecessor().await.is_err() {
+                let error = WorkerExecutorError::runtime(
+                    "A preceding worker interruption establishment failed",
+                );
+                worker.owner_retirement_requested.cancel();
+                establishment.complete(true);
+                worker
+                    .clone()
+                    .finish_failed_interrupt_establishment(error.clone());
+                return Err(error);
+            }
+            let result = std::panic::AssertUnwindSafe(async {
+                if let Some(hook) = Ctx::worker_deletion_hook(&worker.extra_deps()) {
+                    hook.before_lifecycle_establishment_stage(
+                        &worker.owned_agent_id,
+                        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
+                    )
+                    .await;
+                }
+                let active_agent = worker
+                    .active_agents()
+                    .try_get_active_agent(&worker.owned_agent_id)
+                    .await;
+                let active_agent = active_agent
+                    .filter(|active_agent| Arc::ptr_eq(&active_agent.primary(), &worker));
+                if let Some(active_agent) = &active_agent {
+                    debug!(agent_id = %worker.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
+                    active_agent
+                        .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                        .await;
+                }
+                let receiver = worker.notify_queued_interrupt(interrupt_kind).await;
+                if let Some(hook) = Ctx::worker_deletion_hook(&worker.extra_deps()) {
+                    hook.before_lifecycle_establishment_stage(
+                        &worker.owned_agent_id,
+                        WorkerLifecycleEstablishmentStage::FencedBeforeDrain,
+                    )
+                    .await;
+                }
+                if let Some(active_agent) = active_agent {
+                    active_agent.drain_fenced_entity_bodies().await;
+                }
+                debug!(agent_id = %worker.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
+                receiver
+            })
+            .catch_unwind()
+            .await;
+            match result {
+                Ok(receiver) => {
+                    establishment.complete(false);
+                    Ok(receiver)
+                }
+                Err(_) => {
+                    tracing::error!(agent_id = %worker.owned_agent_id, ?interrupt_kind, "Worker interruption establishment panicked");
+                    let error = WorkerExecutorError::runtime(
+                        "Worker interruption establishment panicked",
+                    );
+                    worker.owner_retirement_requested.cancel();
+                    establishment.complete(true);
+                    worker
+                        .clone()
+                        .finish_failed_interrupt_establishment(error.clone());
+                    Err(error)
+                }
+            }
+        })
+        .await
+        .map_err(|error| {
+            WorkerExecutorError::runtime(format!(
+                "Worker interruption establishment task failed: {error}"
+            ))
+        })?;
+        completion.wait().await?;
+        result
+    }
+
+    fn finish_failed_interrupt_establishment(self: Arc<Self>, error: WorkerExecutorError) {
+        tokio::spawn(async move {
+            let _ = self.notify_queued_interrupt(InterruptKind::Restart).await;
+            self.stop_internal(
+                false,
+                Some(error.clone()),
+                UnloadRequest::ordinary(UnloadReason::Failure),
+                FinalWorkerState::CleanupFailed(error),
+                PendingLiveInvocationDisposition::Fail,
+            )
+            .await;
+        });
     }
 
     async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        let instance_guard = self.lock_non_stopping_worker().await;
+        // Establishment may be joined by the invocation loop itself. Do not wait for a concurrent
+        // stop to finish here: that stop joins the loop and would form a cycle.
+        let instance_guard = self.instance.lock().await;
         if let WorkerInstance::Running(running) = instance_guard.deletion_runtime() {
             let _ = running.sender.send(WorkerCommand::WorkAvailable);
         }
@@ -3966,18 +4088,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         reacquire_permits: bool,
         unload_reason: UnloadReason,
         allow_deleting: bool,
-    ) -> bool {
+    ) -> Option<Arc<InterruptEstablishment>> {
         loop {
             let lifecycle = self.instance.lock().await;
             if !allow_deleting && lifecycle.ensure_not_deleting().is_err() {
-                return false;
+                return None;
             }
             if let Some(mut state) = self.interrupt_signal.try_lock() {
-                return state.queue(PendingWorkerInterrupt {
+                let mut tail = self.interrupt_establishment_tail.lock().unwrap();
+                let establishment = Arc::new(InterruptEstablishment::new(tail.clone()));
+                let accepted = state.queue(PendingWorkerInterrupt {
                     kind: interrupt_kind,
                     reacquire_permits,
                     unload_request: UnloadRequest::ordinary(unload_reason),
+                    establishment: establishment.clone(),
                 });
+                if accepted {
+                    *tail = establishment.clone();
+                    return Some(establishment);
+                }
+                return None;
             }
             drop(lifecycle);
             tokio::task::yield_now().await;
@@ -3985,10 +4115,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) async fn set_interrupting_for(
-        &self,
+        self: &Arc<Self>,
         interrupt_kind: InterruptKind,
         unload_reason: UnloadReason,
-    ) -> Option<Receiver<()>> {
+    ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
         self.set_interrupting_internal(interrupt_kind, false, unload_reason, false)
             .await
     }
@@ -5360,6 +5490,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         matches!(&*self.instance.lock().await, WorkerInstance::Running(_))
     }
 
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn terminal_interrupt_claimed_for_test(&self) -> bool {
+        matches!(
+            &*self.interrupt_signal.lock().await,
+            WorkerInterruptState::TerminalClaimed
+        )
+    }
+
     /// Starts a conditional ordinary `ActiveAgents` retirement unless deletion already owns it.
     /// The returned guard rolls the marker back unless the cache removal commits.
     pub(crate) async fn try_begin_cache_retirement(&self) -> Option<WorkerCacheRetirement<'_>> {
@@ -5418,8 +5557,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   pending, or is not loaded. Never evicted.
     pub async fn eviction_class(&self) -> Option<EvictionClass> {
         if self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
+            .active_agent_for_this_owner()
             .await
             .is_some_and(|active_agent| {
                 active_agent
@@ -5487,10 +5625,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         expected_eligibility: Option<FilesystemPressureEligibility>,
         unload_request: UnloadRequest,
     ) -> EvictionStopOutcome {
-        let active_agent = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await;
+        let active_agent = self.active_agent_for_this_owner().await;
         let reopen_entity_generation = match active_agent.as_ref() {
             Some(active_agent) => match active_agent.try_fence_idle_entity_bodies() {
                 Some(reopen_generation) => reopen_generation,
@@ -8791,7 +8926,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Err(WorkerExecutorError::runtime("Worker owner is retiring"));
             }
             worker.owner_retirement_requested.cancel();
-            worker.set_interrupting(InterruptKind::Restart).await;
+            worker.set_interrupting(InterruptKind::Restart).await?;
             worker.durable_stream_producer.fence();
             let forwarding = downcast_oplog::<ForwardingOplog>(&worker.oplog);
             let retirement = worker.retire_durable_stream_producer();
@@ -10641,11 +10776,78 @@ impl Drop for WaitingWorker {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
+struct InterruptEstablishment {
+    predecessor: StdMutex<Option<Arc<InterruptEstablishment>>>,
+    complete: AtomicBool,
+    failed: AtomicBool,
+    completed: tokio::sync::Notify,
+}
+
+impl InterruptEstablishment {
+    fn new(predecessor: Arc<Self>) -> Self {
+        Self {
+            predecessor: StdMutex::new(Some(predecessor)),
+            complete: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+            completed: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn ready() -> Arc<Self> {
+        Arc::new(Self {
+            predecessor: StdMutex::new(None),
+            complete: AtomicBool::new(true),
+            failed: AtomicBool::new(false),
+            completed: tokio::sync::Notify::new(),
+        })
+    }
+
+    fn complete(&self, failed: bool) {
+        self.failed.store(failed, Ordering::Release);
+        self.complete.store(true, Ordering::Release);
+        self.completed.notify_waiters();
+    }
+
+    async fn wait(&self) -> Result<(), WorkerExecutorError> {
+        while !self.complete.load(Ordering::Acquire) {
+            let notified = self.completed.notified();
+            if self.complete.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
+        if self.failed.load(Ordering::Acquire) {
+            Err(WorkerExecutorError::runtime(
+                "Worker interruption establishment failed",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn failed(&self) -> bool {
+        self.complete.load(Ordering::Acquire) && self.failed.load(Ordering::Acquire)
+    }
+
+    async fn wait_for_predecessor(&self) -> Result<(), WorkerExecutorError> {
+        let predecessor = self.predecessor.lock().unwrap().clone();
+        if let Some(predecessor) = predecessor {
+            let result = predecessor.wait().await;
+            self.predecessor.lock().unwrap().take();
+            result
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct PendingWorkerInterrupt {
     kind: InterruptKind,
     reacquire_permits: bool,
     unload_request: UnloadRequest,
+    establishment: Arc<InterruptEstablishment>,
 }
 
 /// The shard epoch the agent's oplog is opened to assert, read from this executor's current
@@ -11065,10 +11267,19 @@ impl RunningWorker {
             .active_agents()
             .try_get_active_agent(&parent.owned_agent_id)
             .await
+            .filter(|active_agent| Arc::ptr_eq(&active_agent.primary(), &parent))
             .map(|active_agent| {
                 let generation = active_agent.entity_fence_generation();
                 (active_agent, generation)
             });
+        let Some(entity_generation) = entity_generation else {
+            return Err(CreateWorkerInstanceError {
+                error: WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::ShardLost,
+                },
+                filesystem_cleanup_failure: None,
+            });
+        };
 
         // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
         parent.reattach_worker_status().await;
@@ -11632,10 +11843,44 @@ impl RunningWorker {
         if last_snapshot_index.is_some() {
             store.data_mut().end_call_snapshotting_function();
         }
-        if let Some((active_agent, generation)) = entity_generation {
+        {
+            let (active_agent, generation) = entity_generation;
+            if let Some(hook) = Ctx::worker_deletion_hook(&parent.extra_deps()) {
+                hook.before_lifecycle_establishment_stage(
+                    &parent.owned_agent_id,
+                    WorkerLifecycleEstablishmentStage::ReplacementBeforeReopen,
+                )
+                .await;
+            }
+            let establishment = parent.interrupt_establishment_tail.lock().unwrap().clone();
+            if establishment.wait().await.is_err() {
+                drop(store);
+                return Err(cleanup_reconstructing_agent_filesystem(
+                    reconstructing,
+                    window,
+                    WorkerExecutorError::runtime("Worker interruption establishment failed"),
+                )
+                .await);
+            }
             let interrupt_state = parent.interrupt_signal.lock().await;
-            if !interrupt_state.has_interrupt() {
-                active_agent.reopen_entity_admission_if_generation(generation);
+            let establishment_is_current = Arc::ptr_eq(
+                &establishment,
+                &parent.interrupt_establishment_tail.lock().unwrap(),
+            );
+            if interrupt_state.has_interrupt()
+                || !establishment_is_current
+                || !active_agent.reopen_entity_admission_if_generation(generation)
+            {
+                drop(interrupt_state);
+                drop(store);
+                return Err(cleanup_reconstructing_agent_filesystem(
+                    reconstructing,
+                    window,
+                    WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Restart,
+                    },
+                )
+                .await);
             }
         }
         let prepare_result =
@@ -13821,6 +14066,7 @@ mod tests {
                 kind,
                 reacquire_permits,
                 unload_request: UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+                establishment: InterruptEstablishment::ready(),
             }
             .retry_decision()
         }
@@ -13880,6 +14126,7 @@ mod tests {
                 kind,
                 reacquire_permits: false,
                 unload_request: UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+                establishment: InterruptEstablishment::ready(),
             }
             .is_terminal()
         }
@@ -13898,12 +14145,14 @@ mod tests {
             kind: InterruptKind::Suspend(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+            establishment: InterruptEstablishment::ready(),
         }));
         assert!(state.take().is_some());
         assert!(!state.queue(PendingWorkerInterrupt {
             kind: InterruptKind::Restart,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
+            establishment: InterruptEstablishment::ready(),
         }));
 
         state.reset_terminal_for_new_generation();
@@ -13912,6 +14161,7 @@ mod tests {
             kind: InterruptKind::Restart,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
+            establishment: InterruptEstablishment::ready(),
         }));
     }
 
@@ -13921,6 +14171,7 @@ mod tests {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
+            establishment: InterruptEstablishment::ready(),
         });
         assert!(state.take().is_some());
         assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
@@ -13929,6 +14180,7 @@ mod tests {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Deleting),
+            establishment: InterruptEstablishment::ready(),
         };
         assert!(state.queue(delete_interrupt));
         assert!(matches!(state, WorkerInterruptState::Pending(_)));

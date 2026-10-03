@@ -1019,6 +1019,7 @@ impl EntityInvocationDurability {
         } = self;
         let invocation = scope.invocation_id().clone();
         let abort = body.abort_handle();
+        let executor_tasks = body.executor_tasks();
         let body_resources = Arc::new(Mutex::new(None));
         let completed_body_resources = body_resources.clone();
         let body = async move {
@@ -1077,7 +1078,11 @@ impl EntityInvocationDurability {
             };
             let supervisor_body_resources = body_resources.clone();
             let monitor_reconstruction = historical_reconstruction.clone();
-            let completed_supervisor = tokio::spawn(async move {
+            let supervisor_tasks = executor_tasks.clone();
+            let completed_supervisor = executor_tasks.spawn_entity(async move {
+                supervisor_tasks
+                    .completed_reconstruction_supervisor_pending()
+                    .await;
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(
@@ -1123,9 +1128,10 @@ impl EntityInvocationDurability {
             });
             let (completed_tx, completed_rx) = oneshot::channel();
             let monitor_body_resources = body_resources.clone();
-            tokio::spawn(async move {
+            let _monitor = executor_tasks.spawn_entity(async move {
                 let completed = match completed_supervisor.await {
-                    Ok(completed) => completed,
+                    Ok(Some(completed)) => completed,
+                    Ok(None) => return,
                     Err(error) => Err(EntityInvocationDurabilityFailure {
                         error: WorkerExecutorError::runtime(format!(
                             "completed entity reconstruction task failed: {error}"
@@ -1135,7 +1141,8 @@ impl EntityInvocationDurability {
                 };
                 let retained_reconstruction = match &completed {
                     Err(failure) => {
-                        on_completed_failure(failure.error.clone()).await;
+                        let error = failure.error.clone();
+                        on_completed_failure(error).await;
                         drop(monitor_reconstruction);
                         None
                     }

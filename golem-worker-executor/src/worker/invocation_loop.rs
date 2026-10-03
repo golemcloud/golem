@@ -217,7 +217,9 @@ fn coalesce_filesystem_limit_update(
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
-    async fn pending_interrupt(&self) -> Option<PendingWorkerInterrupt> {
+    async fn pending_interrupt(
+        &self,
+    ) -> Result<Option<PendingWorkerInterrupt>, WorkerExecutorError> {
         take_pending_interrupt(&self.interrupt_signal).await
     }
 
@@ -285,6 +287,22 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .await;
                 break;
             }
+            let pending_interrupt = match self.pending_interrupt().await {
+                Ok(interrupt) => interrupt,
+                Err(error) => {
+                    self.stop_cleanup_failed(error).await;
+                    break;
+                }
+            };
+            if let Some(interrupt) = pending_interrupt {
+                if self
+                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                    .await
+                {
+                    break;
+                }
+                continue;
+            }
             if self.permit_state.is_none() {
                 let parent = self.parent.clone();
                 let permit_agent_id = self.owned_agent_id.agent_id().clone();
@@ -294,7 +312,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"));
                 tokio::pin!(permit);
                 loop {
-                    if let Some(interrupt) = self.pending_interrupt().await
+                    let pending_interrupt = match self.pending_interrupt().await {
+                        Ok(interrupt) => interrupt,
+                        Err(error) => {
+                            self.stop_cleanup_failed(error).await;
+                            break 'outer;
+                        }
+                    };
+                    if let Some(interrupt) = pending_interrupt
                         && self
                             .handle_unloaded_interrupt(interrupt, retry_was_live)
                             .await
@@ -310,7 +335,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         }
                         permit = &mut permit => {
                             self.permit_state.install_tracked(permit);
-                            break;
+                            continue 'outer;
                         }
                         command = self.receiver.recv() => {
                             let Some(command) = command else {
@@ -323,7 +348,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 .await;
                                 break 'outer;
                             };
-                            if let Some(interrupt) = self.pending_interrupt().await
+                            let pending_interrupt = match self.pending_interrupt().await {
+                                Ok(interrupt) => interrupt,
+                                Err(error) => {
+                                    self.stop_cleanup_failed(error).await;
+                                    break 'outer;
+                                }
+                            };
+                            if let Some(interrupt) = pending_interrupt
                                 && self
                                     .handle_unloaded_interrupt(interrupt, retry_was_live)
                                     .await
@@ -355,8 +387,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 } => (*agent, window, recovery_decision),
                 CreateInstanceResult::Interrupted(kind) => {
                     self.release_concurrent_agent_permit();
-                    let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
+                    let pending_interrupt =
+                        match take_pending_interrupt(&self.interrupt_signal).await {
+                            Ok(interrupt) => interrupt,
+                            Err(error) => {
+                                self.stop_cleanup_failed(error).await;
+                                break;
+                            }
+                        };
                     let kind = pending_interrupt
+                        .as_ref()
                         .map(|interrupt| interrupt.kind)
                         .unwrap_or(kind);
                     if self.parent.initial_worker_metadata.owner_kind
@@ -413,6 +453,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     None,
                                     resident_work_disposition(
                                         pending_interrupt
+                                            .as_ref()
                                             .map(|interrupt| interrupt.unload_request.reason)
                                             .unwrap_or(UnloadReason::Suspend),
                                     ),
@@ -453,7 +494,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         self.stop_startup_retired().await;
                         break;
                     }
-                    if let Some(interrupt) = self.pending_interrupt().await {
+                    let pending_interrupt = match self.pending_interrupt().await {
+                        Ok(interrupt) => interrupt,
+                        Err(error) => {
+                            self.stop_cleanup_failed(error).await;
+                            break;
+                        }
+                    };
+                    if let Some(interrupt) = pending_interrupt {
                         if self
                             .handle_unloaded_interrupt(interrupt, retry_was_live)
                             .await
@@ -473,7 +521,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                     break 'outer;
                                 };
-                                if let Some(interrupt) = self.pending_interrupt().await {
+                                let pending_interrupt = match self.pending_interrupt().await {
+                                    Ok(interrupt) => interrupt,
+                                    Err(error) => {
+                                        self.stop_cleanup_failed(error).await;
+                                        break 'outer;
+                                    }
+                                };
+                                if let Some(interrupt) = pending_interrupt {
                                     if self.handle_unloaded_interrupt(interrupt, retry_was_live).await {
                                         break 'outer;
                                     }
@@ -508,8 +563,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let mut final_unload_request = None;
             let mut cleanup_ephemeral_worker = false;
 
+            let pending_interrupt = match self.pending_interrupt().await {
+                Ok(interrupt) => interrupt,
+                Err(error) => {
+                    recovery_failure = Some(error);
+                    final_decision = Some(RetryDecision::None);
+                    None
+                }
+            };
             if recovery_failure.is_none()
-                && let Some(interrupt) = self.pending_interrupt().await
+                && let Some(interrupt) = pending_interrupt
             {
                 let kind = interrupt.kind;
                 let decision = interrupt.retry_decision();
@@ -619,11 +682,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     .data()
                                     .durable_ctx()
                                     .begin_stream_runtime_teardown();
-                                if let Some(active_agent) = self
-                                    .parent
-                                    .active_agents()
-                                    .try_get_active_agent(&self.owned_agent_id)
-                                    .await
+                                if let Some(active_agent) =
+                                    self.parent.active_agent_for_this_owner().await
                                 {
                                     let owner_failure = failure.clone().map_or_else(
                                         || {
@@ -696,14 +756,22 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     final_interrupt = result.final_interrupt;
                     final_unload_request = result.unload_request;
                     recovery_failure = result.recovery_failure;
-                    if let Some(interrupt) = self.pending_interrupt().await {
-                        let kind = interrupt.kind;
-                        let decision = interrupt.retry_decision();
-                        if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                            final_interrupt = Some(kind);
+                    match self.pending_interrupt().await {
+                        Err(error) => {
+                            recovery_failure = Some(error);
+                            final_decision = Some(RetryDecision::None);
+                            final_interrupt = None;
                         }
-                        final_unload_request = Some(interrupt.unload_request);
-                        final_decision = Some(decision);
+                        Ok(Some(interrupt)) => {
+                            let kind = interrupt.kind;
+                            let decision = interrupt.retry_decision();
+                            if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                                final_interrupt = Some(kind);
+                            }
+                            final_unload_request = Some(interrupt.unload_request);
+                            final_decision = Some(decision);
+                        }
+                        Ok(None) => {}
                     }
                     cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
                     break 'resident;
@@ -765,11 +833,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             if (recovery_failure.is_none()
                 || final_interrupt.is_some()
                 || self.parent.retired_for_lost_shard())
-                && let Some(active_agent) = self
-                    .parent
-                    .active_agents()
-                    .try_get_active_agent(&self.owned_agent_id)
-                    .await
+                && let Some(active_agent) = self.parent.active_agent_for_this_owner().await
             {
                 // A lost shard wins: the bodies must not report an API interrupt or a fault for an
                 // agent that simply has a new owner.
@@ -808,6 +872,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             // not stop cleanup, and a later delete must wait for or retry that same cleanup.
             *self.parent.unload_cleanup.lock().unwrap() = Some(unloading.cleanup.clone());
             if let Some(error) = unloading.await {
+                self.stop_cleanup_failed(error).await;
+                break;
+            }
+            if self.parent.owner_retirement_requested.is_cancelled()
+                && !self.parent.retired_for_lost_shard()
+                && let Some(error) = recovery_failure.take()
+            {
                 self.stop_cleanup_failed(error).await;
                 break;
             }
@@ -880,7 +951,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     }
                                 };
 
-                                if let Some(interrupt) = self.pending_interrupt().await {
+                                let pending_interrupt = match self.pending_interrupt().await {
+                                    Ok(interrupt) => interrupt,
+                                    Err(error) => {
+                                        self.stop_cleanup_failed(error).await;
+                                        break 'outer;
+                                    }
+                                };
+                                if let Some(interrupt) = pending_interrupt {
                                     let kind = interrupt.kind;
                                     let decision = interrupt.retry_decision();
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
@@ -1029,6 +1107,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         interrupt: PendingWorkerInterrupt,
         retry_was_live: bool,
     ) -> bool {
+        if interrupt.establishment.failed() {
+            self.stop_cleanup_failed(WorkerExecutorError::runtime(
+                "Worker interruption establishment failed",
+            ))
+            .await;
+            return true;
+        }
         let kind = interrupt.kind;
         let decision = interrupt.retry_decision();
         debug!(
@@ -1112,12 +1197,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 WorkerExecutorError::unknown("Worker stopped before startup completed")
             })),
         );
-        if let Some(active_agent) = self
-            .parent
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await
-        {
+        if let Some(active_agent) = self.parent.active_agent_for_this_owner().await {
             let failure = if self.parent.retired_for_lost_shard() {
                 OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
             } else {
@@ -1146,12 +1226,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     async fn stop_cleanup_failed(&self, error: WorkerExecutorError) {
         self.parent
             .complete_startup(self.start_attempt, Err(error.clone()));
-        if let Some(active_agent) = self
-            .parent
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await
-        {
+        if let Some(active_agent) = self.parent.active_agent_for_this_owner().await {
             active_agent
                 .fence_entity_bodies(OwnerFailureWinner::Infrastructure(error.clone()))
                 .await;
@@ -1766,14 +1841,21 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
-                        if let Some(interrupt) =
-                            take_pending_interrupt(&self.interrupt_signal).await
-                        {
-                            if interrupt.is_terminal() {
-                                final_interrupt = Some(interrupt.kind);
+                        match take_pending_interrupt(&self.interrupt_signal).await {
+                            Ok(Some(interrupt)) => {
+                                if interrupt.is_terminal() {
+                                    final_interrupt = Some(interrupt.kind);
+                                }
+                                unload_request = Some(interrupt.unload_request);
+                                break self.interrupt(interrupt).await;
                             }
-                            unload_request = Some(interrupt.unload_request);
-                            break self.interrupt(interrupt).await;
+                            Ok(None) => {}
+                            Err(error) => {
+                                break CommandOutcome::BreakInnerLoopForRecovery {
+                                    decision: RetryDecision::None,
+                                    error,
+                                };
+                            }
                         }
 
                         let result = match self.select_next_work().await {
@@ -2535,8 +2617,12 @@ fn mark_idle(idle_since_millis: &AtomicU64) {
 
 async fn take_pending_interrupt(
     signal: &Mutex<WorkerInterruptState>,
-) -> Option<PendingWorkerInterrupt> {
-    signal.lock().await.take()
+) -> Result<Option<PendingWorkerInterrupt>, WorkerExecutorError> {
+    let interrupt = signal.lock().await.take();
+    if let Some(interrupt) = &interrupt {
+        interrupt.establishment.wait().await?;
+    }
+    Ok(interrupt)
 }
 
 fn resident_work_disposition(reason: UnloadReason) -> PendingLiveInvocationDisposition {
@@ -2715,6 +2801,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             result
         };
 
+        if let Some(hook) = Ctx::worker_deletion_hook(&self.parent.extra_deps()) {
+            hook.before_invocation_terminal_selection(&self.owned_agent_id)
+                .await;
+        }
+
         match result {
             Ok(InvokeResult::Succeeded {
                 result: invocation_result,
@@ -2723,6 +2814,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let mut interrupt_state = self.parent.interrupt_signal.lock().await;
                 if let Some(interrupt) = interrupt_state.claim_pending_terminal() {
                     drop(interrupt_state);
+                    if let Err(error) = interrupt.establishment.wait().await {
+                        return CommandOutcome::BreakInnerLoopForRecovery {
+                            decision: RetryDecision::None,
+                            error,
+                        };
+                    }
                     self.agent_invocation_failed(
                         &display_name,
                         &invocation_idempotency_key,
@@ -2745,12 +2842,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
             }
             result @ Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
-                    self.parent
-                        .interrupt_signal
-                        .lock()
-                        .await
-                        .claim_pending_terminal();
+                let terminal =
+                    if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
+                        self.parent
+                            .interrupt_signal
+                            .lock()
+                            .await
+                            .claim_pending_terminal()
+                    } else {
+                        None
+                    };
+                if let Some(terminal) = terminal
+                    && let Err(error) = terminal.establishment.wait().await
+                {
+                    return CommandOutcome::BreakInnerLoopForRecovery {
+                        decision: RetryDecision::None,
+                        error,
+                    };
                 }
                 self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
                     .await
