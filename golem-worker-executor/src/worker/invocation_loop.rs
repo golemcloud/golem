@@ -170,6 +170,12 @@ struct PendingFilesystemLimitUpdate {
     senders: Vec<Sender<Result<(), WorkerExecutorError>>>,
 }
 
+#[derive(Default)]
+struct DelayedRetryCommands {
+    resume_replay: bool,
+    filesystem_limit_updates: Vec<Sender<Result<(), WorkerExecutorError>>>,
+}
+
 enum ResidentWakeup {
     Command(WorkerCommand),
     FilesystemTerminalFailure,
@@ -214,6 +220,55 @@ fn coalesce_filesystem_limit_update(
         absorb(command);
     }
     update
+}
+
+fn coalesce_delayed_retry_prefix<Ctx: WorkerCtx>(
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+    prefix_len: usize,
+) -> DelayedRetryCommands {
+    let mut commands = DelayedRetryCommands::default();
+    let mut work_available = false;
+
+    for _ in 0..prefix_len {
+        let Ok(command) = receiver.try_recv() else {
+            break;
+        };
+        match command {
+            WorkerCommand::WorkAvailable => work_available = true,
+            WorkerCommand::InternalStatusChanged => {}
+            WorkerCommand::ResumeReplay => commands.resume_replay = true,
+            WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                commands.filesystem_limit_updates.push(sender);
+            }
+        }
+    }
+
+    if work_available {
+        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::WorkAvailable);
+    }
+
+    commands
+}
+
+fn apply_delayed_retry_commands_after_unload<Ctx: WorkerCtx>(
+    commands: DelayedRetryCommands,
+    final_decision: &mut Option<RetryDecision>,
+    has_recovery_failure: bool,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+) {
+    let delayed = matches!(final_decision, Some(RetryDecision::Delayed(_)));
+    if delayed {
+        for sender in commands.filesystem_limit_updates {
+            let _ = sender.send(Ok(()));
+        }
+    }
+    if commands.resume_replay {
+        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::ResumeReplay);
+        if delayed && !has_recovery_failure {
+            *final_decision = Some(RetryDecision::Immediate);
+        }
+    }
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
@@ -778,6 +833,34 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
 
+            let delayed_retry_commands = matches!(final_decision, Some(RetryDecision::Delayed(_)))
+                .then(|| {
+                    let prefix_len = self.receiver.len();
+                    coalesce_delayed_retry_prefix::<Ctx>(
+                        &mut self.receiver,
+                        &mut deferred_wakeups,
+                        prefix_len,
+                    )
+                });
+
+            match self.pending_interrupt().await {
+                Err(error) => {
+                    recovery_failure = Some(error);
+                    final_decision = Some(RetryDecision::None);
+                    final_interrupt = None;
+                }
+                Ok(Some(interrupt)) => {
+                    let kind = interrupt.kind;
+                    let decision = interrupt.retry_decision();
+                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                        final_interrupt = Some(kind);
+                    }
+                    final_unload_request = Some(interrupt.unload_request);
+                    final_decision = Some(decision);
+                }
+                Ok(None) => {}
+            }
+
             if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
                 // An external owner cannot reconstruct accepted execution after losing its Store.
                 // Record terminal interruption instead of leaving the accepted key pending behind
@@ -881,6 +964,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             {
                 self.stop_cleanup_failed(error).await;
                 break;
+            }
+
+            if let Some(commands) = delayed_retry_commands {
+                apply_delayed_retry_commands_after_unload::<Ctx>(
+                    commands,
+                    &mut final_decision,
+                    recovery_failure.is_some(),
+                    &mut deferred_wakeups,
+                );
             }
 
             match final_decision {
@@ -3828,7 +3920,8 @@ mod tests {
     use super::{
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, OwnerFailureWinner,
         PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
-        catch_invocation_loop_panic, close_usage_before_delete, coalesce_filesystem_limit_update,
+        apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
+        close_usage_before_delete, coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
         selected_infrastructure_recovery_error, snapshot_action_at, snapshot_baseline_timestamp,
@@ -4097,6 +4190,75 @@ mod tests {
             deferred_wakeups.pop_front(),
             Some(WorkerCommand::WorkAvailable)
         ));
+    }
+
+    #[test]
+    async fn delayed_retry_coalesces_only_the_captured_work_prefix() {
+        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (limit_sender, limit_result) = futures::channel::oneshot::channel();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands.send(WorkerCommand::InternalStatusChanged).unwrap();
+        commands.send(WorkerCommand::ResumeReplay).unwrap();
+        commands
+            .send(WorkerCommand::UpdateFilesystemLimit {
+                allocated_bytes: 4096,
+                sender: limit_sender,
+            })
+            .unwrap();
+        let prefix_len = receiver.len();
+
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        let mut deferred_wakeups = VecDeque::new();
+        let captured = coalesce_delayed_retry_prefix::<Context>(
+            &mut receiver,
+            &mut deferred_wakeups,
+            prefix_len,
+        );
+
+        assert!(captured.resume_replay);
+        assert_eq!(captured.filesystem_limit_updates.len(), 1);
+        assert_eq!(deferred_wakeups.len(), 1);
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::WorkAvailable)
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(WorkerCommand::WorkAvailable)
+        ));
+
+        let _ = captured
+            .filesystem_limit_updates
+            .into_iter()
+            .next()
+            .unwrap()
+            .send(Ok(()));
+        assert!(limit_result.await.unwrap().is_ok());
+    }
+
+    #[test]
+    fn delayed_retry_preserves_replay_request_when_restart_wins() {
+        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        commands.send(WorkerCommand::ResumeReplay).unwrap();
+        let mut deferred_wakeups = VecDeque::new();
+        let captured =
+            coalesce_delayed_retry_prefix::<Context>(&mut receiver, &mut deferred_wakeups, 1);
+        let mut final_decision = Some(RetryDecision::Immediate);
+
+        apply_delayed_retry_commands_after_unload::<Context>(
+            captured,
+            &mut final_decision,
+            false,
+            &mut deferred_wakeups,
+        );
+
+        assert!(matches!(final_decision, Some(RetryDecision::Immediate)));
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::ResumeReplay)
+        ));
+        assert!(deferred_wakeups.is_empty());
     }
 
     #[test]
