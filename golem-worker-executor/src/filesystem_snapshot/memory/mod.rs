@@ -14,7 +14,8 @@
 
 //! A filesystem snapshot store that keeps each snapshot in the memory of the process.
 //!
-//! Each call is one run under one slot of its limiter, because the memory does not fail. The
+//! Each call is one run under one slot of its limiter, because the memory does not fail. A delete
+//! of all snapshots of an agent waits for the calls of the agent that began before it. The
 //! snapshots of an agent are one immutable slice. Each change makes a new slice from the old
 //! one with a pure function. The store puts the new slice in place under a lock that no await
 //! holds. A restore keeps the tree that it read under the lock, so a delete at the same time
@@ -25,6 +26,7 @@ mod tree;
 #[cfg(test)]
 mod tests;
 
+use super::agent_work::{AgentWorks, begin_operation, drain_agent};
 use super::clock::{Clock, SystemClock};
 use super::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
@@ -35,7 +37,6 @@ use async_trait::async_trait;
 use golem_common::model::Timestamp;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio_util::sync::CancellationToken;
 use tree::{TreeEntry, read_tree, tree_info, write_tree};
@@ -48,8 +49,10 @@ use tree::{TreeEntry, read_tree, tree_info, write_tree};
 pub(crate) struct InMemorySnapshotStore {
     agents: Arc<Mutex<HashMap<AgentSnapshots, Arc<[Stored]>>>>,
     clock: Arc<dyn Clock>,
-    /// True after the store shut down.
-    shut_down: AtomicBool,
+    /// Cancelled when the store shuts down.
+    shut_down: CancellationToken,
+    /// The work of each incarnation, which a delete of all snapshots waits for.
+    works: AgentWorks,
 }
 
 impl Clone for InMemorySnapshotStore {
@@ -57,7 +60,8 @@ impl Clone for InMemorySnapshotStore {
         Self {
             agents: Arc::clone(&self.agents),
             clock: Arc::clone(&self.clock),
-            shut_down: AtomicBool::new(false),
+            shut_down: CancellationToken::new(),
+            works: AgentWorks::default(),
         }
     }
 }
@@ -88,13 +92,14 @@ impl InMemorySnapshotStore {
         Self {
             agents: Arc::default(),
             clock,
-            shut_down: AtomicBool::new(false),
+            shut_down: CancellationToken::new(),
+            works: AgentWorks::default(),
         }
     }
 
     /// Takes the one slot of a call, or gives why the call stops.
     pub(crate) async fn slot(&self, slots: &dyn RunSlots) -> Result<Slot, Withdrawal> {
-        if self.shut_down.load(Ordering::SeqCst) {
+        if self.shut_down.is_cancelled() {
             return Err(Withdrawal::Stopped);
         }
         slots.take(true).await
@@ -163,6 +168,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         cancel: &CancellationToken,
         slots: &dyn RunSlots,
     ) -> Result<SnapshotInfo, SaveError> {
+        let _work = begin_operation(&self.works, agent);
         let _slot = self.slot(slots).await.map_err(SaveError::Stopped)?;
         let snapshots = self.snapshots_of(agent);
         if found(&snapshots, name).is_some() {
@@ -204,6 +210,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         into: &Path,
         slots: &dyn RunSlots,
     ) -> Result<SnapshotInfo, RestoreFailure> {
+        let _work = begin_operation(&self.works, agent);
         let _slot = self.slot(slots).await.map_err(RestoreFailure::Stopped)?;
         let snapshots = self.snapshots_of(agent);
         let stored = found(&snapshots, name)
@@ -224,7 +231,8 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         agent: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Result<Option<SnapshotInfo>, ReadError> {
-        if self.shut_down.load(Ordering::SeqCst) {
+        let _work = begin_operation(&self.works, agent);
+        if self.shut_down.is_cancelled() {
             return Err(ReadError::Stopped);
         }
         Ok(found(&self.snapshots_of(agent), name).map(|stored| stored.info))
@@ -235,6 +243,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         agent: &AgentSnapshots,
         slots: &dyn RunSlots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
+        let _work = begin_operation(&self.works, agent);
         let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         Ok(newest_first(
             self.snapshots_of(agent)
@@ -249,6 +258,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         names: &[SnapshotName],
         slots: &dyn RunSlots,
     ) -> Result<(), CallError> {
+        let _work = begin_operation(&self.works, agent);
         let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         let mut agents = self.agents();
         if let Some(snapshots) = agents.get(agent) {
@@ -263,6 +273,13 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         agent: &AgentSnapshots,
         slots: &dyn RunSlots,
     ) -> Result<(), CallError> {
+        // The call waits for the calls of the agent that began before it, and holds no slot
+        // while it waits. A shutdown ends the wait.
+        let _work = tokio::select! {
+            biased;
+            () = self.shut_down.cancelled() => begin_operation(&self.works, agent),
+            work = drain_agent(&self.works, agent) => work,
+        };
         let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         self.agents().remove(agent);
         Ok(())
@@ -274,6 +291,10 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         to: &AgentSnapshots,
         slots: &dyn RunSlots,
     ) -> Result<(), CallError> {
+        let _works = (
+            begin_operation(&self.works, from),
+            begin_operation(&self.works, to),
+        );
         let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         // The snapshots never change, so the two agents can hold the same slice and stay
         // independent. A change for one agent puts a new slice in place for that agent only. When
@@ -291,7 +312,7 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
     }
 
     async fn shut_down(&self) {
-        self.shut_down.store(true, Ordering::SeqCst);
+        self.shut_down.cancel();
     }
 }
 

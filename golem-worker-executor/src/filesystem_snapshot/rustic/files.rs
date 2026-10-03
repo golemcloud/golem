@@ -15,13 +15,14 @@
 //! The blobs of the repository of one scope, and the one policy of each blob storage call of the
 //! store and of its rustic backends.
 //!
-//! The tracker of the store counts each call. A call has up to [`IN_CALL_TRIES`] tries, which
-//! share one window of the deadline; [`call_again`] decides each new try. A try does not start
-//! when the lease of its prune ran out or its operation is cancelled. It ends at the expiry that the
-//! lease had when the try started, when the operation is cancelled, or at the end of the window. A
+//! The tracker of the store counts each call. A call has up to [`IN_CALL_TRIES`] tries, which share
+//! one window of the deadline; [`call_again`] decides each new try. A try does not start when the
+//! lease of its prune ran out or its operation is cancelled. It ends at the expiry that the lease
+//! had when the try started, when the operation is cancelled, or at the end of the window. A
 //! refresh of the lease during a try does not move the end of that try.
 
 use super::fault::{CallFailure, LeaseExpired, OperationCancelled, call_failure};
+use crate::filesystem_snapshot::agent_work::OperationWork;
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
 };
@@ -164,6 +165,9 @@ pub(super) struct SnapshotFiles {
     tracker: TaskTracker,
     /// Records the writes that ended without an answer, when a run asks for them.
     late: Option<Arc<LateWrites>>,
+    /// The share of the operation in the work of its incarnation, which each clone of the blobs
+    /// holds, so a drain of the incarnation waits for each holder of the blobs.
+    _work: Option<OperationWork>,
 }
 
 impl SnapshotFiles {
@@ -186,6 +190,16 @@ impl SnapshotFiles {
             lease: None,
             tracker,
             late: None,
+            _work: None,
+        }
+    }
+
+    /// Gives the same blobs, which hold a share of the work `work` of the incarnation of the
+    /// operation.
+    pub(super) fn of_work(&self, work: &OperationWork) -> Self {
+        Self {
+            _work: Some(work.clone()),
+            ..self.clone()
         }
     }
 

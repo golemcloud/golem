@@ -29,6 +29,7 @@ use std::path::Path;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+mod agent_work;
 mod clock;
 #[cfg(test)]
 mod contract_tests;
@@ -441,7 +442,8 @@ impl std::error::Error for ReadError {
 /// contract.
 ///
 /// The snapshots of one agent can have more than one writer at the same time, on one executor or
-/// on several. A call does not wait for another call.
+/// on several. A call does not wait for another call, except `delete_all`, which waits for the
+/// calls of this store for the agent that began before it.
 ///
 /// Each call gives a final answer. The store tries a failed storage call again for a short time,
 /// runs the call again after a wait when the failure stays, and does again the work that another
@@ -582,9 +584,10 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
 
     /// Removes every snapshot of the agent, with all their data and metadata.
     ///
-    /// A save or a copy for the agent that runs at the same time is not cancelled, and can write
-    /// snapshots of the agent again after the call gives success. A call that gives an error can
-    /// leave some of the snapshots; a new call removes them.
+    /// When the call gives success, each call of this store for the agent that began before it
+    /// has ended, and none of them changes the snapshots of the agent afterwards. A save that
+    /// begins after the call began is not cancelled, and can start the snapshots of the agent
+    /// again. A call that gives an error can leave some of the snapshots; a new call removes them.
     async fn delete_all(
         &self,
         agent: &AgentSnapshots,

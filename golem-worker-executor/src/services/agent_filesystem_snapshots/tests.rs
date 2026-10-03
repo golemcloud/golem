@@ -3871,7 +3871,10 @@ fn a_manual_update_waits_for_the_end_of_a_job_that_confirmed_when_its_run_succee
 
 /// Runs a clean-up of the names of a revert whose delete the store holds at its gate, and an
 /// upload of the agent admitted while the delete is held: the save publishes before the delete
-/// goes on when `save_first`, and after the delete ended otherwise. Gives whether the upload was
+/// goes on when `save_first`, and after the delete ended otherwise. The scripted store does not
+/// prune; the rustic store test
+/// `a_save_and_a_prune_of_one_agent_in_both_orders_of_the_publish_and_the_index_read_give_whole_snapshots`
+/// runs the same overlap with a prune. Gives whether the upload was
 /// admitted, the names that the store keeps, and the content of the tree of the new name.
 async fn save_during_a_clean_up(save_first: bool) -> (bool, usize, Option<Vec<u8>>) {
     let store = Arc::new(ScriptedStore::default());
@@ -3938,7 +3941,7 @@ async fn save_during_a_clean_up(save_first: bool) -> (bool, usize, Option<Vec<u8
 }
 
 #[test]
-fn a_save_during_a_names_clean_up_whose_delete_prunes_gives_whole_snapshots() {
+fn a_save_during_a_names_clean_up_whose_delete_runs_gives_whole_snapshots() {
     paused(async {
         let save_first = save_during_a_clean_up(true).await;
         let delete_first = save_during_a_clean_up(false).await;

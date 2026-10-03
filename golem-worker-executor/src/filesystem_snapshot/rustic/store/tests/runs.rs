@@ -2244,3 +2244,136 @@ async fn the_text_of_a_local_io_error_of_the_fork_keeps_the_form_that_the_store_
         other => panic!("{other:?}"),
     }
 }
+
+/// Gives the number of calls of a delete of all snapshots.
+fn scope_deletes(storage: &ScriptedBlobStorage) -> usize {
+    calls_of(storage, "delete_scope")
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_all_drains_before_it_takes_a_slot() {
+    // The limiter has one slot. The first run of the save fails, and the save waits 500 ms
+    // between its runs, without a slot. A delete of all snapshots that took the slot before its
+    // drain would wait for the save, and the save would wait for the slot.
+    let storage = refusing(1, |op_label, path| {
+        op_label == "write" && path.starts_with("data")
+    });
+    let store = store(
+        storage.clone(),
+        StorePolicy {
+            retry: RetryConfig {
+                min_delay: Duration::from_millis(500),
+                max_delay: Duration::from_millis(500),
+                multiplier: 1.0,
+                ..three_runs()
+            },
+            ..runs_policy(LONG_DEADLINE, 1)
+        },
+    );
+    let scope = new_scope();
+    let tree = fixture_tree();
+    let slots = SharedSlots::new(1);
+    let saving = tokio::spawn({
+        let (store, scope, slots) = (store.clone(), scope.clone(), slots.clone());
+        let tree = tree.path().to_path_buf();
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-1"),
+                    &tree,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &slots,
+                )
+                .await
+        }
+    });
+    let waiting = eventually(|| slots.counts().3 == 1).await;
+
+    let deleting_all = tokio::spawn({
+        let (store, scope, slots) = (store.clone(), scope.clone(), slots.clone());
+        async move { store.delete_all(&scope, &slots).await }
+    });
+    let saved = tokio::time::timeout(LIMIT, saving).await;
+    let deleted_all = tokio::time::timeout(LIMIT, deleting_all).await;
+
+    assert!(matches!(saved, Ok(Ok(Ok(_)))), "{saved:?}");
+    assert!(matches!(deleted_all, Ok(Ok(Ok(())))), "{deleted_all:?}");
+    assert_eq!(
+        (waiting, slots.counts(), listed_names(&store, &scope).await),
+        (true, (3, 0, 1, 1), Vec::<String>::new())
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_all_during_a_later_run_of_a_restore_starts_only_after_the_restore_returned() {
+    // The first run of the restore fails at its read of the pack. The gate holds the read of the
+    // pack of the second run while the delete of all snapshots begins.
+    let armed = Arc::new(AtomicBool::new(false));
+    let reads = AtomicUsize::new(0);
+    let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
+        let armed = armed.clone();
+        move |op_label, path| {
+            if !(armed.load(Ordering::SeqCst)
+                && op_label == "read_range"
+                && path.starts_with("data"))
+            {
+                return Script::Pass;
+            }
+            match reads.fetch_add(1, Ordering::SeqCst) {
+                0 => Script::Refuse,
+                1 => Script::WaitForGate,
+                _ => Script::Pass,
+            }
+        }
+    });
+    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
+    let scope = new_scope();
+    let tree = one_file_tree("kept");
+    save_each(&store, &scope, &["p-0"]).await;
+    store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let restoring = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move { restored_listing(&store, &scope, &name("p-1")).await }
+    });
+    let held = eventually(|| calls_of(&storage, "read_range") >= 2).await;
+
+    let deleting_all = tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        async move {
+            store
+                .delete_all(&scope, &crate::filesystem_snapshot::Unlimited)
+                .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let waited = scope_deletes(&storage) == 0 && !deleting_all.is_finished();
+    storage.open_gate();
+    let restored = tokio::time::timeout(LIMIT, restoring).await;
+    let deleted_all = tokio::time::timeout(LIMIT, deleting_all).await;
+
+    assert!(matches!(deleted_all, Ok(Ok(Ok(())))), "{deleted_all:?}");
+    assert_eq!(
+        (
+            held,
+            waited,
+            restored.ok().and_then(|restored| restored.ok()?.ok()),
+            listed_names(&store, &scope).await,
+        ),
+        (true, true, Some(listing(tree.path())), Vec::<String>::new())
+    );
+}
