@@ -5622,3 +5622,114 @@ fn update_fields_skip_the_entries_in_a_deleted_region() {
         Some(SnapshotFiles::Unconfirmed(name))
     );
 }
+
+/// One update entry of a generated prefix of a fork.
+#[derive(Clone, Debug)]
+enum ForkPrefixEntry {
+    /// A pending snapshot-based update, with a filesystem snapshot when `true`.
+    SnapshotBased(bool),
+    Automatic,
+    Successful,
+    Failed,
+    /// A jump over the region from the first to the second index.
+    Jump(u64, u64),
+}
+
+fn fork_prefix_entry(entry: &ForkPrefixEntry) -> OplogEntry {
+    match entry {
+        ForkPrefixEntry::Jump(start, length) => OplogEntry::Jump {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            jump: OplogRegion::from_index_range(
+                OplogIndex::from_u64(*start)..=OplogIndex::from_u64(start + length),
+            ),
+        },
+        ForkPrefixEntry::SnapshotBased(named) => {
+            OplogEntry::pending_update(UpdateDescription::SnapshotBased {
+                target_revision: ComponentRevision::new(2).unwrap(),
+                payload: OplogPayload::Inline(Box::new(vec![])),
+                mime_type: "application/octet-stream".to_string(),
+                filesystem_snapshot: named.then(FilesystemSnapshotName::update),
+            })
+        }
+        ForkPrefixEntry::Automatic => OplogEntry::pending_update(UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        }),
+        ForkPrefixEntry::Successful => OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            100,
+            None,
+            HashSet::new(),
+        ),
+        ForkPrefixEntry::Failed => {
+            OplogEntry::failed_update(ComponentRevision::new(2).unwrap(), None)
+        }
+    }
+}
+
+/// The filesystem snapshot name of the pending update at `index` in `entries`, when it is a
+/// snapshot-based update.
+fn pending_update_name(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    index: Option<OplogIndex>,
+) -> Option<FilesystemSnapshotName> {
+    match entries.get(&index?)? {
+        OplogEntry::PendingUpdate {
+            description:
+                UpdateDescription::SnapshotBased {
+                    filesystem_snapshot,
+                    ..
+                },
+            ..
+        } => filesystem_snapshot.clone(),
+        _ => None,
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn the_fork_baseline_name_equals_the_fold(
+        prefix in proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::strategy::Strategy::prop_map(proptest::bool::ANY, ForkPrefixEntry::SnapshotBased),
+                proptest::strategy::Just(ForkPrefixEntry::Automatic),
+                proptest::strategy::Just(ForkPrefixEntry::Successful),
+                proptest::strategy::Just(ForkPrefixEntry::Failed),
+                proptest::strategy::Strategy::prop_map((2u64..26, 0u64..4), |(start, length)| ForkPrefixEntry::Jump(start, length)),
+            ],
+            0..24,
+        ),
+        dropped in proptest::collection::vec((2u64..26, 0u64..4), 0..3),
+    ) {
+        let entries = prefix
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 2), fork_prefix_entry(entry)))
+            .collect::<BTreeMap<_, _>>();
+        let deleted = DeletedRegionsBuilder::from_regions(
+            dropped
+                .iter()
+                .map(|(start, length)| {
+                    OplogRegion::from_index_range(
+                        OplogIndex::from_u64(*start)..=OplogIndex::from_u64(start + length),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .build();
+        let fields = super::calculate_update_fields(empty_update_fields(), &deleted, &entries);
+        let copied = golem_common::model::oplog::OplogIndexRange::new(
+            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(prefix.len() as u64 + 1),
+        );
+        let (_, baseline) = crate::services::worker_fork::fork_update_indices(copied, &deleted)
+            .filter_map(|index| entries.get(&index))
+            .fold(crate::services::worker_fork::ForkUpdates::default(), |updates, entry| updates.after(entry))
+            .into_parts();
+
+        proptest::prop_assert_eq!(
+            baseline,
+            pending_update_name(&entries, fields.last_manual_update_snapshot_index)
+        );
+    }
+}

@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::fork::Copied;
 use super::store_calls::StoreOf;
 use super::*;
 use crate::filesystem_snapshot::{
-    Failed, FilesystemSnapshotStore, InMemorySnapshotStore, ReadError, RestoreFailure, RunSlots,
-    SpacedTimes, Unlimited, Withdrawal,
+    CallError, Failed, FilesystemSnapshotStore, InMemorySnapshotStore, ReadError, RestoreFailure,
+    RunSlots, SpacedTimes, Unlimited, Withdrawal,
 };
 use crate::services::agent_filesystem::RestoreTree;
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
 use async_trait::async_trait;
+use futures::FutureExt as _;
 use futures::StreamExt as _;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -847,6 +849,44 @@ fn agent_snapshots(name: &str) -> AgentSnapshots {
     )
 }
 
+/// The target of a fork, with a new stage id and the snapshots of that stage.
+fn fork_target(name: &str) -> (OwnedAgentId, uuid::Uuid, AgentSnapshots) {
+    let target = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: name.to_string(),
+        },
+    );
+    let stage_id = uuid::Uuid::new_v4();
+    let stage = AgentSnapshots::agent(&target, golem_common::model::AgentFingerprint(stage_id));
+    (target, stage_id, stage)
+}
+
+/// Copies the snapshots of `from` into the stage `stage_id` of `target` as a fork attempt does,
+/// and publishes the stage.
+async fn fork_copy(
+    snapshots: &AgentFilesystemSnapshots,
+    from: &AgentSnapshots,
+    target: &OwnedAgentId,
+    stage_id: uuid::Uuid,
+) -> Result<(), CallError> {
+    let copied = snapshots
+        .begin_fork(from, fork_flight(&target.agent_id, [1; 32]))
+        .await
+        .unwrap()
+        .copy(target, stage_id, None)
+        .await?;
+    copied
+        .publish(
+            |_publication| async { PublishFound::<(), ()>::Published(()) }.boxed(),
+            || async { None }.boxed(),
+        )
+        .await
+        .unwrap();
+    Ok(())
+}
+
 /// The time that a test waits for a condition. The time of the tests is paused, so it only has
 /// to be longer than the waits of the service.
 const PATIENCE: Duration = Duration::from_secs(600);
@@ -1424,7 +1464,7 @@ fn a_copy_of_all_snapshots_holds_each_snapshot_of_the_agent() {
         let store = Arc::new(ScriptedStore::default());
         let snapshots = service(&store, settings(4, 4));
         let from = agent_snapshots("copied-from");
-        let to = agent_snapshots("copied-to");
+        let (target, stage_id, to) = fork_target("copied-to");
         let discarded = Arc::new(AtomicUsize::new(0));
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let admission = snapshots
@@ -1435,7 +1475,9 @@ fn a_copy_of_all_snapshots_holds_each_snapshot_of_the_agent() {
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         ended(&snapshots, &from).await;
 
-        snapshots.copy_all_snapshots(&from, &to).await.unwrap();
+        fork_copy(&snapshots, &from, &target, stage_id)
+            .await
+            .unwrap();
         let listed = store
             .memory
             .list(&to, &crate::filesystem_snapshot::Unlimited)
@@ -3332,11 +3374,14 @@ fn every_store_write_arrives_while_its_agent_is_busy() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
         let snapshots = service(&store, settings(4, 4));
-        let (agent, target) = (agent_snapshots("writes"), agent_snapshots("copied"));
+        let agent = agent_snapshots("writes");
+        let (target_id, stage_id, target) = fork_target("copied");
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         let name = submit(&snapshots, &agent, b"tree", confirmer(&confirm)).await;
         ended(&snapshots, &agent).await;
-        snapshots.copy_all_snapshots(&agent, &target).await.unwrap();
+        fork_copy(&snapshots, &agent, &target_id, stage_id)
+            .await
+            .unwrap();
         snapshots.delete_snapshots(&agent, Box::new([name]));
         snapshots.delete_all_snapshots(&target, AgentMode::Durable);
         eventually(|| {
@@ -3374,14 +3419,12 @@ fn a_dropped_fork_keeps_both_incarnations_busy_until_its_copy_returns() {
         let gate = Arc::new(Gate::default());
         *store.copy_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
-        let (source, target) = (
-            agent_snapshots("fork-source"),
-            agent_snapshots("fork-target"),
-        );
+        let source = agent_snapshots("fork-source");
+        let (target_id, stage_id, target) = fork_target("fork-target");
 
         let dropped = tokio::time::timeout(
             Duration::from_secs(1),
-            snapshots.copy_all_snapshots(&source, &target),
+            fork_copy(&snapshots, &source, &target_id, stage_id),
         )
         .await;
         snapshots.delete_all_snapshots(&source, AgentMode::Durable);
@@ -4199,5 +4242,272 @@ fn the_deletes_of_a_revert_run_after_its_hold_and_end_it() {
             Some(Box::from(reverted.as_str()))
         );
         assert_eq!(store.deletes.lock().unwrap().len(), 2);
+    })
+}
+
+/// Whether the store holds a snapshot of `agent`.
+async fn holds_snapshots(store: &ScriptedStore, agent: &AgentSnapshots) -> bool {
+    !store
+        .memory
+        .list(agent, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap()
+        .is_empty()
+}
+
+/// Copies one snapshot of a source into the stage of a fork attempt, then lets `publish` end the
+/// attempt. Gives whether the store still holds the snapshots of the stage after the end of the
+/// attempt and the clean-ups.
+async fn stage_after(
+    publish: impl FnOnce(Copied, golem_common::model::AgentFingerprint),
+) -> (bool, bool) {
+    let store = Arc::new(ScriptedStore::default());
+    let snapshots = service(&store, settings(4, 4));
+    let source = agent_snapshots("fork-source");
+    let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+    submit(&snapshots, &source, b"tree", confirmer(&confirm)).await;
+    ended(&snapshots, &source).await;
+    let (target, stage_id, stage) = fork_target("fork-target");
+    let copied = snapshots
+        .begin_fork(&source, fork_flight(&target.agent_id, [2; 32]))
+        .await
+        .unwrap()
+        .copy(&target, stage_id, None)
+        .await
+        .unwrap();
+    let copied_some = holds_snapshots(&store, &stage).await;
+
+    publish(copied, golem_common::model::AgentFingerprint(stage_id));
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    (copied_some, holds_snapshots(&store, &stage).await)
+}
+
+/// Publishes `copied` with the answer `found` of the publication, and `live` as the live target
+/// that a refused publication reads.
+fn publish_with(
+    copied: Copied,
+    found: PublishFound<(), ()>,
+    live: Option<golem_common::model::AgentFingerprint>,
+) {
+    tokio::spawn(async move {
+        let _ = copied
+            .publish(
+                |_publication| async move { found }.boxed(),
+                move || async move { live }.boxed(),
+            )
+            .await;
+    });
+}
+
+fn other_instance() -> golem_common::model::AgentFingerprint {
+    golem_common::model::AgentFingerprint(uuid::Uuid::new_v4())
+}
+
+#[test]
+fn a_dropped_fork_before_its_publication_deletes_its_stage_scope_after_its_copy_returns() {
+    paused(async {
+        assert_eq!(stage_after(|copied, _| drop(copied)).await, (true, false));
+    })
+}
+
+#[test]
+fn a_loser_deletes_its_stage_scope_when_the_live_target_has_another_instance_id() {
+    paused(async {
+        let published_to_another = stage_after(|copied, _| {
+            publish_with(copied, PublishFound::Live(other_instance(), ()), None)
+        })
+        .await;
+        let lost_before_its_publication =
+            stage_after(|copied, _| copied.lost_to(other_instance())).await;
+
+        assert_eq!(
+            (published_to_another, lost_before_its_publication),
+            ((true, false), (true, false))
+        );
+    })
+}
+
+#[test]
+fn a_live_target_with_the_own_stage_id_is_published_not_deleted() {
+    paused(async {
+        let published =
+            stage_after(|copied, _| publish_with(copied, PublishFound::Published(()), None)).await;
+        let live_own =
+            stage_after(|copied, own| publish_with(copied, PublishFound::Live(own, ()), None))
+                .await;
+        let lost_to_own = stage_after(|copied, own| copied.lost_to(own)).await;
+
+        assert_eq!(
+            [published, live_own, lost_to_own],
+            [(true, true), (true, true), (true, true)]
+        );
+    })
+}
+
+#[test]
+fn a_refused_publication_whose_target_is_the_own_stage_keeps_it() {
+    paused(async {
+        let own =
+            stage_after(|copied, own| publish_with(copied, PublishFound::Refused(()), Some(own)))
+                .await;
+        let other = stage_after(|copied, _| {
+            publish_with(copied, PublishFound::Refused(()), Some(other_instance()))
+        })
+        .await;
+        let none =
+            stage_after(|copied, _| publish_with(copied, PublishFound::Refused(()), None)).await;
+        let unknown =
+            stage_after(|copied, _| publish_with(copied, PublishFound::Unknown(()), None)).await;
+
+        assert_eq!(
+            [own, other, none, unknown],
+            [(true, true), (true, false), (true, true), (true, true)]
+        );
+    })
+}
+
+#[test]
+fn an_export_conflict_after_the_session_deadline_keeps_the_own_stage() {
+    paused(async {
+        // The receipt of the own stage is no longer live, so the fork answers a conflict; the
+        // instance id of the receipt is the own stage id.
+        let kept = stage_after(|copied, own| {
+            tokio::spawn(async move {
+                let answer: Result<Result<(), &str>, ()> = copied
+                    .publish(
+                        |_publication| {
+                            async move { PublishFound::Live(own, Err("conflict")) }.boxed()
+                        },
+                        || async { None }.boxed(),
+                    )
+                    .await;
+                assert_eq!(answer, Ok(Err("conflict")));
+            });
+        })
+        .await;
+
+        assert_eq!(kept, (true, true));
+    })
+}
+
+#[test]
+fn a_fork_waits_for_another_attempt_of_its_request_and_for_a_pending_delete_of_its_source() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
+        let source = agent_snapshots("fork-source");
+        let (target, _, _) = fork_target("fork-target");
+        let flight = fork_flight(&target.agent_id, [3; 32]);
+        let first = snapshots.begin_fork(&source, flight.clone()).await.unwrap();
+
+        let second = {
+            let (snapshots, source, flight) =
+                (Arc::clone(&snapshots), source.clone(), flight.clone());
+            tokio::spawn(async move {
+                snapshots
+                    .begin_fork(&source, flight)
+                    .await
+                    .map(|fork| fork.waited())
+            })
+        };
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let second_waited_while_the_first_lives = !second.is_finished();
+        drop(first);
+        let second_waited = second.await.unwrap().unwrap();
+
+        snapshots.delete_all_snapshots(&source, AgentMode::Durable);
+        let third = {
+            let (snapshots, source) = (Arc::clone(&snapshots), source.clone());
+            tokio::spawn(async move {
+                snapshots
+                    .begin_fork(&source, fork_flight(&target.agent_id, [4; 32]))
+                    .await
+                    .map(|fork| fork.waited())
+            })
+        };
+        eventually(|| store.all_deletes.load(Ordering::SeqCst) == 1).await;
+        let third_waited = third.await.unwrap().unwrap();
+
+        assert_eq!(
+            (
+                second_waited_while_the_first_lives,
+                second_waited,
+                third_waited
+            ),
+            (true, true, true)
+        );
+    })
+}
+
+#[test]
+fn a_revert_delete_of_the_source_waits_for_the_fork() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4));
+        let source = agent_snapshots("fork-source");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+        let name = submit(&snapshots, &source, b"tree", confirmer(&confirm)).await;
+        ended(&snapshots, &source).await;
+        let (target, _, _) = fork_target("fork-target");
+        let fork = snapshots
+            .begin_fork(&source, fork_flight(&target.agent_id, [5; 32]))
+            .await
+            .unwrap();
+
+        snapshots
+            .begin_revert(&source)
+            .delete_snapshots(Box::new([name]));
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let while_the_fork_holds = store.deletes.lock().unwrap().len();
+        drop(fork);
+        eventually(|| store.deletes.lock().unwrap().len() == 1).await;
+
+        assert_eq!(while_the_fork_holds, 0);
+    })
+}
+
+#[test]
+fn the_copy_of_a_fork_checks_the_snapshot_of_the_baseline_in_the_stage() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        let snapshots = service(&store, settings(4, 4));
+        let source = agent_snapshots("fork-source");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+        let name = submit(&snapshots, &source, b"tree", confirmer(&confirm)).await;
+        ended(&snapshots, &source).await;
+        let other = FilesystemSnapshotName::periodic();
+        let baseline_of = |baseline: Option<FilesystemSnapshotName>| {
+            let (snapshots, source) = (&snapshots, &source);
+            async move {
+                let (target, stage_id, _) = fork_target("fork-target");
+                snapshots
+                    .begin_fork(source, fork_flight(&target.agent_id, [6; 32]))
+                    .await
+                    .unwrap()
+                    .copy(&target, stage_id, baseline.as_ref())
+                    .await
+                    .unwrap()
+                    .baseline()
+            }
+        };
+
+        let missing = (
+            snapshots.missing(&source, &name).await.unwrap(),
+            snapshots.missing(&source, &other).await.unwrap(),
+        );
+
+        assert_eq!(missing, (false, true));
+        assert_eq!(
+            [
+                baseline_of(Some(name)).await,
+                baseline_of(Some(other.clone())).await,
+                baseline_of(None).await,
+            ],
+            [
+                Baseline::Present,
+                Baseline::Missing(other),
+                Baseline::NotChecked
+            ]
+        );
     })
 }

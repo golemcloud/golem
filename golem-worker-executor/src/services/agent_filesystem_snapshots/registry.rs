@@ -30,12 +30,13 @@ use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 ///
 /// A transition that wakes wakes every waiter, not only the waiters of its agent. The waiters are
 /// few: a start that waits for the upload of its own agent, a manual update that waits for the job
-/// of its agent, a save that waits for the running save of its agent, a delete of names that
-/// waits between two attempts, and the idle workers of the clean-up pool, at most
-/// `max_concurrent_uploads`. After a restart of the executor there are none but the workers,
-/// because the jobs live in the process. Each woken waiter takes the lock once and checks its own
-/// agent in O(1), so a transition costs O(waiters) lock-and-check steps. A signal for each agent
-/// would add state and a lifecycle to save those steps.
+/// of its agent, a save that waits for the running save of its agent, a fork attempt that waits for
+/// a delete of all snapshots of its source or for another attempt of its request, a clean-up of
+/// names that waits during its whole call for a delete of all snapshots of its agent, and the idle
+/// workers of the clean-up pool, at most `max_concurrent_uploads`. After a restart of the executor
+/// there are none but the workers, because the jobs live in the process. Each woken waiter takes
+/// the lock once and checks its own agent in O(1), so a transition costs O(waiters) lock-and-check
+/// steps. A signal for each agent would add state and a lifecycle to save those steps.
 pub(super) struct Registry {
     state: Mutex<State>,
     changed: watch::Sender<()>,
