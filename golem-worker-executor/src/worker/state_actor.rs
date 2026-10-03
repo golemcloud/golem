@@ -276,6 +276,11 @@ enum LifecycleJob<Ctx: WorkerCtx> {
         worker: Arc<Worker<Ctx>>,
         memory: LinearMemoryTracker,
     },
+    MonthlyCapacityExhausted {
+        worker: Arc<Worker<Ctx>>,
+        target: Arc<super::monthly::MonthlyWindowTarget>,
+        capacity: crate::services::resource_limits::MonthlyCapacity,
+    },
 }
 
 /// The state exclusively owned by the status task.
@@ -317,6 +322,35 @@ fn fenced_error(fence: &OplogFence) -> WorkerExecutorError {
 }
 
 impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
+    pub(super) fn monthly_capacity_exhausted(
+        &self,
+        worker: Arc<Worker<Ctx>>,
+        target: Arc<super::monthly::MonthlyWindowTarget>,
+        capacity: crate::services::resource_limits::MonthlyCapacity,
+    ) -> Result<(), WorkerExecutorError> {
+        self.lifecycle_jobs
+            .send(LifecycleJob::MonthlyCapacityExhausted {
+                worker,
+                target,
+                capacity,
+            })
+            .map_err(|_| WorkerExecutorError::runtime("Monthly monitor lost the lifecycle actor"))
+    }
+
+    pub(super) fn lifecycle_is_closed(&self) -> bool {
+        self.lifecycle_jobs.is_closed()
+    }
+
+    pub(super) async fn monthly_delivery_closed(&self) {
+        self.lifecycle_jobs.closed().await;
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(super) async fn stop_lifecycle_for_test(&self) {
+        let _ = self.lifecycle_jobs.send(LifecycleJob::Stop);
+        self.lifecycle_jobs.closed().await;
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         deps: All<Ctx>,
@@ -520,6 +554,13 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         done,
                     } => {
                         let _ = done.send(worker.add_and_commit_oplog(*entry).await.map(|_| ()));
+                    }
+                    LifecycleJob::MonthlyCapacityExhausted {
+                        worker,
+                        target,
+                        capacity,
+                    } => {
+                        worker.accept_monthly_capacity(target, capacity).await;
                     }
                     LifecycleJob::MemoryLimitExceeded { worker, memory } => {
                         worker

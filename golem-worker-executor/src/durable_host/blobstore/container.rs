@@ -31,7 +31,8 @@ use crate::durable_host::blobstore::types::{
     ContainerEntry, IncomingValueEntry, OutgoingValueEntry,
 };
 use crate::durable_host::blobstore::{
-    authorize_targets, classify_blob_store_error, container_target, object_target,
+    authorize_targets, await_blob_provider, classify_blob_store_error, container_target,
+    object_target,
 };
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable, ResolvedCall,
@@ -115,9 +116,13 @@ async fn list_objects_durable_access<Ctx: WorkerCtx, T: 'static>(
                 .await?;
         }
 
-        let result = blob_store_service
-            .list_objects(environment_id, container_name)
-            .await;
+        let interrupt = accessor.with(|mut host| host.get().create_interrupt_signal());
+        let result = await_blob_provider(
+            interrupt,
+            blob_store_service.list_objects(environment_id, container_name),
+        )
+        .await
+        .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
         handle
             .complete_access(
                 accessor,
@@ -217,17 +222,18 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .get_data(
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.get_data(
                         environment_id,
                         container_name.clone(),
                         name.clone(),
                         start,
                         end,
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -347,17 +353,18 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .write_data(
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.write_data(
                         self.account_resource_limits(),
                         environment_id,
                         &container_name,
                         &name,
                         &data,
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -445,16 +452,17 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .delete_object(
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.delete_object(
                         self.account_resource_limits(),
                         environment_id,
                         container_name.clone(),
                         name.clone(),
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -545,16 +553,17 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .delete_objects(
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.delete_objects(
                         self.account_resource_limits(),
                         environment_id,
                         &container_name,
                         &names,
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -634,11 +643,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .has_object(environment_id, container_name.clone(), name.clone())
-                    .await;
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.has_object(
+                        environment_id,
+                        container_name.clone(),
+                        name.clone(),
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -709,11 +723,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .object_info(environment_id, container_name.clone(), name.clone())
-                    .await;
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.object_info(
+                        environment_id,
+                        container_name.clone(),
+                        name.clone(),
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?
@@ -787,15 +806,16 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             }
 
             let result = loop {
-                let result = self
-                    .state
-                    .blob_store_service
-                    .clear(
+                let result = await_blob_provider(
+                    self.create_interrupt_signal(),
+                    self.state.blob_store_service.clear(
                         self.account_resource_limits(),
                         environment_id,
                         container_name.clone(),
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)
                     .await?

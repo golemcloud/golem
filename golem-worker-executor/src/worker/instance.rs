@@ -14,6 +14,7 @@
 
 use super::Worker;
 use super::entity_slot::{EntitySlot, EntitySlotRegistration};
+use super::invocation::fuel_exhaustion_error;
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
 use crate::durable_host::replay_state::ReplayState;
@@ -22,7 +23,9 @@ use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::oplog::{CommitLevel, Oplog, OplogFence};
-use crate::services::resource_limits::AtomicResourceEntry;
+use crate::services::resource_limits::{
+    AtomicResourceEntry, MonthlyCapacity, ResourceUsageFlusher,
+};
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
@@ -465,6 +468,20 @@ impl OwnerExecution {
     }
 }
 
+pub(crate) struct StoreFuelReservationPublication {
+    generation: Arc<Mutex<Option<u64>>>,
+    transaction: Arc<Mutex<()>>,
+}
+
+impl StoreFuelReservationPublication {
+    pub(crate) fn update<R>(&self, update: impl FnOnce() -> (R, Option<u64>)) -> R {
+        let _transaction = self.transaction.lock().unwrap();
+        let (result, generation) = update();
+        *self.generation.lock().unwrap() = generation;
+        result
+    }
+}
+
 /// Owner-scoped runtime resources reused by primary and entity Store construction.
 pub struct OwnerRuntimeResources {
     resource_limits: Arc<AtomicResourceEntry>,
@@ -472,6 +489,12 @@ pub struct OwnerRuntimeResources {
     // This weak lifecycle handle lets entity Stores attach during reconstruction or residence
     // without sharing or owning the AgentFilesystem itself.
     filesystem_generation: Mutex<Option<FilesystemGenerationHandle>>,
+    fuel_reservations: Mutex<Vec<Weak<Mutex<Option<u64>>>>>,
+    fuel_transaction: Arc<Mutex<()>>,
+    usage_flushers: Mutex<Vec<Weak<dyn ResourceUsageFlusher>>>,
+    #[cfg(feature = "test-utils")]
+    pub(super) scripted_filesystem_usage:
+        Mutex<Option<crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest>>,
 }
 
 impl OwnerRuntimeResources {
@@ -483,7 +506,20 @@ impl OwnerRuntimeResources {
             resource_limits,
             execution_status,
             filesystem_generation: Mutex::new(None),
+            fuel_reservations: Mutex::new(Vec::new()),
+            fuel_transaction: Arc::new(Mutex::new(())),
+            usage_flushers: Mutex::new(Vec::new()),
+            #[cfg(feature = "test-utils")]
+            scripted_filesystem_usage: Mutex::new(None),
         }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn set_scripted_filesystem_usage_for_test(
+        &self,
+        source: crate::services::resource_usage_metering::ScriptedFilesystemUsageForTest,
+    ) {
+        *self.scripted_filesystem_usage.lock().unwrap() = Some(source);
     }
 
     pub fn resource_limits(&self) -> Arc<AtomicResourceEntry> {
@@ -492,6 +528,81 @@ impl OwnerRuntimeResources {
 
     pub fn execution_status(&self) -> Arc<std::sync::RwLock<ExecutionStatus>> {
         self.execution_status.clone()
+    }
+
+    pub(crate) fn register_store_fuel_reservation(&self) -> StoreFuelReservationPublication {
+        let _transaction = self.fuel_transaction.lock().unwrap();
+        let generation = Arc::new(Mutex::new(None));
+        self.fuel_reservations
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&generation));
+        StoreFuelReservationPublication {
+            generation,
+            transaction: self.fuel_transaction.clone(),
+        }
+    }
+
+    pub(crate) fn register_resource_usage_flusher(&self, flusher: Weak<dyn ResourceUsageFlusher>) {
+        self.usage_flushers.lock().unwrap().push(flusher);
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn live_usage_flusher_count_for_test(&self) -> usize {
+        // A retained primary meter can be registered again when its next permit window opens.
+        let mut live = Vec::new();
+        for flusher in self
+            .usage_flushers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(Weak::upgrade)
+        {
+            if !live.iter().any(|existing| Arc::ptr_eq(existing, &flusher)) {
+                live.push(flusher);
+            }
+        }
+        live.len()
+    }
+
+    pub(crate) fn settle_resource_usage(&self) {
+        let flushers = {
+            let mut registered = self.usage_flushers.lock().unwrap();
+            let flushers: Vec<_> = registered.iter().filter_map(Weak::upgrade).collect();
+            registered.retain(|entry| entry.strong_count() > 0);
+            flushers
+        };
+        for flusher in flushers {
+            flusher.flush_usage();
+        }
+    }
+
+    pub(crate) fn with_monthly_capacity<R>(
+        &self,
+        mode: golem_common::model::agent::AgentMode,
+        read: impl FnOnce(MonthlyCapacity) -> R,
+    ) -> R {
+        let _transaction = self.fuel_transaction.lock().unwrap();
+        let mut reservations = self.fuel_reservations.lock().unwrap();
+        let mut generation = None;
+        let mut unreserved = false;
+        reservations.retain(|reservation| {
+            let Some(reservation) = reservation.upgrade() else {
+                return false;
+            };
+            match *reservation.lock().unwrap() {
+                Some(value) => {
+                    generation = Some(generation.map_or(value, |old: u64| old.min(value)))
+                }
+                None => unreserved = true,
+            }
+            true
+        });
+        self.resource_limits.with_monthly_capacity(
+            mode,
+            if unreserved { None } else { generation },
+            read,
+        )
     }
 
     pub(crate) fn activate_filesystem_generation(&self, generation: FilesystemGenerationHandle) {
@@ -696,6 +807,12 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                     self.creation_error(error.into())
                 }
             })?;
+
+        let current_level = store.get_fuel().unwrap_or(0);
+        let agent_mode = store.data().agent_mode();
+        if let Err(error) = store.data_mut().ensure_fuel(current_level) {
+            return Err(fuel_exhaustion_error(agent_mode, error));
+        }
 
         Ok(HostedInstance {
             instance,
@@ -1101,6 +1218,9 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
         self.store.data_mut().set_entity_invocation_scope(None)
     }
 }
+
+#[cfg(test)]
+mod monthly_tests;
 
 #[cfg(test)]
 mod tests {

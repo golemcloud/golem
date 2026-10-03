@@ -531,6 +531,16 @@ impl Services {
             });
         }
 
+        {
+            let cleanup_repo = repos.account_resource_override_repo.clone();
+            let cleanup_interval = config.resource_grants.cleanup_interval;
+            join_set.spawn(async move {
+                cleanup_repo
+                    .run_admin_grant_cleanup_loop(cleanup_interval)
+                    .await
+            });
+        }
+
         if provision_component_builtins {
             let artifact_resolver =
                 crate::services::builtin_artifact::BuiltinArtifactResolver::new(

@@ -14,6 +14,7 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::DropEvent;
+use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::durable_session::{
     DurableInputEndpoint, DurableInputEvent, DurableInputProducer, DurableInputReceiveAdmission,
     ForwardedDurableInput,
@@ -192,6 +193,11 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                                 return;
                             }
                             Ok(Some(DurableInputEvent::Cancelled)) => {
+                                target_lifecycle.abort();
+                                return;
+                            }
+                            Err(error) if error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>().is_some() => {
+                                source.abort_for_teardown();
                                 target_lifecycle.abort();
                                 return;
                             }
@@ -518,8 +524,9 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                 };
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = access.get().stream_runtime_teardown_probe();
-                let (consumer, stream) =
-                    output_stream_pair(capacity, runtime_teardown).map_err(wasmtime::Error::msg)?;
+                let interrupt = access.get().create_interrupt_signal();
+                let (consumer, stream) = output_stream_pair(capacity, runtime_teardown, interrupt)
+                    .map_err(wasmtime::Error::msg)?;
                 reader.pipe(&mut access, consumer)?;
                 access
                     .get()
@@ -564,7 +571,8 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                     let endpoint = stream
                         .take_host_endpoint::<LiveStreamEndpoint>()
                         .map_err(wasmtime::Error::msg)?;
-                    StreamReader::new(&mut access, LiveInputProducer::new(endpoint))
+                    let interrupt = access.get().create_interrupt_signal();
+                    StreamReader::new(&mut access, LiveInputProducer::new(endpoint, interrupt))
                 }
             })
             .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -672,6 +680,62 @@ mod tests {
             ],
             root: 0,
         }
+    }
+
+    #[test]
+    #[timeout("5s")]
+    async fn projected_quiet_demand_observes_stop_without_relay_terminal() {
+        let (publisher, endpoint) = relay_stream_pair(1).unwrap();
+        let mut projection = ExecutorProjectionStreams::for_test(1);
+        let target = projection
+            .project_stream(
+                SchemaValueStream::from_host_endpoint(endpoint),
+                Some(reordered_record_plan()),
+            )
+            .unwrap()
+            .take_host_endpoint::<LiveStreamEndpoint>()
+            .unwrap();
+        let lifecycle = target.lifecycle();
+        let mut subscriber = target.activate();
+        publisher
+            .publish_item(SchemaValue::Record {
+                fields: vec![SchemaValue::U64(7), SchemaValue::String("seven".into())],
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(subscriber.recv().await.unwrap().payload, LiveStreamEventPayload::Item(SchemaValue::Record { fields }) if fields == vec![SchemaValue::String("seven".into()), SchemaValue::U64(7)])
+        );
+        let (stop, signal) = tokio::sync::oneshot::channel();
+        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
+            golem_common::model::Timestamp::now_utc(),
+        );
+        let cancelled = {
+            let lifecycle = lifecycle.clone();
+            async move { lifecycle.cancelled().await }
+        };
+        // The relay keeps its own lifecycle; only the downstream live frontend demand stops.
+        let mut receive = Box::pin(crate::durable_host::stream_transport::receive_input_event(
+            subscriber,
+            tokio_util::sync::CancellationToken::new(),
+            Box::pin(async move { signal.await.unwrap() }),
+        ));
+        use std::future::Future;
+        let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+        assert!(receive.as_mut().poll(&mut cx).is_pending());
+        stop.send(kind).unwrap();
+        let (mut subscriber, _signal, result) = receive.await;
+        assert_eq!(result.unwrap_err(), kind);
+        assert!(!lifecycle.is_aborted());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), subscriber.recv())
+                .await
+                .is_err()
+        );
+        drop(subscriber);
+        tokio::time::timeout(std::time::Duration::from_secs(1), cancelled)
+            .await
+            .unwrap();
     }
 
     #[test]

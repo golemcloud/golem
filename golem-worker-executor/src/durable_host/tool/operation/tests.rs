@@ -1105,6 +1105,114 @@ async fn explicit_cancel_preserves_owner_interrupt_and_fences_streams_before_ret
 }
 
 #[test]
+async fn nonterminal_unload_fences_operations_without_electing_a_terminal_cause() {
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    let (_producer, consumer, observer) = attachment_pair(16, AttachmentMemory::inert());
+    assert!(operation.attach(None, Some(consumer.controller()), None));
+
+    owner.fence_for_unload().await;
+    assert!(owner.selected_owner_failure().is_none());
+    assert!(owner.create(context()).operation.is_none());
+    assert!(!owner.commit_if_owner_open(|| panic!("fenced owner committed")));
+    assert!(!operation.begin_ordinary());
+    assert!(matches!(
+        operation.winner_if_active(),
+        Some(ToolOperationWinner::FencedByOwner)
+    ));
+    assert!(matches!(
+        observer.wait_terminal().await,
+        crate::preview2::golem::tool::host::ByteStreamCloseCause::Failed(
+            ByteStreamFailure::Cancelled
+        )
+    ));
+    owner.drain_owner_failure_lanes().await;
+    assert!(owner.begin_generation().is_err());
+
+    let accepted = InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc());
+    assert!(
+        owner
+            .select_owner_failure(OwnerFailureWinner::Lifecycle(accepted))
+            .await
+    );
+    assert!(
+        !owner
+            .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+            .await
+    );
+    assert!(
+        matches!(owner.selected_owner_failure(), Some(OwnerFailureWinner::Lifecycle(kind)) if kind == accepted)
+    );
+    operation.settle().await;
+    owner.begin_generation().unwrap();
+    assert!(owner.commit_if_owner_open(|| {}));
+    assert!(owner.selected_owner_failure().is_none());
+}
+
+#[test]
+async fn nonterminal_unload_preserves_independent_owner_failures() {
+    for failure in [
+        OwnerFailureWinner::Trap(TrapType::Exit),
+        OwnerFailureWinner::Infrastructure(WorkerExecutorError::runtime("independent failure")),
+    ] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        assert!(owner.select_owner_failure(failure.clone()).await);
+        owner.fence_for_unload().await;
+        assert_eq!(
+            format!("{:?}", owner.selected_owner_failure().unwrap()),
+            format!("{failure:?}")
+        );
+        assert!(
+            !owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Restart))
+                .await
+        );
+        owner.drain_owner_failure_lanes().await;
+        operation.settle().await;
+    }
+}
+
+#[test]
+#[timeout("5s")]
+async fn guest_lifecycle_interrupt_does_not_elect_a_trap() {
+    let timestamp = golem_common::model::Timestamp::now_utc();
+    for kind in [
+        InterruptKind::Suspend(timestamp),
+        InterruptKind::Interrupt(timestamp),
+        InterruptKind::Restart,
+        InterruptKind::Jump,
+        InterruptKind::ShardLost,
+    ] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let failure = super::super::guest_trap_output_failure(
+            &operation,
+            TrapType::Interrupt(kind),
+            false,
+            false,
+        )
+        .await;
+        assert!(matches!(failure, ByteStreamFailure::Cancelled));
+        assert!(owner.selected_owner_failure().is_none());
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::Open)
+        ));
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(kind))
+                .await
+        );
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Lifecycle(selected)) if selected == kind
+        ));
+        operation.settle().await;
+    }
+}
+
+#[test]
 async fn lifecycle_winner_forces_a_losing_guest_trap_output_to_cancelled() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);

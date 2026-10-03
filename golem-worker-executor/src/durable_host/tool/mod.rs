@@ -2565,6 +2565,16 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             )
             .as_trap_type::<Ctx>()
             .expect("a failed tool guest call must classify as a trap");
+            if let crate::model::TrapType::Interrupt(kind) = &trap
+                && !replaying_completed
+                && !local_cancellation_selected
+            {
+                let worker = store.data().durable_ctx().public_state.worker();
+                let kind = worker.terminal_teardown_cause(*kind).await;
+                let _ = operation
+                    .select_failure(operation::OwnerFailureWinner::Lifecycle(kind))
+                    .await;
+            }
             let output_failure = guest_trap_output_failure(
                 &operation,
                 trap.clone(),
@@ -4858,7 +4868,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = access.get().stream_runtime_teardown_probe();
-                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown)
+                let interrupt = access.get().create_interrupt_signal();
+                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown, interrupt)
                     .map_err(wasmtime::Error::msg)?;
                 let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
                 reader.pipe(&mut access, sink)?;

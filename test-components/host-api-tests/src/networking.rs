@@ -38,10 +38,208 @@ async fn tcp_collect(port: u16) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&collected).to_string())
 }
 
+fn tcp_input_poll(port: u16, blocking: bool) -> Result<bool, String> {
+    use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
+
+    let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4)
+        .map_err(|error| format!("{error:?}"))?;
+    socket
+        .start_connect(
+            &instance_network(),
+            IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port,
+            }),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    socket.subscribe().block();
+    if blocking {
+        assert!(socket.subscribe().ready(), "connect poll completed");
+    }
+    let (input, _output) = socket
+        .finish_connect()
+        .map_err(|error| format!("{error:?}"))?;
+    let pollable = input.subscribe();
+    if blocking {
+        pollable.block();
+        Ok(true)
+    } else {
+        Ok(pollable.ready())
+    }
+}
+
+fn tcp_input_connection(
+    port: u16,
+) -> Result<
+    (
+        wasi::sockets::tcp::TcpSocket,
+        wasi::io::streams::InputStream,
+        wasi::io::streams::OutputStream,
+    ),
+    String,
+> {
+    use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
+    let socket = wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4)
+        .map_err(|error| format!("{error:?}"))?;
+    socket
+        .start_connect(
+            &instance_network(),
+            IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                address: (127, 0, 0, 1),
+                port,
+            }),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    socket.subscribe().block();
+    let (input, output) = socket
+        .finish_connect()
+        .map_err(|error| format!("{error:?}"))?;
+    Ok((socket, input, output))
+}
+
+fn tcp_inputs_poll(first_port: u16, second_port: u16, duplicate: bool) -> Result<Vec<u32>, String> {
+    let (_first_socket, first_input, _first_output) = tcp_input_connection(first_port)?;
+    let (_second_socket, second_input, _second_output) = tcp_input_connection(second_port)?;
+    let first = first_input.subscribe();
+    let second = second_input.subscribe();
+    Ok(if duplicate {
+        wasi::io::poll::poll(&[&second, &first, &second])
+    } else {
+        wasi::io::poll::poll(&[&first, &second])
+    })
+}
+
+fn tcp_blocking_read(port: u16) -> Result<Vec<u8>, String> {
+    let (_socket, input, _output) = tcp_input_connection(port)?;
+    input.blocking_read(1).map_err(|error| format!("{error:?}"))
+}
+
+fn tcp_blocking_skip(port: u16) -> Result<u64, String> {
+    let (_socket, input, _output) = tcp_input_connection(port)?;
+    input.blocking_skip(1).map_err(|error| format!("{error:?}"))
+}
+
+fn tcp_blocking_splice(port: u16) -> Result<u64, String> {
+    let (_socket, input, output) = tcp_input_connection(port)?;
+    output
+        .blocking_splice(&input, 1)
+        .map_err(|error| format!("{error:?}"))
+}
+
+fn tcp_cross_socket_blocking_splice(input_port: u16, output_port: u16) -> Result<u64, String> {
+    let (_input_socket, input, _input_output) = tcp_input_connection(input_port)?;
+    let (_output_socket, _output_input, output) = tcp_input_connection(output_port)?;
+    output
+        .blocking_splice(&input, 1)
+        .map_err(|error| format!("{error:?}"))
+}
+
+async fn udp_receive() -> Result<Vec<u8>, String> {
+    use golem_rust::wasip3::sockets::types::{
+        IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, UdpSocket,
+    };
+    let socket = UdpSocket::create(IpAddressFamily::Ipv4).map_err(|error| format!("{error:?}"))?;
+    socket
+        .bind(IpSocketAddress::Ipv4(Ipv4SocketAddress {
+            address: (127, 0, 0, 1),
+            port: 0,
+        }))
+        .map_err(|error| format!("{error:?}"))?;
+    socket
+        .receive()
+        .await
+        .map(|(data, _)| data)
+        .map_err(|error| format!("{error:?}"))
+}
+
+#[agent_definition(ephemeral)]
+pub trait EphemeralNetworking {
+    fn new(name: String) -> Self;
+    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String>;
+    async fn tcp_collect_p3(&self, port: u16) -> Result<String, String>;
+    fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String>;
+    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String>;
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String>;
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String>;
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String>;
+    fn tcp_cross_socket_blocking_splice_p2(
+        &self,
+        input_port: u16,
+        output_port: u16,
+    ) -> Result<u64, String>;
+    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String>;
+}
+
+pub struct EphemeralNetworkingImpl;
+
+#[agent_implementation]
+impl EphemeralNetworking for EphemeralNetworkingImpl {
+    fn new(_name: String) -> Self {
+        Self
+    }
+
+    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String> {
+        tcp_inputs_poll(first_port, second_port, false)
+    }
+
+    async fn tcp_collect_p3(&self, port: u16) -> Result<String, String> {
+        tcp_collect(port).await
+    }
+
+    fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String> {
+        tcp_input_poll(port, false)
+    }
+
+    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String> {
+        tcp_input_poll(port, true)
+    }
+
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String> {
+        tcp_blocking_read(port)
+    }
+
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String> {
+        tcp_blocking_skip(port)
+    }
+
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String> {
+        tcp_blocking_splice(port)
+    }
+
+    fn tcp_cross_socket_blocking_splice_p2(
+        &self,
+        input_port: u16,
+        output_port: u16,
+    ) -> Result<u64, String> {
+        tcp_cross_socket_blocking_splice(input_port, output_port)
+    }
+
+    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String> {
+        udp_receive().await
+    }
+}
+
 #[agent_definition]
 pub trait Networking {
     fn new(name: String) -> Self;
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String>;
+    fn tcp_cross_socket_blocking_splice_p2(
+        &self,
+        input_port: u16,
+        output_port: u16,
+    ) -> Result<u64, String>;
+    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String>;
+    fn tcp_inputs_duplicate_poll_p2(
+        &self,
+        first_port: u16,
+        second_port: u16,
+    ) -> Result<Vec<u32>, String>;
     fn get(&self) -> Vec<String>;
+    fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String>;
+    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String>;
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String>;
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String>;
+    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String>;
     fn probe_p2(
         &self,
         operation: String,
@@ -73,6 +271,18 @@ impl Networking for NetworkingImpl {
         Self { _name: name }
     }
 
+    fn tcp_inputs_poll_p2(&self, first_port: u16, second_port: u16) -> Result<Vec<u32>, String> {
+        tcp_inputs_poll(first_port, second_port, false)
+    }
+
+    fn tcp_inputs_duplicate_poll_p2(
+        &self,
+        first_port: u16,
+        second_port: u16,
+    ) -> Result<Vec<u32>, String> {
+        tcp_inputs_poll(first_port, second_port, true)
+    }
+
     fn get(&self) -> Vec<String> {
         let network = instance_network();
         let resolve_stream = resolve_addresses(&network, "golem.cloud").expect("resolve_addresses");
@@ -91,6 +301,38 @@ impl Networking for NetworkingImpl {
             }
         }
         result
+    }
+
+    fn tcp_input_ready_p2(&self, port: u16) -> Result<bool, String> {
+        tcp_input_poll(port, false)
+    }
+
+    fn tcp_input_block_p2(&self, port: u16) -> Result<bool, String> {
+        tcp_input_poll(port, true)
+    }
+
+    fn tcp_blocking_read_p2(&self, port: u16) -> Result<Vec<u8>, String> {
+        tcp_blocking_read(port)
+    }
+
+    fn tcp_blocking_skip_p2(&self, port: u16) -> Result<u64, String> {
+        tcp_blocking_skip(port)
+    }
+
+    fn tcp_blocking_splice_p2(&self, port: u16) -> Result<u64, String> {
+        tcp_blocking_splice(port)
+    }
+
+    fn tcp_cross_socket_blocking_splice_p2(
+        &self,
+        input_port: u16,
+        output_port: u16,
+    ) -> Result<u64, String> {
+        tcp_cross_socket_blocking_splice(input_port, output_port)
+    }
+
+    async fn udp_receive_p3(&self) -> Result<Vec<u8>, String> {
+        udp_receive().await
     }
 
     fn probe_p2(

@@ -4730,7 +4730,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let timer = duration.map(|duration| {
             let latch = latch.clone();
             let execution_status = self.execution_status.clone();
+            #[cfg(feature = "test-utils")]
+            let deadline = self
+                .public_state
+                .worker()
+                .invocation_deadline_for_test(duration);
             tokio::spawn(async move {
+                #[cfg(feature = "test-utils")]
+                deadline.await;
+                #[cfg(not(feature = "test-utils"))]
                 tokio::time::sleep(duration).await;
                 latch.store(true, Ordering::Release);
                 let interrupt_signal = {
@@ -5429,9 +5437,11 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading { agent_mode, .. } => {
-                let (tx, _) = tokio::sync::broadcast::channel(128);
-                let interrupt_signal = Arc::new(tx);
+            ExecutionStatus::Loading {
+                agent_mode,
+                interrupt_signal,
+                ..
+            } => {
                 *execution_status = ExecutionStatus::Running {
                     agent_mode,
                     timestamp: Timestamp::now_utc(),
@@ -5524,10 +5534,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         self.clear_invocation_scope_card().await;
     }
 
-    async fn on_invocation_failure(
+    async fn on_invocation_failure_with_origin(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        origin: crate::worker::InvocationFailureOrigin,
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
@@ -5558,6 +5569,34 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             self.public_state.worker().retire_if_shard_lost(&err.source);
             return RetryDecision::None;
         }
+
+        #[cfg(feature = "test-utils")]
+        self.public_state
+            .worker()
+            .wait_outcome_gate_for_test(false)
+            .await;
+        let selected_trap;
+        let mut outcome_writer = None;
+        let trap_type = if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
+            trap_type
+        } else {
+            let Some((selected, writer)) = self
+                .public_state
+                .worker()
+                .claim_invocation_failure(current_idempotency_key.clone(), trap_type, origin)
+                .await
+            else {
+                return RetryDecision::None;
+            };
+            #[cfg(feature = "test-utils")]
+            self.public_state
+                .worker()
+                .wait_outcome_gate_for_test(true)
+                .await;
+            outcome_writer = Some(writer);
+            selected_trap = selected;
+            &selected_trap
+        };
 
         if let TrapType::Error { error, .. } = trap_type {
             match error {
@@ -5634,20 +5673,27 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     // to an oplog that belongs to another executor now.
                     self.public_state.worker().record_retirement(
                         InterruptKind::ShardLost,
-                        crate::worker::RetirementReason::Fenced(Some(fence)),
+                        crate::worker::RetirementReason::Fenced(Some(fence.clone())),
                     );
+                    if let Some(writer) = outcome_writer.take() {
+                        writer.refused(fence);
+                    }
                     return RetryDecision::None;
                 }
                 Err(error) => panic!("oplog write: {error}"),
             }
             // Refused, like the add above: the shard is lost.
-            if self
+            if let Err(error) = self
                 .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
                 .await
-                .is_err()
             {
+                if let OplogError::Fenced(fence) = error
+                    && let Some(writer) = outcome_writer.take()
+                {
+                    writer.refused(fence);
+                }
                 return RetryDecision::None;
             }
             true
@@ -5688,13 +5734,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         // Refused, the shard is lost: no failure is published for its invocation, which
         // the shard's new owner runs.
         if let Some(entry) = oplog_entry
-            && self
-                .public_state
-                .worker()
-                .add_and_commit_oplog(entry)
-                .await
-                .is_err()
+            && let Err(error) = self.public_state.worker().add_and_commit_oplog(entry).await
         {
+            if let OplogError::Fenced(fence) = error
+                && let Some(writer) = outcome_writer.take()
+            {
+                writer.refused(fence);
+            }
             return RetryDecision::None;
         };
 
@@ -5733,6 +5779,9 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             latest_status_before.current_retry_state, decision
         );
 
+        if let Some(writer) = outcome_writer {
+            writer.complete();
+        }
         decision
     }
 
@@ -5862,7 +5911,23 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     .await?;
             }
 
-            let finished_index = self
+            #[cfg(feature = "test-utils")]
+            self.public_state
+                .worker()
+                .wait_outcome_gate_for_test(false)
+                .await;
+            let outcome_writer = self
+                .public_state
+                .worker()
+                .claim_invocation_success(self.state.get_current_idempotency_key())
+                .await?;
+            #[cfg(feature = "test-utils")]
+            self.public_state
+                .worker()
+                .wait_outcome_gate_for_test(true)
+                .await;
+
+            let finished_index = match self
                 .public_state
                 .worker()
                 .oplog()
@@ -5873,21 +5938,33 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     component_revision,
                 )
                 .await
-                .map_err(|err| match err {
-                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
-                    err => {
-                        panic!("could not encode function result for {full_function_name}: {err}")
-                    }
-                })?;
+            {
+                Ok(index) => index,
+                Err(OplogError::Fenced(fence)) => {
+                    let error = self.public_state.worker().retired_by(fence.clone());
+                    outcome_writer.refused(fence);
+                    return Err(error.into());
+                }
+                Err(err) => {
+                    panic!("could not encode function result for {full_function_name}: {err}")
+                }
+            };
 
             let commit_level = match self.public_state.worker().agent_mode() {
                 AgentMode::Durable => CommitLevel::Always,
                 AgentMode::Ephemeral => CommitLevel::Deferred,
             };
-            self.public_state
+            if let Err(error) = self
+                .public_state
                 .worker()
                 .commit_oplog_before_status_update(commit_level)
-                .await?;
+                .await
+            {
+                if let OplogError::Fenced(fence) = &error {
+                    outcome_writer.refused(fence.clone());
+                }
+                return Err(error.into());
+            }
 
             // Bump the read-only cache epoch after the
             // `AgentInvocationFinished` entry is committed, but *before*
@@ -5925,6 +6002,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     is_live,
                 );
             }
+            outcome_writer.complete();
         }
         debug!("Function {full_function_name} finished");
 
@@ -6307,6 +6385,12 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                 .clear_invocation_scope_card().await;
                             break Err(error);
                         }
+                        #[cfg(feature = "test-utils")]
+                        worker.wait_completed_replay_for_test(
+                            &idempotency_key,
+                            oplog_index,
+                            &store.as_context().data().durable_ctx().state.replay_state,
+                        ).await;
                         let invoke_result = invoke_observed_and_traced(
                             lowered,
                             store,
@@ -10816,6 +10900,10 @@ struct PrivateDurableWorkerState {
     /// oplog.
     file_stream_pollables: HashSet<u32>,
 
+    tcp_connect_replay: sockets::tcp::TcpConnectReplay,
+    open_tcp_input_streams: HashSet<u32>,
+    open_tcp_output_streams: HashSet<u32>,
+
     /// Shadow of the wasmtime P3 TCP one-shot `send`/`receive` stream-taken flags,
     /// keyed by TCP socket resource rep. The durable wrappers replay `send`/`receive`
     /// from the oplog instead of invoking the native host call, so the native
@@ -11241,6 +11329,9 @@ impl PrivateDurableWorkerState {
             open_filesystem_output_streams: HashMap::new(),
             open_filesystem_input_streams: HashSet::new(),
             file_stream_pollables: HashSet::new(),
+            tcp_connect_replay: sockets::tcp::TcpConnectReplay::default(),
+            open_tcp_input_streams: HashSet::new(),
+            open_tcp_output_streams: HashSet::new(),
             tcp_taken_streams: HashMap::new(),
             snapshotting_mode: false,
             invocation_strictness: InvocationStrictness::Normal,

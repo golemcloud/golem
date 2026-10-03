@@ -834,7 +834,7 @@ struct SecretPolicyEvidence {
     leaf_revealed: bool,
 }
 
-fn deployment_state(
+pub(crate) fn deployment_state(
     owner_account_id: AccountId,
     provider_component_id: golem_common::model::component::ComponentId,
     provider_revision: ComponentRevision,

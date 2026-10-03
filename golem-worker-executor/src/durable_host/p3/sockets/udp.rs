@@ -17,10 +17,13 @@ use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, NotCancellable,
     authorize_live_permissions_at_serialized_access,
 };
+use crate::durable_host::durability::DurabilityHost;
 use crate::durable_host::p3::{
     DurableP3, DurableP3View, durable_worker_ctx, observe_function_call, run_read_access,
     wasi_sockets_view,
 };
+#[cfg(feature = "test-utils")]
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     P3SocketsTypesUdpSocketConnect, P3SocketsTypesUdpSocketReceive, P3SocketsTypesUdpSocketSend,
@@ -31,12 +34,27 @@ use golem_common::model::oplog::{
     HostRequestP3SocketsUdpSend, HostResponseP3SocketsConnect, HostResponseP3SocketsUdpReceive,
     HostResponseP3SocketsUdpSend,
 };
+use golem_service_base::error::worker_executor::InterruptKind;
+use std::future::Future;
 use wasmtime::component::{Accessor, Resource};
 use wasmtime_wasi::p3::bindings::sockets::types;
 use wasmtime_wasi::p3::sockets::{SocketError, SocketResult};
 use wasmtime_wasi::sockets::{UdpSocket, WasiSockets, WasiSocketsView};
 
 use super::serialize_socket_error;
+
+#[cfg(test)]
+mod tests;
+
+async fn interruptible_receive<T>(
+    native: impl Future<Output = SocketResult<T>>,
+    interrupt: impl Future<Output = InterruptKind>,
+) -> wasmtime::Result<SocketResult<T>> {
+    tokio::select! {
+        result = native => Ok(result),
+        kind = interrupt => Err(wasmtime::Error::from_anyhow(kind.into())),
+    }
+}
 
 pub(super) fn socket_target(
     address: &types::IpSocketAddress,
@@ -327,9 +345,35 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostUdpSocketWithStore<U> for Dur
             DurableFunctionType::ReadRemote,
             || async {
                 let sockets = store.with_getter::<WasiSockets>(wasi_sockets_view::<Ctx, U>);
-                let result =
-                    <WasiSockets as types::HostUdpSocketWithStore<U>>::receive(&sockets, socket)
-                        .await;
+                #[cfg(feature = "test-utils")]
+                let observer = store.with(|mut access| {
+                    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+                    let local_address = types::HostUdpSocket::get_local_address(
+                        &mut WasiSocketsView::sockets(ctx),
+                        Resource::new_borrow(socket.rep()),
+                    )
+                    .ok()?;
+                    ctx.public_state.worker().p3_udp_receive_observer_for_test(
+                        ctx.state.get_current_idempotency_key(),
+                        socket.rep(),
+                        local_address.into(),
+                    )
+                });
+                let native =
+                    <WasiSockets as types::HostUdpSocketWithStore<U>>::receive(&sockets, socket);
+                #[cfg(feature = "test-utils")]
+                let native = async {
+                    match observer {
+                        Some(observer) => observer.observe(native).await,
+                        None => native.await,
+                    }
+                };
+                let interrupt = store.with(|mut access| {
+                    durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+                });
+                // Only native receive is interruptible. Replay, terminal persistence and
+                // completion delivery remain owned by the durable call outside this select.
+                let result = interruptible_receive(native, interrupt).await?;
 
                 Ok(HostResponseP3SocketsUdpReceive {
                     result: match result {

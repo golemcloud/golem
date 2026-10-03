@@ -184,7 +184,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
@@ -1056,6 +1056,13 @@ impl TestWorkerExecutor {
 
     pub async fn commit_oplog(&self, agent_id: &AgentId) -> anyhow::Result<()> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        if let Some(active) = self.production_active_agent(&owned_agent_id).await {
+            golem_worker_executor::services::HasOplog::oplog(active.primary().as_ref())
+                .commit(CommitLevel::Always)
+                .await
+                .map_err(|error| anyhow!("oplog commit failed: {error}"))?;
+            return Ok(());
+        }
         let worker = self
             .additional_test_deps
             .try_get_worker(&owned_agent_id)
@@ -1176,6 +1183,16 @@ impl TestWorkerExecutor {
             .await
     }
 
+    pub async fn concurrent_agent_permit_is_held(&self, owned_agent_id: &OwnedAgentId) -> bool {
+        if let Some(active) = self.active_agent(owned_agent_id).await {
+            active.primary().concurrent_agent_permit_is_held().await
+        } else if let Some(active) = self.production_active_agent(owned_agent_id).await {
+            active.primary().concurrent_agent_permit_is_held().await
+        } else {
+            false
+        }
+    }
+
     pub async fn production_active_agent(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -1230,7 +1247,7 @@ impl TestWorkerExecutor {
     ///   - the shell is present but the wasmtime instance has been unloaded
     ///     (e.g. after memory-pressure eviction).
     ///
-    /// Used by the read-only cache eviction-survival test (#3393 T5).
+    /// Used by tests that need to prove a wasmtime instance is resident.
     pub async fn worker_is_loaded(&self, owned_agent_id: &OwnedAgentId) -> bool {
         if let Some(active_agents) = &self.production_active_agents {
             return active_agents
@@ -2698,13 +2715,14 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx.on_agent_invocation_finished().await
     }
 
-    async fn on_invocation_failure(
+    async fn on_invocation_failure_with_origin(
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        origin: golem_worker_executor::worker::InvocationFailureOrigin,
     ) -> RetryDecision {
         self.durable_ctx
-            .on_invocation_failure(full_function_name, trap_type)
+            .on_invocation_failure_with_origin(full_function_name, trap_type, origin)
             .await
     }
 
@@ -3350,35 +3368,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<TestWorkerCtx>>> {
-        // The in-process test harness shares its process (and RSS) with the test
-        // framework and other services, so a process-RSS probe cannot isolate
-        // this executor's footprint. Disable measured admission for ordinary
-        // tests. When a test pins a memory limit via system_memory_override,
-        // keep admission enabled but give the gate a fixed probe reporting that
-        // limit with zero current usage, so admission is decided solely on the
-        // granted accounting (exact and process-isolated) against the pinned
-        // limit. The usable_ratio (worker_memory_ratio) still applies.
-        match golem_config.memory.system_memory_override {
-            Some(limit) => Ok(Arc::new(ActiveAgents::new_with_probe(
-                Box::new(FixedProbe::new(limit, 0)),
-                &golem_config.active_agents,
-                &golem_config.memory,
-                &golem_config.filesystem_storage,
-                &golem_config.agent_status_flush,
-                shutdown_token,
-            )?)),
-            None => {
-                let mut memory_config = golem_config.memory.clone();
-                memory_config.enable_measured_admission = false;
-                Ok(Arc::new(ActiveAgents::new(
-                    &golem_config.active_agents,
-                    &memory_config,
-                    &golem_config.filesystem_storage,
-                    &golem_config.agent_status_flush,
-                    shutdown_token,
-                )?))
-            }
-        }
+        Ok(Arc::new(in_process_active_agents(
+            golem_config,
+            shutdown_token,
+        )?))
     }
 
     fn create_shard_service(&self) -> Arc<dyn ShardService> {
@@ -3578,28 +3571,82 @@ struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
-    active_agents: Arc<
-        std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
-    >,
+    wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
+    environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
+    active_agents:
+        Arc<OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>>,
+}
+
+/// Builds the active agents of an executor that runs in the test process.
+///
+/// The test process shares its RSS with the test framework, other services and other tests,
+/// so a process-RSS probe cannot isolate this executor's footprint. Ordinary tests disable
+/// measured admission. Tests with `system_memory_override` use a fixed probe with no usage,
+/// so admission depends on granted accounting against the pinned limit and `worker_memory_ratio`.
+fn in_process_active_agents<Ctx: WorkerCtx>(
+    golem_config: &GolemConfig,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<ActiveAgents<Ctx>> {
+    Ok(match golem_config.memory.system_memory_override {
+        Some(limit) => ActiveAgents::new_with_probe(
+            Box::new(FixedProbe::new(limit, 0)),
+            &golem_config.active_agents,
+            &golem_config.memory,
+            &golem_config.filesystem_storage,
+            &golem_config.agent_status_flush,
+            shutdown_token,
+        ),
+        None => {
+            let mut memory_config = golem_config.memory.clone();
+            memory_config.enable_measured_admission = false;
+            ActiveAgents::new(
+                &golem_config.active_agents,
+                &memory_config,
+                &golem_config.filesystem_storage,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )
+        }
+    }?)
 }
 
 #[async_trait]
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn wrap_key_value_storage(
+        &self,
+        storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        if let Some(wrap) = &self.wrap_key_value_storage {
+            wrap(storage)
+        } else {
+            storage
+        }
+    }
+
+    fn create_blob_store_service(
+        &self,
+        blob_storage: &Arc<dyn BlobStorage>,
+    ) -> Arc<dyn BlobStoreService> {
+        let service = Arc::new(DefaultBlobStoreService::new(blob_storage.clone()));
+        if let Some(wrap) = &self.wrap_blob_store_service {
+            wrap(service)
+        } else {
+            service
+        }
+    }
+
     fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>> {
-        let active_agents = Arc::new(ActiveAgents::new(
-            &golem_config.active_agents,
-            &golem_config.memory,
-            &golem_config.filesystem_storage,
-            &golem_config.agent_status_flush,
-            shutdown_token,
-        )?);
-        let _ = self.active_agents.set(active_agents.clone());
+        let active_agents = Arc::new(in_process_active_agents(golem_config, shutdown_token)?);
+        self.active_agents
+            .set(active_agents.clone())
+            .map_err(|_| anyhow!("production ActiveAgents initialized more than once"))?;
         Ok(active_agents)
     }
 
@@ -3626,7 +3673,9 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _config: &EnvironmentStateServiceConfig,
         _registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn EnvironmentStateService> {
-        Arc::new(DisabledEnvironmentStateService)
+        self.environment_state_service
+            .clone()
+            .unwrap_or_else(|| Arc::new(DisabledEnvironmentStateService))
     }
 
     fn create_component_service(
@@ -3832,14 +3881,16 @@ async fn run_production_context_bootstrap(
 
     let handle = tokio::runtime::Handle::current();
     let mut join_set = tokio::task::JoinSet::new();
-
-    let active_agents = Arc::new(std::sync::OnceLock::new());
+    let production_active_agents = Arc::new(OnceLock::new());
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
             wrap_rpc: overrides.wrap_rpc,
-            active_agents: active_agents.clone(),
+            wrap_blob_store_service: overrides.wrap_blob_store_service,
+            wrap_key_value_storage: overrides.wrap_key_value_storage,
+            environment_state_service: overrides.environment_state_service,
+            active_agents: production_active_agents.clone(),
         },
         config,
         prometheus.clone(),
@@ -3881,9 +3932,9 @@ async fn run_production_context_bootstrap(
                 additional_test_deps: AdditionalTestDeps::new(),
                 services: None,
                 production_active_agents: Some(
-                    active_agents
+                    production_active_agents
                         .get()
-                        .expect("active agents initialized")
+                        .expect("production ActiveAgents must be initialized during bootstrap")
                         .clone(),
                 ),
                 concurrent_resource_entry,
@@ -3922,6 +3973,43 @@ pub async fn start_with_resource_limits(
         TestExecutorOverrides::default(),
         None,
         "Timeout waiting for custom-resource-limits server to start",
+    )
+    .await
+}
+
+pub async fn start_with_resource_limits_and_overrides(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        resource_limits,
+        overrides,
+        None,
+        "Timeout waiting for custom-resource-limits server with overrides to start",
+    )
+    .await
+}
+
+pub async fn start_with_resource_limits_and_configure(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    resource_limits: Arc<dyn ResourceLimits>,
+    configure: Arc<dyn Fn(&mut GolemConfig) + Send + Sync>,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        resource_limits,
+        TestExecutorOverrides {
+            configure: Some(configure),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for configured custom-resource-limits server to start",
     )
     .await
 }
@@ -7098,15 +7186,54 @@ impl BlobStoreMutationRecorder {
     }
 }
 
+pub struct BlobStoreExistsGate {
+    pub pending: tokio::sync::Notify,
+    pub release: tokio::sync::Semaphore,
+    pub attempts: std::sync::atomic::AtomicUsize,
+    pub dropped: std::sync::atomic::AtomicUsize,
+}
+
+impl Default for BlobStoreExistsGate {
+    fn default() -> Self {
+        Self {
+            pending: tokio::sync::Notify::new(),
+            release: tokio::sync::Semaphore::new(0),
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            dropped: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+struct BlobExistsObservation<'a>(&'a BlobStoreExistsGate, bool);
+
+impl Drop for BlobExistsObservation<'_> {
+    fn drop(&mut self) {
+        if !self.1 {
+            self.0.dropped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
 pub struct FailingBlobStoreService {
     inner: Arc<dyn BlobStoreService>,
     remaining_get_data_failures: AtomicU32,
     remaining_write_data_failures: AtomicU32,
     remaining_delete_objects_failures: AtomicU32,
     mutation_recorder: Option<Arc<BlobStoreMutationRecorder>>,
+    exists_gate: Option<Arc<BlobStoreExistsGate>>,
 }
 
 impl FailingBlobStoreService {
+    pub fn with_exists_gate(
+        inner: Arc<dyn BlobStoreService>,
+        gate: Arc<BlobStoreExistsGate>,
+    ) -> Self {
+        Self {
+            exists_gate: Some(gate),
+            ..Self::new(inner, 0)
+        }
+    }
+
     pub fn new(inner: Arc<dyn BlobStoreService>, failure_count: u32) -> Self {
         Self {
             inner,
@@ -7114,6 +7241,7 @@ impl FailingBlobStoreService {
             remaining_write_data_failures: AtomicU32::new(0),
             remaining_delete_objects_failures: AtomicU32::new(0),
             mutation_recorder: None,
+            exists_gate: None,
         }
     }
 
@@ -7129,6 +7257,7 @@ impl FailingBlobStoreService {
             remaining_write_data_failures: AtomicU32::new(write_data_failures),
             remaining_delete_objects_failures: AtomicU32::new(delete_objects_failures),
             mutation_recorder: Some(recorder),
+            exists_gate: None,
         }
     }
 }
@@ -7151,6 +7280,22 @@ impl BlobStoreService for FailingBlobStoreService {
         environment_id: EnvironmentId,
         container_name: String,
     ) -> Result<bool, BlobStoreError> {
+        if let Some(gate) = &self.exists_gate {
+            gate.attempts.fetch_add(1, Ordering::SeqCst);
+            let mut observation = BlobExistsObservation(gate, false);
+            let mut acquire = Box::pin(gate.release.acquire());
+            let permit = std::future::poll_fn(|cx| {
+                let result = acquire.as_mut().poll(cx);
+                if result.is_pending() {
+                    gate.pending.notify_one();
+                }
+                result
+            })
+            .await
+            .expect("exists gate closed");
+            permit.forget();
+            observation.1 = true;
+        }
         self.inner
             .container_exists(environment_id, container_name)
             .await

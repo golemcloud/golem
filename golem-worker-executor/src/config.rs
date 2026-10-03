@@ -81,6 +81,38 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_metering_requires_managed_xfs() {
+        let mut config = GolemConfig::default();
+        config.resource_usage_metering.compute = true;
+        config.resource_usage_metering.memory = true;
+        config.resource_usage_metering.filesystem = true;
+        assert_eq!(
+            config.effective_resource_usage_metering(),
+            ResourceUsageMeteringConfig {
+                compute: true,
+                memory: true,
+                filesystem: false,
+            }
+        );
+
+        config.filesystem_storage.managed_xfs_root_dir = Some("/managed-xfs".into());
+        assert_eq!(
+            config.effective_resource_usage_metering(),
+            ResourceUsageMeteringConfig::all_enabled()
+        );
+
+        config.resource_usage_metering.filesystem = false;
+        assert_eq!(
+            config.effective_resource_usage_metering(),
+            ResourceUsageMeteringConfig {
+                compute: true,
+                memory: true,
+                filesystem: false,
+            }
+        );
+    }
+
+    #[test]
     fn filesystem_policy_defaults_and_safe_display_remain_stable() {
         let object_policy = FilesystemObjectLimitPolicyConfig::default();
         assert_eq!(object_policy.objects_per_gib(), 32_768);

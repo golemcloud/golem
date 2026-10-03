@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::{HashMap, HashSet};
 use wasmtime::component::Resource;
 
 use crate::durable_host::authorization::targets::tcp_target;
@@ -24,6 +25,44 @@ use wasmtime_wasi::p2::bindings::sockets::tcp::{
     OutputStream, Pollable, ShutdownType, TcpSocket,
 };
 use wasmtime_wasi::sockets::WasiSocketsView as _;
+
+/// Native P2 connects re-execute during reconstruction. Their recorded-ready polls must
+/// drive the new connect future before the guest calls synchronous `finish_connect`.
+#[derive(Default)]
+pub(crate) struct TcpConnectReplay {
+    connecting: HashSet<u32>,
+    pollable_sockets: HashMap<u32, u32>,
+}
+
+impl TcpConnectReplay {
+    fn started(&mut self, socket: u32) {
+        self.connecting.insert(socket);
+    }
+
+    fn finished(&mut self, socket: u32) {
+        self.connecting.remove(&socket);
+    }
+
+    fn subscribed(&mut self, socket: u32, pollable: u32) {
+        self.pollable_sockets.insert(pollable, socket);
+    }
+
+    pub(crate) fn needs_readiness(&self, pollable: u32) -> bool {
+        self.pollable_sockets
+            .get(&pollable)
+            .is_some_and(|socket| self.connecting.contains(socket))
+    }
+
+    pub(crate) fn drop_pollable(&mut self, pollable: u32) {
+        self.pollable_sockets.remove(&pollable);
+    }
+
+    fn drop_socket(&mut self, socket: u32) {
+        self.connecting.remove(&socket);
+        // Native resource deletion rejects a socket with live pollable children.
+        // Each successful child drop has already removed its association.
+    }
+}
 
 impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
     async fn start_bind(
@@ -56,8 +95,11 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
             }
         }
         self.observe_function_call("sockets::tcp", "start_connect");
+        let rep = self_.rep();
         let mut view = self.as_wasi_view();
-        HostTcpSocket::start_connect(&mut view.sockets(), self_, network, remote_address).await
+        HostTcpSocket::start_connect(&mut view.sockets(), self_, network, remote_address).await?;
+        self.state.tcp_connect_replay.started(rep);
+        Ok(())
     }
 
     fn finish_connect(
@@ -65,7 +107,16 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         self_: Resource<TcpSocket>,
     ) -> Result<(Resource<InputStream>, Resource<OutputStream>), SocketError> {
         self.observe_function_call("sockets::tcp", "finish_connect");
-        HostTcpSocket::finish_connect(&mut self.as_wasi_view().sockets(), self_)
+        let rep = self_.rep();
+        let result = HostTcpSocket::finish_connect(&mut self.as_wasi_view().sockets(), self_);
+        if !matches!(&result, Err(error) if error.downcast_ref() == Some(&ErrorCode::WouldBlock)) {
+            self.state.tcp_connect_replay.finished(rep);
+        }
+        if let Ok((input, output)) = &result {
+            self.state.open_tcp_input_streams.insert(input.rep());
+            self.state.open_tcp_output_streams.insert(output.rep());
+        }
+        result
     }
 
     fn start_listen(&mut self, self_: Resource<TcpSocket>) -> Result<(), SocketError> {
@@ -90,7 +141,10 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
         SocketError,
     > {
         self.observe_function_call("sockets::tcp", "accept");
-        HostTcpSocket::accept(&mut self.as_wasi_view().sockets(), self_)
+        let result = HostTcpSocket::accept(&mut self.as_wasi_view().sockets(), self_)?;
+        self.state.open_tcp_input_streams.insert(result.1.rep());
+        self.state.open_tcp_output_streams.insert(result.2.rep());
+        Ok(result)
     }
 
     fn local_address(
@@ -227,7 +281,12 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
 
     fn subscribe(&mut self, self_: Resource<TcpSocket>) -> wasmtime::Result<Resource<Pollable>> {
         self.observe_function_call("sockets::tcp", "subscribe");
-        HostTcpSocket::subscribe(&mut self.as_wasi_view().sockets(), self_)
+        let rep = self_.rep();
+        let pollable = HostTcpSocket::subscribe(&mut self.as_wasi_view().sockets(), self_)?;
+        self.state
+            .tcp_connect_replay
+            .subscribed(rep, pollable.rep());
+        Ok(pollable)
     }
 
     fn shutdown(
@@ -241,7 +300,10 @@ impl<Ctx: WorkerCtx> HostTcpSocket for DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<TcpSocket>) -> wasmtime::Result<()> {
         self.observe_function_call("sockets::tcp", "drop");
-        HostTcpSocket::drop(&mut self.as_wasi_view().sockets(), rep)
+        let socket = rep.rep();
+        HostTcpSocket::drop(&mut self.as_wasi_view().sockets(), rep)?;
+        self.state.tcp_connect_replay.drop_socket(socket);
+        Ok(())
     }
 }
 
@@ -260,5 +322,56 @@ fn ip_socket_target(
             .ok()
         }
         IpSocketAddress::Ipv6(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TcpConnectReplay;
+    use test_r::test;
+
+    #[test]
+    fn connect_poll_classification_tracks_operation_not_subscription_time() {
+        let mut replay = TcpConnectReplay::default();
+        replay.subscribed(1, 10);
+        assert!(!replay.needs_readiness(10));
+        replay.started(1);
+        assert!(replay.needs_readiness(10));
+        replay.subscribed(1, 11);
+        assert!(replay.needs_readiness(11));
+        replay.subscribed(2, 20);
+        assert!(!replay.needs_readiness(20));
+        assert!(!replay.needs_readiness(99));
+        replay.finished(1);
+        assert!(!replay.needs_readiness(10));
+        assert!(!replay.needs_readiness(11));
+    }
+
+    #[test]
+    fn dropped_connect_pollable_does_not_classify_a_recycled_rep() {
+        let mut replay = TcpConnectReplay::default();
+        replay.started(1);
+        replay.subscribed(1, 10);
+        replay.subscribed(1, 11);
+        replay.drop_pollable(10);
+        assert!(!replay.needs_readiness(10));
+        assert!(replay.needs_readiness(11));
+        replay.subscribed(2, 10);
+        assert!(!replay.needs_readiness(10));
+    }
+
+    #[test]
+    fn dropped_connect_socket_does_not_classify_a_recycled_rep() {
+        let mut replay = TcpConnectReplay::default();
+        replay.started(1);
+        replay.subscribed(1, 10);
+        replay.drop_pollable(10);
+        replay.drop_socket(1);
+        assert!(!replay.connecting.contains(&1));
+        assert!(!replay.needs_readiness(10));
+        replay.started(1);
+        assert!(!replay.needs_readiness(10));
+        replay.subscribed(1, 11);
+        assert!(replay.needs_readiness(11));
     }
 }

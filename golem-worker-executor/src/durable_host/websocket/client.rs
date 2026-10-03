@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::WebSocketConnectionPool;
 use crate::durable_host::authorization::targets::websocket_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop, NotCancellable, ResolvedCall,
@@ -20,10 +21,13 @@ use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::golem::websocket::client::{
     CloseInfo, Error, Host, HostWebsocketConnection, HostWebsocketConnectionWithStore, Message,
 };
+#[cfg(feature = "test-utils")]
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use futures::future::Either;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt, pin_mut};
+use golem_common::model::OplogIndex;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::payload::types::{
     SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
@@ -35,6 +39,7 @@ use golem_common::model::oplog::{
     HostResponseWebsocketReceiveResponse, HostResponseWebsocketReceiveWithTimeoutResponse,
     HostResponseWebsocketSendResponse,
 };
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -185,10 +190,16 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         };
 
-        let permit = match self.websocket_connection_pool.acquire().await {
-            Ok(permit) => permit,
-            Err(err) => {
-                return Err(call.trap(err));
+        let interrupt_signal = self.create_interrupt_signal();
+        let pool = self.websocket_connection_pool.clone();
+        let permit = match acquire_websocket_connection_or_interrupt(&pool, interrupt_signal).await
+        {
+            Ok(Ok(permit)) => permit,
+            Err(err) => return Err(call.trap(err)),
+            Ok(Err(interrupt_kind)) => {
+                tracing::info!("Interrupted while waiting for WebSocket connection pool");
+                call.abandon_for_trap();
+                return Err(interrupt_kind.into());
             }
         };
 
@@ -198,7 +209,22 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             .unwrap()
             .create_await_interrupt_signal();
 
+        #[cfg(feature = "test-utils")]
+        let observer = self
+            .public_state
+            .worker()
+            .websocket_handshake_observer_for_test(
+                self.state.get_current_idempotency_key(),
+                call.start_index(),
+            );
         let connect_fut = connect_async(request);
+        #[cfg(feature = "test-utils")]
+        let connect_fut = async {
+            match observer {
+                Some(observer) => observer.observe(connect_fut).await,
+                None => connect_fut.await,
+            }
+        };
         pin_mut!(connect_fut);
         let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
             Either::Left((result, _)) => result,
@@ -273,7 +299,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         }
 
-        match ensure_websocket_connection_live(self, &self_).await {
+        match ensure_websocket_connection_live(self, &self_, call.start_index()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketSendResponse {
@@ -391,7 +417,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         }
 
-        match ensure_websocket_connection_live(self, &self_).await {
+        match ensure_websocket_connection_live(self, &self_, call.start_index()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketCloseResponse {
@@ -533,7 +559,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(accessor, &self_).await {
+        match ensure_websocket_connection_live_access(accessor, &self_, call.start_index()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveResponse {
@@ -651,7 +677,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(accessor, &self_).await {
+        match ensure_websocket_connection_live_access(accessor, &self_, call.start_index()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveWithTimeoutResponse {
@@ -683,10 +709,39 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 };
             (interrupt_signal, live_lookup)
         });
+        #[cfg(feature = "test-utils")]
+        let mut observer = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.public_state
+                .worker()
+                .websocket_timed_receive_observer_for_test(
+                    ctx.state.get_current_idempotency_key(),
+                    call.start_index(),
+                )
+        });
+
+        #[cfg(feature = "test-utils")]
+        let lock_observer = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.public_state
+                .worker()
+                .websocket_reader_lock_observer_for_test(
+                    ctx.state.get_current_idempotency_key(),
+                    call.start_index(),
+                )
+        });
 
         let live_result: Result<Option<Message>, Error> = match live_lookup {
             Ok(Ok(live)) => {
-                let mut reader = live.reader.lock().await;
+                let reader_lock = live.reader.lock();
+                #[cfg(feature = "test-utils")]
+                let reader_lock = async {
+                    match lock_observer {
+                        Some(observer) => observer.observe(reader_lock).await,
+                        None => reader_lock.await,
+                    }
+                };
+                let mut reader = reader_lock.await;
                 let deadline = Instant::now() + Duration::from_millis(timeout_ms);
                 pin_mut!(interrupt_signal);
                 loop {
@@ -694,7 +749,15 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                     if remaining.is_zero() {
                         break Ok(None);
                     }
-                    let next_frame = tokio::time::timeout(remaining, reader.next());
+                    let next_frame = reader.next();
+                    #[cfg(feature = "test-utils")]
+                    let next_frame = async {
+                        match observer.take() {
+                            Some(observer) => observer.observe(next_frame).await,
+                            None => next_frame.await,
+                        }
+                    };
+                    let next_frame = tokio::time::timeout(remaining, next_frame);
                     pin_mut!(next_frame);
                     match futures::future::select(next_frame, interrupt_signal.as_mut()).await {
                         Either::Left((Ok(Some(Ok(msg))), _)) => match to_user_message(msg) {
@@ -747,7 +810,10 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
 async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WebSocketConnectionEntry>,
+    start: OplogIndex,
 ) -> anyhow::Result<Result<(), Error>> {
+    #[cfg(not(feature = "test-utils"))]
+    let _ = start;
     let rep = resource.rep();
     let is_replay_entry = {
         let mut view = ctx.as_wasi_view();
@@ -788,14 +854,51 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         }
     };
 
-    let permit = ctx.websocket_connection_pool.acquire().await?;
-    let interrupt_signal = ctx
-        .execution_status
-        .read()
-        .unwrap()
-        .create_await_interrupt_signal();
+    #[cfg(feature = "test-utils")]
+    let observer = ctx
+        .public_state
+        .worker()
+        .websocket_reconnect_pool_observer_for_test(
+            ctx.state.get_current_idempotency_key(),
+            start,
+            crate::worker::WebSocketReconnectPathForTest::Direct,
+        );
+    let acquire = ctx.websocket_connection_pool.acquire();
+    #[cfg(feature = "test-utils")]
+    let acquire = async {
+        match observer {
+            Some(observer) => observer.observe(acquire).await,
+            None => acquire.await,
+        }
+    };
+    let interrupt_signal = ctx.create_interrupt_signal();
+    let permit =
+        match acquire_websocket_connection_or_interrupt_future(acquire, interrupt_signal).await? {
+            Ok(permit) => permit,
+            Err(interrupt_kind) => {
+                tracing::info!("Interrupted while waiting for WebSocket reconnect pool");
+                return Err(interrupt_kind.into());
+            }
+        };
+    let interrupt_signal = ctx.create_interrupt_signal();
 
+    #[cfg(feature = "test-utils")]
+    let observer = ctx
+        .public_state
+        .worker()
+        .websocket_handshake_observer_with_path_for_test(
+            ctx.state.get_current_idempotency_key(),
+            start,
+            crate::worker::WebSocketHandshakePathForTest::DirectReconnect,
+        );
     let connect_fut = connect_async(request);
+    #[cfg(feature = "test-utils")]
+    let connect_fut = async {
+        match observer {
+            Some(observer) => observer.observe(connect_fut).await,
+            None => connect_fut.await,
+        }
+    };
     pin_mut!(connect_fut);
     let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
         Either::Left((result, _)) => result,
@@ -838,7 +941,10 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
 async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     resource: &Resource<WebSocketConnectionEntry>,
+    start: OplogIndex,
 ) -> anyhow::Result<Result<(), Error>> {
+    #[cfg(not(feature = "test-utils"))]
+    let _ = start;
     let rep = resource.rep();
 
     let (is_replay_entry, info, pool) = match accessor.with(|mut access| {
@@ -892,10 +998,55 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         }
     };
 
-    let permit = pool.acquire().await?;
+    #[cfg(feature = "test-utils")]
+    let observer = accessor.with(|mut access| {
+        let ctx = access.get();
+        ctx.public_state
+            .worker()
+            .websocket_reconnect_pool_observer_for_test(
+                ctx.state.get_current_idempotency_key(),
+                start,
+                crate::worker::WebSocketReconnectPathForTest::Accessor,
+            )
+    });
+    let acquire = pool.acquire();
+    #[cfg(feature = "test-utils")]
+    let acquire = async {
+        match observer {
+            Some(observer) => observer.observe(acquire).await,
+            None => acquire.await,
+        }
+    };
+    let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
+    let permit =
+        match acquire_websocket_connection_or_interrupt_future(acquire, interrupt_signal).await? {
+            Ok(permit) => permit,
+            Err(interrupt_kind) => {
+                tracing::info!("Interrupted while waiting for WebSocket reconnect pool");
+                return Err(interrupt_kind.into());
+            }
+        };
     let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
 
+    #[cfg(feature = "test-utils")]
+    let observer = accessor.with(|mut access| {
+        let ctx = access.get();
+        ctx.public_state
+            .worker()
+            .websocket_handshake_observer_with_path_for_test(
+                ctx.state.get_current_idempotency_key(),
+                start,
+                crate::worker::WebSocketHandshakePathForTest::AccessorReconnect,
+            )
+    });
     let connect_fut = connect_async(request);
+    #[cfg(feature = "test-utils")]
+    let connect_fut = async {
+        match observer {
+            Some(observer) => observer.observe(connect_fut).await,
+            None => connect_fut.await,
+        }
+    };
     pin_mut!(connect_fut);
     let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
         Either::Left((result, _)) => result,
@@ -944,6 +1095,39 @@ fn mark_websocket_terminal<Ctx: WorkerCtx>(
     let entry = view.table().get_mut(resource)?;
     *entry = WebSocketConnectionEntry::Terminal(error);
     Ok(())
+}
+
+async fn acquire_websocket_connection_or_interrupt(
+    pool: &WebSocketConnectionPool,
+    interrupt_signal: impl Future<Output = golem_service_base::error::worker_executor::InterruptKind>,
+) -> anyhow::Result<
+    Result<
+        tokio::sync::OwnedSemaphorePermit,
+        golem_service_base::error::worker_executor::InterruptKind,
+    >,
+> {
+    let acquire = pool.acquire();
+    pin_mut!(acquire, interrupt_signal);
+    match futures::future::select(acquire, interrupt_signal).await {
+        Either::Left((result, _)) => result.map(Ok),
+        Either::Right((interrupt, _)) => Ok(Err(interrupt)),
+    }
+}
+
+async fn acquire_websocket_connection_or_interrupt_future(
+    acquire: impl Future<Output = anyhow::Result<tokio::sync::OwnedSemaphorePermit>>,
+    interrupt_signal: impl Future<Output = golem_service_base::error::worker_executor::InterruptKind>,
+) -> anyhow::Result<
+    Result<
+        tokio::sync::OwnedSemaphorePermit,
+        golem_service_base::error::worker_executor::InterruptKind,
+    >,
+> {
+    pin_mut!(acquire, interrupt_signal);
+    match futures::future::select(acquire, interrupt_signal).await {
+        Either::Left((result, _)) => result.map(Ok),
+        Either::Right((interrupt, _)) => Ok(Err(interrupt)),
+    }
 }
 
 fn build_request(
@@ -1088,7 +1272,44 @@ fn serializable_error_to_error(e: SerializableWebsocketError) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_r::test;
+    use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("10s")]
+    async fn occupied_pool_observes_preexisting_deadline_or_entity_cancellation() {
+        use golem_common::model::Timestamp;
+        use golem_service_base::error::worker_executor::InterruptKind;
+        use tokio_util::sync::CancellationToken;
+
+        let pool = WebSocketConnectionPool::new(1);
+        let held = pool.acquire().await.unwrap();
+        let deadline = std::future::ready(InterruptKind::Interrupt(Timestamp::now_utc()));
+        assert!(matches!(
+            acquire_websocket_connection_or_interrupt(&pool, deadline)
+                .await
+                .unwrap(),
+            Err(InterruptKind::Interrupt(_))
+        ));
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(matches!(
+            acquire_websocket_connection_or_interrupt(&pool, async move {
+                cancellation.cancelled().await;
+                InterruptKind::Interrupt(Timestamp::now_utc())
+            })
+            .await
+            .unwrap(),
+            Err(InterruptKind::Interrupt(_))
+        ));
+        drop(held);
+        assert!(
+            acquire_websocket_connection_or_interrupt(&pool, std::future::pending())
+                .await
+                .unwrap()
+                .is_ok()
+        );
+    }
 
     #[test]
     fn permission_denial_uses_the_existing_other_error_case() {

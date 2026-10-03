@@ -29,6 +29,8 @@ use crate::durable_host::http::{continue_http_request, end_http_request};
 use crate::durable_host::io::{ManagedStdErr, ManagedStdOut};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, HttpOutputStreamState};
 use crate::model::event::InternalWorkerEvent;
+#[cfg(feature = "test-utils")]
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::host_functions::{
     FilesystemInputStreamRead, FilesystemInputStreamSkip, FilesystemOutputStreamCheckWrite,
@@ -46,11 +48,65 @@ use golem_common::model::oplog::{
     HostResponseStreamWriteResult, HostResponseStreamWriteWithBytes, HostResponseStreamWriteZeroes,
     OplogIndex, SpanOutcome,
 };
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
 use wasmtime_wasi_http::p2::body::{FailingStream, HostIncomingBodyStream};
+
+// Raw TCP input and raw TCP splice have no durable call to complete.
+// Race only their native wait, never HTTP/file operations or resource deletion.
+async fn interruptible_tcp_input<T>(
+    native: impl Future<Output = Result<T, StreamError>>,
+    interrupt: impl Future<Output = InterruptKind>,
+) -> Result<T, StreamError> {
+    tokio::select! {
+        result = native => result,
+        kind = interrupt => Err(StreamError::Trap(wasmtime::Error::from_anyhow(kind.into()))),
+    }
+}
+
+// A native trap is not a transient HTTP stream error. Typed interrupts retain
+// their original trap; other traps carry the call's context without an End.
+fn propagate_http_body_native_trap<Pair, P, T>(
+    call: &mut DurableCallSession<Pair, P>,
+    result: Result<T, StreamError>,
+) -> Result<Result<T, StreamError>, StreamError>
+where
+    Pair: HostPayloadPair,
+    P: DropPolicy,
+{
+    match result {
+        Err(StreamError::Trap(trap)) => {
+            if is_typed_http_body_interrupt(&trap) {
+                call.abandon_for_trap();
+                Err(StreamError::Trap(trap))
+            } else {
+                Err(StreamError::Trap(wasmtime::Error::from_anyhow(
+                    call.trap(trap),
+                )))
+            }
+        }
+        result => Ok(result),
+    }
+}
+
+fn is_typed_http_body_interrupt(trap: &wasmtime::Error) -> bool {
+    trap.root_cause().downcast_ref::<InterruptKind>().is_some()
+}
+
+// Keep native stream errors available for HTTP's inline resumption and retry decisions.
+// Only the selected interruption escapes the batched child without a terminal.
+async fn interruptible_http_body_input<T>(
+    native: impl Future<Output = Result<T, StreamError>>,
+    interrupt: impl Future<Output = InterruptKind>,
+) -> Result<Result<T, StreamError>, InterruptKind> {
+    tokio::select! {
+        biased;
+        result = native => Ok(result),
+        kind = interrupt => Err(kind),
+    }
+}
 
 enum RepairedHttpBodyRead {
     Resumed,
@@ -69,6 +125,8 @@ where
     match crate::durable_host::http::inline_retry::repair_resuming_response_body_after_recovery(
         ctx,
         stream_handle,
+        #[cfg(feature = "test-utils")]
+        call.start_index(),
     )
     .await
     {
@@ -105,8 +163,12 @@ where
         Err(HttpStreamResumeError::HttpContent(error)) => Ok(RepairedHttpBodyRead::ContentFailure(
             StreamError::LastOperationFailed(wasmtime::Error::from_anyhow(error)),
         )),
-        Err(HttpStreamResumeError::Lifecycle(interrupt)) => Err(StreamError::Trap(
-            wasmtime::Error::from_anyhow(call.trap(anyhow::Error::new(interrupt))),
+        Err(HttpStreamResumeError::Lifecycle(interrupt)) => {
+            call.abandon_for_trap();
+            Err(StreamError::Trap(wasmtime::Error::from_anyhow(interrupt)))
+        }
+        Err(HttpStreamResumeError::NativeTrap(error)) => Err(StreamError::Trap(
+            wasmtime::Error::from_anyhow(call.trap(error)),
         )),
         Err(error @ HttpStreamResumeError::PayloadBackend(_)) => {
             Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(
@@ -139,13 +201,18 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             .await?;
 
             let result = if call.is_live() {
-                let first_try = HostInputStream::read(self.table(), self_, len).await;
+                let first_try = propagate_http_body_native_trap(
+                    &mut call,
+                    HostInputStream::read(self.table(), self_, len).await,
+                )?;
 
                 // Attempt response-body resumption inline retry if the read
                 // failed with a transient error.
                 let read_result = if is_transient_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_resuming_response_body_inline_retry(
                         self, handle,
+                        #[cfg(feature = "test-utils")]
+                        call.start_index(),
                     )
                     .await
                     {
@@ -153,7 +220,10 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                             // Stream swapped — retry the read on the new stream
                             let self2 = Resource::<InputStream>::new_borrow(handle);
                             HttpStreamOperationResult::without_override(
-                                HostInputStream::read(self.table(), self2, len).await,
+                                propagate_http_body_native_trap(
+                                    &mut call,
+                                    HostInputStream::read(self.table(), self2, len).await,
+                                )?,
                             )
                         }
                         Ok(HttpStreamInlineRetryOutcome::Ineligible(_))
@@ -184,9 +254,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                             return Err(stream_error);
                         }
                         Err(HttpStreamResumeError::Lifecycle(interrupt)) => {
-                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
-                                call.trap(anyhow::Error::new(interrupt)),
-                            )));
+                            call.abandon_for_trap();
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(interrupt)));
+                        }
+                        Err(HttpStreamResumeError::NativeTrap(error)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(error))));
                         }
                         Err(error @ HttpStreamResumeError::PayloadBackend(_)) => {
                             return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
@@ -349,22 +421,64 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             >::start_repairable_in_scope(self, request, begin_idx)
             .await?;
             let result = if call.is_live() {
-                let first_try = HostInputStream::blocking_read(self.table(), self_, len).await;
+                #[cfg(feature = "test-utils")]
+                let observer = self
+                    .public_state
+                    .worker()
+                    .p2_native_input_observer_for_test(
+                        self.state.get_current_idempotency_key(),
+                        handle,
+                        "http_body_blocking_read",
+                        Some(call.start_index()),
+                    );
+                let interrupt = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
+                let native = HostInputStream::blocking_read(self.table(), self_, len);
+                #[cfg(feature = "test-utils")]
+                let native = async {
+                    match observer {
+                        Some(observer) => observer.observe(native).await,
+                        None => native.await,
+                    }
+                };
+                let first_try = match interruptible_http_body_input(native, interrupt).await {
+                    Ok(result) => propagate_http_body_native_trap(&mut call, result)?,
+                    Err(kind) => {
+                        call.abandon_for_trap();
+                        return Err(StreamError::Trap(wasmtime::Error::from_anyhow(kind.into())));
+                    }
+                };
 
                 // Attempt response-body resumption inline retry if the read
                 // failed with a transient error.
                 let read_result = if is_transient_stream_error(&first_try) {
                     match crate::durable_host::http::inline_retry::try_resuming_response_body_inline_retry(
                         self, handle,
+                        #[cfg(feature = "test-utils")]
+                        call.start_index(),
                     )
                     .await
                     {
                         Ok(HttpStreamInlineRetryOutcome::Retried) => {
                             // Stream swapped — retry the read on the new stream
                             let self2 = Resource::<InputStream>::new_borrow(handle);
-                            HttpStreamOperationResult::without_override(
-                                HostInputStream::blocking_read(self.table(), self2, len).await,
-                            )
+                            let interrupt = self
+                                .execution_status
+                                .read()
+                                .unwrap()
+                                .create_await_interrupt_signal();
+                            let native = HostInputStream::blocking_read(self.table(), self2, len);
+                            let result = match interruptible_http_body_input(native, interrupt).await {
+                                Ok(result) => propagate_http_body_native_trap(&mut call, result)?,
+                                Err(kind) => {
+                                    call.abandon_for_trap();
+                                    return Err(StreamError::Trap(wasmtime::Error::from_anyhow(kind.into())));
+                                }
+                            };
+                            HttpStreamOperationResult::without_override(result)
                         }
                         Ok(HttpStreamInlineRetryOutcome::Ineligible(_))
                         | Ok(HttpStreamInlineRetryOutcome::NotRetried)
@@ -394,9 +508,11 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                             return Err(stream_error);
                         }
                         Err(HttpStreamResumeError::Lifecycle(interrupt)) => {
-                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
-                                call.trap(anyhow::Error::new(interrupt)),
-                            )));
+                            call.abandon_for_trap();
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(interrupt)));
+                        }
+                        Err(HttpStreamResumeError::NativeTrap(error)) => {
+                            return Err(StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(error))));
                         }
                         Err(error @ HttpStreamResumeError::PayloadBackend(_)) => {
                             return Err(StreamError::Trap(wasmtime::Error::from_anyhow(
@@ -445,7 +561,24 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                         {
                             RepairedHttpBodyRead::Resumed => {
                                 let self_ = Resource::<InputStream>::new_borrow(handle);
-                                HostInputStream::blocking_read(self.table(), self_, len).await
+                                let interrupt = self
+                                    .execution_status
+                                    .read()
+                                    .unwrap()
+                                    .create_await_interrupt_signal();
+                                let native =
+                                    HostInputStream::blocking_read(self.table(), self_, len);
+                                match interruptible_http_body_input(native, interrupt).await {
+                                    Ok(result) => {
+                                        propagate_http_body_native_trap(&mut call, result)?
+                                    }
+                                    Err(kind) => {
+                                        call.abandon_for_trap();
+                                        return Err(StreamError::Trap(
+                                            wasmtime::Error::from_anyhow(kind.into()),
+                                        ));
+                                    }
+                                }
                             }
                             RepairedHttpBodyRead::ContentFailure(stream_error) => {
                                 let recorded_result =
@@ -485,7 +618,45 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_read");
-            HostInputStream::blocking_read(self.table(), self_, len).await
+            if self.state.open_tcp_input_streams.contains(&self_.rep()) {
+                #[cfg(feature = "test-utils")]
+                let observer = self
+                    .public_state
+                    .worker()
+                    .p2_native_input_observer_for_test(
+                        self.state.get_current_idempotency_key(),
+                        self_.rep(),
+                        "blocking_read",
+                        None,
+                    );
+                let interrupt = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
+                let native = HostInputStream::blocking_read(self.table(), self_, len);
+                #[cfg(feature = "test-utils")]
+                let native = async {
+                    match observer {
+                        Some(observer) => observer.observe(native).await,
+                        None => native.await,
+                    }
+                };
+                interruptible_tcp_input(native, interrupt).await
+            } else if self
+                .state
+                .open_filesystem_input_streams
+                .contains(&self_.rep())
+            {
+                let interrupt = self.create_interrupt_signal();
+                observe_file_stream(
+                    interrupt,
+                    HostInputStream::blocking_read(self.table(), self_, len),
+                )
+                .await
+            } else {
+                HostInputStream::blocking_read(self.table(), self_, len).await
+            }
         }
     }
 
@@ -616,7 +787,59 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             .await?;
 
             let result = if call.is_live() {
-                let result = HostInputStream::blocking_skip(self.table(), self_, len).await;
+                #[cfg(feature = "test-utils")]
+                let observer = self
+                    .public_state
+                    .worker()
+                    .p2_native_input_observer_for_test(
+                        self.state.get_current_idempotency_key(),
+                        handle,
+                        "http_body_blocking_skip",
+                        Some(call.start_index()),
+                    );
+                #[cfg(feature = "test-utils")]
+                let selection = {
+                    let key = self.state.get_current_idempotency_key();
+                    self.public_state
+                        .worker()
+                        .wait_p2_http_pre_subscription_for_test(
+                            key.as_ref(),
+                            crate::worker::P2HttpPreSubscriptionOperationForTest::BlockingSkip,
+                            handle,
+                            call.start_index(),
+                        )
+                        .await
+                };
+                let interrupt = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
+                let native = HostInputStream::blocking_skip(self.table(), self_, len);
+                #[cfg(feature = "test-utils")]
+                let native = async {
+                    match observer {
+                        Some(observer) => observer.observe(native).await,
+                        None => native.await,
+                    }
+                };
+                let selected = interruptible_http_body_input(native, interrupt).await;
+                #[cfg(feature = "test-utils")]
+                if let Some(selection) = selection {
+                    selection.report(match &selected {
+                        Ok(_) => crate::worker::P2HttpPreSubscriptionSelectionForTest::Native,
+                        Err(kind) => {
+                            crate::worker::P2HttpPreSubscriptionSelectionForTest::Interrupt(*kind)
+                        }
+                    });
+                }
+                let result = match selected {
+                    Ok(result) => propagate_http_body_native_trap(&mut call, result)?,
+                    Err(kind) => {
+                        call.abandon_for_trap();
+                        return Err(StreamError::Trap(wasmtime::Error::from_anyhow(kind.into())));
+                    }
+                };
                 call.try_trigger_retry(self, &ignore_closed_error(&result), |_| {
                     HostFailureKind::Transient
                 })
@@ -640,7 +863,45 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::input_stream", "blocking_skip");
-            HostInputStream::blocking_skip(self.table(), self_, len).await
+            if self.state.open_tcp_input_streams.contains(&self_.rep()) {
+                #[cfg(feature = "test-utils")]
+                let observer = self
+                    .public_state
+                    .worker()
+                    .p2_native_input_observer_for_test(
+                        self.state.get_current_idempotency_key(),
+                        self_.rep(),
+                        "blocking_skip",
+                        None,
+                    );
+                let interrupt = self
+                    .execution_status
+                    .read()
+                    .unwrap()
+                    .create_await_interrupt_signal();
+                let native = HostInputStream::blocking_skip(self.table(), self_, len);
+                #[cfg(feature = "test-utils")]
+                let native = async {
+                    match observer {
+                        Some(observer) => observer.observe(native).await,
+                        None => native.await,
+                    }
+                };
+                interruptible_tcp_input(native, interrupt).await
+            } else if self
+                .state
+                .open_filesystem_input_streams
+                .contains(&self_.rep())
+            {
+                let interrupt = self.create_interrupt_signal();
+                observe_file_stream(
+                    interrupt,
+                    HostInputStream::blocking_skip(self.table(), self_, len),
+                )
+                .await
+            } else {
+                HostInputStream::blocking_skip(self.table(), self_, len).await
+            }
         }
     }
 
@@ -674,6 +935,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
             // Only unclassify after the resource is really gone: reps are recycled by the
             // resource table, and a failed drop leaves the file stream live.
             self.state.open_filesystem_input_streams.remove(&stream_rep);
+            self.state.open_tcp_input_streams.remove(&stream_rep);
         }
         result
     }
@@ -1102,7 +1364,16 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             result.result.map_err(StreamError::from)
         } else {
             self.observe_function_call("io::streams::output_stream", "blocking_flush");
-            HostOutputStream::blocking_flush(self.table(), self_).await
+            if self.state.open_filesystem_output_streams.contains_key(&rep) {
+                let interrupt = self.create_interrupt_signal();
+                observe_file_stream(
+                    interrupt,
+                    HostOutputStream::blocking_flush(self.table(), self_),
+                )
+                .await
+            } else {
+                HostOutputStream::blocking_flush(self.table(), self_).await
+            }
         }
     }
 
@@ -1387,10 +1658,78 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                 .open_filesystem_output_streams
                 .contains_key(&stream_rep)
             {
-                let readiness = self.table().get_mut(&self_)?.write_ready().await;
+                let file_pair = self
+                    .state
+                    .open_filesystem_input_streams
+                    .contains(&src.rep());
+                let readiness = if file_pair {
+                    let interrupt = self.create_interrupt_signal();
+                    observe_file_stream(interrupt, self.table().get_mut(&self_)?.write_ready())
+                        .await
+                } else {
+                    self.table().get_mut(&self_)?.write_ready().await
+                };
                 readiness?;
             }
-            HostOutputStream::blocking_splice(self.table(), self_, src, len).await
+            let tcp_input = self.state.open_tcp_input_streams.contains(&src.rep());
+            let raw_tcp_output = self.state.open_tcp_output_streams.contains(&rep);
+            #[cfg(feature = "test-utils")]
+            let (observer, output_capacity) = if tcp_input && raw_tcp_output {
+                let mut observer = self
+                    .public_state
+                    .worker()
+                    .p2_native_input_observer_for_test(
+                        self.state.get_current_idempotency_key(),
+                        src.rep(),
+                        "blocking_splice",
+                        None,
+                    );
+                let output_capacity = if let Some(observer) = &mut observer {
+                    let capacity =
+                        HostOutputStream::check_write(self.table(), Resource::new_borrow(rep))
+                            .await?;
+                    observer.set_output_capacity(capacity);
+                    Some(capacity)
+                } else {
+                    None
+                };
+                (observer, output_capacity)
+            } else {
+                (None, None)
+            };
+            #[cfg(feature = "test-utils")]
+            if tcp_input && raw_tcp_output {
+                let key = self.state.get_current_idempotency_key();
+                self.public_state
+                    .worker()
+                    .wait_p2_splice_pre_subscription_for_test(
+                        key.as_ref(),
+                        src.rep(),
+                        rep,
+                        output_capacity,
+                    )
+                    .await;
+            }
+            let file_pair = self
+                .state
+                .open_filesystem_input_streams
+                .contains(&src.rep())
+                && self.state.open_filesystem_output_streams.contains_key(&rep);
+            let file_interrupt = file_pair.then(|| self.create_interrupt_signal());
+            let interrupt = (tcp_input && raw_tcp_output).then(|| self.create_interrupt_signal());
+            let native = HostOutputStream::blocking_splice(self.table(), self_, src, len);
+            #[cfg(feature = "test-utils")]
+            let native = async {
+                match observer {
+                    Some(observer) => observer.observe(native).await,
+                    None => native.await,
+                }
+            };
+            match (interrupt, file_interrupt) {
+                (Some(interrupt), _) => interruptible_tcp_input(native, interrupt).await,
+                (_, Some(interrupt)) => observe_file_stream(interrupt, native).await,
+                _ => native.await,
+            }
         }
     }
 
@@ -1407,6 +1746,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             // Only unclassify after the resource is really gone: reps are recycled by the
             // resource table, and a failed drop leaves the file stream live.
             self.state.open_filesystem_output_streams.remove(&handle);
+            self.state.open_tcp_output_streams.remove(&handle);
         }
         result
     }
@@ -1455,6 +1795,15 @@ fn get_http_output_stream_state<Ctx: WorkerCtx>(
         })
 }
 
+async fn observe_file_stream<T>(
+    interrupt: crate::wasi_filesystem::FilesystemInterruptSignal,
+    native: impl std::future::Future<Output = Result<T, StreamError>>,
+) -> Result<T, StreamError> {
+    crate::wasi_filesystem::observe_filesystem_operation(interrupt, native)
+        .await
+        .map_err(|kind| StreamError::Trap(wasmtime::Error::from(kind)))?
+}
+
 /// Re-reads exactly `recorded_len` bytes from a file-backed input stream during
 /// replay, reproducing the chunk the guest received when the oplog was written.
 /// The initial file system is restored to the same contents for replay, so the
@@ -1470,7 +1819,13 @@ async fn replay_file_stream_read<Ctx: WorkerCtx>(
     while (collected.len() as u64) < recorded_len {
         let remaining = recorded_len - collected.len() as u64;
         let stream = Resource::<InputStream>::new_borrow(handle);
-        match HostInputStream::blocking_read(ctx.table(), stream, remaining).await {
+        let interrupt = ctx.create_interrupt_signal();
+        match observe_file_stream(
+            interrupt,
+            HostInputStream::blocking_read(ctx.table(), stream, remaining),
+        )
+        .await
+        {
             Ok(chunk) if !chunk.is_empty() => collected.extend_from_slice(&chunk),
             Ok(_) | Err(StreamError::Closed) => {
                 return Err(file_stream_replay_divergence(
@@ -1495,7 +1850,13 @@ async fn replay_file_stream_skip<Ctx: WorkerCtx>(
     while skipped < recorded_len {
         let remaining = recorded_len - skipped;
         let stream = Resource::<InputStream>::new_borrow(handle);
-        match HostInputStream::blocking_skip(ctx.table(), stream, remaining).await {
+        let interrupt = ctx.create_interrupt_signal();
+        match observe_file_stream(
+            interrupt,
+            HostInputStream::blocking_skip(ctx.table(), stream, remaining),
+        )
+        .await
+        {
             Ok(n) if n > 0 => skipped += n,
             Ok(_) | Err(StreamError::Closed) => {
                 return Err(file_stream_replay_divergence(skipped, recorded_len));
@@ -1604,7 +1965,7 @@ fn mark_replayed_body_write<Ctx: WorkerCtx>(ctx: &mut DurableWorkerCtx<Ctx>, req
 }
 
 fn is_transient_stream_error<T>(result: &Result<T, StreamError>) -> bool {
-    matches!(result, Err(err) if !matches!(err, StreamError::Closed))
+    matches!(result, Err(StreamError::LastOperationFailed(_)))
 }
 
 /// For HTTP body streams, StreamError::Closed is also retryable because it
@@ -1832,4 +2193,163 @@ async fn blocking_write_zeroes_and_flush_chunked(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod http_body_read_tests {
+    use super::{
+        interruptible_http_body_input, is_transient_stream_error, is_typed_http_body_interrupt,
+    };
+    use golem_common::model::Timestamp;
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use std::future::{pending, ready};
+    use test_r::test;
+    use wasmtime_wasi::StreamError;
+
+    #[test]
+    async fn native_http_body_skip_wins_ready_signal_tie() {
+        let stop = InterruptKind::Suspend(Timestamp::now_utc());
+        let result = interruptible_http_body_input(ready(Ok::<u64, StreamError>(1)), ready(stop))
+            .await
+            .unwrap();
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[test]
+    async fn pending_http_body_skip_receives_typed_stop() {
+        let stop = InterruptKind::Suspend(Timestamp::now_utc());
+        let result =
+            interruptible_http_body_input(pending::<Result<u64, StreamError>>(), ready(stop)).await;
+        assert_eq!(result.unwrap_err(), stop);
+    }
+
+    #[test]
+    fn native_http_body_traps_are_never_transient() {
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        let typed = wasmtime::Error::from_anyhow(anyhow::Error::new(kind));
+        assert!(is_typed_http_body_interrupt(&typed));
+        assert!(!is_transient_stream_error::<()>(&Err(StreamError::Trap(
+            typed
+        ))));
+
+        let infrastructure = wasmtime::Error::msg("missing HTTP body table entry");
+        assert!(!is_typed_http_body_interrupt(&infrastructure));
+        assert!(!is_transient_stream_error::<()>(&Err(StreamError::Trap(
+            infrastructure
+        ))));
+        assert!(is_transient_stream_error::<()>(&Err(
+            StreamError::LastOperationFailed(wasmtime::Error::msg("peer closed"))
+        )));
+        assert!(!is_transient_stream_error::<()>(&Err(StreamError::Closed)));
+    }
+}
+
+#[cfg(test)]
+mod tcp_input_tests {
+    use super::interruptible_tcp_input;
+    use golem_common::model::Timestamp;
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use std::future::{pending, poll_fn, ready};
+    use std::task::Poll;
+    use test_r::{test, timeout};
+    use wasmtime_wasi::StreamError;
+
+    fn assert_interrupt<T: std::fmt::Debug>(
+        result: Result<T, StreamError>,
+        expected: InterruptKind,
+    ) {
+        match result {
+            Err(StreamError::Trap(error)) => {
+                assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&expected))
+            }
+            other => panic!("expected typed interrupt trap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn prepublished_signal_interrupts_tcp_input() {
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        assert_interrupt(
+            interruptible_tcp_input(pending::<Result<u64, StreamError>>(), ready(kind)).await,
+            kind,
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn signal_interrupts_pending_tcp_input() {
+        let kind = InterruptKind::Suspend(Timestamp::now_utc());
+        let (pending_tx, pending_rx) = tokio::sync::oneshot::channel();
+        let (signal_tx, signal_rx) = tokio::sync::oneshot::channel();
+        let mut pending_tx = Some(pending_tx);
+        let native = poll_fn(|_| {
+            if let Some(tx) = pending_tx.take() {
+                let _ = tx.send(());
+            }
+            Poll::<Result<u64, StreamError>>::Pending
+        });
+        let input = interruptible_tcp_input(native, async { signal_rx.await.unwrap() });
+        let trigger = async {
+            pending_rx.await.unwrap();
+            signal_tx.send(kind).unwrap();
+        };
+        let (result, ()) = tokio::join!(input, trigger);
+        assert_interrupt(result, kind);
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn tcp_input_completion_before_signal_keeps_result() {
+        let (signal_tx, signal_rx) = tokio::sync::oneshot::channel();
+        let result = interruptible_tcp_input(ready(Ok::<_, StreamError>(vec![b'x'])), async {
+            signal_rx.await.unwrap()
+        })
+        .await;
+        assert_eq!(result.unwrap(), vec![b'x']);
+        assert!(
+            signal_tx
+                .send(InterruptKind::Suspend(Timestamp::now_utc()))
+                .is_err()
+        );
+    }
+}
+
+#[cfg(feature = "test-utils")]
+pub use crate::wasi_filesystem::FilesystemObservationGateForTest;
+
+#[cfg(test)]
+mod file_observation_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn pending_file_stream_observation_preserves_typed_stop() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        let error = observe_file_stream(
+            Box::pin(std::future::ready(kind)),
+            std::future::pending::<Result<(), StreamError>>(),
+        )
+        .await
+        .unwrap_err();
+        let StreamError::Trap(error) = error else {
+            panic!("typed trap expected");
+        };
+        assert_eq!(error.downcast_ref::<InterruptKind>(), Some(&kind));
+    }
+
+    #[test]
+    async fn file_stream_completion_wins_before_stop() {
+        let kind = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
+        assert_eq!(
+            observe_file_stream(
+                Box::pin(std::future::ready(kind)),
+                std::future::ready(Ok(19))
+            )
+            .await
+            .unwrap(),
+            19
+        );
+    }
 }
