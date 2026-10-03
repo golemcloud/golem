@@ -17,16 +17,16 @@
 //! The contract suite runs on the store with the policy of the configuration. The other tests
 //! give the store a short or a long deadline and a prune policy that the test controls.
 
-use super::super::fault::is_lease_expired;
+use super::super::fault::{CallFailure, call_failure};
 use super::super::prune::{
     CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, LEDGERS_PATH, Percent, PruneLedger, claim_hold,
     next_claim, parse_claim_entry, parse_freed, read_ledger,
 };
-use super::super::publish::StagedSnapshot;
+use super::super::publish::PublishBound;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{
-    backend_of, copy_flat_tree, entries, files_of, polled_until, three_file_tree,
-    wait_past_change_times,
+    backend_of, copy_flat_tree, entries, files_of, one_run, polled_until, publish_bound_for,
+    three_file_tree, wait_past_change_times,
 };
 use super::super::{PruneReport, PruneSettings, RepositoryKey, open_existing};
 use super::{
@@ -40,8 +40,8 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
 };
 use crate::filesystem_snapshot::contract_tests::{self, OpenStore, new_scope};
 use crate::filesystem_snapshot::{
-    AgentSnapshots, ChangeDetection, FilesystemSnapshotStore, SnapshotInfo, SnapshotName,
-    SnapshotStoreError,
+    AgentSnapshots, ChangeDetection, FailureOf, FilesystemSnapshotStore, ReadError, RestoreFailure,
+    SaveError, SnapshotName,
 };
 use crate::services::golem_config::FilesystemSnapshotStoreConfig;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -85,8 +85,10 @@ fn key() -> RepositoryKey {
     RepositoryKey::new(*config().repository_key().bytes())
 }
 
-/// The policy of the configuration, with the deadline, the prune threshold and the grace period
-/// of the test.
+/// The policy of the configuration, with the deadline, the prune threshold and the grace period of
+/// the test. A call makes one run and a blob call one try, so a failure gives the answer at once;
+/// the tests of the runs and the tries set their own. A save has the publish bound when the
+/// configuration would allow the deadline and the grace period.
 fn policy(deadline: Duration, prune_threshold: Percent, grace: Duration) -> StorePolicy {
     StorePolicy {
         deadline,
@@ -95,6 +97,9 @@ fn policy(deadline: Duration, prune_threshold: Percent, grace: Duration) -> Stor
             ..StorePolicy::from_config(&config()).prune
         },
         prune_threshold,
+        retry: one_run(),
+        publish_bound: publish_bound_for(deadline, grace),
+        in_call_tries: 1,
         ..StorePolicy::from_config(&config())
     }
 }
@@ -139,15 +144,22 @@ async fn restored_listing(
     store: &RusticSnapshotStore,
     scope: &AgentSnapshots,
     name: &SnapshotName,
-) -> Result<Vec<Listed>, SnapshotStoreError> {
+) -> Result<Vec<Listed>, RestoreFailure> {
     let into = Scratch::new();
-    store.restore(scope, name, into.path()).await?;
+    store
+        .restore(
+            scope,
+            name,
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await?;
     Ok(listing(into.path()))
 }
 
 async fn listed_names(store: &RusticSnapshotStore, scope: &AgentSnapshots) -> Vec<String> {
     store
-        .list(scope)
+        .list(scope, &crate::filesystem_snapshot::Unlimited)
         .await
         .unwrap()
         .iter()
@@ -229,8 +241,14 @@ async fn drop_when<T>(
     }
 }
 
-fn is_storage(error: &SnapshotStoreError, expected_retryable: bool) -> bool {
-    matches!(error, SnapshotStoreError::Storage { retryable, .. } if *retryable == expected_retryable)
+/// Tells whether the error of a call is `Failed`.
+fn is_failed<E: FailureOf>(error: &E) -> bool {
+    error.failure().is_some()
+}
+
+/// Tells whether the error of a call is `Stopped`.
+fn is_stopped<E: FailureOf>(error: &E) -> bool {
+    error.stopped()
 }
 
 #[test_gen]
@@ -348,7 +366,14 @@ async fn a_new_repository_uses_the_rabin_chunker_zstd_level_3_and_extra_verify()
     let tree = one_file_tree("settings");
 
     store
-        .save(&scope, &name("p-settings"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-settings"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let backend = backend_of(storage, &scope, LONG_DEADLINE);
@@ -396,13 +421,20 @@ async fn a_tree_saved_through_a_proc_self_fd_path_is_stored_below_the_root() {
     let through_fd = format!("/proc/self/fd/{}", directory.as_raw_fd());
 
     store
-        .save(&scope, &name("p-fd"), Path::new(&through_fd), None)
+        .save(
+            &scope,
+            &name("p-fd"),
+            Path::new(&through_fd),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let backend = backend_of(storage, &scope, LONG_DEADLINE);
     let paths = tokio::task::spawn_blocking(move || {
-        let repository = open_existing(backend, &key()).unwrap().unwrap();
-        scope_snapshots(&repository)
+        let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
+        scope_snapshots(&repository, &backend)
             .unwrap()
             .readable
             .iter()
@@ -441,19 +473,34 @@ async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_fr
     let scope = new_scope();
     let tree = fixture_tree();
 
-    let failed = store.save(&scope, &name("p-1"), tree.path(), None).await;
+    let failed = store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let names = listed_names(&store, &scope).await;
     let restore = restored_listing(&store, &scope, &name("p-1")).await;
     refuse.store(false, Ordering::SeqCst);
-    let saved_again = store.save(&scope, &name("p-1"), tree.path(), None).await;
+    let saved_again = store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
+    assert!(failed.as_ref().is_err_and(is_failed), "{failed:?}");
     assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
-    assert!(
-        matches!(restore, Err(SnapshotStoreError::NotFound)),
+        matches!(restore, Err(RestoreFailure::NotFound)),
         "{restore:?}"
     );
     assert_eq!(
@@ -471,7 +518,10 @@ async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_fr
 
 #[test]
 #[timeout("60s")]
-async fn a_publish_that_reaches_the_deadline_and_lands_late_publishes_nothing() {
+async fn a_save_whose_publish_landed_late_stays_saved() {
+    // The publish reaches its deadline, and the storage writes the file without an answer. The
+    // store waits one deadline after the try, finds its own file, and answers with the info. No
+    // delete of the file is sent.
     let hang = Arc::new(AtomicBool::new(true));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
         let hang = hang.clone();
@@ -490,28 +540,49 @@ async fn a_publish_that_reaches_the_deadline_and_lands_late_publishes_nothing() 
     let scope = new_scope();
     let tree = one_file_tree("late");
 
-    let failed = store.save(&scope, &name("p-late"), tree.path(), None).await;
+    let saved = store
+        .save(
+            &scope,
+            &name("p-late"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     hang.store(false, Ordering::SeqCst);
     let stat = store.stat(&scope, &name("p-late")).await.unwrap();
     let names = listed_names(&store, &scope).await;
-    let saved_again = store.save(&scope, &name("p-late"), tree.path(), None).await;
+    let saved_again = store
+        .save(
+            &scope,
+            &name("p-late"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
+    assert!(saved.is_ok(), "{saved:?}");
     assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
+        matches!(saved_again, Err(SaveError::NameInUse)),
+        "{saved_again:?}"
     );
     assert_eq!(
         (
             stat,
             names,
-            saved_again.is_ok(),
+            blobs(&*storage, &scope.0, "snapshots/").await.len(),
             storage
                 .calls()
                 .iter()
-                .filter(|(op_label, _)| *op_label == "retract")
+                .filter(
+                    |(op_label, path)| op_label.contains("delete") && path.starts_with("snapshots")
+                )
                 .count()
         ),
-        (None, Vec::<String>::new(), true, 1)
+        (saved.ok(), vec!["p-late".to_string()], 1, 0)
     );
 }
 
@@ -528,12 +599,26 @@ async fn a_second_save_of_an_unchanged_tree_writes_no_pack() {
     let tree = fixture_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let first = storage.calls().len();
     store
-        .save(&scope, &name("p-2"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let writes = storage.calls()[first..]
@@ -571,7 +656,7 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
         });
     let policy = policy(LONG_DEADLINE, NEVER, Duration::ZERO);
     let (first, second) = (
-        store(storage.clone(), policy),
+        store(storage.clone(), policy.clone()),
         store(storage.clone(), policy),
     );
     let scope = new_scope();
@@ -586,8 +671,22 @@ async fn two_stores_that_create_one_repository_at_the_same_time_both_save() {
 
     let (first_name, second_name) = (name("p-first"), name("p-second"));
     let (first_saved, second_saved, both_waited) = tokio::join!(
-        first.save(&scope, &first_name, first_tree.path(), None),
-        second.save(&scope, &second_name, second_tree.path(), None),
+        first.save(
+            &scope,
+            &first_name,
+            first_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
+        ),
+        second.save(
+            &scope,
+            &second_name,
+            second_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited
+        ),
         async {
             let both = eventually(|| config_writes() == 2).await;
             storage.open_gate();
@@ -649,7 +748,14 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
     let scope = new_scope();
     let (old_tree, new_tree) = (one_file_tree("old"), fixture_tree());
     store
-        .save(&scope, &name("p-old"), old_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-old"),
+            old_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     hold_next_index.store(true, Ordering::SeqCst);
@@ -666,15 +772,38 @@ async fn a_prune_during_a_save_keeps_the_packs_of_the_save() {
         let store = store.clone();
         let scope = scope.clone();
         let path = new_tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-new"), &path, None).await }
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-new"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = polled_until(REACH_LIMIT, || index_writes() > before).await;
     assert!(held, "the save did not reach its index write");
-    let deleted = store.delete(&scope, &[name("p-old")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-old")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let pruned_while_held = ledger(&storage, &scope).await.last_prune.is_some();
     storage.open_gate();
     let saved = saving.await.unwrap();
-    let pruned_again = store.delete(&scope, &[name("p-none")]).await;
+    let pruned_again = store
+        .delete(
+            &scope,
+            &[name("p-none")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert_eq!(
         (
@@ -710,19 +839,21 @@ async fn a_restore_whose_pack_reads_fail_gives_a_retryable_storage_error() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
 
     let restored = restored_listing(&store, &scope, &name("p-1")).await;
 
-    assert!(
-        restored
-            .as_ref()
-            .is_err_and(|error| is_storage(error, true)),
-        "{restored:?}"
-    );
+    assert!(restored.as_ref().is_err_and(is_failed), "{restored:?}");
 }
 
 #[cfg(unix)]
@@ -748,11 +879,18 @@ async fn a_save_of_a_file_without_read_permission_gives_source_with_permission_d
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
 
     let saved = store
-        .save(&scope, &name("p-locked"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-locked"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await;
 
     assert!(
-        matches!(&saved, Err(SnapshotStoreError::Source(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
+        matches!(&saved, Err(SaveError::Source(error)) if error.kind() == std::io::ErrorKind::PermissionDenied),
         "{saved:?}"
     );
     assert_eq!(
@@ -796,14 +934,21 @@ async fn a_restore_that_cannot_set_an_extended_attribute_gives_destination() {
     );
     let scope = new_scope();
     store
-        .save(&scope, &name("p-xattr"), source.path(), None)
+        .save(
+            &scope,
+            &name("p-xattr"),
+            source.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
 
     let restored = restored_listing(&store, &scope, &name("p-xattr")).await;
 
     assert!(
-        matches!(&restored, Err(SnapshotStoreError::Destination(_))),
+        matches!(&restored, Err(RestoreFailure::Destination(_))),
         "{restored:?}"
     );
 }
@@ -842,7 +987,14 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     storage
@@ -861,12 +1013,9 @@ async fn a_snapshot_file_that_fails_its_check_is_left_out_of_list_and_makes_an_u
     let unknown = store.stat(&scope, &name("p-unknown")).await;
     let restore_unknown = restored_listing(&store, &scope, &name("p-unknown")).await;
 
+    assert!(matches!(unknown, Err(ReadError::Corrupt(_))), "{unknown:?}");
     assert!(
-        matches!(unknown, Err(SnapshotStoreError::Corrupt(_))),
-        "{unknown:?}"
-    );
-    assert!(
-        matches!(restore_unknown, Err(SnapshotStoreError::Corrupt(_))),
+        matches!(restore_unknown, Err(RestoreFailure::Corrupt(_))),
         "{restore_unknown:?}"
     );
     assert_eq!(
@@ -886,21 +1035,49 @@ async fn a_delete_past_the_threshold_prunes_and_the_packs_go_after_the_grace_per
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
 
-    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let after_first = ledger(&storage, &scope).await;
     let after_first_freed = freed(&storage, &scope).await;
     // The margin for clock skew keeps the next prune back, so the ledger moves back.
     age_ledger(&storage, &scope, &after_first).await;
-    store.delete(&scope, &[name("p-none")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-none")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let packs_after = blobs(&*storage, &scope.0, "data/").await;
 
     assert_eq!(
@@ -1006,18 +1183,39 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), one_file_tree("second"));
     store
-        .save(&scope, &name("p-1"), first.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let now = golem_common::model::Timestamp::now_utc();
     set_last_prune(&storage, &scope, now).await;
     let before_first = storage.calls().len();
 
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let before_second = storage.calls().len();
     set_last_prune(
         &storage,
@@ -1025,7 +1223,14 @@ async fn a_delete_within_the_grace_period_does_not_list_the_packs() {
         golem_common::model::Timestamp::from(now.to_millis().saturating_sub(2 * 3_600_000)),
     )
     .await;
-    store.delete(&scope, &[name("p-2")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let calls = storage.calls();
 
     assert_eq!(
@@ -1059,7 +1264,14 @@ async fn a_batch_delete_lists_the_snapshots_once_and_deletes_each_name_of_the_ba
             let scope = &scope;
             async move {
                 store
-                    .save(scope, &name(snapshot), tree.path(), None)
+                    .save(
+                        scope,
+                        &name(snapshot),
+                        tree.path(),
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                        &crate::filesystem_snapshot::Unlimited,
+                    )
                     .await
                     .unwrap();
             }
@@ -1071,12 +1283,13 @@ async fn a_batch_delete_lists_the_snapshots_once_and_deletes_each_name_of_the_ba
         .delete(
             &scope,
             &[name("p-1"), name("p-2"), name("p-unknown"), name("p-3")],
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
     let calls = storage.calls();
     let remaining = store
-        .list(&scope)
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
         .await
         .unwrap()
         .iter()
@@ -1091,7 +1304,7 @@ async fn a_batch_delete_lists_the_snapshots_once_and_deletes_each_name_of_the_ba
 
 #[test]
 #[timeout("60s")]
-async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
+async fn a_failed_listing_of_the_packs_leaves_the_delete_its_success_and_records_no_prune() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "list_data" {
             Script::Refuse
@@ -1106,27 +1319,53 @@ async fn a_failed_listing_of_the_packs_gives_storage_and_records_no_prune() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), one_file_tree("kept"));
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
 
-    let deleted = store.delete(&scope, &[name("p-deleted")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let after = ledger(&storage, &scope).await;
     let after_freed = freed(&storage, &scope).await;
 
-    assert!(
-        deleted.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{deleted:?}"
-    );
+    assert!(matches!(&deleted, Ok(())), "{deleted:?}");
     assert_eq!((after_freed > 0, after.last_prune), (true, None));
 }
 
 /// Counts the prunes among the recorded calls. A prune lists the packs, and no other step of a
 /// delete makes that call.
+/// How each prune of the store that failed since the last take failed.
+fn failed_prunes(store: &RusticSnapshotStore) -> Vec<CallFailure> {
+    store
+        .take_failed_prunes()
+        .iter()
+        .map(call_failure)
+        .collect()
+}
+
 fn prunes(calls: &[(&'static str, String)]) -> usize {
     calls
         .iter()
@@ -1140,7 +1379,14 @@ async fn save_each(store: &RusticSnapshotStore, scope: &AgentSnapshots, names: &
         .for_each(|text| async move {
             let tree = one_file_tree(text);
             store
-                .save(scope, &name(text), tree.path(), None)
+                .save(
+                    scope,
+                    &name(text),
+                    tree.path(),
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
                 .await
                 .unwrap();
         })
@@ -1172,7 +1418,15 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
     let paused = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     // The second delete lists the freed records too. So the gate would hold it for ever when the
     // first delete did not reach its listing first.
@@ -1182,7 +1436,13 @@ async fn a_delete_that_paused_after_its_ledger_read_does_not_put_back_the_old_le
         "the first delete did not reach its listing of the freed records"
     );
 
-    let pruned = store.delete(&scope, &[name("p-2")]).await;
+    let pruned = store
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let after_prune = ledger(&storage, &scope).await;
     storage.open_gate();
     let paused = tokio::time::timeout(LIMIT, paused).await;
@@ -1234,7 +1494,15 @@ async fn a_record_that_a_delete_adds_during_a_prune_stays_for_the_next_prune() {
     let pruning = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
 
@@ -1285,7 +1553,14 @@ async fn a_late_older_ledger_entry_does_not_win() {
     .await;
 
     let read = ledger(&storage, &scope).await;
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -1330,7 +1605,15 @@ async fn a_prune_deletes_the_older_ledger_entries_and_keeps_a_newer_one() {
     let pruning = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let prune_held = eventually(|| held.load(Ordering::SeqCst)).await;
 
@@ -1465,7 +1748,15 @@ async fn a_prune_refreshes_the_claim_with_its_own_number() {
     .await;
     let pruning = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let refreshes = || {
         storage
@@ -1541,17 +1832,20 @@ async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_after_refreshes
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &[name("p-1")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let refreshes = storage
         .calls()
         .iter()
         .filter(|(op_label, _)| *op_label == "refresh_claim")
         .count();
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
     assert_eq!(
         (
             refreshes > 0,
@@ -1592,7 +1886,15 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     let pruning = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     // The second delete claims and lists the packs too. So the gate would hold its prune for ever
     // when the first delete did not reach its listing first.
@@ -1617,7 +1919,13 @@ async fn a_prune_slower_than_the_grace_period_keeps_its_claim_fresh() {
     )
     .await
     .is_ok();
-    let second = store.delete(&scope, &[name("p-2")]).await;
+    let second = store
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let prunes_while_held = prunes(&storage.calls());
     storage.open_gate();
     let pruned = tokio::time::timeout(LIMIT, pruning).await;
@@ -1678,7 +1986,13 @@ async fn a_prune_whose_refreshes_fail_stops_when_its_lease_runs_out_and_keeps_it
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let calls = storage.calls();
     let backend_calls_after_claim = calls
         .iter()
@@ -1696,14 +2010,10 @@ async fn a_prune_whose_refreshes_fail_stops_when_its_lease_runs_out_and_keeps_it
         now.to_millis() + u64::try_from((hold + Duration::from_secs(1)).as_millis()).unwrap(),
     );
 
-    assert!(
-        matches!(
-            &deleted,
-            Err(error @ SnapshotStoreError::Storage { source, .. })
-                if is_storage(error, true) && is_lease_expired(source.as_ref())
-        ),
-        "{deleted:?}"
-    );
+    // The prune fails when its lease runs out; the delete answers success, because the names
+    // stopped resolving.
+    assert!(matches!(&deleted, Ok(())), "{deleted:?}");
+    assert_eq!(failed_prunes(&store), vec![CallFailure::LeaseExpired]);
     assert_eq!(
         (
             backend_calls_after_claim,
@@ -1743,7 +2053,13 @@ async fn a_prune_goes_on_after_one_failed_refresh_when_the_later_refreshes_succe
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let calls = storage.calls();
     let backend_calls_after_claim = calls
         .iter()
@@ -1806,7 +2122,15 @@ async fn a_marker_ahead_within_the_margin_after_a_slow_claim_listing_holds_the_c
     .await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| {
         storage
@@ -1856,7 +2180,13 @@ async fn a_ledger_entry_ahead_within_the_margin_of_the_moved_clock_holds_the_pru
     put_ledger_entry(&storage, &scope, &format!("{ahead}-0-ahead")).await;
     clock.advance(Duration::from_secs(20));
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(prunes(&storage.calls()), 0);
@@ -1896,11 +2226,25 @@ async fn a_save_and_a_prune_take_their_times_from_the_injected_clock() {
     let tree = one_file_tree("timed");
 
     let saved = store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     save_each(&store, &scope, &["p-2"]).await;
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let calls = storage.calls();
     let written = ["write_marker", "final_marker", "write_ledger"]
         .map(|op_label| written_times(&calls, op_label));
@@ -1948,7 +2292,15 @@ async fn the_refresh_markers_of_a_prune_take_their_times_from_the_injected_clock
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let pruning = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let refreshed =
         eventually(|| written_times(&storage.calls(), "refresh_claim").len() >= 2).await;
@@ -1990,7 +2342,15 @@ async fn the_second_ledger_read_of_a_delete_compares_with_the_injected_clock() {
     clock.advance(Duration::from_secs(20));
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let claiming = eventually(|| {
         storage
@@ -2022,7 +2382,15 @@ async fn the_final_marker_of_a_dropped_delete_takes_its_time_from_the_injected_c
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let started = eventually(|| prunes(&storage.calls()) == 1).await;
     deleting.abort();
@@ -2063,17 +2431,20 @@ async fn a_ledger_write_after_the_lease_ran_out_is_not_sent_and_the_claim_stays(
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let calls = storage.calls();
     let entries = claim_entries(&storage, &scope).await;
 
-    assert!(
-        matches!(
-            &deleted,
-            Err(SnapshotStoreError::Storage { source, .. }) if is_lease_expired(source.as_ref())
-        ),
-        "{deleted:?}"
-    );
+    // The prune fails when its lease runs out; the delete answers success, because the names
+    // stopped resolving.
+    assert!(matches!(&deleted, Ok(())), "{deleted:?}");
+    assert_eq!(failed_prunes(&store), vec![CallFailure::LeaseExpired]);
     assert_eq!(
         (
             prunes(&calls),
@@ -2108,17 +2479,19 @@ async fn a_ledger_write_that_starts_within_the_lease_ends_at_the_end_of_the_leas
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let calls = storage.calls();
     let entries = claim_entries(&storage, &scope).await;
 
-    assert!(
-        matches!(
-            &deleted,
-            Err(SnapshotStoreError::Storage { source, .. }) if is_lease_expired(source.as_ref())
-        ),
-        "{deleted:?}"
-    );
+    // The prune fails when its lease runs out; the delete answers success, because the names
+    // stopped resolving.
+    assert!(matches!(&deleted, Ok(())), "{deleted:?}");
     assert_eq!(
         (
             calls
@@ -2146,7 +2519,13 @@ async fn the_lease_of_a_prune_starts_at_its_first_marker_so_a_prune_without_a_re
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let calls = storage.calls();
 
     assert!(deleted.is_ok(), "{deleted:?}");
@@ -2193,11 +2572,24 @@ async fn a_delete_within_the_hold_reads_no_record_of_freed_bytes_and_lists_no_pa
     );
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2", "p-3"]).await;
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let pruned = ledger(&storage, &scope).await.last_prune.is_some();
     let from = storage.calls().len();
 
-    let deleted = store.delete(&scope, &[name("p-2")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2220,7 +2612,13 @@ async fn a_delete_whose_named_bytes_are_below_the_threshold_reads_no_record_cont
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let from = storage.calls().len();
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2246,7 +2644,13 @@ async fn a_delete_whose_named_bytes_reach_the_threshold_reads_and_settles_the_re
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let from = storage.calls().len();
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2283,7 +2687,14 @@ async fn a_prune_deletes_the_claims_of_old_ledgers() {
         })
         .await;
 
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -2321,7 +2732,14 @@ async fn a_prune_keeps_the_claims_of_a_newer_ledger() {
         })
         .await;
 
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -2363,7 +2781,14 @@ async fn a_prune_deletes_an_empty_claim_directory_of_an_old_ledger() {
     };
     let before = list_claims().await.unwrap();
 
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -2403,17 +2828,33 @@ async fn a_failed_ledger_write_after_a_prune_keeps_the_claim_so_no_second_prune_
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2", "p-3"]).await;
 
-    let failed = store.delete(&scope, &[name("p-1")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let second = store.delete(&scope, &[name("p-2")]).await;
+    let second = store
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let prunes_after_second = prunes(&storage.calls());
     age_claims(&storage, &scope).await;
-    let third = store.delete(&scope, &[name("p-3")]).await;
+    let third = store
+        .delete(
+            &scope,
+            &[name("p-3")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
+    assert_eq!(failed_prunes(&store), vec![CallFailure::Failed]);
     assert!(second.is_ok(), "{second:?}");
     assert!(third.is_ok(), "{third:?}");
     assert_eq!(
@@ -2449,12 +2890,15 @@ async fn a_forget_that_fails_after_the_record_write_leaves_the_record() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
-    assert!(
-        deleted.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{deleted:?}"
-    );
+    assert!(deleted.as_ref().is_err_and(is_failed), "{deleted:?}");
     assert_eq!(
         (
             freed(&storage, &scope).await > 0,
@@ -2499,7 +2943,15 @@ async fn a_prune_keeps_the_record_of_a_delete_that_has_not_forgotten_its_snapsho
     );
     let paused = tokio::spawn({
         let scope = scope.clone();
-        async move { pausing.delete(&scope, &[name("p-1")]).await }
+        async move {
+            pausing
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let at_forget = eventually(|| {
         held.calls()
@@ -2509,7 +2961,14 @@ async fn a_prune_keeps_the_record_of_a_delete_that_has_not_forgotten_its_snapsho
     .await;
     let paused_record = records(&inner, &scope).await;
 
-    plain.delete(&scope, &[name("p-2")]).await.unwrap();
+    plain
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let after_prune = records(&inner, &scope).await;
     let pruned = ledger(&inner, &scope).await;
     age_ledger(&inner, &scope, &pruned).await;
@@ -2576,7 +3035,15 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
             policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
         );
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &[name("p-1")]).await }
+        async move {
+            deleting
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let first_at_forget = eventually(|| forgetting.waiting_steps() > 0).await;
     let first_record = records(&inner, &scope).await;
@@ -2586,7 +3053,15 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
             policy(LONG_DEADLINE, ALWAYS, Duration::from_secs(3600)),
         );
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &[name("p-2")]).await }
+        async move {
+            deleting
+                .delete(
+                    &scope,
+                    &[name("p-2")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let second_at_prune = eventually(|| pruning.waiting_steps() > 0).await;
 
@@ -2597,7 +3072,14 @@ async fn a_forget_that_lands_while_a_prune_runs_keeps_its_record_for_the_next_pr
     let after_prune = records(&inner, &scope).await;
     let pruned = ledger(&inner, &scope).await;
     age_ledger(&inner, &scope, &pruned).await;
-    plain.delete(&scope, &[name("p-3")]).await.unwrap();
+    plain
+        .delete(
+            &scope,
+            &[name("p-3")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert!(matches!(first, Ok(Ok(Ok(())))), "{first:?}");
     assert!(matches!(second, Ok(Ok(Ok(())))), "{second:?}");
@@ -2640,8 +3122,22 @@ async fn a_record_whose_snapshot_still_exists_counts_nothing_and_does_not_make_a
         .await
         .unwrap();
 
-    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
-    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-unknown")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-unknown")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -2675,7 +3171,13 @@ async fn a_record_write_that_answers_already_exists_counts_as_written() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -2718,12 +3220,24 @@ async fn a_delete_sees_the_marker_of_a_claim_that_is_not_taken_yet_and_does_not_
     let holding = tokio::spawn({
         let deleting = store(first.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &[name("p-1")]).await }
+        async move {
+            deleting
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| writes.load(Ordering::SeqCst) >= 2).await;
 
     let seen = store(second.clone(), policy(LONG_DEADLINE, ALWAYS, grace))
-        .delete(&scope, &[name("p-2")])
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await;
     first.open_gate();
     let holding = tokio::time::timeout(LIMIT, holding).await;
@@ -2768,7 +3282,15 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
     let holding = tokio::spawn({
         let deleting = store(first.clone(), policy(LONG_DEADLINE, ALWAYS, grace));
         let scope = scope.clone();
-        async move { deleting.delete(&scope, &[name("p-1")]).await }
+        async move {
+            deleting
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| {
         first
@@ -2789,7 +3311,11 @@ async fn a_claim_without_a_marker_does_not_unblock_a_live_holder() {
         .unwrap();
 
     let seen = store(second.clone(), policy(LONG_DEADLINE, ALWAYS, grace))
-        .delete(&scope, &[name("p-2")])
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await;
     first.open_gate();
     let holding = tokio::time::timeout(LIMIT, holding).await;
@@ -2831,7 +3357,15 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
     let first = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     // The second delete claims and reads too, so the gate would hold it for ever when the first
     // delete did not reach its read first.
@@ -2841,7 +3375,13 @@ async fn two_deletes_that_read_the_same_ledger_make_one_prune() {
         "the first delete did not reach its first read after its claim"
     );
 
-    let second = store.delete(&scope, &[name("p-2")]).await;
+    let second = store
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     storage.open_gate();
     let first = tokio::time::timeout(LIMIT, first).await;
     let calls = storage.calls();
@@ -2883,7 +3423,15 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
     let late = tokio::spawn({
         let store = store.clone();
         let scope = scope.clone();
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     // The second delete lists the claims too, so the gate would hold it for ever when the first
     // delete did not reach its listing first.
@@ -2893,7 +3441,13 @@ async fn a_delete_that_claims_after_another_prune_removed_the_claims_does_not_pr
         "the first delete did not reach its listing of the claims"
     );
 
-    let pruned = store.delete(&scope, &[name("p-2")]).await;
+    let pruned = store
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     storage.open_gate();
     let late = tokio::time::timeout(LIMIT, late).await;
 
@@ -2936,15 +3490,24 @@ async fn a_failed_second_read_of_the_ledger_deletes_the_claim_and_a_retry_of_the
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &[name("p-1")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let retried = store.delete(&scope, &[name("p-1")]).await;
+    let retried = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let after = ledger(&storage, &scope).await;
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
     assert!(retried.is_ok(), "{retried:?}");
     assert_eq!(
         (
@@ -2995,7 +3558,15 @@ async fn a_delete_dropped_after_a_failed_second_read_still_releases_its_claim() 
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| {
         storage
@@ -3058,7 +3629,15 @@ async fn a_delete_dropped_after_its_claim_and_before_its_prune_releases_the_clai
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let claimed = |calls: &[(&'static str, String)]| {
         calls
@@ -3106,7 +3685,15 @@ async fn shut_down_waits_for_the_release_of_a_delete_dropped_after_its_claim() {
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| {
         storage
@@ -3194,7 +3781,15 @@ async fn a_shut_down_during_a_started_prune_still_writes_its_final_marker_and_wa
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let started = eventually(|| prunes(&storage.calls()) == 1).await;
 
@@ -3203,7 +3798,7 @@ async fn a_shut_down_during_a_started_prune_still_writes_its_final_marker_and_wa
     storage.open_gate();
     let deleted = tokio::time::timeout(LIMIT, deleting).await;
 
-    assert!(matches!(deleted, Ok(Ok(Err(_)))), "{deleted:?}");
+    assert!(matches!(deleted, Ok(Ok(Ok(())))), "{deleted:?}");
     assert_eq!(
         (
             started,
@@ -3228,7 +3823,15 @@ async fn a_delete_dropped_during_a_started_prune_writes_its_final_marker() {
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let started = eventually(|| prunes(&storage.calls()) == 1).await;
 
@@ -3265,7 +3868,13 @@ async fn a_prune_writes_one_final_marker() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let ended = eventually(|| store.work_in_flight() == 0).await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
@@ -3293,7 +3902,15 @@ async fn a_shut_down_after_the_claim_still_releases_it() {
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| {
         storage
@@ -3321,7 +3938,7 @@ async fn a_shut_down_after_the_claim_still_releases_it() {
     let deleted = tokio::time::timeout(LIMIT, deleting).await;
 
     assert!(matches!(shut_down, Ok(Ok(()))), "{shut_down:?}");
-    assert!(matches!(deleted, Ok(Ok(Err(_)))), "{deleted:?}");
+    assert!(matches!(deleted, Ok(Ok(Ok(())))), "{deleted:?}");
     assert_eq!(
         (
             held,
@@ -3364,14 +3981,24 @@ async fn a_release_whose_claim_delete_is_refused_still_deletes_its_marker_and_th
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &[name("p-1")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let retried = store.delete(&scope, &[name("p-1")]).await;
+    let retried = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
+    assert_eq!(failed_prunes(&store), vec![CallFailure::Failed]);
     assert!(retried.is_ok(), "{retried:?}");
     assert_eq!(
         (
@@ -3394,13 +4021,17 @@ async fn a_release_whose_marker_delete_is_refused_still_deletes_the_claim() {
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &[name("p-1")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
+    assert_eq!(failed_prunes(&store), vec![CallFailure::Failed]);
     assert_eq!(
         claims_after_failure
             .iter()
@@ -3455,7 +4086,13 @@ async fn a_prune_plans_again_when_a_snapshot_file_is_gone_at_its_read_and_prunes
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let deleted = store.delete(&scope, &[name("p-1")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(deleted.is_ok(), "{deleted:?}");
     assert_eq!(
@@ -3470,7 +4107,7 @@ async fn a_prune_plans_again_when_a_snapshot_file_is_gone_at_its_read_and_prunes
 
 #[test]
 #[timeout("60s")]
-async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_releases_its_claim_and_gives_a_retryable_error()
+async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_releases_its_claim_and_the_delete_succeeds()
  {
     let (storage, vanished) = vanishing_snapshots_after_the_claim(usize::MAX);
     let store = store(
@@ -3480,12 +4117,15 @@ async fn a_prune_that_finds_a_snapshot_file_gone_at_each_attempt_releases_its_cl
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &[name("p-1")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
     assert_eq!(
         (
             vanished.load(Ordering::SeqCst),
@@ -3530,18 +4170,34 @@ async fn a_prune_that_fails_keeps_its_claim_so_no_second_prune_runs_within_the_h
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    let failed = store.delete(&scope, &[name("p-1")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let claims_after_failure = blobs(&*storage, &scope.0, "golem/prune-claims/").await;
-    let retried = store.delete(&scope, &[name("p-1")]).await;
+    let retried = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let after_retry = ledger(&storage, &scope).await;
     age_claims(&storage, &scope).await;
-    let later = store.delete(&scope, &[name("p-1")]).await;
+    let later = store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let after = ledger(&storage, &scope).await;
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
+    assert_eq!(failed_prunes(&store), vec![CallFailure::Failed]);
     assert!(retried.is_ok(), "{retried:?}");
     assert!(later.is_ok(), "{later:?}");
     assert_eq!(
@@ -3577,7 +4233,14 @@ async fn a_claim_without_a_marker_does_not_block_a_prune() {
         .await
         .unwrap();
 
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert!(ledger(&storage, &scope).await.last_prune.is_some());
 }
@@ -3593,7 +4256,14 @@ async fn a_prune_that_succeeds_deletes_the_claims_and_the_counted_records_of_fre
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
 
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -3616,16 +4286,37 @@ async fn a_delete_below_the_threshold_does_not_prune() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), one_file_tree("kept"));
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let packs_before = blobs(&*storage, &scope.0, "data/").await;
 
-    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let after = ledger(&storage, &scope).await;
     let after_freed = freed(&storage, &scope).await;
 
@@ -3655,16 +4346,37 @@ async fn no_second_prune_runs_within_the_hold_after_a_prune() {
             let scope = scope.clone();
             async move {
                 store
-                    .save(&scope, &name(text), tree.path(), None)
+                    .save(
+                        &scope,
+                        &name(text),
+                        tree.path(),
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                        &crate::filesystem_snapshot::Unlimited,
+                    )
                     .await
                     .unwrap();
             }
         })
         .await;
 
-    store.delete(&scope, &[name("p-a")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-a")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let after_first = ledger(&storage, &scope).await;
-    store.delete(&scope, &[name("p-b")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-b")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let after_second = ledger(&storage, &scope).await;
     let after_second_freed = freed(&storage, &scope).await;
 
@@ -3680,7 +4392,7 @@ async fn no_second_prune_runs_within_the_hold_after_a_prune() {
 
 #[test]
 #[timeout("60s")]
-async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
+async fn a_delete_whose_prune_fails_succeeds_and_the_next_delete_prunes() {
     let refuse = Arc::new(AtomicBool::new(false));
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), {
         let refuse = refuse.clone();
@@ -3702,29 +4414,52 @@ async fn a_delete_whose_prune_fails_gives_storage_and_a_retry_prunes() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
 
-    let failed = store.delete(&scope, &[name("p-deleted")]).await;
+    let failed = store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let after_failure = ledger(&storage, &scope).await;
     let after_failure_freed = freed(&storage, &scope).await;
     refuse.store(false, Ordering::SeqCst);
     // The prune started, so its claim stays until the hold passed.
     age_claims(&storage, &scope).await;
-    let retried = store.delete(&scope, &[name("p-deleted")]).await;
+    let retried = store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let after_retry = ledger(&storage, &scope).await;
     let after_retry_freed = freed(&storage, &scope).await;
 
-    assert!(
-        failed.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{failed:?}"
-    );
+    assert!(matches!(&failed, Ok(())), "{failed:?}");
     assert_eq!(
         (
             after_failure_freed > 0,
@@ -3748,17 +4483,41 @@ async fn a_deleted_scope_holds_no_blob() {
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), one_file_tree("second"));
     store
-        .save(&scope, &name("p-1"), first.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let before = blobs(&*storage, &scope.0, "").await;
 
-    store.delete_all(&scope).await.unwrap();
+    store
+        .delete_all(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
 
     assert_eq!(
         (
@@ -3773,10 +4532,13 @@ async fn a_deleted_scope_holds_no_blob() {
 
 #[test]
 #[timeout("60s")]
-async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_name_free() {
+async fn a_save_dropped_at_any_storage_call_before_its_publish_publishes_nothing_and_leaves_the_name_free()
+ {
     // The first save counts the calls of a save. Each later round holds one of these calls: the
     // call reaches the storage and never answers, as a write that S3 received and completes after
-    // the caller left. The round drops the save there, and waits until the store has no work.
+    // the caller left. The round drops the save there, and waits until the store has no work. A
+    // save that is dropped in its publish is the one exception that the doc of `save` names: the
+    // publish that the storage received lands, and the name resolves to the whole tree.
     let tree = one_file_tree("dropped");
     let other = one_file_tree("saved later");
     let counted =
@@ -3785,10 +4547,22 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
         counted.clone(),
         policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     )
-    .save(&new_scope(), &name("p-dropped"), tree.path(), None)
+    .save(
+        &new_scope(),
+        &name("p-dropped"),
+        tree.path(),
+        None,
+        crate::filesystem_snapshot::never_cancelled(),
+        &crate::filesystem_snapshot::Unlimited,
+    )
     .await
     .unwrap();
-    let calls = counted.calls().len();
+    let labels = counted
+        .calls()
+        .into_iter()
+        .map(|(op_label, _)| op_label)
+        .collect::<Vec<_>>();
+    let calls = labels.len();
 
     let rounds = futures::stream::iter(1..=calls)
         .then(|held| {
@@ -3804,12 +4578,19 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                     }
                 });
                 let policy = policy(LONG_DEADLINE, NEVER, Duration::ZERO);
-                let dropping = store(storage.clone(), policy);
+                let dropping = store(storage.clone(), policy.clone());
                 let scope = new_scope();
                 let ended = drop_when(
                     &storage,
                     |calls| calls.len() >= held,
-                    dropping.save(&scope, &name("p-dropped"), &tree, None),
+                    dropping.save(
+                        &scope,
+                        &name("p-dropped"),
+                        &tree,
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                        &crate::filesystem_snapshot::Unlimited,
+                    ),
                 )
                 .await;
                 let stopped = tokio::time::timeout(LIMIT, dropping.shut_down())
@@ -3818,7 +4599,16 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                 let later = store(inner, policy);
                 let stat = later.stat(&scope, &name("p-dropped")).await.ok().flatten();
                 let names = listed_names(&later, &scope).await;
-                let saved_again = later.save(&scope, &name("p-dropped"), &other, None).await;
+                let saved_again = later
+                    .save(
+                        &scope,
+                        &name("p-dropped"),
+                        &other,
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(),
+                        &crate::filesystem_snapshot::Unlimited,
+                    )
+                    .await;
                 let restored = restored_listing(&later, &scope, &name("p-dropped"))
                     .await
                     .ok();
@@ -3826,10 +4616,18 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
                     held,
                     ended.is_none(),
                     stopped,
-                    stat,
+                    stat.is_some(),
                     names,
                     saved_again.is_ok(),
-                    restored == Some(listing(&other)),
+                    restored.map(|restored| {
+                        if restored == listing(&tree) {
+                            "the dropped tree"
+                        } else if restored == listing(&other) {
+                            "the later tree"
+                        } else {
+                            "a part of a tree"
+                        }
+                    }),
                 )
             }
         })
@@ -3839,16 +4637,27 @@ async fn a_save_dropped_at_any_storage_call_publishes_nothing_and_leaves_the_nam
     assert_eq!(
         rounds,
         (1..=calls)
-            .map(|held| (held, true, true, None, Vec::new(), true, true))
-            .collect::<Vec<(
-                usize,
-                bool,
-                bool,
-                Option<SnapshotInfo>,
-                Vec<String>,
-                bool,
-                bool
-            )>>()
+            .map(|held| match labels[held - 1] {
+                "publish" => (
+                    held,
+                    true,
+                    true,
+                    true,
+                    vec!["p-dropped".to_string()],
+                    false,
+                    Some("the dropped tree")
+                ),
+                _ => (
+                    held,
+                    true,
+                    true,
+                    false,
+                    Vec::new(),
+                    true,
+                    Some("the later tree")
+                ),
+            })
+            .collect::<Vec<(usize, bool, bool, bool, Vec<String>, bool, Option<&str>)>>()
     );
 }
 
@@ -3893,7 +4702,7 @@ async fn shut_down_waits_for_a_blob_call_of_the_store_that_is_not_polled() {
         policy(LONG_DEADLINE, NEVER, Duration::ZERO),
     );
     let scope = new_scope();
-    let deleting = store.delete_all(&scope);
+    let deleting = store.delete_all(&scope, &crate::filesystem_snapshot::Unlimited);
     tokio::pin!(deleting);
     let pending = futures::poll!(&mut deleting).is_pending();
 
@@ -3909,7 +4718,7 @@ async fn shut_down_waits_for_a_blob_call_of_the_store_that_is_not_polled() {
     storage.open_gate();
 
     assert!(
-        matches!(&deleted, Ok(Err(error)) if is_storage(error, true)),
+        matches!(&deleted, Ok(Err(error)) if is_stopped(error)),
         "{deleted:?}"
     );
     assert_eq!(
@@ -3947,7 +4756,11 @@ async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_pol
     let scope = new_scope();
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleted_name = name("p-1");
-    let deleting = store.delete(&scope, std::slice::from_ref(&deleted_name));
+    let deleting = store.delete(
+        &scope,
+        std::slice::from_ref(&deleted_name),
+        &crate::filesystem_snapshot::Unlimited,
+    );
     tokio::pin!(deleting);
     let reached = tokio::select! {
         biased;
@@ -3974,10 +4787,10 @@ async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_pol
     tokio::time::sleep(grace).await;
     storage.open_gate();
 
-    assert!(
-        matches!(&deleted, Ok(Err(error)) if is_storage(error, true)),
-        "{deleted:?}"
-    );
+    // The prune ends at the shutdown; the delete answers success, because its names stopped
+    // resolving.
+    assert!(matches!(&deleted, Ok(Ok(()))), "{deleted:?}");
+    assert_eq!(failed_prunes(&store), vec![CallFailure::Cancelled]);
     assert_eq!(
         (
             reached,
@@ -3992,12 +4805,12 @@ async fn shut_down_waits_for_the_step_of_a_prune_and_its_refresh_that_is_not_pol
 
 #[test]
 #[timeout("60s")]
-async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
-    // The gate holds the read of the listed index file, and the test deletes that file meanwhile,
-    // as a prune does.
+async fn a_copy_whose_listed_index_file_is_gone_runs_again() {
+    // The gate holds the copy of the listed index file, and the test deletes that file meanwhile.
+    // The run ends with a source that is gone, and the next run lists the source again.
     let inner = Arc::new(InMemoryBlobStorage::new());
     let storage = ScriptedBlobStorage::new(inner.clone(), |op_label, path| {
-        if op_label == "copy_read" && path.starts_with("index") {
+        if op_label == "copy" && path.starts_with("index") {
             Script::WaitForGate
         } else {
             Script::Pass
@@ -4012,13 +4825,17 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
     let copying = tokio::spawn({
         let store = store.clone();
         let (from, to) = (from.clone(), to.clone());
-        async move { store.copy_all(&from, &to).await }
+        async move {
+            store
+                .copy_all(&from, &to, &crate::filesystem_snapshot::Unlimited)
+                .await
+        }
     });
     let held = eventually(|| {
         storage
             .calls()
             .iter()
-            .any(|(op_label, path)| *op_label == "copy_read" && path.starts_with("index"))
+            .any(|(op_label, path)| *op_label == "copy" && path.starts_with("index"))
     })
     .await;
     let index_files = blobs(&*inner, &from.0, "index/").await;
@@ -4037,17 +4854,19 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
     storage.open_gate();
     let copied = tokio::time::timeout(LIMIT, copying).await;
 
-    assert!(
-        matches!(&copied, Ok(Ok(Err(error))) if is_storage(error, true)),
-        "{copied:?}"
-    );
+    assert!(matches!(&copied, Ok(Ok(Ok(())))), "{copied:?}");
     assert_eq!(
         (
             held,
             index_files.is_empty(),
-            blobs(&*inner, &to.0, "config").await
+            storage
+                .calls()
+                .iter()
+                .filter(|(op_label, _)| *op_label == "copy_read")
+                .count(),
+            blobs(&*inner, &to.0, "index/").await
         ),
-        (true, false, Vec::<String>::new())
+        (true, false, 2, Vec::<String>::new())
     );
 }
 
@@ -4056,7 +4875,7 @@ async fn a_copy_fails_when_a_prune_removed_an_index_file_that_it_listed() {
 async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listing() {
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
-            if op_label == "copy_read" && path.starts_with("snapshots") {
+            if op_label == "copy" && path.starts_with("snapshots") {
                 Script::Vanish
             } else {
                 Script::Pass
@@ -4069,7 +4888,9 @@ async fn a_copy_leaves_out_a_snapshot_file_that_a_delete_removed_after_the_listi
     let (from, to) = (new_scope(), new_scope());
     save_each(&store, &from, &["p-1"]).await;
 
-    let copied = store.copy_all(&from, &to).await;
+    let copied = store
+        .copy_all(&from, &to, &crate::filesystem_snapshot::Unlimited)
+        .await;
 
     assert!(copied.is_ok(), "{copied:?}");
     assert_eq!(
@@ -4098,13 +4919,24 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
     let (from, to) = (new_scope(), new_scope());
     let tree = one_file_tree("copied");
     store
-        .save(&from, &name("p-1"), tree.path(), None)
+        .save(
+            &from,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let mut copying = tokio::spawn({
         let store = store.clone();
         let (from, to) = (from.clone(), to.clone());
-        async move { store.copy_all(&from, &to).await }
+        async move {
+            store
+                .copy_all(&from, &to, &crate::filesystem_snapshot::Unlimited)
+                .await
+        }
     });
     let held = eventually(|| {
         storage
@@ -4122,7 +4954,7 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
     storage.open_gate();
 
     assert!(
-        matches!(&copied, Ok(Ok(Err(error))) if is_storage(error, true)),
+        matches!(&copied, Ok(Ok(Err(error))) if is_stopped(error)),
         "{copied:?}"
     );
     assert_eq!(
@@ -4133,7 +4965,7 @@ async fn a_copy_held_at_a_storage_call_stops_at_shut_down_and_makes_no_later_cal
 
 #[test]
 #[timeout("60s")]
-async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_ends() {
+async fn a_publish_held_at_its_storage_call_ends_at_shut_down_and_the_save_answers_stopped() {
     let storage = ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, _| {
         if op_label == "publish" {
             Script::WaitForGate
@@ -4151,7 +4983,18 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
         let store = store.clone();
         let scope = scope.clone();
         let path = tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-held"), &path, None).await }
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-held"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| {
         storage
@@ -4161,19 +5004,23 @@ async fn a_publish_held_at_its_storage_call_keeps_shut_down_waiting_until_it_end
     })
     .await;
 
-    let shutting = store.shut_down();
-    tokio::pin!(shutting);
-    let waited = tokio::time::timeout(Duration::from_millis(200), &mut shutting)
+    // The shutdown ends the held publish, so it returns without a wait for the gate.
+    let shut_down = tokio::time::timeout(Duration::from_millis(500), store.shut_down())
         .await
-        .is_err();
-    storage.open_gate();
-    // A finished future must not be polled again, so the second wait runs only after a first wait
-    // that timed out.
-    let stopped = !waited || tokio::time::timeout(LIMIT, &mut shutting).await.is_ok();
+        .is_ok();
     let saved = tokio::time::timeout(LIMIT, saving).await;
+    storage.open_gate();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let published = blobs(&*storage, &scope.0, "snapshots/").await;
 
-    assert!(matches!(&saved, Ok(Ok(Ok(_)))), "{saved:?}");
-    assert_eq!((held, waited, stopped), (true, true, true));
+    assert!(
+        matches!(&saved, Ok(Ok(Err(SaveError::Stopped(_))))),
+        "{saved:?}"
+    );
+    assert_eq!(
+        (held, shut_down, published),
+        (true, true, Vec::<String>::new())
+    );
 }
 
 #[test]
@@ -4202,7 +5049,15 @@ async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_stor
     save_each(&store, &scope, &["p-1", "p-2"]).await;
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-1")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-1")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let listing = eventually(|| {
         storage
@@ -4227,13 +5082,7 @@ async fn a_shut_down_between_the_claim_listing_and_the_claim_guard_makes_no_stor
     let deleted = tokio::time::timeout(LIMIT, deleting).await;
     let ended = eventually(|| store.work_in_flight() == 0).await;
 
-    assert!(
-        matches!(
-            &deleted,
-            Ok(Ok(Err(error))) if is_storage(error, false)
-        ),
-        "{deleted:?}"
-    );
+    assert!(matches!(&deleted, Ok(Ok(Ok(())))), "{deleted:?}");
     assert_eq!(
         (
             listing,
@@ -4287,12 +5136,30 @@ async fn a_save_that_loses_the_creation_of_the_repository_after_its_first_config
     let (won_tree, lost_tree) = (one_file_tree("winner"), one_file_tree("loser"));
     let losing_save = tokio::spawn({
         let (loser, scope, path) = (loser.clone(), scope.clone(), lost_tree.path().to_path_buf());
-        async move { loser.save(&scope, &name("p-loser"), &path, None).await }
+        async move {
+            loser
+                .save(
+                    &scope,
+                    &name("p-loser"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| checks.load(Ordering::SeqCst) >= 2).await;
 
     let won = winner
-        .save(&scope, &name("p-winner"), won_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-winner"),
+            won_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await;
     losing.open_gate();
     let lost = tokio::time::timeout(LIMIT, losing_save).await;
@@ -4335,7 +5202,6 @@ async fn shut_down_waits_for_the_check_of_a_local_path() {
                 .check_path(
                     crate::sandbox_filesystem::NativeOperation::Metadata,
                     &path,
-                    SnapshotStoreError::Source,
                     move |_| {
                         let _ = reached_sender.send(());
                         let _ = opened.recv();
@@ -4408,11 +5274,25 @@ async fn scope_with_a_prune_to_come(
     let scope = new_scope();
     let (kept, deleted) = (fixture_tree(), one_file_tree("deleted"));
     pruning
-        .save(&scope, &name("p-1"), kept.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            kept.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     pruning
-        .save(&scope, &name("p-2"), deleted.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            deleted.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     (scope, pruning, kept)
@@ -4420,7 +5300,7 @@ async fn scope_with_a_prune_to_come(
 
 #[test]
 #[timeout("60s")]
-async fn a_restore_whose_index_file_a_prune_deleted_after_the_listing_gives_retryable_storage_and_a_retry_restores()
+async fn a_restore_whose_index_file_a_prune_deleted_after_the_listing_loads_again_and_gives_the_whole_tree()
  {
     let shared = Arc::new(InMemoryBlobStorage::new());
     let (scope, pruning, kept) = scope_with_a_prune_to_come(&shared).await;
@@ -4430,22 +5310,32 @@ async fn a_restore_whose_index_file_a_prune_deleted_after_the_listing_gives_retr
         let (restoring, scope) = (restoring.clone(), scope.clone());
         async move {
             let into = Scratch::new();
-            restoring.restore(&scope, &name("p-1"), into.path()).await
+            restoring
+                .restore(
+                    &scope,
+                    &name("p-1"),
+                    into.path(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
         }
     });
     let reached = eventually(|| held.load(Ordering::SeqCst) > 0).await;
 
-    let deleted = pruning.delete(&scope, &[name("p-2")]).await;
+    let deleted = pruning
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let pruned = ledger(&shared, &scope).await.last_prune.is_some();
     hold.store(false, Ordering::SeqCst);
     storage.open_gate();
     let first = tokio::time::timeout(LIMIT, first).await;
     let again = restored_listing(&restoring, &scope, &name("p-1")).await;
 
-    assert!(
-        matches!(&first, Ok(Ok(Err(error))) if is_storage(error, true)),
-        "{first:?}"
-    );
+    assert!(matches!(&first, Ok(Ok(Ok(_)))), "{first:?}");
     assert_eq!(
         (reached, deleted.is_ok(), pruned, again.ok()),
         (true, true, true, Some(listing(kept.path())))
@@ -4454,8 +5344,7 @@ async fn a_restore_whose_index_file_a_prune_deleted_after_the_listing_gives_retr
 
 #[test]
 #[timeout("60s")]
-async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryable_storage_and_a_retry_saves()
- {
+async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_loads_again_and_saves() {
     let shared = Arc::new(InMemoryBlobStorage::new());
     let (scope, pruning, _) = scope_with_a_prune_to_come(&shared).await;
     let (saving, storage, hold, held) = holding_index_reads(&shared);
@@ -4463,22 +5352,45 @@ async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryab
     hold.store(true, Ordering::SeqCst);
     let first = tokio::spawn({
         let (saving, scope, path) = (saving.clone(), scope.clone(), tree.path().to_path_buf());
-        async move { saving.save(&scope, &name("p-3"), &path, None).await }
+        async move {
+            saving
+                .save(
+                    &scope,
+                    &name("p-3"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let reached = eventually(|| held.load(Ordering::SeqCst) > 0).await;
 
-    let deleted = pruning.delete(&scope, &[name("p-2")]).await;
+    let deleted = pruning
+        .delete(
+            &scope,
+            &[name("p-2")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
     let pruned = ledger(&shared, &scope).await.last_prune.is_some();
     hold.store(false, Ordering::SeqCst);
     storage.open_gate();
     let first = tokio::time::timeout(LIMIT, first).await;
-    let again = saving.save(&scope, &name("p-3"), tree.path(), None).await;
+    let again = saving
+        .save(
+            &scope,
+            &name("p-3"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
-    assert!(
-        matches!(&first, Ok(Ok(Err(error))) if is_storage(error, true)),
-        "{first:?}"
-    );
-    assert!(again.is_ok(), "{again:?}");
+    assert!(matches!(&first, Ok(Ok(Ok(_)))), "{first:?}");
+    assert!(matches!(again, Err(SaveError::NameInUse)), "{again:?}");
     assert_eq!(
         (
             reached,
@@ -4492,167 +5404,33 @@ async fn a_save_whose_index_file_a_prune_deleted_after_the_listing_gives_retryab
 
 #[test]
 #[timeout("60s")]
-async fn a_save_dropped_during_the_delete_after_a_failed_publish_still_deletes_the_snapshot_file() {
-    // The publish write lands and loses its answer, so the publish deletes the file. The gate
-    // holds that delete, and the test drops the save there.
-    let storage =
-        ScriptedBlobStorage::new(
-            Arc::new(InMemoryBlobStorage::new()),
-            |op_label, _| match op_label {
-                "publish" => Script::LoseTheAnswer,
-                "retract" => Script::WaitForGate,
-                _ => Script::Pass,
-            },
-        );
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let scope = new_scope();
-    let tree = one_file_tree("dropped");
-    let saving = tokio::spawn({
-        let (store, scope, path) = (store.clone(), scope.clone(), tree.path().to_path_buf());
-        async move { store.save(&scope, &name("p-dropped"), &path, None).await }
-    });
-    let retracting = eventually(|| {
-        storage
-            .calls()
-            .iter()
-            .any(|(op_label, _)| *op_label == "retract")
-    })
-    .await;
-    let written = blobs(&*storage, &scope.0, "snapshots/").await.len();
-
-    saving.abort();
-    let dropped = saving.await;
-    storage.open_gate();
-    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
-
-    assert!(
-        dropped.as_ref().is_err_and(|error| error.is_cancelled()),
-        "{dropped:?}"
-    );
-    assert_eq!(
-        (
-            retracting,
-            written,
-            stopped,
-            blobs(&*storage, &scope.0, "snapshots/").await,
-            RusticSnapshotStore::with_policy(
-                storage.clone(),
-                key(),
-                policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-                Arc::new(SystemClock),
-            )
-            .stat(&scope, &name("p-dropped"))
-            .await
-            .ok(),
-        ),
-        (true, 1, true, Vec::<String>::new(), Some(None))
-    );
-}
-
-/// A snapshot file of a save that the backend kept and did not write.
-fn staged_snapshot() -> StagedSnapshot {
-    StagedSnapshot {
-        path: Arc::from(Path::new(&format!("snapshots/{}", "cd".repeat(32)))),
-        content: bytes::Bytes::from_static(b"snapshot"),
-    }
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_publish_that_is_counted_before_shut_down_and_polled_after_its_cancel_publishes_nothing()
-{
-    // The tracker counts the publish when the save makes it, before its first poll. `shut_down`
-    // cancels and then waits for the publish, and the publish is polled only after the cancel.
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let scope = new_scope();
-    let publishing = store.publish_staged(&scope, staged_snapshot());
-    let counted = store.work_in_flight();
-
-    let shutting_down = tokio::spawn({
-        let store = store.clone();
-        async move { store.shut_down().await }
-    });
-    let cancelled = eventually(|| store.root.is_cancelled()).await;
-    let waited = !shutting_down.is_finished();
-    let published = tokio::time::timeout(LIMIT, publishing).await;
-    let stopped = tokio::time::timeout(LIMIT, shutting_down).await;
-
-    assert!(
-        matches!(&published, Ok(Err(error)) if is_storage(error, false)),
-        "{published:?}"
-    );
-    assert!(matches!(stopped, Ok(Ok(()))), "{stopped:?}");
-    assert_eq!(
-        (
-            counted,
-            cancelled,
-            waited,
-            blobs(&*storage, &scope.0, "snapshots/").await
-        ),
-        (1, true, true, Vec::<String>::new())
-    );
-}
-
-#[test]
-#[timeout("60s")]
-async fn a_publish_that_starts_after_shut_down_publishes_nothing() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let store = store(
-        storage.clone(),
-        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
-    );
-    let scope = new_scope();
-
-    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
-    let published = store.publish_staged(&scope, staged_snapshot()).await;
-
-    assert!(
-        matches!(&published, Err(error) if is_storage(error, false)),
-        "{published:?}"
-    );
-    assert_eq!(
-        (
-            stopped,
-            blobs(&*storage, &scope.0, "snapshots/").await,
-            store.work_in_flight(),
-        ),
-        (true, Vec::<String>::new(), 0)
-    );
-}
-
-#[test]
-#[timeout("60s")]
-async fn delete_scope_and_copy_scope_after_shut_down_give_storage() {
+async fn a_delete_all_and_a_copy_after_shut_down_give_stopped() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
     let (scope, other) = (new_scope(), new_scope());
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store.shut_down().await;
 
-    let deleted = store.delete_all(&scope).await;
-    let copied = store.copy_all(&scope, &other).await;
+    let deleted = store
+        .delete_all(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await;
+    let copied = store
+        .copy_all(&scope, &other, &crate::filesystem_snapshot::Unlimited)
+        .await;
 
-    assert!(
-        deleted
-            .as_ref()
-            .is_err_and(|error| is_storage(error, false)),
-        "{deleted:?}"
-    );
-    assert!(
-        copied.as_ref().is_err_and(|error| is_storage(error, false)),
-        "{copied:?}"
-    );
+    assert!(deleted.as_ref().is_err_and(is_stopped), "{deleted:?}");
+    assert!(copied.as_ref().is_err_and(is_stopped), "{copied:?}");
 }
 
 #[test]
@@ -4683,7 +5461,18 @@ async fn shut_down_ends_running_operations_before_it_returns() {
         let store = store.clone();
         let scope = scope.clone();
         let path = tree.path().to_path_buf();
-        async move { store.save(&scope, &name("p-held"), &path, None).await }
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-held"),
+                    &path,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     reached.cancelled().await;
 
@@ -4693,13 +5482,10 @@ async fn shut_down_ends_running_operations_before_it_returns() {
     storage.open_gate();
 
     assert!(
-        matches!(&saved, Ok(Ok(Err(error))) if is_storage(error, true)),
+        matches!(&saved, Ok(Ok(Err(error))) if is_stopped(error)),
         "{saved:?}"
     );
-    assert!(
-        later.as_ref().is_err_and(|error| is_storage(error, false)),
-        "{later:?}"
-    );
+    assert!(later.as_ref().is_err_and(is_stopped), "{later:?}");
     assert_eq!((stopped, store.work_in_flight()), (true, 0));
 }
 
@@ -4745,7 +5531,14 @@ async fn a_dropped_operation_stops_its_blocking_work() {
         let scope = new_scope();
         let tree = fixture_tree();
         store
-            .save(&scope, &name("p-1"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-1"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
         hold.store(true, Ordering::SeqCst);
@@ -4761,7 +5554,14 @@ async fn a_dropped_operation_stops_its_blocking_work() {
                 drop_when(
                     &storage,
                     reached,
-                    store.restore(&scope, &name("p-1"), into.path()).map(|_| ()),
+                    store
+                        .restore(
+                            &scope,
+                            &name("p-1"),
+                            into.path(),
+                            &crate::filesystem_snapshot::Unlimited,
+                        )
+                        .map(|_| ()),
                 )
                 .await
             }
@@ -4773,12 +5573,27 @@ async fn a_dropped_operation_stops_its_blocking_work() {
                 )
                 .await
             }
-            Dropped::List => drop_when(&storage, reached, store.list(&scope).map(|_| ())).await,
+            Dropped::List => {
+                drop_when(
+                    &storage,
+                    reached,
+                    store
+                        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+                        .map(|_| ()),
+                )
+                .await
+            }
             Dropped::Delete => {
                 drop_when(
                     &storage,
                     reached,
-                    store.delete(&scope, &[name("p-1")]).map(|_| ()),
+                    store
+                        .delete(
+                            &scope,
+                            &[name("p-1")],
+                            &crate::filesystem_snapshot::Unlimited,
+                        )
+                        .map(|_| ()),
                 )
                 .await
             }
@@ -4810,8 +5625,8 @@ async fn snapshot_files(
 ) -> Vec<rustic_core::repofile::SnapshotFile> {
     let backend = backend_of(storage, scope, LONG_DEADLINE);
     tokio::task::spawn_blocking(move || {
-        let repository = open_existing(backend, &key()).unwrap().unwrap();
-        scope_snapshots(&repository).unwrap().readable
+        let repository = open_existing(backend.clone(), &key()).unwrap().unwrap();
+        scope_snapshots(&repository, &backend).unwrap().readable
     })
     .await
     .unwrap()
@@ -4859,7 +5674,14 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
     copy_flat_tree(tree.path(), copy.path());
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
@@ -4868,6 +5690,8 @@ async fn a_size_and_mtime_save_of_a_copied_tree_reads_no_unchanged_file() {
             &name("p-2"),
             copy.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -4891,7 +5715,14 @@ async fn a_full_save_reads_each_file() {
     let tree = three_file_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
@@ -4900,6 +5731,8 @@ async fn a_full_save_reads_each_file() {
             &name("p-2"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::Full)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -4920,11 +5753,25 @@ async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_e
     let tree = three_file_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
@@ -4933,6 +5780,8 @@ async fn the_parent_of_a_save_is_the_named_snapshot_also_when_a_newer_snapshot_e
             &name("p-3"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -4959,11 +5808,25 @@ async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_r
     let tree = three_file_tree();
 
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
@@ -4972,6 +5835,8 @@ async fn a_save_without_a_parent_or_with_a_parent_that_the_scope_does_not_hold_r
             &name("p-3"),
             tree.path(),
             Some((&name("p-missing"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -5006,7 +5871,14 @@ async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent
     let scope = new_scope();
     let tree = one_file_tree("parent");
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
@@ -5018,6 +5890,8 @@ async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent
             &name("p-2"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await;
     let publishes = storage.calls()[before..]
@@ -5026,10 +5900,7 @@ async fn a_save_whose_read_of_the_snapshot_files_fails_while_it_finds_the_parent
         .count();
     refuse.store(false, Ordering::SeqCst);
 
-    assert!(
-        saved.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{saved:?}"
-    );
+    assert!(saved.as_ref().is_err_and(is_failed), "{saved:?}");
     assert_eq!(
         (publishes, listed_names(&store, &scope).await),
         (0, vec!["p-1".to_string()])
@@ -5055,22 +5926,25 @@ async fn a_failed_read_of_a_snapshot_file_fails_stat_and_list_with_a_retryable_s
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     refuse.store(true, Ordering::SeqCst);
 
     let stat = store.stat(&scope, &name("p-kept")).await;
-    let list = store.list(&scope).await;
+    let list = store
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await;
 
-    assert!(
-        stat.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{stat:?}"
-    );
-    assert!(
-        list.as_ref().is_err_and(|error| is_storage(error, true)),
-        "{list:?}"
-    );
+    assert!(stat.as_ref().is_err_and(is_failed), "{stat:?}");
+    assert!(list.as_ref().is_err_and(is_failed), "{list:?}");
 }
 
 #[test]
@@ -5092,7 +5966,14 @@ async fn a_snapshot_file_that_is_gone_after_the_listing_is_left_out() {
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     inner
@@ -5124,11 +6005,25 @@ async fn a_delete_that_frees_nothing_writes_no_ledger() {
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
 
-    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-unknown")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         blobs(&*storage, &scope.0, "golem/").await,
@@ -5158,7 +6053,14 @@ async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pa
     let scope = new_scope();
     let tree = one_file_tree("kept");
     store
-        .save(&scope, &name("p-kept"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let unindexed = format!("data/ab/{}", "ab".repeat(32));
@@ -5174,7 +6076,14 @@ async fn a_due_prune_that_marks_a_pack_that_no_index_lists_records_the_marked_pa
         .unwrap();
     set_last_prune(&storage, &scope, golem_common::model::Timestamp::from(0)).await;
 
-    store.delete(&scope, &[name("p-unknown")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-unknown")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let after = ledger(&storage, &scope).await;
     let after_freed = freed(&storage, &scope).await;
 
@@ -5229,13 +6138,17 @@ async fn a_save_of_a_relative_directory_path_gives_source_and_writes_nothing() {
     let scope = new_scope();
 
     let saved = store
-        .save(&scope, &name("p-relative"), relative, None)
+        .save(
+            &scope,
+            &name("p-relative"),
+            relative,
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await;
 
-    assert!(
-        matches!(saved, Err(SnapshotStoreError::Source(_))),
-        "{saved:?}"
-    );
+    assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
     assert_eq!(blobs(&*storage, &scope.0, "").await, Vec::<String>::new());
 }
 
@@ -5252,13 +6165,17 @@ async fn a_save_of_a_regular_file_gives_source_and_writes_nothing() {
     let scope = new_scope();
 
     let saved = store
-        .save(&scope, &name("p-file"), &tree.path().join("file.txt"), None)
+        .save(
+            &scope,
+            &name("p-file"),
+            &tree.path().join("file.txt"),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await;
 
-    assert!(
-        matches!(saved, Err(SnapshotStoreError::Source(_))),
-        "{saved:?}"
-    );
+    assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
     assert_eq!(blobs(&*storage, &scope.0, "").await, Vec::<String>::new());
 }
 
@@ -5273,7 +6190,14 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-deleted"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let added = snapshot_files(storage.clone(), &scope)
@@ -5283,7 +6207,14 @@ async fn the_ledger_counts_the_packed_bytes_that_the_deleted_snapshot_added() {
         .map(|summary| summary.data_added_packed)
         .sum::<u64>();
 
-    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     assert_eq!((added > 1, freed(&storage, &scope).await), (true, added));
 }
@@ -5303,13 +6234,22 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
     let scope = new_scope();
     let tree = one_file_tree("never saved");
 
-    let saved = store.save(&scope, &name("p-1"), tree.path(), None).await;
+    let saved = store
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(
         matches!(
             &saved,
-            Err(SnapshotStoreError::Storage { retryable: true, source })
-                if format!("{source:#}").contains("the storage refused the call")
+            Err(SaveError::Failed(failed))
+                if format!("{:#}", failed.cause()).contains("the storage refused the call")
         ),
         "{saved:?}"
     );
@@ -5317,9 +6257,9 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
 
 #[test]
 #[timeout("60s")]
-async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_retryable() {
+async fn a_prune_that_fails_without_a_storage_failure_leaves_the_delete_its_success() {
     // Packs of zeros with the sizes of the index give the prune a decryption error, not a failed
-    // storage call. The forget before the prune has succeeded, so the delete gives `Storage`.
+    // storage call. The forget before the prune has succeeded, so the delete gives success.
     let storage = Arc::new(InMemoryBlobStorage::new());
     let store = store(
         storage.clone(),
@@ -5328,11 +6268,25 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let packs = storage
@@ -5354,14 +6308,15 @@ async fn a_prune_that_fails_without_a_storage_failure_gives_storage_that_is_not_
     .collect::<anyhow::Result<Vec<()>>>()
     .unwrap();
 
-    let deleted = store.delete(&scope, &[name("p-deleted")]).await;
+    let deleted = store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
-    assert!(
-        deleted
-            .as_ref()
-            .is_err_and(|error| is_storage(error, false)),
-        "{deleted:?}"
-    );
+    assert!(matches!(&deleted, Ok(())), "{deleted:?}");
 }
 
 /// The operation label, the path, and the name and the nice value of the calling thread of each
@@ -5432,7 +6387,14 @@ async fn the_forget_of_a_delete_runs_its_storage_calls_in_a_rayon_pool_of_its_ow
     save_each(&store, &scope, &["p-1"]).await;
     taken_calls(&calls);
 
-    store.delete(&scope, &[name("p-1")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-1")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let forgets = taken_threads(&calls, "delete", "snapshots/");
 
     assert_eq!(
@@ -5459,7 +6421,12 @@ async fn the_index_load_of_a_restore_runs_its_storage_calls_in_a_rayon_pool_of_i
 
     let into = Scratch::new();
     store
-        .restore(&scope, &name("p-1"), into.path())
+        .restore(
+            &scope,
+            &name("p-1"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let index_reads = taken_threads(&calls, "read", "index/");
@@ -5503,7 +6470,14 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     std::fs::write(tree.path().join("added.txt"), b"added").unwrap();
@@ -5515,6 +6489,8 @@ async fn the_storage_calls_of_a_save_run_at_nice_19() {
             &name("p-2"),
             tree.path(),
             Some((&name("p-1"), ChangeDetection::SizeMtime)),
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
         )
         .await
         .unwrap();
@@ -5541,16 +6517,37 @@ async fn the_storage_calls_of_a_prune_run_at_nice_19() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     taken_calls(&calls);
 
-    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let prune = taken_calls(&calls)
         .into_iter()
         .skip_while(|(op_label, _, _)| op_label != "read_ledger")
@@ -5596,7 +6593,14 @@ async fn the_storage_calls_of_a_restore_run_at_the_nice_value_of_the_process() {
     let scope = new_scope();
     let tree = fixture_tree();
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     std::mem::take(&mut *calls.lock().unwrap());
@@ -5636,14 +6640,35 @@ async fn after_saves_and_prunes_the_pools_keep_the_nice_value_of_the_process() {
     let scope = new_scope();
     let (deleted_tree, kept_tree) = (one_file_tree("deleted content"), fixture_tree());
     store
-        .save(&scope, &name("p-deleted"), deleted_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-deleted"),
+            deleted_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
-    store.delete(&scope, &[name("p-deleted")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-deleted")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
 
     let barrier = Arc::new(std::sync::Barrier::new(TASKS));
     let blocking = futures::future::join_all((0..TASKS).map(|_| {
@@ -5693,16 +6718,37 @@ async fn the_storage_calls_of_the_rayon_workers_of_a_prune_that_repacks_run_at_n
     let kept = Scratch::new();
     write_tree(kept.path(), &[("kept.txt", file(b"kept content"))]);
     store
-        .save(&scope, &name("p-both"), both.path(), None)
+        .save(
+            &scope,
+            &name("p-both"),
+            both.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-kept"), kept.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     std::mem::take(&mut *calls.lock().unwrap());
 
-    store.delete(&scope, &[name("p-both")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-both")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let recorded = std::mem::take(&mut *calls.lock().unwrap());
     let from_workers = recorded
         .iter()
@@ -5756,11 +6802,25 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
     let scope = new_scope();
     let (first, second) = (one_file_tree("first"), fixture_tree());
     store
-        .save(&scope, &name("p-1"), first.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            first.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     store
-        .save(&scope, &name("p-2"), second.path(), None)
+        .save(
+            &scope,
+            &name("p-2"),
+            second.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
 
@@ -5772,7 +6832,11 @@ async fn the_global_rayon_pool_keeps_the_nice_value_of_the_process_after_saves_w
     );
 }
 
+mod bound;
+mod drain;
+mod mapping;
 mod race;
+mod runs;
 mod sweep;
 
 /// The largest number of steps of one turn. A delete takes at most 21 steps of the protocol, and
@@ -5880,7 +6944,8 @@ async fn two_deletes_make_at_most_one_prune_when_one_is_dropped_as_its_prune_sta
 #[timeout("60s")]
 async fn two_deletes_make_at_most_one_prune_in_random_orders_with_a_failed_call() {
     // The test generates the order of the steps, a call that fails, and a call that gets no answer
-    // and reaches the storage later, and shrinks a failing case to the shortest order. The seed is fixed, and no file keeps a failing case.
+    // and reaches the storage later, and shrinks a failing case to the shortest order. The seed is
+    // fixed, and no file keeps a failing case.
     use proptest::prelude::{Strategy, prop};
     use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
     let (shared, prepared) = prepared_scope().await;
@@ -5964,7 +7029,14 @@ async fn a_restore_builds_its_pool_with_the_restore_reader_threads() {
     let scope = new_scope();
     let tree = one_file_tree("restored");
     store
-        .save(&scope, &name("p-1"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-1"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
 
@@ -6012,24 +7084,52 @@ async fn a_delete_dropped_in_its_prune_while_a_save_of_the_same_agent_runs_keeps
     let (kept_tree, new_tree) = (one_file_tree("kept"), fixture_tree());
     save_each(&store, &scope, &["p-old"]).await;
     store
-        .save(&scope, &name("p-kept"), kept_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-kept"),
+            kept_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     hold_next_listing.store(true, Ordering::SeqCst);
 
     let deleting = tokio::spawn({
         let (store, scope) = (store.clone(), scope.clone());
-        async move { store.delete(&scope, &[name("p-old")]).await }
+        async move {
+            store
+                .delete(
+                    &scope,
+                    &[name("p-old")],
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
     });
     let held = eventually(|| prunes(&storage.calls()) >= 1).await;
     deleting.abort();
     let dropped = deleting.await;
     let saved = store
-        .save(&scope, &name("p-new"), new_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-new"),
+            new_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await;
     storage.open_gate();
     let ended = eventually(|| store.work_in_flight() == 0).await;
-    let deleted_again = store.delete(&scope, &[name("p-none")]).await;
+    let deleted_again = store
+        .delete(
+            &scope,
+            &[name("p-none")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert!(
         dropped.as_ref().is_err_and(|error| error.is_cancelled()),

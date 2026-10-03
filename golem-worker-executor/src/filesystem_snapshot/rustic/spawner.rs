@@ -15,23 +15,33 @@
 //! The runtime and the tracker of the work that the store runs as a task, so that the work also
 //! ends when its caller stops waiting.
 
+use crate::filesystem_snapshot::agent_work::OperationWork;
 use tokio::runtime::Handle;
 use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 
 /// Runs work of the store as a task on a runtime that the store gave, and the tracker of the store
-/// counts the task. The cleanup of a release or a drop of a claim, and the delete of a dropped
-/// publish, run through it, so no drop looks up a runtime. When the runtime is gone, the task does
-/// not run.
+/// and the work of the incarnation of the operation count the task. The cleanup of a release or a
+/// drop of a claim runs through it, so no drop looks up a runtime. When the runtime is gone, the
+/// task does not run.
 #[derive(Clone, Debug)]
 pub(super) struct Spawner {
     pub(super) tracker: TaskTracker,
     pub(super) runtime: Handle,
+    /// The work of the incarnation of the operation that made the spawner.
+    pub(super) operation: OperationWork,
 }
 
 impl Spawner {
-    /// Runs the work as a task that the tracker counts.
+    /// Runs the work as a task that the tracker and the work of the incarnation count.
     pub(super) fn spawn(&self, work: impl Future<Output = ()> + Send + 'static) -> JoinHandle<()> {
-        self.tracker.spawn_on(work, &self.runtime)
+        let operation = self.operation.clone();
+        self.tracker.spawn_on(
+            async move {
+                let _operation = operation;
+                work.await
+            },
+            &self.runtime,
+        )
     }
 }

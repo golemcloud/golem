@@ -1527,15 +1527,11 @@ impl UpdateFields {
                 description,
                 ..
             } => {
-                let kind = match description {
-                    UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
-                    UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
-                };
                 self.pending_updates.push_back(PendingUpdateRef {
                     timestamp: *timestamp,
                     oplog_index: oplog_idx,
                     target_revision: *description.target_revision(),
-                    kind,
+                    kind: PendingUpdateKind::of(description),
                 });
             }
             OplogEntry::FailedUpdate {
@@ -1556,20 +1552,28 @@ impl UpdateFields {
                 new_component_size,
                 ..
             } => {
+                let applied_update = self.pending_updates.pop_front();
                 self.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     oplog_index: oplog_idx,
+                    filesystem_snapshot: applied_update.as_ref().and_then(|update| {
+                        match &update.kind {
+                            PendingUpdateKind::SnapshotBased {
+                                filesystem_snapshot,
+                            } => filesystem_snapshot.clone(),
+                            PendingUpdateKind::Automatic => None,
+                        }
+                    }),
                 });
                 self.component_revision = *target_revision;
                 self.component_size = *new_component_size;
 
-                let applied_update = self.pending_updates.pop_front();
                 self.last_automatic_snapshot = None;
                 self.previous_usable_automatic_snapshot = None;
 
                 if let Some(PendingUpdateRef {
-                    kind: PendingUpdateKind::SnapshotBased,
+                    kind: PendingUpdateKind::SnapshotBased { .. },
                     oplog_index: applied_update_oplog_index,
                     ..
                 }) = applied_update

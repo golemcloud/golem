@@ -3066,7 +3066,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
-        let agent_snapshots = AgentSnapshots::agent(&self.owned_agent_id);
+        let agent_snapshots = AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.parent.initial_worker_metadata.fingerprint,
+        );
+        let mode = self.parent.agent_mode();
         let (snapshot, filesystem_snapshot, retention) = match update_snapshot(
             &mut UpdateHost {
                 invocation: self,
@@ -3074,6 +3078,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             },
             &snapshots,
             &agent_snapshots,
+            mode,
         )
         .await
         {
@@ -3120,8 +3125,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     Some(Err(_)) => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
                     Some(Ok(_)) => {
+                        // The status holds the new pending update by now, so its name is kept.
                         if let Some(retention) = retention {
-                            retention.delete_older_snapshots();
+                            retention.delete_older_snapshots(
+                                &crate::worker::snapshot_selection::update_names_in_use(
+                                    &self.parent.last_known_status.load(),
+                                ),
+                            );
                         }
                         CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                     }
@@ -3391,8 +3401,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return CommandOutcome::Continue;
         }
         let snapshots = self.parent.agent_filesystem_snapshots();
-        let agent_snapshots = AgentSnapshots::agent(&self.owned_agent_id);
-        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots).await {
+        let agent_snapshots = AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.parent.initial_worker_metadata.fingerprint,
+        );
+        let mode = self.parent.agent_mode();
+        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots, mode).await {
             PeriodicResult::Continue => CommandOutcome::Continue,
             PeriodicResult::Guest(outcome) => outcome,
             PeriodicResult::NotWritten(failure) => periodic_failure_outcome(&failure),
@@ -3798,8 +3812,8 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
         self.invocation.parent.retired_for_lost_shard()
     }
 
-    async fn kept_baseline(&self) -> Option<FilesystemSnapshotName> {
-        self.invocation.parent.manual_update_baseline_name().await
+    fn lost_shard_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.invocation.parent.lost_shard_signal()
     }
 }
 

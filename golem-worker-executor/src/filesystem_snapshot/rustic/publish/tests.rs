@@ -13,26 +13,24 @@
 // limitations under the License.
 
 use super::super::files::SnapshotFiles;
-use super::super::spawner::Spawner;
+use super::super::runs::{RunEnd, now};
 use super::super::tests::files_of;
-use super::super::tests::holding::reached_deadline;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
-use super::{SnapshotStage, StagedSnapshot, publish, retract};
+use super::{
+    MIN_PUBLISH_TRY, Published, SnapshotStage, StagedSnapshot, backup_end, index_read_bound,
+    publish, publish_try,
+};
 use bytes::Bytes;
-use futures::FutureExt;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use test_r::{test, timeout};
-use tokio_util::task::TaskTracker;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-
-/// The longest time that a test waits for the tasks of a tracker.
-const LIMIT: Duration = Duration::from_secs(10);
 
 const SNAPSHOT_PATH: &str =
     "snapshots/cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
@@ -44,18 +42,17 @@ fn staged() -> StagedSnapshot {
     }
 }
 
-/// Gives the snapshot files of a new namespace over a scripted storage. Its script for the publish
-/// is `publish`, and its script for the delete is `retract`. It also gives the snapshot files of
-/// the same namespace over the in-memory storage below it.
+/// Gives the snapshot files of a new namespace over a scripted storage whose `n`-th publish try
+/// follows `script(n)`, counted from 1, with the tries of a blob call of the store. It also gives
+/// the snapshot files of the same namespace over the in-memory storage below it.
 fn files(
-    publish: Script,
-    retract: Script,
+    script: impl Fn(usize) -> Script + Send + Sync + 'static,
     deadline: Duration,
 ) -> (SnapshotFiles, Arc<ScriptedBlobStorage>, SnapshotFiles) {
     let inner = Arc::new(InMemoryBlobStorage::new());
+    let tries = std::sync::atomic::AtomicUsize::new(0);
     let storage = ScriptedBlobStorage::new(inner.clone(), move |op_label, _| match op_label {
-        "publish" => publish,
-        "retract" => retract,
+        "publish" => script(tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1),
         _ => Script::Pass,
     });
     let namespace = BlobStorageNamespace::InitialAgentFiles {
@@ -66,18 +63,11 @@ fn files(
             storage,
             namespace.clone(),
             deadline,
-            tokio_util::sync::CancellationToken::new(),
+            CancellationToken::new(),
         )
+        .with_tries(super::super::files::IN_CALL_TRIES)
     };
     (over(storage.clone()), storage, over(inner))
-}
-
-/// Gives a spawner on the runtime of the test, counted by the tracker.
-fn spawner(tracker: &TaskTracker) -> Spawner {
-    Spawner {
-        tracker: tracker.clone(),
-        runtime: tokio::runtime::Handle::current(),
-    }
 }
 
 /// Gives the content of the snapshot file, when the storage below the script holds it.
@@ -85,132 +75,196 @@ async fn stored(inner: &SnapshotFiles) -> Option<Vec<u8>> {
     inner.get("test", Path::new(SNAPSHOT_PATH)).await.unwrap()
 }
 
+/// Gives what a publish gave without its failure.
+fn shape(published: &Published) -> (Option<RunEnd>, bool) {
+    match published {
+        Published::Written => (None, false),
+        Published::NotWritten { end, late, .. } => (Some(*end), late.is_some()),
+    }
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_publish_writes_the_staged_file() {
-    let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
+    let (files, _, inner) = files(|_| Script::Pass, Duration::from_secs(2));
 
-    let published = publish(&files, &staged(), &spawner(&TaskTracker::new())).await;
+    let published = publish(&files, &staged(), None, &CancellationToken::new()).await;
 
     assert_eq!(
-        (published.is_ok(), stored(&inner).await),
-        (true, Some(b"snapshot".to_vec()))
+        (shape(&published), stored(&inner).await),
+        ((None, false), Some(b"snapshot".to_vec()))
     );
 }
 
 #[test]
 #[timeout("60s")]
 async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
-    let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
-    let tracker = TaskTracker::new();
+    let (files, _, inner) = files(|_| Script::Pass, Duration::from_secs(2));
 
-    let first = publish(&files, &staged(), &spawner(&tracker)).await;
-    let second = publish(&files, &staged(), &spawner(&tracker)).await;
+    let first = publish(&files, &staged(), None, &CancellationToken::new()).await;
+    let second = publish(&files, &staged(), None, &CancellationToken::new()).await;
 
     assert_eq!(
-        (first.is_ok(), second.is_ok(), stored(&inner).await),
-        (true, true, Some(b"snapshot".to_vec()))
+        (shape(&first), shape(&second), stored(&inner).await),
+        ((None, false), (None, false), Some(b"snapshot".to_vec()))
     );
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_publish_whose_answer_is_lost_deletes_the_file_and_gives_the_error() {
-    let (files, storage, inner) =
-        files(Script::LoseTheAnswer, Script::Pass, Duration::from_secs(2));
+async fn a_try_whose_answer_was_lost_is_followed_by_a_try_that_counts_the_landed_file_as_written() {
+    let (files, storage, inner) = files(
+        |tried| match tried {
+            1 => Script::LoseTheAnswer,
+            _ => Script::AnswerAlreadyExists,
+        },
+        Duration::from_secs(2),
+    );
 
-    let published = publish(&files, &staged(), &spawner(&TaskTracker::new())).await;
+    let published = publish(&files, &staged(), None, &CancellationToken::new()).await;
 
     assert_eq!(
         (
-            published.map_err(|error| error.to_string()),
+            shape(&published),
             stored(&inner).await,
-            storage.calls(),
+            storage.calls().len()
+        ),
+        ((None, false), Some(b"snapshot".to_vec()), 2)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_publish_whose_tries_all_lose_their_answer_keeps_the_file_and_gives_a_late_window() {
+    let (files, storage, inner) = files(|_| Script::LoseTheAnswer, Duration::from_secs(2));
+    let started = now();
+
+    let published = publish(&files, &staged(), None, &CancellationToken::new()).await;
+    let late = match &published {
+        Published::NotWritten { late, .. } => *late,
+        Published::Written => None,
+    };
+
+    assert_eq!(
+        (
+            shape(&published),
+            stored(&inner).await,
+            storage.calls().len(),
+            late.is_some_and(|late| late >= started + Duration::from_secs(2)),
         ),
         (
-            Err("the answer of the call was lost".to_string()),
-            None,
-            vec![
-                ("publish", SNAPSHOT_PATH.to_string()),
-                ("retract", SNAPSHOT_PATH.to_string()),
-            ]
+            (Some(RunEnd::CallFailed), true),
+            Some(b"snapshot".to_vec()),
+            3,
+            true
         )
     );
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_publish_that_reaches_the_deadline_deletes_the_file_that_the_storage_wrote() {
-    let (files, _, inner) = files(
-        Script::NeverAnswer,
-        Script::Pass,
-        Duration::from_millis(100),
-    );
+async fn a_publish_whose_cancel_fired_sends_no_try() {
+    let (files, storage, inner) = files(|_| Script::Pass, Duration::from_secs(2));
+    let cancel = CancellationToken::new();
+    cancel.cancel();
 
-    let published = publish(&files, &staged(), &spawner(&TaskTracker::new())).await;
+    let published = publish(&files, &staged(), None, &cancel).await;
 
     assert_eq!(
         (
-            published
-                .as_ref()
-                .is_err_and(|error| reached_deadline(error.as_ref())),
-            stored(&inner).await
+            shape(&published),
+            stored(&inner).await,
+            storage.calls().len()
         ),
-        (true, None)
+        ((Some(RunEnd::Cancelled), false), None, 0)
     );
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_publish_that_the_caller_drops_deletes_the_file_in_a_task_of_the_tracker() {
-    // The delete waits for the gate, so the test reads the file that the dropped write left
-    // before the task of the tracker deletes it.
-    let (files, storage, inner) = files(
-        Script::NeverAnswer,
-        Script::WaitForGate,
-        Duration::from_secs(60),
-    );
-    let tracker = TaskTracker::new();
+async fn a_publish_with_no_time_before_the_bound_sends_no_try() {
+    let (files, storage, inner) = files(|_| Script::Pass, Duration::from_secs(2));
+    let bound = now() + Duration::from_secs(2);
 
-    let dropped = publish(&files, &staged(), &spawner(&tracker)).now_or_never();
-    let written_before_the_drop = stored(&inner).await;
-    storage.open_gate();
-    tracker.close();
-    let waited = tokio::time::timeout(LIMIT, tracker.wait()).await;
+    let published = publish(&files, &staged(), Some(bound), &CancellationToken::new()).await;
 
     assert_eq!(
         (
-            dropped.is_none(),
-            written_before_the_drop,
-            waited.is_ok(),
-            stored(&inner).await
+            shape(&published),
+            stored(&inner).await,
+            storage.calls().len()
         ),
-        (true, Some(b"snapshot".to_vec()), true, None)
+        ((Some(RunEnd::BoundPassed), false), None, 0)
     );
 }
 
 #[test]
-#[timeout("60s")]
-async fn a_publish_that_returns_keeps_the_file_when_the_tasks_of_the_tracker_end() {
-    let (files, _, inner) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
-    let tracker = TaskTracker::new();
-
-    let published = publish(&files, &staged(), &spawner(&tracker)).await;
-    tracker.close();
-    let waited = tokio::time::timeout(LIMIT, tracker.wait()).await;
+fn the_earliest_index_read_is_the_grace_less_two_deadlines_and_one_period_after_t0() {
+    let t0 = Instant::now();
+    let minute = Duration::from_secs(60);
+    let grace = Duration::from_secs(15 * 60);
+    let period = Duration::from_secs(210);
+    let bound = index_read_bound(t0, grace, minute, period);
 
     assert_eq!(
-        (published.is_ok(), waited.is_ok(), stored(&inner).await),
-        (true, true, Some(b"snapshot".to_vec()))
+        (
+            bound.duration_since(t0),
+            backup_end(bound, minute).duration_since(t0),
+            index_read_bound(t0, Duration::from_secs(60), minute, period),
+        ),
+        (
+            Duration::from_secs(9 * 60 + 30),
+            Duration::from_secs(7 * 60 + 30),
+            t0,
+        )
     );
 }
 
 #[test]
-#[timeout("60s")]
-async fn a_retract_of_a_path_without_a_file_succeeds() {
-    let (files, _, _) = files(Script::Pass, Script::Pass, Duration::from_secs(2));
+fn a_publish_try_is_cut_at_the_least_of_the_window_and_the_bound_and_needs_at_least_one_second() {
+    let now = Instant::now();
+    let minute = Duration::from_secs(60);
+    let bound = now + Duration::from_secs(150);
 
-    assert!(retract(&files, Path::new(SNAPSHOT_PATH)).await.is_ok());
+    assert_eq!(
+        [
+            publish_try(now, Duration::ZERO, Some(bound), minute),
+            publish_try(now, Duration::from_secs(10), Some(bound), minute),
+            publish_try(
+                now,
+                Duration::ZERO,
+                Some(now + Duration::from_secs(70)),
+                minute
+            ),
+            publish_try(
+                now,
+                Duration::ZERO,
+                Some(now + minute + MIN_PUBLISH_TRY),
+                minute
+            ),
+            publish_try(
+                now,
+                Duration::ZERO,
+                Some(now + minute + MIN_PUBLISH_TRY - Duration::from_millis(1)),
+                minute
+            ),
+            publish_try(now, minute - MIN_PUBLISH_TRY, Some(bound), minute),
+            publish_try(now, minute - Duration::from_millis(1), Some(bound), minute),
+            publish_try(now, Duration::from_secs(59), None, minute),
+            publish_try(now, minute, None, minute),
+        ],
+        [
+            Some(minute),
+            Some(Duration::from_secs(50)),
+            Some(Duration::from_secs(10)),
+            Some(MIN_PUBLISH_TRY),
+            None,
+            Some(MIN_PUBLISH_TRY),
+            None,
+            Some(Duration::from_secs(1)),
+            None,
+        ]
+    );
 }
 
 #[test]
@@ -229,5 +283,31 @@ fn a_stage_keeps_one_file_until_it_is_taken() {
     assert_eq!(
         (first, second, taken, taken_again),
         (Ok(()), Err(other), Some(staged()), None)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_stop_of_the_tries_ends_the_wait_between_two_tries_of_a_publish() {
+    // The first try is refused, and the tries stop 20 ms into the wait of 250 ms before the next
+    // try. The publish ends then, with no second try.
+    let (files, storage, _) = files(|_| Script::Refuse, Duration::from_secs(2));
+    let retry_stop = CancellationToken::new();
+    let files = files.with_retry_stop(retry_stop.clone());
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        retry_stop.cancel();
+    });
+    let started = now();
+
+    let published = publish(&files, &staged(), None, &CancellationToken::new()).await;
+
+    assert_eq!(
+        (
+            shape(&published),
+            storage.calls().len(),
+            now().duration_since(started) < Duration::from_millis(200)
+        ),
+        ((Some(RunEnd::Cancelled), true), 1, true)
     );
 }

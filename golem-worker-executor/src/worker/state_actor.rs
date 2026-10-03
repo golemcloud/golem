@@ -1581,6 +1581,66 @@ mod tests {
         }
     }
 
+    /// A confirmation gives `Confirmed` only from a status that folded the new confirmation
+    /// record. When no other entry follows, the names that a start can select from that status
+    /// are the own name of the job and the name of the previous usable record.
+    #[test]
+    fn a_confirmed_answer_selects_the_own_name_and_the_previous_usable_name_of_the_folded_status() {
+        use super::{ConfirmOutcome, confirmation_after_append};
+        use crate::worker::snapshot_selection::selectable_names;
+        use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogPayload};
+        let (previous, own) = (
+            FilesystemSnapshotName::periodic(),
+            FilesystemSnapshotName::periodic(),
+        );
+        let snapshot = |name: &FilesystemSnapshotName| OplogEntry::Snapshot {
+            timestamp: Timestamp::now_utc(),
+            data: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 0,
+            filesystem_snapshot: Some(name.clone()),
+        };
+        let fold = |status: AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
+            crate::worker::status::update_status_with_new_entries(
+                golem_common::model::agent::AgentMode::Durable,
+                status,
+                entries
+                    .into_iter()
+                    .map(|(index, entry)| (OplogIndex::from_u64(index), entry))
+                    .collect(),
+                &golem_common::model::RetryConfig::default(),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let before = fold(
+            AgentStatusRecord {
+                oplog_idx: OplogIndex::from_u64(1),
+                ..AgentStatusRecord::default()
+            },
+            vec![
+                (2, snapshot(&previous)),
+                (3, OplogEntry::snapshot_confirmed(previous.clone())),
+                (4, snapshot(&own)),
+            ],
+        );
+        let after = fold(
+            before.clone(),
+            vec![(5, OplogEntry::snapshot_confirmed(own.clone()))],
+        );
+
+        assert_eq!(
+            confirmation_after_append(false, &before, &own),
+            ConfirmOutcome::Deferred
+        );
+        assert_eq!(
+            confirmation_after_append(false, &after, &own),
+            ConfirmOutcome::Confirmed
+        );
+        assert_eq!(selectable_names(&after), Box::from([own, previous]));
+    }
+
     #[test]
     fn a_confirmation_job_goes_on_to_the_admission_only_for_the_unconfirmed_candidate() {
         use super::{BeforeAppend, ConfirmOutcome, confirmation_before_append};

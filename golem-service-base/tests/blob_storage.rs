@@ -20,10 +20,10 @@ use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
-use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::widen_infallible;
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::db::sqlite::SqlitePool;
@@ -122,11 +122,6 @@ impl GetBlobStorage for FsTest {
         TestStorage::new(Arc::new(
             fs::FileSystemBlobStorage::new(&path).await.unwrap(),
         ))
-    }
-
-    /// The filesystem backend gives the error of the filesystem for a source with no blob.
-    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
-        false
     }
 }
 
@@ -313,15 +308,17 @@ fn filesystem_snapshots() -> BlobStorageNamespace {
         "4c8c5ff4-2a42-4e81-ac48-e63005f609fd",
         "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11",
         r#"counter("a/../b")"#,
+        "5f1d6a2b-0c3e-4a7b-9d1f-6e2a3b4c5d6e",
     )
 }
 
-/// The filesystem snapshots namespace of the agent `agent` of the component `component` in the
-/// environment `environment`.
+/// The filesystem snapshots namespace of the incarnation `fingerprint` of the agent `agent` of the
+/// component `component` in the environment `environment`.
 fn filesystem_snapshots_of(
     environment: &str,
     component: &str,
     agent: &str,
+    fingerprint: &str,
 ) -> BlobStorageNamespace {
     BlobStorageNamespace::FilesystemSnapshots {
         environment_id: EnvironmentId(Uuid::parse_str(environment).unwrap()),
@@ -329,6 +326,7 @@ fn filesystem_snapshots_of(
             component_id: ComponentId(Uuid::parse_str(component).unwrap()),
             agent_id: agent.to_string(),
         },
+        fingerprint: AgentFingerprint(Uuid::parse_str(fingerprint).unwrap()),
     }
 }
 
@@ -2378,12 +2376,15 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
         BlobStorageNamespace::Components { .. } => {
             BlobStorageNamespace::Components { environment_id }
         }
-        BlobStorageNamespace::FilesystemSnapshots { agent_id, .. } => {
-            BlobStorageNamespace::FilesystemSnapshots {
-                environment_id,
-                agent_id,
-            }
-        }
+        BlobStorageNamespace::FilesystemSnapshots {
+            agent_id,
+            fingerprint,
+            ..
+        } => BlobStorageNamespace::FilesystemSnapshots {
+            environment_id,
+            agent_id,
+            fingerprint,
+        },
     }
 }
 
@@ -4092,16 +4093,16 @@ async fn fs_put_raw_if_absent_gives_the_error_of_a_name_that_the_filesystem_refu
 
 #[test]
 #[tracing::instrument]
-async fn the_filesystem_snapshots_namespace_gives_each_agent_its_own_location(
+async fn the_filesystem_snapshots_namespace_gives_each_agent_incarnation_its_own_location(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
 ) {
     // Each namespace holds a blob at the same path with its own bytes. The agents differ in their
-    // name, their environment or their component. The last three namespaces are other kinds of
-    // namespace of the same environment. One agent name holds a `..` segment, which the rules of a
-    // blob name refuse. So a location of that agent must not hold the name. The two oplog payload
-    // namespaces are of that agent name in two components.
+    // name, their environment, their component or their incarnation. The last three namespaces are
+    // other kinds of namespace of the same environment. One agent name holds a `..` segment, which
+    // the rules of a blob name refuse. So a location of that agent must not hold the name. The two
+    // oplog payload namespaces are of that agent name in two components.
     let storage = test.get_blob_storage().await;
-    let label = "the_filesystem_snapshots_namespace_gives_each_agent_its_own_location";
+    let label = "the_filesystem_snapshots_namespace_gives_each_agent_incarnation_its_own_location";
     let environment = "0a8cd1b1-5c35-4f0e-9c67-2bb4c0f0f3a1";
     let other_environment = "1b9de2c2-6d46-4a1f-8d78-3cc5d101a4b2";
     let component = "2caef3d3-7e57-4b2a-9e89-4dd6e212b5c3";
@@ -4116,11 +4117,14 @@ async fn the_filesystem_snapshots_namespace_gives_each_agent_its_own_location(
         },
         agent_mode: AgentMode::Durable,
     };
+    let fingerprint = "4e0a15f5-9a79-4d4c-8a0b-6ff8a434d7e5";
+    let other_fingerprint = "5f1b26a6-ab8a-4e5d-9b1c-70a9b545e8f6";
     let namespaces = [
-        filesystem_snapshots_of(environment, component, agent),
-        filesystem_snapshots_of(environment, component, dot_segment_agent),
-        filesystem_snapshots_of(other_environment, component, agent),
-        filesystem_snapshots_of(environment, other_component, agent),
+        filesystem_snapshots_of(environment, component, agent, fingerprint),
+        filesystem_snapshots_of(environment, component, dot_segment_agent, fingerprint),
+        filesystem_snapshots_of(other_environment, component, agent, fingerprint),
+        filesystem_snapshots_of(environment, other_component, agent, fingerprint),
+        filesystem_snapshots_of(environment, component, agent, other_fingerprint),
         oplog_payload_of(component),
         oplog_payload_of(other_component),
         BlobStorageNamespace::CustomStorage {
@@ -4188,4 +4192,347 @@ async fn the_filesystem_snapshots_namespace_gives_each_agent_its_own_location(
             .chain((1..namespaces.len()).map(own_blob))
             .collect::<Vec<_>>()
     );
+}
+
+/// The namespace of another incarnation of the agent of [`filesystem_snapshots`], whose location
+/// is in the same bucket under another prefix.
+fn other_incarnation() -> BlobStorageNamespace {
+    filesystem_snapshots_of(
+        "4c8c5ff4-2a42-4e81-ac48-e63005f609fd",
+        "7e0e4c9a-3c34-4d52-8d6f-0d2f6b6d3a11",
+        r#"counter("a/../b")"#,
+        "6a2e7b3c-1d4f-4b8c-ae20-7f3b4c5d6e7f",
+    )
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_writes_the_blob_into_another_namespace_and_keeps_the_source(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_writes_the_blob_into_another_namespace_and_keeps_the_source";
+    let (source, same_bucket, other_bucket) = (
+        filesystem_snapshots(),
+        other_incarnation(),
+        custom_storage(),
+    );
+    let blobs = [("data/ab/pack", "payload"), ("empty", "")];
+    futures::stream::iter(blobs)
+        .then(|(path, content)| {
+            let (storage, source) = (&storage, &source);
+            async move {
+                storage
+                    .put_raw(
+                        label,
+                        "put-raw",
+                        source.clone(),
+                        Path::new(path),
+                        content.as_bytes(),
+                    )
+                    .await
+            }
+        })
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+
+    let copied = futures::stream::iter([
+        (same_bucket.clone(), "data/ab/pack", "data/ab/pack"),
+        (same_bucket.clone(), "empty", "empty"),
+        (other_bucket.clone(), "data/ab/pack", "elsewhere/pack"),
+    ])
+    .then(|(target, from, to)| {
+        let (storage, source) = (&storage, &source);
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    source.clone(),
+                    Path::new(from),
+                    target.clone(),
+                    Path::new(to),
+                )
+                .await?;
+            storage
+                .get_raw(label, "get-raw", target, Path::new(to))
+                .await
+        }
+    })
+    .try_collect::<Vec<_>>()
+    .await
+    .unwrap();
+    let kept = storage
+        .get_raw(label, "get-raw", source, Path::new("data/ab/pack"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (copied, kept),
+        (
+            vec![
+                Some(b"payload".to_vec()),
+                Some(Vec::new()),
+                Some(b"payload".to_vec())
+            ],
+            Some(b"payload".to_vec())
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_from_a_missing_source_gives_blob_missing_error_and_writes_nothing(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_from_a_missing_source_gives_blob_missing_error_and_writes_nothing";
+
+    let copied = storage
+        .copy_between(
+            label,
+            "copy-between",
+            filesystem_snapshots(),
+            Path::new("missing/blob"),
+            other_incarnation(),
+            Path::new("target"),
+        )
+        .await;
+    let written = storage
+        .get_raw(label, "get-raw", other_incarnation(), Path::new("target"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            copied.map_err(|error| error.downcast_ref::<BlobMissingError>().is_some()),
+            written
+        ),
+        (Err(true), None)
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_from_a_directory_or_from_below_a_file_gives_blob_missing_error_and_writes_nothing(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_from_a_directory_or_from_below_a_file_gives_blob_missing_error_and_writes_nothing";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("directory/blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+
+    let copied = futures::stream::iter([
+        ("directory", "target/from-directory"),
+        ("directory/blob/below", "target/from-below-a-file"),
+    ])
+    .then(|(from, to)| {
+        let storage = &storage;
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    filesystem_snapshots(),
+                    Path::new(from),
+                    other_incarnation(),
+                    Path::new(to),
+                )
+                .await
+                .map_err(|error| error.downcast_ref::<BlobMissingError>().is_some())
+        }
+    })
+    .collect::<Vec<_>>()
+    .await;
+    let written = storage
+        .exists(label, "exists", other_incarnation(), Path::new("target"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (copied, written),
+        (vec![Err(true), Err(true)], ExistsResult::DoesNotExist)
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_at_a_root_path_is_an_error(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_at_a_root_path_is_an_error";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+
+    let errors = futures::stream::iter(
+        ROOT_PATHS
+            .iter()
+            .flat_map(|root| [(*root, "blob"), ("blob", *root)]),
+    )
+    .then(|(from, to)| {
+        let storage = &storage;
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    filesystem_snapshots(),
+                    Path::new(from),
+                    other_incarnation(),
+                    Path::new(to),
+                )
+                .await
+                .err()
+                .and_then(name_error)
+        }
+    })
+    .collect::<Vec<_>>()
+    .await;
+
+    assert!(
+        errors.iter().all(|error| *error
+            == Some(BlobNameError::NoName {
+                path: PathBuf::new()
+            })),
+        "{errors:?}"
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_onto_the_same_path_in_the_same_namespace_changes_nothing(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_onto_the_same_path_in_the_same_namespace_changes_nothing";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+    let copy_onto_itself = |path: &'static str| {
+        let storage = &storage;
+        async move {
+            storage
+                .copy_between(
+                    label,
+                    "copy-between",
+                    filesystem_snapshots(),
+                    Path::new(path),
+                    filesystem_snapshots(),
+                    Path::new(path),
+                )
+                .await
+        }
+    };
+
+    let present = copy_onto_itself("blob").await;
+    let missing = copy_onto_itself("missing").await;
+    let after = storage
+        .get_raw(label, "get-raw", filesystem_snapshots(), Path::new("blob"))
+        .await
+        .unwrap();
+
+    assert!(present.is_ok(), "{present:?}");
+    assert!(
+        missing
+            .err()
+            .is_some_and(|error| error.downcast_ref::<BlobMissingError>().is_some())
+    );
+    assert_eq!(after, Some(b"payload".to_vec()));
+}
+
+#[test]
+#[tracing::instrument]
+async fn copy_between_checks_each_name_before_it_becomes_a_key(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "copy_between_checks_each_name_before_it_becomes_a_key";
+    storage
+        .put_raw(
+            label,
+            "put-raw",
+            filesystem_snapshots(),
+            Path::new("blob"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+
+    let broken = futures::stream::iter([("a/../blob", "target"), ("blob", "a/../target")])
+        .then(|(from, to)| {
+            let storage = &storage;
+            async move {
+                storage
+                    .copy_between(
+                        label,
+                        "copy-between",
+                        filesystem_snapshots(),
+                        Path::new(from),
+                        other_incarnation(),
+                        Path::new(to),
+                    )
+                    .await
+                    .err()
+                    .and_then(name_error)
+                    .is_some()
+            }
+        })
+        .collect::<Vec<_>>()
+        .await;
+    let written = storage
+        .get_raw(label, "get-raw", other_incarnation(), Path::new("target"))
+        .await
+        .unwrap();
+
+    assert_eq!((broken, written), (vec![true, true], None));
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_delete_of_a_missing_blob_succeeds(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("fss")] snapshots: &BlobStorageNamespace,
+    #[tagged_as("cs")] custom: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_delete_of_a_missing_blob_succeeds";
+    let path = Path::new("missing/blob");
+
+    let deleted = (
+        storage
+            .delete(label, "delete", snapshots.clone(), path)
+            .await
+            .map_err(|error| error.to_string()),
+        storage
+            .delete(label, "delete", custom.clone(), path)
+            .await
+            .map_err(|error| error.to_string()),
+    );
+
+    assert_eq!(deleted, (Ok(()), Ok(())));
 }

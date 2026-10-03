@@ -19,6 +19,7 @@
 //! keeps the gate of the held calls closed until the storage is dropped. So the threads of rustic
 //! stop because of the deadline, and not because the gate opens.
 
+pub(super) mod counting;
 pub(super) mod holding;
 pub(super) mod scripted;
 
@@ -27,10 +28,11 @@ use self::scripted::{Script, ScriptedBlobStorage};
 use super::backend::{BlobBackend, KEPT_PACKS_LIMIT};
 use super::files::SnapshotFiles;
 use super::prune::Percent;
+use super::publish::PublishBound;
 use super::store::{RusticSnapshotStore, StorePolicy, named};
 use super::{
     PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
-    prune_options, repository_options, restore_snapshot, run_blocking,
+    prune_options, repository_options, run_blocking,
 };
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::contract_tests::fixture::{
@@ -38,8 +40,8 @@ use crate::filesystem_snapshot::contract_tests::fixture::{
 };
 use crate::filesystem_snapshot::contract_tests::new_scope;
 use crate::filesystem_snapshot::{
-    AgentSnapshots, ChangeDetection as StoreChangeDetection, FilesystemSnapshotStore, SnapshotName,
-    SnapshotStoreError,
+    AgentSnapshots, ChangeDetection as StoreChangeDetection, FailureOf, FilesystemSnapshotStore,
+    SaveError, SnapshotName, Withdrawal,
 };
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::Context;
@@ -72,15 +74,27 @@ const SHORT_DEADLINE: Duration = Duration::from_millis(200);
 /// stop.
 const LIMIT: Duration = Duration::from_secs(10);
 
-/// Gives the blobs of the namespace of the storage, with a tracker of their own. Their calls wait
-/// for at most the deadline, and they stop when the token is cancelled.
+/// Gives the blobs of the namespace of the storage, with a tracker of their own. Their calls make
+/// one try, wait for at most the deadline, and stop when the token is cancelled.
 pub(super) fn files_of(
     storage: Arc<dyn BlobStorage>,
     namespace: BlobStorageNamespace,
     deadline: Duration,
     cancel: CancellationToken,
 ) -> SnapshotFiles {
-    SnapshotFiles::new(storage, namespace, deadline, cancel, TaskTracker::new())
+    SnapshotFiles::new(storage, namespace, deadline, cancel, TaskTracker::new()).once()
+}
+
+/// The runs of a call in the tests that do not test them: one run, so a failed call answers at
+/// once.
+pub(super) fn one_run() -> golem_common::model::RetryConfig {
+    golem_common::model::RetryConfig {
+        max_attempts: 1,
+        min_delay: Duration::from_secs(2),
+        max_delay: Duration::from_secs(120),
+        multiplier: 4.0,
+        max_jitter_factor: None,
+    }
 }
 
 fn name(text: &str) -> SnapshotName {
@@ -89,6 +103,17 @@ fn name(text: &str) -> SnapshotName {
 
 fn key() -> RepositoryKey {
     RepositoryKey::new(std::array::from_fn(|index| index as u8))
+}
+
+/// Gives the publish bound of a test store: on when the configuration would allow the deadline and
+/// the grace period, that is a deadline of at least the shortest publish try and at most an eighth
+/// of the grace period, and off otherwise.
+pub(super) fn publish_bound_for(deadline: Duration, grace: Duration) -> PublishBound {
+    if deadline >= super::publish::MIN_PUBLISH_TRY && deadline.saturating_mul(8) <= grace {
+        PublishBound::On
+    } else {
+        PublishBound::Off
+    }
 }
 
 /// Gives a store over the storage whose calls wait for at most `deadline`. A delete never prunes.
@@ -105,6 +130,9 @@ fn store(storage: Arc<dyn BlobStorage>, deadline: Duration) -> RusticSnapshotSto
                 keep_delete: Duration::from_secs(15 * 60),
             },
             prune_threshold: Percent(u16::MAX),
+            retry: one_run(),
+            publish_bound: publish_bound_for(deadline, Duration::from_secs(15 * 60)),
+            in_call_tries: 1,
         },
         Arc::new(SystemClock),
     )
@@ -311,9 +339,16 @@ async fn with_existing_repository<R: Send + 'static>(
 /// Tells whether an operation of the store ended within the limit with the storage error of a
 /// call that got no answer within its deadline. `None` means that the operation did not end within
 /// the limit.
-fn failed_at_deadline<T>(outcome: Result<Result<T, SnapshotStoreError>, Elapsed>) -> Option<bool> {
+fn failed_at_deadline<T, E: FailureOf>(outcome: Result<Result<T, E>, Elapsed>) -> Option<bool> {
     outcome.ok().map(|result| {
-        matches!(result, Err(SnapshotStoreError::Storage { source, .. }) if reached_deadline(source.as_ref()))
+        result
+            .err()
+            .and_then(|error| {
+                error
+                    .failure()
+                    .map(|failure| reached_deadline(failure.as_ref()))
+            })
+            .unwrap_or(false)
     })
 }
 
@@ -330,7 +365,14 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
     let scope = new_scope();
     let tree = many_directories_tree(60);
     store(inner.clone(), STORAGE_CALL_DEADLINE)
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let tree_packs = tree_packs(&inner, &scope).await;
@@ -338,7 +380,12 @@ async fn a_restore_reads_each_tree_pack_one_time_in_full_and_no_range_of_a_tree_
     let into = Scratch::new();
 
     store(storage.clone(), STORAGE_CALL_DEADLINE)
-        .restore(&scope, &name("p-first"), into.path())
+        .restore(
+            &scope,
+            &name("p-first"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let calls_on_tree_packs = |op: &str| {
@@ -373,7 +420,14 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
     let tree = fixture_tree();
 
     store
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let config_after_the_first = stored_paths(&storage, &scope)
@@ -382,7 +436,14 @@ async fn the_first_save_creates_the_repository_with_no_key_file_and_later_saves_
         .filter(|path| path == "config")
         .count();
     store
-        .save(&scope, &name("p-second"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-second"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let paths = stored_paths(&storage, &scope).await;
@@ -415,12 +476,26 @@ async fn a_restore_reads_data_on_at_most_its_reader_threads() {
     let tree = Scratch::new();
     std::fs::write(tree.path().join("first.txt"), b"first").unwrap();
     store
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     std::fs::write(tree.path().join("second.txt"), b"second").unwrap();
     store
-        .save(&scope, &name("p-second"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-second"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let restore = async |reader_threads| {
@@ -541,6 +616,27 @@ impl OverlapCountingStorage {
 
 #[async_trait]
 impl BlobStorageBackend for OverlapCountingStorage {
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .copy_between_at(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,
@@ -721,7 +817,14 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
 
     let saved = tokio::time::timeout(
         LIMIT,
-        store.save(&scope, &name("p-first"), tree.path(), None),
+        store.save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        ),
     )
     .await;
     drop(store);
@@ -736,6 +839,75 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
         (failed_at_deadline(saved), snapshots, stopped),
         (Some(true), Vec::<String>::new(), true)
     );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_cancelled_before_its_publish_publishes_nothing() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    let tree = fixture_tree();
+    store(inner.clone(), STORAGE_CALL_DEADLINE)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
+    // The second save of the same tree deduplicates all its content. The third call on the
+    // snapshot files is the listing after its backup, and it waits until the cancel ends it.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let held = Arc::new(Notify::new());
+    let (storage, _gate, _dropped) = holding_storage(inner.clone(), {
+        let (calls, held) = (calls.clone(), held.clone());
+        move |_, path| {
+            let selected =
+                path.starts_with("snapshots") && calls.fetch_add(1, Ordering::SeqCst) == 2;
+            if selected {
+                held.notify_one();
+            }
+            selected
+        }
+    });
+    let store = store(storage, STORAGE_CALL_DEADLINE);
+    let cancel = CancellationToken::new();
+
+    let second = name("p-second");
+    let saving = store.save(
+        &scope,
+        &second,
+        tree.path(),
+        None,
+        &cancel,
+        &crate::filesystem_snapshot::Unlimited,
+    );
+    let cancelling = async {
+        held.notified().await;
+        cancel.cancel();
+    };
+    let (saved, ()) = tokio::join!(saving, cancelling);
+    let listed = store
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap()
+        .iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect::<Vec<_>>();
+    let snapshot_files = stored_paths(&inner, &scope)
+        .await
+        .into_iter()
+        .filter(|path| path.starts_with("snapshots/"))
+        .count();
+
+    assert!(
+        matches!(saved, Err(SaveError::Stopped(Withdrawal::Stopped))),
+        "{saved:?}"
+    );
+    assert_eq!((listed, snapshot_files), (vec!["p-first".to_string()], 1));
 }
 
 #[test]
@@ -765,14 +937,28 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
 
     let saved = tokio::time::timeout(
         LIMIT,
-        store.save(&scope, &name("p-first"), tree.path(), None),
+        store.save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        ),
     )
     .await
     .map(|result| result.map(|_| ()).map_err(|error| format!("{error:#}")));
     let opened = tokio::time::timeout(LIMIT, opener)
         .await
         .is_ok_and(|joined| joined.is_ok());
-    let restored = store.restore(&scope, &name("p-first"), into.path()).await;
+    let restored = store
+        .restore(
+            &scope,
+            &name("p-first"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert_eq!(
         (saved, opened, restored.is_ok(), listing(into.path())),
@@ -787,7 +973,14 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
     let scope = new_scope();
     let tree = fixture_tree();
     store(inner.clone(), STORAGE_CALL_DEADLINE)
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let data_packs = data_packs(&inner, &scope).await;
@@ -807,11 +1000,20 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
 
-    let restored =
-        tokio::time::timeout(LIMIT, store.restore(&scope, &name("p-first"), into.path())).await;
+    let restored = tokio::time::timeout(
+        LIMIT,
+        store.restore(
+            &scope,
+            &name("p-first"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        ),
+    )
+    .await;
     drop(store);
     let stopped = dropped_within_limit(dropped).await;
-    // The plan phase of a restore makes each directory before the content phase reads data.
+    // The plan phase of a restore makes each directory before the content phase reads data. A
+    // run that fails after its first write removes what it wrote.
     let made = directories
         .iter()
         .map(|path| (*path, into.path().join(path).is_dir()))
@@ -832,7 +1034,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
             false,
             directories
                 .iter()
-                .map(|path| (*path, true))
+                .map(|path| (*path, false))
                 .collect::<Vec<_>>()
         )
     );
@@ -845,7 +1047,14 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
     let scope = new_scope();
     let tree = fixture_tree();
     store(inner.clone(), STORAGE_CALL_DEADLINE)
-        .save(&scope, &name("p-first"), tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     // A prune reads the trees of the snapshots, and each tree read is a full read of a pack.
@@ -888,12 +1097,26 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
     let first_tree = one_file_tree("first.txt", "only in the first tree");
     let second_tree = one_file_tree("second.txt", "only in the second tree");
     store
-        .save(&scope, &name("p-first"), first_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-first"),
+            first_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let first_packs = pack_paths(&inner, &scope).await;
     store
-        .save(&scope, &name("p-second"), second_tree.path(), None)
+        .save(
+            &scope,
+            &name("p-second"),
+            second_tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
         .await
         .unwrap();
     let second_packs = pack_paths(&inner, &scope)
@@ -905,7 +1128,14 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
 
     // The first prune marks the packs that only the deleted name used, and the second prune
     // deletes them, because they stay marked for no time.
-    store.delete(&scope, &[name("p-first")]).await.unwrap();
+    store
+        .delete(
+            &scope,
+            &[name("p-first")],
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await
+        .unwrap();
     let settings = PruneSettings {
         fast_repack: true,
         keep_delete: Duration::ZERO,
@@ -916,7 +1146,14 @@ async fn a_prune_after_a_delete_deletes_the_packs_of_that_name_and_the_other_nam
     prune_with(inner.clone(), &scope, STORAGE_CALL_DEADLINE, settings)
         .await
         .unwrap();
-    let restored = store.restore(&scope, &name("p-second"), into.path()).await;
+    let restored = store
+        .restore(
+            &scope,
+            &name("p-second"),
+            into.path(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
 
     assert_eq!(
         (
@@ -1096,7 +1333,14 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
         let scope = new_scope();
         let store = store(storage.clone(), STORAGE_CALL_DEADLINE);
         store
-            .save(&scope, &name("p-first"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-first"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
         rewrite(tree.path());
@@ -1106,12 +1350,19 @@ async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mt
                 &name("p-second"),
                 tree.path(),
                 Some((&name("p-first"), detection)),
+                crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
             .await
             .unwrap();
         let into = Scratch::new();
         store
-            .restore(&scope, &name("p-second"), into.path())
+            .restore(
+                &scope,
+                &name("p-second"),
+                into.path(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
         let counts = with_existing_repository(
@@ -1171,16 +1422,37 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
         )
         .unwrap();
         store
-            .save(&scope, &name("p-first"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-first"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
         let first_packs = data_packs(&storage, &scope).await;
         std::fs::write(tree.path().join("changed.txt"), b"in the second snapshot").unwrap();
         store
-            .save(&scope, &name("p-second"), tree.path(), None)
+            .save(
+                &scope,
+                &name("p-second"),
+                tree.path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
-        store.delete(&scope, &[name("p-first")]).await.unwrap();
+        store
+            .delete(
+                &scope,
+                &[name("p-first")],
+                &crate::filesystem_snapshot::Unlimited,
+            )
+            .await
+            .unwrap();
         let settings = PruneSettings {
             fast_repack,
             keep_delete: Duration::ZERO,
@@ -1205,7 +1477,12 @@ async fn two_prunes_without_a_grace_period_under_the_limits_of_rustic_give_back_
         let after_delete = stored(pack_paths(&storage, &scope).await);
         let into = Scratch::new();
         store
-            .restore(&scope, &name("p-second"), into.path())
+            .restore(
+                &scope,
+                &name("p-second"),
+                into.path(),
+                &crate::filesystem_snapshot::Unlimited,
+            )
             .await
             .unwrap();
         (
@@ -1245,4 +1522,282 @@ async fn a_prune_of_a_scope_without_a_repository_gives_nothing() {
     .unwrap();
 
     assert_eq!(pruned, None);
+}
+
+/// A tree of the fixture with one more file whose content is `content`, so that each save of a
+/// new content changes a few blobs.
+fn changed_tree(content: &str) -> Scratch {
+    let tree = fixture_tree();
+    std::fs::write(tree.path().join("changing.txt"), content).unwrap();
+    tree
+}
+
+/// Saves the snapshots `p-<index>` for each index of `indexes`, each of its own content.
+async fn save_numbered(
+    store: &RusticSnapshotStore,
+    scope: &AgentSnapshots,
+    indexes: std::ops::Range<usize>,
+) {
+    futures::stream::iter(indexes)
+        .for_each(|index| async move {
+            let tree = changed_tree(&format!("content {index}"));
+            store
+                .save(
+                    scope,
+                    &name(&format!("p-{index}")),
+                    tree.path(),
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+                .unwrap();
+        })
+        .await;
+}
+
+#[test]
+#[timeout("120s")]
+async fn scope_snapshots_reads_the_snapshot_files_concurrently_and_in_order() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    save_numbered(&store(inner.clone(), STORAGE_CALL_DEADLINE), &scope, 0..40).await;
+    let counting = Arc::new(self::counting::CountingBlobStorage::new(
+        inner,
+        Duration::from_millis(20),
+    ));
+    let store = store(counting.clone(), STORAGE_CALL_DEADLINE);
+
+    let listed = store
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap()
+        .iter()
+        .map(|(name, _)| name.as_str().to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        listed,
+        (0..40)
+            .rev()
+            .map(|index| format!("p-{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(counting.count("read", "snapshots"), 40);
+    let at_once = counting.most_snapshot_reads_at_once();
+    assert!(
+        (2..=super::backend::SNAPSHOT_FILE_READS).contains(&at_once),
+        "{at_once} reads of snapshot files ran at once"
+    );
+}
+
+#[test]
+#[timeout("120s")]
+async fn the_reads_ahead_of_a_store_take_the_read_slots_that_the_store_got() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    save_numbered(&store(inner.clone(), STORAGE_CALL_DEADLINE), &scope, 0..12).await;
+    let counting = Arc::new(self::counting::CountingBlobStorage::new(
+        inner,
+        Duration::from_millis(20),
+    ));
+    let store = store(counting.clone(), STORAGE_CALL_DEADLINE)
+        .reading_under(Arc::new(tokio::sync::Semaphore::new(2)));
+
+    let listed = store
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            listed.len(),
+            counting.count("read", "snapshots"),
+            counting.most_snapshot_reads_at_once() <= 2
+        ),
+        (12, 12, true)
+    );
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_save_reads_all_snapshot_files_once_and_then_only_the_new_ones() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    save_numbered(&store(inner.clone(), STORAGE_CALL_DEADLINE), &scope, 0..5).await;
+    let counting = Arc::new(self::counting::CountingBlobStorage::new(
+        inner,
+        Duration::ZERO,
+    ));
+    let store = store(counting.clone(), STORAGE_CALL_DEADLINE);
+
+    save_numbered(&store, &scope, 5..6).await;
+
+    assert_eq!(
+        (
+            counting.count("read", "snapshots"),
+            counting.count("list", "snapshots")
+        ),
+        (5, 2)
+    );
+}
+
+/// The resident memory of the process, in KiB, from `/proc/self/status`. Zero where the file is
+/// not there.
+fn resident_kib() -> i64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("VmRSS:"))
+                .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
+        })
+        .unwrap_or_default()
+}
+
+/// What one operation of the measurement cost.
+struct Measured {
+    operation: &'static str,
+    elapsed: Duration,
+    snapshot_reads: u64,
+    index_reads: u64,
+    resident_kib: i64,
+}
+
+/// Runs `operation` and gives what it cost on `counting`.
+async fn measured<T>(
+    counting: &self::counting::CountingBlobStorage,
+    label: &'static str,
+    operation: impl std::future::Future<Output = T>,
+) -> (T, Measured) {
+    counting.reset();
+    let (resident, started) = (resident_kib(), std::time::Instant::now());
+    let result = operation.await;
+    let measured = Measured {
+        operation: label,
+        elapsed: started.elapsed(),
+        snapshot_reads: counting.count("read", "snapshots"),
+        index_reads: counting.count("read", "index"),
+        resident_kib: resident_kib() - resident,
+    };
+    (result, measured)
+}
+
+/// Measures each operation of the store on one repository that holds 1, 64, 128, 256 and 1024
+/// snapshots, and prints the time, the reads of snapshot and index files, the change of resident
+/// memory, and the counts of a copy. It is slow, so it runs only when asked for:
+/// `cargo test -p golem-worker-executor --lib -- --ignored a_repository_with_many_snapshots_stays_usable --nocapture`.
+#[test]
+#[ignore = "a measurement that fills a repository with 1024 snapshots; run it on request"]
+#[timeout("3600s")]
+async fn a_repository_with_many_snapshots_stays_usable() {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let counting = Arc::new(self::counting::CountingBlobStorage::new(
+        inner.clone(),
+        Duration::ZERO,
+    ));
+    let store = store(counting.clone(), STORAGE_CALL_DEADLINE);
+    let scope = new_scope();
+    let sizes = [1usize, 64, 128, 256, 1024];
+
+    futures::stream::iter(sizes.iter().enumerate())
+        .fold(0usize, |filled, (round, size)| {
+            let (store, counting, inner, scope) = (&store, &counting, &inner, &scope);
+            async move {
+                save_numbered(store, scope, filled..size - 1).await;
+                let next = size - 1;
+                let tree = changed_tree(&format!("content {next}"));
+                let own = name(&format!("p-{next}"));
+                let (saved, save) = measured(
+                    counting,
+                    "save",
+                    store.save(
+                        scope,
+                        &own,
+                        tree.path(),
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(), &crate::filesystem_snapshot::Unlimited,
+                    ),
+                )
+                .await;
+                let into = Scratch::new();
+                let (restored, restore) =
+                    measured(counting, "restore", store.restore(scope, &own, into.path(), &crate::filesystem_snapshot::Unlimited)).await;
+                let (stated, stat) = measured(counting, "stat", store.stat(scope, &own)).await;
+                let (listed, list) = measured(counting, "list", store.list(scope, &crate::filesystem_snapshot::Unlimited)).await;
+                let target = new_scope();
+                let (copied, copy) =
+                    measured(counting, "copy_all", store.copy_all(scope, &target, &crate::filesystem_snapshot::Unlimited)).await;
+                let copy_counts = (
+                    counting.count_of("copy_read"),
+                    counting.count_of("copy_write"),
+                    counting.count_of("copy"),
+                );
+                let index_files = stored_paths(inner, scope)
+                    .await
+                    .into_iter()
+                    .filter(|path| path.starts_with("index/"))
+                    .count();
+                let (deleted, delete) =
+                    measured(counting, "delete", store.delete(scope, std::slice::from_ref(&own), &crate::filesystem_snapshot::Unlimited)).await;
+                let resave = changed_tree(&format!("content {next}"));
+                store
+                    .save(
+                        scope,
+                        &own,
+                        resave.path(),
+                        None,
+                        crate::filesystem_snapshot::never_cancelled(), &crate::filesystem_snapshot::Unlimited,
+                    )
+                    .await
+                    .unwrap();
+
+                assert!(saved.is_ok() && restored.is_ok() && copied.is_ok() && deleted.is_ok());
+                assert!(stated.is_ok_and(|info| info.is_some()));
+                assert_eq!(listed.map(|listing| listing.len()).ok(), Some(*size));
+                assert!(
+                    save.snapshot_reads <= *size as u64 + 2,
+                    "a save at {size} snapshots read {} snapshot files",
+                    save.snapshot_reads
+                );
+                println!(
+                    "MEASURED round {round} size {size} index_files {index_files} copy_reads_writes_copies {copy_counts:?}"
+                );
+                [save, restore, stat, list, copy, delete]
+                    .iter()
+                    .for_each(|measured| {
+                        println!(
+                            "MEASURED size {size} {} took {:?}, read {} snapshot files and {} index files, resident memory changed by {} KiB",
+                            measured.operation,
+                            measured.elapsed,
+                            measured.snapshot_reads,
+                            measured.index_reads,
+                            measured.resident_kib
+                        )
+                    });
+                *size
+            }
+        })
+        .await;
+}
+
+/// Writes the tree of the snapshot into the empty directory `into`.
+fn restore_snapshot(
+    repository: rustic_core::Repository<rustic_core::OpenStatus>,
+    snapshot: &rustic_core::repofile::SnapshotFile,
+    into: &std::path::Path,
+    options: &rustic_core::RestoreOptions,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let repository = repository.to_indexed()?;
+    let into = into
+        .to_str()
+        .context("the directory of a restore must have a UTF-8 path")?;
+    let destination = rustic_core::LocalDestination::new(into, false, false)?;
+    let node = repository.node_from_snapshot_and_path(snapshot, "")?;
+    let entries = repository.ls(&node, &rustic_core::LsOptions::default())?;
+    let plan = repository.prepare_restore(options, entries.clone(), &destination, false)?;
+    repository.restore(plan, options, entries, &destination)?;
+    Ok(())
 }

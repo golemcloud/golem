@@ -22,6 +22,7 @@ use golem_service_base::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
     NormalizedBlobPath, PutIfAbsent,
 };
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -47,8 +48,8 @@ pub(crate) enum Script {
     Delay(std::time::Duration),
     /// Waits for the time, and then gives an error and does not pass the call.
     RefuseAfter(std::time::Duration),
-    /// Gives no blob to a read of a whole blob, as a delete after a listing does. Each other call
-    /// passes.
+    /// Gives no blob to a read of a whole blob or to the source of a copy, as a delete after a
+    /// listing does. Each other call passes.
     Vanish,
     /// Passes the call, and then answers a write if absent with `AlreadyExists`, as a new try of a
     /// call whose first answer was lost does. Each other call passes.
@@ -57,10 +58,37 @@ pub(crate) enum Script {
     /// when `refuse` is true. A `late` write or delete gives an error at its step, as a call that
     /// got no answer within its deadline, and it reaches the storage when the test lands it.
     Step { refuse: bool, late: bool },
+    /// Waits until the test opens the gate of the storage, passes the listing, and leaves out of
+    /// its result each path that the test hid, as a listing that a write and a delete tore does.
+    /// Each other call passes.
+    Torn,
+    /// Gives an error at once to a write or a delete, as a call that got no answer, and makes the
+    /// change in a task after the time, as a change that lands late. Each other call passes.
+    LandAfter(std::time::Duration),
 }
 
-/// A rule that gives the script of a call from its operation label and its path.
-type Rule = Box<dyn Fn(&str, &Path) -> Script + Send + Sync>;
+impl Script {
+    /// Whether a write or a delete with this script gives an error and lands later.
+    fn is_late(self) -> bool {
+        matches!(self, Script::Step { late: true, .. } | Script::LandAfter(_))
+    }
+}
+
+/// One call of the storage: its namespace, its operation label, its path, the instant when it
+/// started, and the instant when it ended. A late change is an event of its own, whose start and
+/// end are the instant when it landed.
+#[derive(Clone, Debug)]
+pub(crate) struct CallEvent {
+    pub(crate) namespace: BlobStorageNamespace,
+    pub(crate) op_label: &'static str,
+    pub(crate) path: Box<Path>,
+    pub(crate) started: std::time::Instant,
+    pub(crate) ended: std::time::Instant,
+    pub(crate) landed_late: bool,
+}
+
+/// A rule that gives the script of a call from its namespace, its operation label and its path.
+type Rule = Box<dyn Fn(&BlobStorageNamespace, &str, &Path) -> Script + Send + Sync>;
 
 /// A blob storage that records the operation label and the path of each call, and does with each
 /// call what its rule gives.
@@ -81,12 +109,28 @@ pub(crate) struct ScriptedBlobStorage {
     landings: Arc<Semaphore>,
     /// The late calls that reached the storage.
     landed: Arc<AtomicUsize>,
+    /// The paths that a torn listing leaves out.
+    hidden: Mutex<Vec<Box<Path>>>,
+    /// The calls in flight for each namespace.
+    in_flight: Mutex<HashMap<BlobStorageNamespace, usize>>,
+    /// The most namespaces that had a call in flight at one time.
+    most_namespaces: AtomicUsize,
+    /// Each call that ended, and each late change that landed, in the order of their ends.
+    events: Arc<Mutex<Vec<CallEvent>>>,
 }
 
 impl ScriptedBlobStorage {
     pub(crate) fn new(
         inner: Arc<InMemoryBlobStorage>,
         rule: impl Fn(&str, &Path) -> Script + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Self::in_namespaces(inner, move |_, op_label, path| rule(op_label, path))
+    }
+
+    /// A storage whose rule also reads the namespace of each call.
+    pub(crate) fn in_namespaces(
+        inner: Arc<InMemoryBlobStorage>,
+        rule: impl Fn(&BlobStorageNamespace, &str, &Path) -> Script + Send + Sync + 'static,
     ) -> Arc<Self> {
         Arc::new(Self {
             inner,
@@ -99,7 +143,55 @@ impl ScriptedBlobStorage {
             took: Mutex::new(Vec::new()),
             landings: Arc::new(Semaphore::new(0)),
             landed: Arc::new(AtomicUsize::new(0)),
+            hidden: Mutex::new(Vec::new()),
+            in_flight: Mutex::new(HashMap::new()),
+            most_namespaces: AtomicUsize::new(0),
+            events: Arc::default(),
         })
+    }
+
+    /// Gives the most namespaces that had a call in flight at one time.
+    pub(crate) fn most_namespaces_at_once(&self) -> usize {
+        self.most_namespaces.load(Ordering::SeqCst)
+    }
+
+    /// Gives each call that ended, and each late change that landed, in the order of their ends.
+    pub(crate) fn events(&self) -> Vec<CallEvent> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Counts a call of `namespace` as in flight until the guard drops, and then records it.
+    fn in_flight(
+        &self,
+        namespace: &BlobStorageNamespace,
+        op_label: &'static str,
+        path: &Path,
+    ) -> InFlight<'_> {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *in_flight.entry(namespace.clone()).or_default() += 1;
+        self.most_namespaces
+            .fetch_max(in_flight.len(), Ordering::SeqCst);
+        InFlight {
+            storage: self,
+            namespace: namespace.clone(),
+            op_label,
+            path: path.into(),
+            started: super::super::runs::now(),
+        }
+    }
+
+    /// Makes each torn listing leave out `paths`.
+    pub(crate) fn hide(&self, paths: impl IntoIterator<Item = Box<Path>>) {
+        self.hidden
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(paths);
     }
 
     /// Lets each call that waits for the gate, and each later such call, go on.
@@ -168,23 +260,53 @@ impl ScriptedBlobStorage {
         self.landed.load(Ordering::SeqCst)
     }
 
-    /// Takes one step for a late call: the caller gets an error, and the call reaches the storage
-    /// in a task when the test lands it.
+    /// Runs a late call with its `script`: the caller gets an error, and the call reaches the
+    /// storage in a task. A step waits for a step of the test and lands when the test lands it,
+    /// and a [`Script::LandAfter`] lands after its time.
     async fn late<T>(
         &self,
-        op_label: &'static str,
-        path: &Path,
+        script: Script,
+        call: &InFlight<'_>,
         landing: impl Future<Output = anyhow::Result<()>> + Send + 'static,
     ) -> anyhow::Result<T> {
+        let (op_label, path) = (call.op_label, &*call.path);
         self.record(op_label, path);
+        let landed = self.landed.clone();
+        let events = self.events.clone();
+        let (namespace, owned_path) = (call.namespace.clone(), Box::<Path>::from(path));
+        let record_landing = move |landing_result: anyhow::Result<()>| {
+            if landing_result.is_ok() {
+                let at = super::super::runs::now();
+                events
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(CallEvent {
+                        namespace,
+                        op_label,
+                        path: owned_path,
+                        started: at,
+                        ended: at,
+                        landed_late: true,
+                    });
+            }
+            landed.fetch_add(1, Ordering::SeqCst);
+        };
+        if let Script::LandAfter(after) = script {
+            tokio::spawn(async move {
+                tokio::time::sleep(after).await;
+                record_landing(landing.await);
+            });
+            return Err(anyhow::anyhow!(
+                "the call got no answer within its deadline"
+            ));
+        }
         let stepped = self.wait_for_step(op_label, path).await;
-        let (landings, landed) = (self.landings.clone(), self.landed.clone());
+        let landings = self.landings.clone();
         tokio::spawn(async move {
             if let Ok(permit) = landings.acquire().await {
                 permit.forget();
             }
-            let _ = landing.await;
-            landed.fetch_add(1, Ordering::SeqCst);
+            record_landing(landing.await);
         });
         drop(stepped);
         Err(anyhow::anyhow!(
@@ -211,11 +333,12 @@ impl ScriptedBlobStorage {
 
     async fn answer<T>(
         &self,
+        namespace: &BlobStorageNamespace,
         op_label: &'static str,
         path: &Path,
         call: impl Future<Output = anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
-        self.follow((self.rule)(op_label, path), op_label, path, call)
+        self.follow((self.rule)(namespace, op_label, path), op_label, path, call)
             .await
     }
 
@@ -243,7 +366,9 @@ impl ScriptedBlobStorage {
                 self.gate.cancelled().await;
                 call.await
             }
-            Script::Vanish | Script::AnswerAlreadyExists => call.await,
+            Script::Vanish | Script::AnswerAlreadyExists | Script::Torn | Script::LandAfter(_) => {
+                call.await
+            }
             Script::Delay(time) => {
                 tokio::time::sleep(time).await;
                 call.await
@@ -261,6 +386,44 @@ impl ScriptedBlobStorage {
                 }
             }
         }
+    }
+}
+
+/// Counts a call of a namespace as in flight, until the guard drops.
+struct InFlight<'a> {
+    storage: &'a ScriptedBlobStorage,
+    namespace: BlobStorageNamespace,
+    op_label: &'static str,
+    path: Box<Path>,
+    started: std::time::Instant,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        let mut in_flight = self
+            .storage
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(calls) = in_flight.get_mut(&self.namespace) {
+            *calls -= 1;
+            if *calls == 0 {
+                in_flight.remove(&self.namespace);
+            }
+        }
+        drop(in_flight);
+        self.storage
+            .events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(CallEvent {
+                namespace: self.namespace.clone(),
+                op_label: self.op_label,
+                path: self.path.clone(),
+                started: self.started,
+                ended: super::super::runs::now(),
+                landed_late: false,
+            });
     }
 }
 
@@ -304,7 +467,8 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        match (self.rule)(op_label, path) {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
+        match (self.rule)(&_in_flight.namespace, op_label, path) {
             Script::Vanish => {
                 self.record(op_label, path);
                 Ok(None)
@@ -331,7 +495,9 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         offset: u64,
         length: u64,
     ) -> anyhow::Result<Option<golem_service_base::storage::blob::BlobRangeStream>> {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
         self.answer(
+            &_in_flight.namespace,
             op_label,
             path,
             self.inner
@@ -349,7 +515,9 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
         self.answer(
+            &_in_flight.namespace,
             op_label,
             path,
             self.inner
@@ -365,7 +533,9 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BlobMetadata>> {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
         self.answer(
+            &_in_flight.namespace,
             op_label,
             path,
             self.inner
@@ -382,12 +552,13 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<()> {
-        let script = (self.rule)(op_label, path);
-        if let Script::Step { late: true, .. } = script {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
+        let script = (self.rule)(&_in_flight.namespace, op_label, path);
+        if script.is_late() {
             let (inner, owned_path, owned_data) =
                 (self.inner.clone(), path.to_path_buf(), data.to_vec());
             return self
-                .late(op_label, path, async move {
+                .late(script, &_in_flight, async move {
                     inner
                         .put_raw(target_label, op_label, namespace, &owned_path, &owned_data)
                         .await
@@ -412,12 +583,13 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
-        let script = (self.rule)(op_label, path);
-        if let Script::Step { late: true, .. } = script {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
+        let script = (self.rule)(&_in_flight.namespace, op_label, path);
+        if script.is_late() {
             let (inner, owned_path, owned_data) =
                 (self.inner.clone(), path.to_path_buf(), data.to_vec());
             return self
-                .late(op_label, path, async move {
+                .late(script, &_in_flight, async move {
                     inner
                         .put_raw_if_absent(
                             target_label,
@@ -456,11 +628,12 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<()> {
-        let script = (self.rule)(op_label, path);
-        if let Script::Step { late: true, .. } = script {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
+        let script = (self.rule)(&_in_flight.namespace, op_label, path);
+        if script.is_late() {
             let (inner, owned_path) = (self.inner.clone(), path.to_path_buf());
             return self
-                .late(op_label, path, async move {
+                .late(script, &_in_flight, async move {
                     inner
                         .delete(target_label, op_label, namespace, &owned_path)
                         .await
@@ -484,7 +657,9 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<()> {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
         self.answer(
+            &_in_flight.namespace,
             op_label,
             path,
             self.inner
@@ -500,7 +675,9 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Vec<PathBuf>> {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
         self.answer(
+            &_in_flight.namespace,
             op_label,
             path,
             self.inner
@@ -516,7 +693,28 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.answer(
+        let _in_flight = self.in_flight(&namespace, op_label, path);
+        let script = (self.rule)(&_in_flight.namespace, op_label, path);
+        if script == Script::Torn {
+            self.record(op_label, path);
+            self.gate.cancelled().await;
+            let listed = self
+                .inner
+                .list_blobs_below_at(target_label, op_label, namespace, path)
+                .await?;
+            let hidden = self
+                .hidden
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            return Ok(listed
+                .iter()
+                .filter(|blob| !hidden.contains(&blob.path))
+                .cloned()
+                .collect());
+        }
+        self.follow(
+            script,
             op_label,
             path,
             self.inner
@@ -532,11 +730,12 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<bool> {
-        let script = (self.rule)(op_label, path);
-        if let Script::Step { late: true, .. } = script {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
+        let script = (self.rule)(&_in_flight.namespace, op_label, path);
+        if script.is_late() {
             let (inner, owned_path) = (self.inner.clone(), path.to_path_buf());
             return self
-                .late(op_label, path, async move {
+                .late(script, &_in_flight, async move {
                     inner
                         .delete_dir(target_label, op_label, namespace, &owned_path)
                         .await
@@ -554,6 +753,55 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         .await
     }
 
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        let _in_flight = self.in_flight(&from_namespace, op_label, from);
+        let script = (self.rule)(&_in_flight.namespace, op_label, from);
+        if script == Script::Vanish {
+            self.record(op_label, from);
+            return Ok(false);
+        }
+        if script.is_late() {
+            let (inner, owned_from, owned_to) =
+                (self.inner.clone(), from.to_path_buf(), to.to_path_buf());
+            return self
+                .late(script, &_in_flight, async move {
+                    inner
+                        .copy_between(
+                            target_label,
+                            op_label,
+                            from_namespace,
+                            &owned_from,
+                            to_namespace,
+                            &owned_to,
+                        )
+                        .await
+                })
+                .await;
+        }
+        self.follow(
+            script,
+            op_label,
+            from,
+            self.inner.copy_between_at(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            ),
+        )
+        .await
+    }
+
     async fn exists_at(
         &self,
         target_label: &'static str,
@@ -561,7 +809,9 @@ impl BlobStorageBackend for ScriptedBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<ExistsResult> {
+        let _in_flight = self.in_flight(&namespace, op_label, path);
         self.answer(
+            &_in_flight.namespace,
             op_label,
             path,
             self.inner

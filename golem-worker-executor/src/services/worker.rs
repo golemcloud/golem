@@ -361,6 +361,16 @@ struct RunningWorker {
     fingerprint: AgentFingerprint,
 }
 
+/// What a scan of the recovery index found.
+#[derive(Debug, Default)]
+pub struct RecoveryScan {
+    /// The workers that this executor must recover.
+    pub workers: Vec<GetWorkerMetadataResult>,
+    /// The incarnations whose recovery-index entry the scan removed, because their oplog is gone
+    /// or the agent id now belongs to another incarnation. Each of them is dead.
+    pub stale: Vec<(OwnedAgentId, AgentFingerprint)>,
+}
+
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
 pub trait WorkerService: Send + Sync {
@@ -376,10 +386,9 @@ pub trait WorkerService: Send + Sync {
     /// Enumerates the workers this executor must recover, per assigned shard.
     ///
     /// Returns `Err` when the recovery index itself could not be read; individual workers that
-    /// cannot be loaded are skipped and logged, so one of them cannot block the rest.
-    async fn get_running_workers_in_shards(
-        &self,
-    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
+    /// cannot be loaded are skipped and logged, so one of them cannot block the rest. The result
+    /// also names each dead incarnation whose entry the scan removed.
+    async fn get_running_workers_in_shards(&self) -> Result<RecoveryScan, WorkerExecutorError>;
 
     /// Deletes the worker: its cached status, its indexes, its oplog and its entry in the recovery
     /// index, in that order.
@@ -394,6 +403,10 @@ pub trait WorkerService: Send + Sync {
     /// removed; refused, nothing is removed and the result is [`WorkerExecutorError::OplogFenced`],
     /// because the agent's state belongs to the shard's new owner. `None` is an ephemeral oplog,
     /// which nothing fences.
+    ///
+    /// `after_oplog_delete` is called with `fingerprint` right after the oplog delete succeeded,
+    /// or after it was skipped because the stored identity belongs to another incarnation or is
+    /// gone. A call that fails before that point does not call it.
     async fn remove(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
@@ -401,6 +414,7 @@ pub trait WorkerService: Send + Sync {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
+        after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
     ) -> Result<(), WorkerExecutorError>;
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy
@@ -774,10 +788,7 @@ impl DefaultWorkerService {
         self.lifecycle_gates.acquire(owned_agent_id)
     }
 
-    async fn enum_workers_at_key(
-        &self,
-        key: &str,
-    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+    async fn enum_workers_at_key(&self, key: &str) -> Result<RecoveryScan, WorkerExecutorError> {
         record_worker_call("enum");
 
         // The index itself is not per-worker: without it there is no list of workers to recover,
@@ -794,6 +805,7 @@ impl DefaultWorkerService {
             })?;
 
         let mut workers = Vec::new();
+        let mut stale = Vec::new();
 
         for running_worker in value {
             let owned_agent_id = &running_worker.owned_agent_id;
@@ -823,6 +835,7 @@ impl DefaultWorkerService {
                     .await?;
                 record_stale_running_worker(reason);
                 debug!("Skipping {owned_agent_id} during recovery: stale recovery-index member");
+                stale.push((owned_agent_id.clone(), running_worker.fingerprint));
                 continue;
             }
 
@@ -840,6 +853,7 @@ impl DefaultWorkerService {
                     debug!(
                         "Skipping {owned_agent_id} during recovery: stale recovery-index member"
                     );
+                    stale.push((owned_agent_id.clone(), running_worker.fingerprint));
                 }
                 Ok(None) => {
                     let current = self.resolve_agent_identity(owned_agent_id).await?;
@@ -855,6 +869,7 @@ impl DefaultWorkerService {
                         self.remove_running_worker_member(key, &running_worker)
                             .await?;
                         record_stale_running_worker(reason);
+                        stale.push((owned_agent_id.clone(), running_worker.fingerprint));
                     } else {
                         return Err(WorkerExecutorError::runtime(format!(
                             "failed to load metadata for existing {owned_agent_id} during recovery"
@@ -869,7 +884,7 @@ impl DefaultWorkerService {
             }
         }
 
-        Ok(workers)
+        Ok(RecoveryScan { workers, stale })
     }
 
     async fn remove_running_worker_member(
@@ -1658,16 +1673,15 @@ impl WorkerService for DefaultWorkerService {
         }
     }
 
-    async fn get_running_workers_in_shards(
-        &self,
-    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+    async fn get_running_workers_in_shards(&self) -> Result<RecoveryScan, WorkerExecutorError> {
         let shard_assignment = self.shard_service.try_get_current_assignment();
-        let mut result: Vec<GetWorkerMetadataResult> = vec![];
+        let mut result = RecoveryScan::default();
         if let Some(shard_assignment) = shard_assignment {
             for shard_id in shard_assignment.shard_ids() {
                 let key = Self::running_in_shard_key(&shard_id);
-                let mut shard_worker = self.enum_workers_at_key(&key).await?;
-                result.append(&mut shard_worker);
+                let mut shard = self.enum_workers_at_key(&key).await?;
+                result.workers.append(&mut shard.workers);
+                result.stale.append(&mut shard.stale);
             }
         }
         Ok(result)
@@ -1680,6 +1694,7 @@ impl WorkerService for DefaultWorkerService {
         agent_mode: AgentMode,
         fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
+        after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
     ) -> Result<(), WorkerExecutorError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         let lifecycle_gate = self.lifecycle_gate(owned_agent_id);
@@ -1745,6 +1760,7 @@ impl WorkerService for DefaultWorkerService {
                 .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
                 .await?;
         }
+        after_oplog_delete(fingerprint);
 
         let shard_assignment = self
             .shard_service
@@ -3277,6 +3293,7 @@ mod tests {
             timestamp: Timestamp::from(1_700_000_001_000u64),
             target_revision: ComponentRevision::new(3).unwrap(),
             oplog_index: OplogIndex::from_u64(6),
+            filesystem_snapshot: Some(golem_common::model::oplog::FilesystemSnapshotName::update()),
         });
         status
     }
@@ -4212,18 +4229,27 @@ mod tests {
             .await
             .unwrap();
 
-        service
-            .remove(
-                &mut crate::services::oplog::OpenOplogs::new("delete-test")
-                    .lock_lifecycle(&owned_agent_id.agent_id)
-                    .await,
-                &owned_agent_id,
-                AgentMode::Durable,
-                first,
-                None,
-            )
-            .await
-            .unwrap();
+        // The second call is an in-process retry of the delete: it requests the delete of all
+        // snapshots of the deleted incarnation again.
+        let requested = std::sync::Mutex::new(Vec::new());
+        let request = |fingerprint| requested.lock().unwrap().push(fingerprint);
+        futures::StreamExt::for_each(futures::stream::iter(0..2), |_| async {
+            service
+                .remove(
+                    &mut crate::services::oplog::OpenOplogs::new("delete-test")
+                        .lock_lifecycle(&owned_agent_id.agent_id)
+                        .await,
+                    &owned_agent_id,
+                    AgentMode::Durable,
+                    first,
+                    None,
+                    &request,
+                )
+                .await
+                .unwrap();
+        })
+        .await;
+        assert_eq!(*requested.lock().unwrap(), vec![first, first]);
 
         assert_eq!(
             service
@@ -4648,13 +4674,14 @@ mod tests {
     }
 
     #[test]
-    async fn recovery_scan_skips_workers_whose_oplog_is_gone() {
+    async fn recovery_scan_skips_workers_whose_oplog_is_gone_and_names_them_as_stale() {
         let storage = Arc::new(InMemoryKeyValueStorage::new());
         let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
         let deleted = test_owned_agent_id("deleted-by-a-racing-delete");
+        let deleted_fingerprint = AgentFingerprint(Uuid::new_v4());
         let deleted_member = RunningWorker {
-            owned_agent_id: deleted,
-            fingerprint: AgentFingerprint(Uuid::new_v4()),
+            owned_agent_id: deleted.clone(),
+            fingerprint: deleted_fingerprint,
         };
         storage
             .with_entity("worker", "add", "agent_id")
@@ -4669,8 +4696,9 @@ mod tests {
         let service = test_worker_service(storage.clone(), Arc::new(FakeOplogService::default()));
 
         // The index entry outlived the worker; recovery isolates that instead of aborting.
-        let workers = service.enum_workers_at_key(&shard_key).await.unwrap();
-        assert!(workers.is_empty());
+        let scan = service.enum_workers_at_key(&shard_key).await.unwrap();
+        assert!(scan.workers.is_empty());
+        assert_eq!(scan.stale, vec![(deleted, deleted_fingerprint)]);
         let remaining: Vec<RunningWorker> = storage
             .with_entity("worker", "enum", "agent_id")
             .members_of_set(KeyValueStorageNamespace::RunningWorkers, &shard_key)
@@ -4805,6 +4833,7 @@ mod tests {
                 .is_err(),
             "expected the cached status delete failure to surface"
         );
+        let requested = std::sync::atomic::AtomicBool::new(false);
         assert!(
             service
                 .remove(
@@ -4815,11 +4844,14 @@ mod tests {
                     AgentMode::Durable,
                     AgentFingerprint(Uuid::new_v4()),
                     None,
+                    &|_| requested.store(true, std::sync::atomic::Ordering::SeqCst),
                 )
                 .await
                 .is_err(),
             "expected the delete failure to surface"
         );
+        // A delete that fails before the oplog delete requests no delete of snapshots.
+        assert!(!requested.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[test]

@@ -1584,7 +1584,7 @@ mod tests {
 
         async fn get_running_workers_in_shards(
             &self,
-        ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+        ) -> Result<crate::services::worker::RecoveryScan, WorkerExecutorError> {
             unimplemented!()
         }
 
@@ -1595,6 +1595,7 @@ mod tests {
             _agent_mode: AgentMode,
             _fingerprint: golem_common::model::AgentFingerprint,
             _expected_epoch: Option<golem_common::model::ShardEpoch>,
+            _after_oplog_delete: &(dyn Fn(golem_common::model::AgentFingerprint) + Send + Sync),
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
