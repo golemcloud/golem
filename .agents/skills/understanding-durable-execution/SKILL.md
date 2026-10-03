@@ -86,7 +86,9 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
 something from the right column to survive a restart is wrong. Sockets and other OS resources are
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect. Durable liveness also needs *rediscovery*: a timed wait schedules its
+must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
+coordination gate so concurrent calls cannot reconnect one handle twice (see
+"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed wait schedules its
 wakeup as a persisted scheduler action first (`durable_host/suspendable_wait.rs`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
@@ -861,6 +863,28 @@ the existing non-span cancellation behavior stay with their original owners.
 
 Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
 Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
+
+A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
+use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the
+per-handle reconnect gate — and every `send`/`receive`/`receive-with-timeout`/`close` on that
+handle goes through `ensure_websocket_connection_live` (direct) or
+`ensure_websocket_connection_live_access` (accessor), both in `durable_host/websocket/client.rs`.
+The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
+re-reads the entry *while still holding it*, and only a call that still sees its own gate in the
+entry proceeds to take one pool permit, run the handshake, and publish `Live` — or `Terminal` on
+failure — in a single store window re-verified against the current entry. A queued peer therefore
+re-reads the entry instead of independently reconnecting: a fresh `Replay` gate or a `Live` entry
+published by the leader means it uses that entry and takes no permit, and a `Terminal` entry fails
+with the recorded error. Without this gate, two accessors can each snapshot `Replay`, each acquire
+a pool permit, and the leader's published `Live` connection then retains the only permit while the
+follower waits on the pool forever; the gate bounds reconnection to one in-flight attempt per
+handle without changing pool capacity or timeouts. An unpublished `LiveWebSocketConnection` is
+dropped, releasing the permit and socket it held. Gate and pool waits race against interruption,
+so a reconnecting peer never blocks suspension or explicit interruption. Tests:
+`tests/websocket.rs::websocket_reconnect_concurrent_receives_complete_after_reconstruction`,
+`websocket_reconnect_coordination_{admits_one_accessor_reconnect,after_executor_restart,with_spare_pool_permits,is_per_handle,is_interruptible}`,
+`websocket_reconnect_failure_publishes_terminal_outcome`,
+`websocket_closed_connection_stays_terminal_after_replay`.
 
 ## Streaming invocations
 

@@ -1304,6 +1304,25 @@ impl TestWorkerExecutor {
         Ok(worker.stop_if_idle().await)
     }
 
+    /// Installs a websocket reconnect observation onto this executor's
+    /// websocket connection pool and returns the test-side handle (events +
+    /// controls). The observation may be requested before any worker context
+    /// was created; it is then installed by the first worker context creation.
+    pub fn observe_websocket_reconnects_for_test(
+        &self,
+    ) -> golem_worker_executor::durable_host::websocket::WebSocketReconnectObservationForTest {
+        self.additional_test_deps
+            .observe_websocket_reconnects_for_test()
+    }
+
+    /// Returns this executor's websocket connection pool if a worker context
+    /// has been created on this executor, `None` otherwise.
+    pub fn websocket_connection_pool(
+        &self,
+    ) -> Option<golem_worker_executor::durable_host::websocket::WebSocketConnectionPool> {
+        self.additional_test_deps.websocket_connection_pool()
+    }
+
     /// Returns the current eviction classification for the worker shell
     /// registered in `ActiveAgents`, or `None` if the worker is missing or
     /// non-evictable. Used by tests to wait until the worker is `LoadedIdle`
@@ -2919,6 +2938,10 @@ impl WorkerCtx for TestWorkerCtx {
         // it, so test helpers (e.g. `worker_is_loaded`) can observe worker
         // shells under memory-pressure eviction (#3393 T5).
         extra_deps.set_active_agents(active_agents.clone());
+        // Capture the executor's websocket connection pool before it is moved
+        // into the worker context, so test helpers can observe and drive the
+        // websocket reconnect path of any worker on this executor.
+        extra_deps.set_websocket_connection_pool(websocket_connection_pool.clone());
         let worker_agent_id = owned_agent_id.agent_id.clone();
         let runtime_generation = entity_execution_mode
             .is_none()
@@ -5438,6 +5461,21 @@ pub struct AdditionalTestDeps {
     /// live `Worker` state for the memory-pressure-driven eviction test
     /// (issue #3393 T5).
     active_agents: Arc<std::sync::OnceLock<Arc<ActiveAgents<TestWorkerCtx>>>>,
+    /// Captured once on first call to [`TestWorkerCtx::create`], before the
+    /// pool is moved into `DurableWorkerCtx::create`. Lets tests observe and
+    /// drive the websocket reconnect path of any worker on this executor.
+    websocket_connection_pool:
+        Arc<std::sync::OnceLock<golem_worker_executor::durable_host::websocket::WebSocketConnectionPool>>,
+    /// A websocket reconnect observation requested before any worker context
+    /// was created; installed onto the captured pool by the first
+    /// [`TestWorkerCtx::create`].
+    pending_websocket_reconnect_observation: Arc<
+        std::sync::Mutex<
+            Option<
+                golem_worker_executor::durable_host::websocket::WebSocketReconnectObservationInnerForTest,
+            >,
+        >,
+    >,
 }
 
 impl Default for AdditionalTestDeps {
@@ -5486,6 +5524,8 @@ impl AdditionalTestDeps {
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
+            websocket_connection_pool: Arc::new(std::sync::OnceLock::new()),
+            pending_websocket_reconnect_observation: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -6088,6 +6128,51 @@ impl AdditionalTestDeps {
     /// calls are no-ops because they all carry the same `Arc`.
     pub(crate) fn set_active_agents(&self, agents: Arc<ActiveAgents<TestWorkerCtx>>) {
         let _ = self.active_agents.set(agents);
+    }
+
+    /// Stores the executor's websocket connection pool on first call (before it
+    /// is moved into the worker context) and installs any reconnect observation
+    /// that was requested before the first worker context was created.
+    pub(crate) fn set_websocket_connection_pool(
+        &self,
+        pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+    ) {
+        let _ = self.websocket_connection_pool.set(pool.clone());
+        if let Some(pending) = self
+            .pending_websocket_reconnect_observation
+            .lock()
+            .unwrap()
+            .take()
+        {
+            pool.install_websocket_reconnect_observation_for_test(pending);
+        }
+    }
+
+    /// Installs a websocket reconnect observation onto the executor's websocket
+    /// connection pool. If no worker context was created yet (the pool is not
+    /// captured), the observation is parked and installed by the first
+    /// [`TestWorkerCtx::create`].
+    pub(crate) fn observe_websocket_reconnects_for_test(
+        &self,
+    ) -> golem_worker_executor::durable_host::websocket::WebSocketReconnectObservationForTest {
+        let (observation, inner) =
+            golem_worker_executor::durable_host::websocket::WebSocketReconnectObservationForTest::new(
+            );
+        match self.websocket_connection_pool.get() {
+            Some(pool) => pool.install_websocket_reconnect_observation_for_test(inner),
+            None => {
+                *self.pending_websocket_reconnect_observation.lock().unwrap() = Some(inner);
+            }
+        }
+        observation
+    }
+
+    /// Returns the executor's websocket connection pool if a worker context has
+    /// been created on this executor (captured pool), `None` otherwise.
+    pub(crate) fn websocket_connection_pool(
+        &self,
+    ) -> Option<golem_worker_executor::durable_host::websocket::WebSocketConnectionPool> {
+        self.websocket_connection_pool.get().cloned()
     }
 
     /// Look up a `Worker` shell currently registered in `ActiveAgents`.
