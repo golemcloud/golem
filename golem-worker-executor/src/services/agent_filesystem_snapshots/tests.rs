@@ -955,14 +955,22 @@ fn a_disabled_service_admits_nothing_and_restores_nothing() {
         let admitted = snapshots
             .admit_periodic(&agent, AgentMode::Durable)
             .await
+            .without_name();
+        let update = snapshots
+            .admit_update(&agent, AgentMode::Durable, no_interrupt())
+            .await
             .err();
         let restored = snapshots
             .restore(&agent, &FilesystemSnapshotName::periodic())
             .err();
 
         assert_eq!(
-            (admitted, restored),
-            (Some(SnapshotSkip::Disabled), Some(SnapshotsDisabled))
+            (admitted, update, restored),
+            (
+                true,
+                Some(UpdateNotAdmitted::WithoutName),
+                Some(SnapshotsDisabled)
+            )
         );
     })
 }
@@ -1336,7 +1344,6 @@ fn the_labels_and_the_messages_of_the_service_name_what_they_count_and_report() 
         ConfirmOutcome::Deferred.label(),
     ];
     let messages = [
-        SnapshotSkip::Disabled.to_string(),
         SnapshotSkip::UploadInFlight.to_string(),
         SnapshotSkip::VolumeUnderPressure.to_string(),
         SnapshotSkip::DeletingAllSnapshots.to_string(),
@@ -1350,7 +1357,6 @@ fn the_labels_and_the_messages_of_the_service_name_what_they_count_and_report() 
     assert_eq!(
         messages,
         [
-            "filesystem snapshots are disabled on this executor",
             "an upload of a filesystem snapshot of the agent runs now",
             "the volume of the agent filesystems is under pressure",
             "the filesystem snapshots of the agent are being deleted",
@@ -1419,7 +1425,7 @@ fn an_admission_during_a_delete_of_all_snapshots_gets_deleting_all_snapshots_unt
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("deleting");
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         eventually(|| store.all_deletes.load(Ordering::SeqCst) == 1).await;
         let while_deleting = snapshots
             .admit_periodic(&agent, AgentMode::Durable)
@@ -1433,8 +1439,8 @@ fn an_admission_during_a_delete_of_all_snapshots_gets_deleting_all_snapshots_unt
                 .then(|()| snapshots.admit_periodic(&agent, AgentMode::Durable))
                 .filter(|admitted| std::future::ready(admitted.is_ok()));
             match admitted {
-                Ok(_) => true,
-                Err(_) => {
+                Admitted::Upload(_) => true,
+                Admitted::WithoutName | Admitted::Skip(_) => {
                     tokio::time::timeout(Duration::from_secs(5), std::pin::pin!(retried).next())
                         .await
                         .is_ok()
@@ -1536,7 +1542,7 @@ fn a_manual_update_waits_for_a_running_upload_up_to_the_limit_and_then_is_refuse
 
         assert_eq!(
             admitted,
-            Some(UpdateRefusal::Skip(SnapshotSkip::UploadInFlight))
+            Some(UpdateNotAdmitted::Skip(SnapshotSkip::UploadInFlight))
         );
         assert_eq!(waited, Duration::from_secs(60));
     })
@@ -1588,7 +1594,7 @@ fn a_terminal_interrupt_ends_the_wait_of_a_manual_update() {
         let (admitted, ()) = futures::join!(admitting, interrupting);
         gate.open();
 
-        assert_eq!(admitted.err(), Some(UpdateRefusal::Interrupted));
+        assert_eq!(admitted.err(), Some(UpdateNotAdmitted::Interrupted));
     })
 }
 
@@ -1748,7 +1754,7 @@ fn delete_all_snapshots_cancels_the_job_and_deletes_them_after_its_save_returned
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         save_gate.wait_reached(1).await;
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         ended(&snapshots, &agent).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         let while_the_save_runs = (
@@ -1795,7 +1801,7 @@ fn a_cancelled_confirmation_deletes_nothing() {
         admission.submit(capture(b"tree", &discarded), None, confirmer(&confirm));
         gate.wait_reached(1).await;
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         ended(&snapshots, &agent).await;
         eventually(|| store.all_deletes.load(Ordering::SeqCst) == 1).await;
 
@@ -1825,7 +1831,7 @@ fn a_store_that_fails_every_delete_of_all_snapshots_leaves_the_service_running()
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("failing-delete");
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         eventually(|| store.all_deletes.load(Ordering::SeqCst) == 3).await;
         let discarded = Arc::new(AtomicUsize::new(0));
         let saved = snapshots
@@ -1869,7 +1875,7 @@ fn each_delete_holds_a_slot_of_the_uploads() {
                 FilesystemSnapshotName::periodic(),
             ]),
         );
-        snapshots.delete_all_snapshots(&agent_snapshots("deleted"));
+        snapshots.delete_all_snapshots(&agent_snapshots("deleted"), AgentMode::Durable);
         tokio::time::sleep(Duration::from_millis(100)).await;
         let before = (
             store.deletes.lock().unwrap().len(),
@@ -2150,7 +2156,7 @@ async fn update_uploads_with_retention(
                     )
                     .await
                     .unwrap()
-                    .delete_older_snapshots(None);
+                    .delete_older_snapshots(&[]);
                 ended(snapshots, agent).await;
                 name
             }
@@ -2298,7 +2304,7 @@ fn delete_all_snapshots_ends_a_delete_of_a_superseded_snapshot_at_once() {
         let (_store, snapshots, agent, gate) = with_a_delete_held(ConfirmOutcome::Superseded).await;
         let core = snapshots.core.as_ref().unwrap();
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         let ended = tokio::time::timeout(
             Duration::from_secs(2),
             core.registry.until_agent_free(&agent),
@@ -2466,7 +2472,7 @@ fn a_call_that_runs_on_keeps_its_slot_until_it_returns() {
         let core = snapshots.core.as_ref().unwrap();
         let during = (core.calls.upload_attempts(), core.calls.free_slots());
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         ended(&snapshots, &agent).await;
         let after_the_stop = (core.calls.upload_attempts(), core.calls.free_slots());
         gate.open();
@@ -2574,7 +2580,7 @@ fn a_manual_update_ends_the_wait_of_the_retention_of_an_earlier_update_for_its_s
         let held = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
         submit(&snapshots, &holder, b"held", confirmer(&held)).await;
         holder_gate.wait_reached(1).await;
-        saved.delete_older_snapshots(None);
+        saved.delete_older_snapshots(&[]);
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         let (admitted, waited) = update_admission_time(&snapshots, &agent).await;
@@ -2648,7 +2654,7 @@ fn delete_all_snapshots_starts_only_after_the_held_save_ended_and_leaves_no_snap
         submit(&snapshots, &agent, b"tree", confirmer(&confirm)).await;
         gate.wait_reached(1).await;
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         tokio::time::sleep(Duration::from_secs(1)).await;
         let while_the_save_runs = store.all_deletes.load(Ordering::SeqCst);
         gate.open();
@@ -2715,7 +2721,7 @@ fn a_stop_at_each_wait_before_the_save_call_leaves_no_save_flag() {
         )
         .await;
         tokio::time::sleep(Duration::from_secs(1)).await;
-        snapshots.delete_all_snapshots(&waiting_for_a_slot);
+        snapshots.delete_all_snapshots(&waiting_for_a_slot, AgentMode::Durable);
         ended(&snapshots, &waiting_for_a_slot).await;
         let after_the_slot_wait = save_running(&snapshots, &waiting_for_a_slot);
         holder_gate.open();
@@ -2742,7 +2748,7 @@ fn a_stop_at_each_wait_before_the_save_call_leaves_no_save_flag() {
         let saves_before = store.saved_contents().len();
         submit(&snapshots, &retrying, b"retry", confirmer(&confirm)).await;
         eventually(|| store.saved_contents().len() == saves_before + 1).await;
-        snapshots.delete_all_snapshots(&retrying);
+        snapshots.delete_all_snapshots(&retrying, AgentMode::Durable);
         ended(&snapshots, &retrying).await;
         tokio::time::sleep(Duration::from_secs(60)).await;
 
@@ -3055,7 +3061,7 @@ fn a_delete_of_all_snapshots_waits_for_a_running_delete_of_names_of_its_agent() 
 
         snapshots.delete_snapshots(&agent, Box::new([FilesystemSnapshotName::periodic()]));
         gate.wait_reached(1).await;
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         tokio::time::sleep(Duration::from_secs(1)).await;
         let while_the_names_run = store.all_deletes.load(Ordering::SeqCst);
         gate.open();
@@ -3077,7 +3083,7 @@ fn an_all_ends_the_retry_sleep_of_a_names_of_its_agent() {
         snapshots.delete_snapshots(&agent, Box::new([FilesystemSnapshotName::periodic()]));
         eventually(|| store.failed_deletes.load(Ordering::SeqCst) == 1).await;
         let started = tokio::time::Instant::now();
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         eventually(|| store.all_deletes.load(Ordering::SeqCst) == 1).await;
         tokio::time::sleep(Duration::from_secs(60)).await;
 
@@ -3192,18 +3198,17 @@ fn an_ephemeral_admission_is_disabled_and_makes_no_store_call() {
         let periodic = snapshots
             .admit_periodic(&agent, AgentMode::Ephemeral)
             .await
-            .err();
+            .without_name();
         let update = snapshots
             .admit_update(&agent, AgentMode::Ephemeral, no_interrupt())
             .await
             .err();
+        snapshots.delete_all_snapshots(&agent, AgentMode::Ephemeral);
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         assert_eq!(
-            (periodic, update),
-            (
-                Some(SnapshotSkip::Disabled),
-                Some(UpdateRefusal::Skip(SnapshotSkip::Disabled))
-            )
+            (periodic, update, store.all_deletes.load(Ordering::SeqCst)),
+            (true, Some(UpdateNotAdmitted::WithoutName), 0)
         );
         assert!(store.saved_names().is_empty());
         assert_eq!(store.lists.load(Ordering::SeqCst), 0);
@@ -3221,7 +3226,7 @@ fn every_store_write_arrives_while_its_agent_is_busy() {
         ended(&snapshots, &agent).await;
         snapshots.copy_all_snapshots(&agent, &target).await.unwrap();
         snapshots.delete_snapshots(&agent, Box::new([name]));
-        snapshots.delete_all_snapshots(&target);
+        snapshots.delete_all_snapshots(&target, AgentMode::Durable);
         eventually(|| {
             store.deletes.lock().unwrap().len() == 1
                 && store.all_deletes.load(Ordering::SeqCst) == 1
@@ -3267,8 +3272,8 @@ fn a_dropped_fork_keeps_both_incarnations_busy_until_its_copy_returns() {
             snapshots.copy_all_snapshots(&source, &target),
         )
         .await;
-        snapshots.delete_all_snapshots(&source);
-        snapshots.delete_all_snapshots(&target);
+        snapshots.delete_all_snapshots(&source, AgentMode::Durable);
+        snapshots.delete_all_snapshots(&target, AgentMode::Durable);
         tokio::time::sleep(Duration::from_secs(1)).await;
         let while_the_copy_runs = store.all_deletes.load(Ordering::SeqCst);
         gate.open();
@@ -3919,7 +3924,7 @@ fn a_delete_all_during_the_wait_for_a_late_publish_removes_the_landed_file() {
         submit(&snapshots, &agent, b"landed", confirmer(&confirm)).await;
         late.wait_reached(1).await;
 
-        snapshots.delete_all_snapshots(&agent);
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
         tokio::time::sleep(Duration::from_secs(1)).await;
         let while_it_waits = store.all_deletes.load(Ordering::SeqCst);
         late.open();
@@ -3983,5 +3988,104 @@ fn a_manual_update_whose_deadline_comes_during_the_wait_for_a_late_publish_gets_
         let never_landed = update_through_a_late_publish(false).await;
 
         assert_eq!((landed, never_landed), (Ok(()), Err("failed".to_string())));
+    })
+}
+
+#[test]
+fn a_revert_hold_ends_a_retention_delete_at_once() {
+    paused(async {
+        let (store, snapshots, agent, gate) = with_a_delete_held(ConfirmOutcome::Confirmed).await;
+        let core = snapshots.core.as_ref().unwrap();
+
+        let hold = snapshots.begin_revert(&agent);
+        let ended = tokio::time::timeout(
+            Duration::from_secs(2),
+            core.registry.until_agent_free(&agent),
+        )
+        .await;
+        gate.open();
+        drop(hold);
+
+        assert!(ended.is_ok(), "the job waited for its retention delete");
+        // The delete in flight runs to its end, counted; the job sends no further delete.
+        eventually(|| store.deletes.lock().unwrap().len() == 1).await;
+    })
+}
+
+/// Saves an older snapshot of an agent that keeps one periodic snapshot, and then begins a revert
+/// of the agent. Gives the store, the service, the agent and the hold.
+async fn with_a_revert_hold() -> (
+    Arc<ScriptedStore>,
+    AgentFilesystemSnapshots,
+    AgentSnapshots,
+    RevertHold,
+) {
+    let store = Arc::new(ScriptedStore::default());
+    let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+        retained_periodic_snapshots: 1,
+        ..values(4, 4)
+    })
+    .unwrap();
+    let snapshots = service(&store, settings);
+    let agent = agent_snapshots("revert-hold");
+    let deferred = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
+    submit(&snapshots, &agent, b"older", confirmer(&deferred)).await;
+    ended(&snapshots, &agent).await;
+    let hold = snapshots.begin_revert(&agent);
+    (store, snapshots, agent, hold)
+}
+
+#[test]
+fn a_job_admitted_during_a_revert_hold_deletes_nothing() {
+    paused(async {
+        let (store, snapshots, agent, hold) = with_a_revert_hold().await;
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+
+        let newest = submit(&snapshots, &agent, b"newest", confirmer(&confirm)).await;
+        ended(&snapshots, &agent).await;
+        drop(hold);
+
+        assert_eq!(
+            (
+                confirm.names(),
+                store.lists.load(Ordering::SeqCst),
+                store.deletes.lock().unwrap().len()
+            ),
+            (vec![newest], 0, 0)
+        );
+    })
+}
+
+#[test]
+fn a_dropped_revert_hold_frees_the_deletes_of_later_jobs() {
+    paused(async {
+        let (store, snapshots, agent, hold) = with_a_revert_hold().await;
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+
+        drop(hold);
+        submit(&snapshots, &agent, b"newest", confirmer(&confirm)).await;
+        ended(&snapshots, &agent).await;
+
+        assert_eq!(store.deletes.lock().unwrap().len(), 1);
+    })
+}
+
+#[test]
+fn the_deletes_of_a_revert_run_after_its_hold_and_end_it() {
+    paused(async {
+        let (store, snapshots, agent, hold) = with_a_revert_hold().await;
+        let reverted = FilesystemSnapshotName::periodic();
+
+        hold.delete_snapshots(Box::new([reverted.clone()]));
+        eventually(|| store.deletes.lock().unwrap().len() == 1).await;
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        submit(&snapshots, &agent, b"newest", confirmer(&confirm)).await;
+        ended(&snapshots, &agent).await;
+
+        assert_eq!(
+            store.deletes.lock().unwrap().first().cloned(),
+            Some(Box::from(reverted.as_str()))
+        );
+        assert_eq!(store.deletes.lock().unwrap().len(), 2);
     })
 }

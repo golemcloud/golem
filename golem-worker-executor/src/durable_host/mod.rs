@@ -169,7 +169,7 @@ use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
-use crate::services::worker::WorkerService;
+use crate::services::worker::{RecoveryScan, WorkerService};
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
@@ -6591,10 +6591,14 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-        let workers = this
+        let RecoveryScan { workers, stale } = this
             .worker_service()
             .get_running_workers_in_shards()
             .await?;
+        crate::worker::filesystem_snapshots::delete_snapshots_of_stale_incarnations(
+            &this.agent_filesystem_snapshots(),
+            &stale,
+        );
 
         debug!(workers = ?workers, "Recovering running workers");
 

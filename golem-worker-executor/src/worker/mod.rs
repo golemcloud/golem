@@ -3394,6 +3394,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.initial_worker_metadata.agent_mode,
                     self.initial_worker_metadata.fingerprint,
                     self.oplog.shard_epoch(),
+                    &|fingerprint| {
+                        self.agent_filesystem_snapshots().delete_all_snapshots(
+                            &crate::filesystem_snapshot::AgentSnapshots::agent(
+                                &self.owned_agent_id,
+                                fingerprint,
+                            ),
+                            self.initial_worker_metadata.agent_mode,
+                        )
+                    },
                 )
                 .await;
             if let Err(error) = removed {
@@ -5439,26 +5448,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             agent_filesystem_snapshots::ConfirmOutcome::Deferred => {
                 agent_filesystem_snapshots::Confirmation::Deferred
             }
-        }
-    }
-
-    /// Gives the filesystem snapshot name of the last successful manual update, which the status
-    /// keeps as the manual-update baseline.
-    pub(crate) async fn manual_update_baseline_name(&self) -> Option<FilesystemSnapshotName> {
-        let index = self
-            .last_known_status
-            .load()
-            .last_manual_update_snapshot_index?;
-        match self.oplog.read(index).await {
-            OplogEntry::PendingUpdate {
-                description:
-                    UpdateDescription::SnapshotBased {
-                        filesystem_snapshot,
-                        ..
-                    },
-                ..
-            } => filesystem_snapshot,
-            _ => None,
         }
     }
 
@@ -8850,6 +8839,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let worker = self.clone();
         tokio::spawn(async move {
+            // The hold stops the deletes of the upload jobs of the agent until the revert ends, so
+            // retention removes no name that the revert can make a baseline again.
+            let revert_hold = worker.agent_filesystem_snapshots().begin_revert(
+                &crate::filesystem_snapshot::AgentSnapshots::agent(
+                    &worker.owned_agent_id,
+                    worker.initial_worker_metadata.fingerprint,
+                ),
+            );
             let mut cleanup = worker.owner_cleanup.lock().await;
             if worker.deletion_owns_retirement().await {
                 return Err(WorkerExecutorError::invalid_request(
@@ -8907,18 +8904,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker.status_checkpointer.begin_delete().await;
             worker.remove_from_active_agents().await;
             *cleanup = OwnerCleanupState::Retired;
-            result
+            result.map(|reverted| revert_hold.delete_snapshots(reverted))
         })
         .await
         .map_err(|error| WorkerExecutorError::runtime(format!("Worker revert failed: {error}")))?
     }
 
-    /// Called only after owner writers have drained, with the stopped instance locked.
+    /// Called only after owner writers have drained, with the stopped instance locked. Gives the
+    /// filesystem snapshot names that the committed revert made unused.
     async fn append_revert(
         &self,
         last_oplog_index: OplogIndex,
         expected_oplog_index: Option<OplogIndex>,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<Box<[FilesystemSnapshotName]>, WorkerExecutorError> {
         use crate::durable_host::durable_stream::StreamStoreError;
         use crate::services::oplog::DurableStreamOplogRecord;
 
@@ -8986,6 +8984,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )));
             }
 
+            let reverted = filesystem_snapshots::reverted_snapshot_names(
+                &entries,
+                &dropped_region,
+                &last_known_status.deleted_regions,
+            );
             let mut prospective_entries = entries;
             prospective_entries.insert(
                 region_end.next(),
@@ -9084,7 +9087,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.durable_stream_commit()(None).await;
             self.reattach_worker_status().await;
             self.current_component.store(Arc::new(restored_component));
-            Ok(())
+            Ok(reverted)
         }
     }
 

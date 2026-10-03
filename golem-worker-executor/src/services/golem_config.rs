@@ -2429,9 +2429,12 @@ pub struct FilesystemSnapshotUploadConfig {
     capture_wait: Duration,
     /// The number of periodic snapshots that retention keeps for each agent, the newest first.
     /// A revert restores exactly only from a periodic snapshot that the store still holds, so this
-    /// number sets how far back a revert can go without a full replay.
+    /// number sets how far back a revert can go without a full replay. One agent can have twice
+    /// this number of snapshot names, and a margin more, waiting for their delete.
     retained_periodic_snapshots: NonZeroUsize,
-    /// The number of manual-update snapshots that retention keeps for each agent.
+    /// The number of manual-update snapshots that retention keeps for each agent among those that
+    /// no successful or pending update of the agent uses. The snapshot of each successful or
+    /// pending update stays.
     retained_update_snapshots: NonZeroUsize,
 }
 
