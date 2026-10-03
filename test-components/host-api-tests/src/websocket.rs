@@ -1,3 +1,4 @@
+use futures_concurrency::future::Join;
 use golem_rust::{
     PromiseId, WebSocketMessage, WebsocketConnection, agent_definition, agent_implementation,
 };
@@ -16,6 +17,11 @@ pub trait WebsocketTest {
     fn receive_next_from_persisted(&self) -> String;
     /// Like `receive_next_from_persisted`, but returns websocket errors to the caller.
     fn receive_next_from_persisted_result(&self) -> Result<String, String>;
+    /// Concurrent `receive` and `receive-with-timeout` on the connection stored in
+    /// agent state, so both calls contend on reconnecting the same reconstructed
+    /// handle. Each result is the received text, `"timeout"` if the timed receive
+    /// expired, or `"Receive error: ..."` on failure.
+    async fn receive_lock_contention_from_persisted(&self, timeout_ms: u64) -> (String, String);
     /// Closes the persisted websocket and returns any close error to the caller.
     fn close_persisted_result(&self) -> Result<(), String>;
 
@@ -103,6 +109,31 @@ impl WebsocketTest for WebsocketTestImpl {
             WebSocketMessage::Text(t) => Ok(t),
             WebSocketMessage::Binary(b) => Ok(format!("{} bytes", b.len())),
         }
+    }
+
+    async fn receive_lock_contention_from_persisted(&self, timeout_ms: u64) -> (String, String) {
+        let ws = self.persisted_ws.borrow();
+        let ws = ws
+            .as_ref()
+            .expect("persisted websocket was not initialized");
+        fn text(message: WebSocketMessage) -> String {
+            match message {
+                WebSocketMessage::Text(t) => t,
+                WebSocketMessage::Binary(b) => format!("{} bytes", b.len()),
+            }
+        }
+        let (received, timed) = (ws.receive(), ws.receive_with_timeout(timeout_ms))
+            .join()
+            .await;
+        let received = received
+            .map(text)
+            .unwrap_or_else(|e| format!("Receive error: {e:?}"));
+        let timed = match timed {
+            Ok(Some(message)) => text(message),
+            Ok(None) => "timeout".to_string(),
+            Err(e) => format!("Receive error: {e:?}"),
+        };
+        (received, timed)
     }
 
     fn close_persisted_result(&self) -> Result<(), String> {
