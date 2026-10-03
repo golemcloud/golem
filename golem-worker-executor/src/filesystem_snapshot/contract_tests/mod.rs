@@ -57,6 +57,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use test_r::core::{DynamicTestRegistration, TestProperties};
+use tokio_util::task::AbortOnDropHandle;
 use uuid::Uuid;
 
 /// Opens a store over the storage of one case. Each call opens another store over the same
@@ -181,6 +182,10 @@ const CASES: &[(&str, Case)] = &[
             a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes_nothing(open)
                 .boxed()
         },
+    ),
+    (
+        "a_delete_all_waits_for_a_save_of_the_agent_that_began_before_it",
+        |open| a_delete_all_waits_for_a_save_of_the_agent_that_began_before_it(open).boxed(),
     ),
     ("a_store_that_is_shut_down_gives_stopped", |open| {
         a_store_that_is_shut_down_gives_stopped(open).boxed()
@@ -1777,6 +1782,101 @@ async fn a_call_whose_limiter_withdraws_gives_stopped_with_the_cause_and_changes
             listing(into.path()),
         ),
         (vec!["p-kept".to_string()], Vec::<String>::new(), Vec::new())
+    );
+}
+
+/// A limiter whose takes wait until the test opens it, and that counts its takes.
+#[derive(Clone)]
+struct GatedSlots {
+    gate: Arc<tokio::sync::Semaphore>,
+    takes: Arc<AtomicU64>,
+}
+
+impl GatedSlots {
+    /// A limiter that gives no slot until [`GatedSlots::open`].
+    fn shut() -> Self {
+        Self {
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            takes: Arc::default(),
+        }
+    }
+
+    /// Gives a slot to each take, now and later.
+    fn open(&self) {
+        self.gate
+            .add_permits(tokio::sync::Semaphore::MAX_PERMITS / 2);
+    }
+
+    fn takes(&self) -> u64 {
+        self.takes.load(Ordering::SeqCst)
+    }
+}
+
+impl RunSlots for GatedSlots {
+    fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
+        self.takes.fetch_add(1, Ordering::SeqCst);
+        let gate = Arc::clone(&self.gate);
+        async move {
+            gate.acquire_owned()
+                .await
+                .map(Slot::new)
+                .map_err(|_| Withdrawal::Stopped)
+        }
+        .boxed()
+    }
+
+    fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
+        std::future::pending().boxed()
+    }
+}
+
+async fn a_delete_all_waits_for_a_save_of_the_agent_that_began_before_it(open: OpenStore) {
+    // The limiter of the save holds its slot, so the save began and has not ended when the
+    // delete of all snapshots begins.
+    let store = open();
+    let scope = new_scope();
+    let tree = new_tree(&fixture());
+    let gate = GatedSlots::shut();
+    let saving = AbortOnDropHandle::new(tokio::spawn({
+        let (store, scope, gate) = (Arc::clone(&store), scope.clone(), gate.clone());
+        let tree = tree.path().to_path_buf();
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-1"),
+                    &tree,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &gate,
+                )
+                .await
+        }
+    }));
+    let began = futures::stream::repeat(())
+        .then(|()| async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            gate.takes()
+        })
+        .take(1000)
+        .any(|takes| async move { takes > 0 })
+        .await;
+    let deleting = AbortOnDropHandle::new(tokio::spawn({
+        let (store, scope) = (Arc::clone(&store), scope.clone());
+        async move { store.delete_all(&scope, &slots()).await }
+    }));
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let waited = !deleting.is_finished();
+    gate.open();
+    let saved = saving.await.unwrap();
+    let deleted = deleting.await.unwrap();
+
+    assert!(saved.is_ok(), "{saved:?}");
+    assert!(deleted.is_ok(), "{deleted:?}");
+    assert_eq!(
+        (began, waited, listed_names(&*store, &scope).await),
+        (true, true, Vec::<String>::new())
     );
 }
 

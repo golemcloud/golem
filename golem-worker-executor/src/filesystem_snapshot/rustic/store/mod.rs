@@ -50,6 +50,9 @@ use super::{
     PruneReport, PruneSettings, RepositoryKey, backup_options, open_existing, open_or_create,
     prune, run_blocking,
 };
+use crate::filesystem_snapshot::agent_work::{
+    AgentWorks, OperationWork, begin_operation, drain_agent,
+};
 use crate::filesystem_snapshot::clock::{Clock, SystemClock};
 use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
@@ -238,6 +241,9 @@ pub(crate) struct RusticSnapshotStore {
     /// Gives the wall time that the store compares with the times from storage, and the times that
     /// it writes.
     clock: Arc<dyn Clock>,
+    /// The work of each incarnation in this process, which a delete of all its snapshots waits
+    /// for.
+    works: AgentWorks,
     /// The slots of the reads ahead of snapshot files, which the backends of the store share.
     read_slots: Arc<tokio::sync::Semaphore>,
     /// The points of the clear of the directory of a restore where a test acts.
@@ -373,6 +379,7 @@ impl RusticSnapshotStore {
             tracker: TaskTracker::new(),
             low_priority,
             clock,
+            works: AgentWorks::default(),
             read_slots: Arc::new(tokio::sync::Semaphore::new(MAX_SNAPSHOT_FILE_READS)),
             #[cfg(test)]
             clear_hook: Arc::new(NoHook),
@@ -465,11 +472,17 @@ impl RusticSnapshotStore {
     /// Gives the spawner of the work that the store runs as a task, so that the work also ends when
     /// the caller of an operation stops waiting: the runtime of the operation, and the tracker of
     /// the store.
-    fn spawner(&self) -> anyhow::Result<Spawner> {
+    fn spawner(&self, work: &OperationWork) -> anyhow::Result<Spawner> {
         Ok(Spawner {
             tracker: self.tracker.clone(),
             runtime: runtime()?,
+            operation: work.clone(),
         })
+    }
+
+    /// Gives the share of a new operation of `scope` in the work of its incarnation.
+    fn work(&self, scope: &AgentSnapshots) -> OperationWork {
+        begin_operation(&self.works, scope)
     }
 
     /// Gives the values of the prune decision from the policy of the store.
@@ -484,18 +497,21 @@ impl RusticSnapshotStore {
     /// Gives a backend over the repository of the scope for the run with the token.
     fn scope_backend(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
         token: &CancellationToken,
     ) -> anyhow::Result<BlobBackend> {
-        self.backend(self.files(scope, token))
+        self.backend(self.files(work, scope, token))
     }
 
-    /// Runs the task on a blocking thread that the tracker counts.
+    /// Runs the task on a blocking thread that the tracker and the work `work` of the incarnation
+    /// of the operation count.
     async fn blocking<T: Send + 'static>(
         &self,
+        work: &OperationWork,
         task: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
     ) -> anyhow::Result<T> {
-        let tracked = self.tracker.token();
+        let tracked = (self.tracker.token(), work.clone());
         run_blocking(move || {
             let _tracked = tracked;
             task()
@@ -503,9 +519,14 @@ impl RusticSnapshotStore {
         .await
     }
 
-    /// Gives the blobs of the scope for the run with the token. A wait between two tries of a call
-    /// ends at the shutdown.
-    fn files(&self, scope: &AgentSnapshots, token: &CancellationToken) -> SnapshotFiles {
+    /// Gives the blobs of the scope for the run with the token, which hold the work `work` of the
+    /// incarnation of the operation. A wait between two tries of a call ends at the shutdown.
+    fn files(
+        &self,
+        work: &OperationWork,
+        scope: &AgentSnapshots,
+        token: &CancellationToken,
+    ) -> SnapshotFiles {
         SnapshotFiles::new(
             self.storage.clone(),
             (*scope.0).clone(),
@@ -515,13 +536,20 @@ impl RusticSnapshotStore {
         )
         .with_retry_stop(self.root.clone())
         .with_tries(self.policy.in_call_tries())
+        .of_work(work)
     }
 
     /// Links the cancel of a save to the token of a run, so a cancel of the save cancels the run.
     /// The link ends with the run, and the tracker counts it.
-    fn link_cancel(&self, cancel: &CancellationToken, token: &CancellationToken) {
-        let (cancel, token) = (cancel.clone(), token.clone());
+    fn link_cancel(
+        &self,
+        work: &OperationWork,
+        cancel: &CancellationToken,
+        token: &CancellationToken,
+    ) {
+        let (cancel, token, work) = (cancel.clone(), token.clone(), work.clone());
         self.tracker.spawn(async move {
+            let _work = work;
             tokio::select! {
                 () = cancel.cancelled() => token.cancel(),
                 () = token.cancelled() => {}
@@ -546,10 +574,11 @@ impl RusticSnapshotStore {
     /// write. A prune that succeeds deletes each claim of its ledger.
     async fn prune_when_due(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
         token: &CancellationToken,
     ) -> anyhow::Result<()> {
-        let files = self.files(scope, token).once();
+        let files = self.files(work, scope, token).once();
         let policy = self.prune_policy();
         let Some(due) = due_prune(&files, &*self.clock, &policy).await? else {
             return Ok(());
@@ -561,7 +590,7 @@ impl RusticSnapshotStore {
         if self.root.is_cancelled() {
             anyhow::bail!("the filesystem snapshot store is shut down");
         }
-        let spawner = self.spawner()?;
+        let spawner = self.spawner(work)?;
         let Some(claim) = Claim::take(
             &files,
             due.claim,
@@ -587,7 +616,7 @@ impl RusticSnapshotStore {
         };
         // No attempt of a prune that found a snapshot file gone changed the repository, so no
         // prune ran, and the claim goes.
-        let pruned = match self.run_prune(backend, &files, &claim).await {
+        let pruned = match self.run_prune(work, backend, &files, &claim).await {
             Ok(None) => {
                 claim.release().await;
                 anyhow::bail!(
@@ -634,6 +663,7 @@ impl RusticSnapshotStore {
     /// prune leaves marked packs. It gives `None` when each attempt found a snapshot file gone.
     async fn run_prune(
         &self,
+        work: &OperationWork,
         backend: Arc<BlobBackend>,
         files: &SnapshotFiles,
         claim: &Claim,
@@ -645,7 +675,7 @@ impl RusticSnapshotStore {
         // The plan of a prune reads each snapshot file before the prune changes the repository.
         // A forget of another delete can remove a listed file before its read, so the prune
         // plans again from a new listing.
-        let pruning = self.blocking(move || {
+        let pruning = self.blocking(work, move || {
             low_priority.run("fs-snap-prune", move || {
                 // A delete that dropped before this point released the claim, so no prune runs.
                 if !start.start() {
@@ -685,6 +715,7 @@ impl RusticSnapshotStore {
     #[allow(clippy::too_many_arguments)]
     async fn save_run(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
         name: &SnapshotName,
         tree: &Path,
@@ -693,9 +724,9 @@ impl RusticSnapshotStore {
         t0: Instant,
     ) -> Ran<Result<SnapshotInfo, SaveError>> {
         let (token, _guard) = self.run_token();
-        self.link_cancel(cancel, &token);
+        self.link_cancel(work, cancel, &token);
         let stage = Arc::new(SnapshotStage::default());
-        let backend = match self.scope_backend(scope, &token) {
+        let backend = match self.scope_backend(work, scope, &token) {
             Ok(backend) => Arc::new(backend.staging_in(stage.clone())),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
@@ -705,7 +736,7 @@ impl RusticSnapshotStore {
         let tree: Box<Path> = tree.into();
         let low_priority = self.low_priority;
         let clock = self.clock.clone();
-        let mut backup = pin!(self.blocking(move || {
+        let mut backup = pin!(self.blocking(work, move || {
             low_priority.run("fs-snap-save", move || {
                 Ok(stage_save_again_after_a_missing_index(
                     &backend, &stage, &key, &policy, &name, &tree, parent, &*clock,
@@ -753,7 +784,7 @@ impl RusticSnapshotStore {
             Err(error) => return save_failure(error),
         };
         let bound = self.policy.index_read_bound(t0);
-        match publish(&self.files(scope, &self.root), &staged, bound, cancel).await {
+        match publish(&self.files(work, scope, &self.root), &staged, bound, cancel).await {
             Published::Written => Ran::Answered(Ok(info)),
             Published::NotWritten { end, failure, late } => Ran::Ended(Ended {
                 end,
@@ -774,12 +805,13 @@ impl RusticSnapshotStore {
     /// could not read. It holds no slot and ends only at the shutdown.
     async fn own_name_check(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
         name: &SnapshotName,
         own: OwnFile,
     ) -> Checked {
         let OwnFile { path, info } = own;
-        let files = self.files(scope, &self.root);
+        let files = self.files(work, scope, &self.root);
         let listed = match files
             .list_below("check_name", Path::new(FileType::Snapshot.dirname()))
             .await
@@ -797,7 +829,7 @@ impl RusticSnapshotStore {
             Err(_) => return Checked::Unreadable,
         };
         let named = self
-            .blocking(move || {
+            .blocking(work, move || {
                 Ok(match open_existing(backend.clone(), &key)? {
                     Some(repository) => has_name(&scope_snapshots(&repository, &backend)?, &name),
                     None => false,
@@ -814,12 +846,13 @@ impl RusticSnapshotStore {
     /// One run of a restore, as [`reload::next_step`] decides each step.
     async fn restore_run(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
         name: &SnapshotName,
         into: &Path,
     ) -> Ran<Result<SnapshotInfo, RestoreFailure>> {
         let (token, _guard) = self.run_token();
-        let backend = match self.scope_backend(scope, &token) {
+        let backend = match self.scope_backend(work, scope, &token) {
             Ok(backend) => Arc::new(backend),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
@@ -839,26 +872,29 @@ impl RusticSnapshotStore {
             threads: Some(self.policy.restore_reader_threads),
             ..self.low_priority
         };
-        self.blocking(move || pool.in_own_pool("fs-snap-restore", move || Ok(run.run())))
-            .await
-            .unwrap_or_else(|error| Ran::Ended(ended_by(error)))
+        self.blocking(work, move || {
+            pool.in_own_pool("fs-snap-restore", move || Ok(run.run()))
+        })
+        .await
+        .unwrap_or_else(|error| Ran::Ended(ended_by(error)))
     }
 
     /// One run of a `stat`.
     async fn stat_run(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
         name: &SnapshotName,
     ) -> Ran<Result<Option<SnapshotInfo>, ReadError>> {
         let (token, _guard) = self.run_token();
-        let backend = match self.scope_backend(scope, &token) {
+        let backend = match self.scope_backend(work, scope, &token) {
             Ok(backend) => Arc::new(backend),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
         let key = self.key.clone();
         let name = name.clone();
         match self
-            .blocking(move || {
+            .blocking(work, move || {
                 Ok(match open_existing(backend.clone(), &key)? {
                     Some(repository) => lookup(scope_snapshots(&repository, &backend)?, &name),
                     None => Lookup::Missing,
@@ -876,16 +912,17 @@ impl RusticSnapshotStore {
     /// One run of a `list`.
     async fn list_run(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
     ) -> Ran<Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError>> {
         let (token, _guard) = self.run_token();
-        let backend = match self.scope_backend(scope, &token) {
+        let backend = match self.scope_backend(work, scope, &token) {
             Ok(backend) => Arc::new(backend),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
         let key = self.key.clone();
         match self
-            .blocking(move || {
+            .blocking(work, move || {
                 Ok(match open_existing(backend.clone(), &key)? {
                     Some(repository) => {
                         newest_first(listed(scope_snapshots(&repository, &backend)?))
@@ -905,18 +942,19 @@ impl RusticSnapshotStore {
     /// fails gives a warning and a count, and the next delete prunes.
     async fn delete_run(
         &self,
+        work: &OperationWork,
         scope: &AgentSnapshots,
         names: &HashSet<Box<str>>,
     ) -> Ran<Result<(), CallError>> {
         let (token, _guard) = self.run_token();
-        let backend = match self.scope_backend(scope, &token) {
+        let backend = match self.scope_backend(work, scope, &token) {
             Ok(backend) => Arc::new(backend),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
         let key = self.key.clone();
         let names = names.clone();
         let found = self
-            .blocking(move || {
+            .blocking(work, move || {
                 let Some(repository) = open_existing(backend.clone(), &key)? else {
                     return Ok(None);
                 };
@@ -942,7 +980,7 @@ impl RusticSnapshotStore {
         // The record comes before the forget, so a stop between the two cannot lose the bytes. A
         // forget that then fails ends the run, and the record stays, which only brings a prune
         // earlier.
-        let files = self.files(scope, &token);
+        let files = self.files(work, scope, &token);
         if freed > 0 {
             let snapshots = ids
                 .iter()
@@ -956,7 +994,7 @@ impl RusticSnapshotStore {
         // blocking thread starts the threads of that pool, so they have its normal priority.
         let pool = self.low_priority;
         if let Err(error) = self
-            .blocking(move || {
+            .blocking(work, move || {
                 pool.in_own_pool("fs-snap-delete", move || {
                     repository.delete_snapshots(&ids)?;
                     Ok(())
@@ -966,7 +1004,7 @@ impl RusticSnapshotStore {
         {
             return Ran::Ended(ended_by(error));
         }
-        if let Err(error) = self.prune_when_due(scope, &token).await {
+        if let Err(error) = self.prune_when_due(work, scope, &token).await {
             warn!(
                 snapshots = ?scope,
                 error = %format!("{error:#}"),
@@ -983,9 +1021,13 @@ impl RusticSnapshotStore {
     }
 
     /// One run of a delete of all snapshots.
-    async fn delete_all_run(&self, scope: &AgentSnapshots) -> Ran<Result<(), CallError>> {
+    async fn delete_all_run(
+        &self,
+        work: &OperationWork,
+        scope: &AgentSnapshots,
+    ) -> Ran<Result<(), CallError>> {
         let (token, _guard) = self.run_token();
-        match delete_scope(&self.files(scope, &token)).await {
+        match delete_scope(&self.files(work, scope, &token)).await {
             Ok(()) => Ran::Answered(Ok(())),
             Err(error) => Ran::Ended(Ended::new(storage_end(&error), error)),
         }
@@ -995,6 +1037,7 @@ impl RusticSnapshotStore {
     /// that ended without an answer gives the instant after which it landed or never lands.
     async fn copy_run(
         &self,
+        works: &(OperationWork, OperationWork),
         from: &AgentSnapshots,
         to: &AgentSnapshots,
         again: bool,
@@ -1002,8 +1045,8 @@ impl RusticSnapshotStore {
         let (token, _guard) = self.run_token();
         let late = Arc::new(LateWrites::default());
         let copied = copy_scope(
-            &self.files(from, &token).recording(late.clone()),
-            &self.files(to, &token).recording(late.clone()),
+            &self.files(&works.0, from, &token).recording(late.clone()),
+            &self.files(&works.1, to, &token).recording(late.clone()),
             again,
         )
         .await;
@@ -1088,6 +1131,9 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         cancel: &CancellationToken,
         slots: &dyn RunSlots,
     ) -> Result<SnapshotInfo, SaveError> {
+        // The call takes its share of the work of the incarnation first, so a later delete of all
+        // snapshots waits for it.
+        let work = &self.work(scope);
         if self.root.is_cancelled() {
             return Err(SaveError::Stopped(Withdrawal::Stopped));
         }
@@ -1099,8 +1145,8 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .call(
                 save_answers(),
                 |t0| self.policy.backup_end(t0),
-                |start| self.save_run(scope, name, tree, parent.clone(), cancel, start.t0),
-                |own| self.own_name_check(scope, name, own),
+                |start| self.save_run(work, scope, name, tree, parent.clone(), cancel, start.t0),
+                |own| self.own_name_check(work, scope, name, own),
             )
             .await
     }
@@ -1112,6 +1158,9 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         into: &Path,
         slots: &dyn RunSlots,
     ) -> Result<SnapshotInfo, RestoreFailure> {
+        // The call takes its share of the work of the incarnation first, so a later delete of all
+        // snapshots waits for it.
+        let work = &self.work(scope);
         if self.root.is_cancelled() {
             return Err(RestoreFailure::Stopped(Withdrawal::Stopped));
         }
@@ -1126,7 +1175,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .call(
                 restore_answers(),
                 |_| None,
-                |_| self.restore_run(scope, name, into),
+                |_| self.restore_run(work, scope, name, into),
                 no_check,
             )
             .await
@@ -1140,11 +1189,12 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         if self.root.is_cancelled() {
             return Err(ReadError::Stopped);
         }
+        let work = &self.work(scope);
         self.shell(Kind::Stat, &Unlimited, None)
             .call(
                 read_answers(),
                 |_| None,
-                |_| self.stat_run(scope, name),
+                |_| self.stat_run(work, scope, name),
                 no_check,
             )
             .await
@@ -1155,8 +1205,14 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         scope: &AgentSnapshots,
         slots: &dyn RunSlots,
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
+        let work = &self.work(scope);
         self.shell(Kind::List, slots, None)
-            .call(call_answers(), |_| None, |_| self.list_run(scope), no_check)
+            .call(
+                call_answers(),
+                |_| None,
+                |_| self.list_run(work, scope),
+                no_check,
+            )
             .await
     }
 
@@ -1171,11 +1227,12 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .map(|name| Box::<str>::from(name.as_str()))
             .collect::<HashSet<_>>();
         let names = &names;
+        let work = &self.work(scope);
         self.shell(Kind::Delete, slots, None)
             .call(
                 call_answers(),
                 |_| None,
-                |_| self.delete_run(scope, names),
+                |_| self.delete_run(work, scope, names),
                 no_check,
             )
             .await
@@ -1186,11 +1243,18 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         scope: &AgentSnapshots,
         slots: &dyn RunSlots,
     ) -> Result<(), CallError> {
+        // The drain comes before the first take, so the call holds no slot while it waits for the
+        // work of the incarnation that began before it. A shutdown ends the wait.
+        let work = &tokio::select! {
+            biased;
+            () = self.root.cancelled() => self.work(scope),
+            work = drain_agent(&self.works, scope) => work,
+        };
         self.shell(Kind::DeleteAll, slots, None)
             .call(
                 call_answers(),
                 |_| None,
-                |_| self.delete_all_run(scope),
+                |_| self.delete_all_run(work, scope),
                 no_check,
             )
             .await
@@ -1202,11 +1266,12 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         to: &AgentSnapshots,
         slots: &dyn RunSlots,
     ) -> Result<(), CallError> {
+        let works = &(self.work(from), self.work(to));
         self.shell(Kind::Copy, slots, None)
             .call(
                 call_answers(),
                 |_| None,
-                |start| self.copy_run(from, to, start.number > 1),
+                |start| self.copy_run(works, from, to, start.number > 1),
                 no_check,
             )
             .await
