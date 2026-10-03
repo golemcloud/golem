@@ -261,8 +261,13 @@ design; it does not mean every cached allocation is physically freed immediately
 durable sleep, reclaimable cache time and unloaded time do not accrue memory or storage byte-time.
 
 `worker/monthly.rs` attaches one monitor to an enabled, permit-held execution window. It checks
-local capacity every 30 seconds and on applied Registry updates, settling owner-scoped byte-time
-first and reading published fuel reservations without locking the Store. It neither scans other
+local capacity on a normal 30-second cadence and on applied Registry updates, settling owner-scoped
+byte-time first and reading published fuel reservations without locking the Store. Before each wait,
+it settles that usage and wakes earlier when exact remaining monthly memory byte-nanoseconds divided
+by the primary runtime's current allocated linear-memory bytes predicts exhaustion sooner. The
+horizon rounds up to a nanosecond; zero allocation, exhausted or inapplicable memory caps retain the
+normal cadence, including rejected-stop retries. This owner-rate estimate is not a global account
+prediction or a universal interruption deadline. It neither scans other
 account owners nor changes Registry refresh cadence. All-off windows have no monthly monitor or
 capacity subscription. Window closure invalidates its target and joins the monitor and registered
 stop cleanup. During unload, the filesystem drains before its final allocation read. That allocation

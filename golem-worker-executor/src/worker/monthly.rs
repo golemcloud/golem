@@ -127,6 +127,7 @@ impl ExecutionWindow {
             let target_task = target.clone();
             let weak_worker = Arc::downgrade(worker);
             let actor = worker.state_actor.clone();
+            let memory = window.monthly_memory_tracker();
             #[cfg(feature = "test-utils")]
             let clock = worker.monthly_clock.lock().unwrap().clone();
             let task = tokio::spawn(async move {
@@ -134,7 +135,19 @@ impl ExecutionWindow {
                 let _exited = target_task.exited.clone().drop_guard();
                 let result = std::panic::AssertUnwindSafe(async {
                     loop {
-                        let duration = Duration::from_secs(30);
+                        let Some(worker) = weak_worker.upgrade() else {
+                            break;
+                        };
+                        worker.owner_runtime_resources.settle_resource_usage();
+                        let duration = memory
+                            .as_ref()
+                            .and_then(|memory| {
+                                worker.resource_entry.monthly_memory_check_after(memory.current_bytes())
+                            })
+                            .map_or(Duration::from_secs(30), |horizon| {
+                                horizon.min(Duration::from_secs(30))
+                            });
+                        drop(worker);
                         #[cfg(feature = "test-utils")]
                         let tick = match &clock {
                             Some(clock) => futures::future::Either::Left(clock.sleep(duration)),
@@ -1066,13 +1079,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     #[cfg(feature = "test-utils")]
     pub async fn concurrent_agent_permit_is_held(&self) -> bool {
-        match self.instance.lock().await.deletion_runtime() {
-            WorkerInstance::Running(running) => running
-                .concurrent_agent_permit_held
-                .load(std::sync::atomic::Ordering::Acquire),
-            WorkerInstance::Stopping(_) => true,
-            _ => false,
-        }
+        self.instance.lock().await.concurrent_agent_permit_is_held()
     }
 
     async fn lock_for_outcome(

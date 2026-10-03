@@ -997,6 +997,22 @@ impl AtomicResourceEntry {
         )
     }
 
+    pub(crate) fn monthly_memory_check_after(&self, allocated_bytes: u64) -> Option<Duration> {
+        if allocated_bytes == 0 || !self.metering.memory {
+            return None;
+        }
+        let mut revision_state = self.usage_revision_state.lock().unwrap();
+        self.update_usage_period_locked(&mut revision_state, AccountUsagePeriod::current());
+        let remaining = self.memory_settlement_limit(&revision_state)?;
+        if remaining == 0 {
+            return None;
+        }
+        let nanoseconds = remaining.div_ceil(allocated_bytes as u128);
+        Some(Duration::from_nanos(
+            nanoseconds.min(u64::MAX as u128) as u64
+        ))
+    }
+
     fn memory_settlement_limit(&self, revision_state: &UsageRevisionState) -> Option<u128> {
         let gate = revision_state.monthly_policy.as_ref()?;
         (gate.period == revision_state.current_period
@@ -3653,6 +3669,69 @@ mod tests {
             7,
             0,
         )
+    }
+
+    #[test]
+    fn monthly_memory_check_after_uses_exact_remaining_budget_and_ceiling() {
+        let entry = memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            1,
+        );
+        entry.record_resource_settlement_for_period(
+            AgentMode::Durable,
+            AccountUsagePeriod::current(),
+            ByteTimeSettlement {
+                units: 0,
+                remainder: BYTE_NANOSECONDS_PER_GB_SECOND - 10,
+            },
+            ByteTimeSettlement::default(),
+        );
+        assert_eq!(
+            entry.monthly_memory_check_after(2),
+            Some(Duration::from_nanos(5))
+        );
+        assert_eq!(
+            entry.monthly_memory_check_after(3),
+            Some(Duration::from_nanos(4))
+        );
+        assert_eq!(
+            entry.monthly_memory_check_after(11),
+            Some(Duration::from_nanos(1))
+        );
+        let huge = memory_entry(
+            AccountUsagePeriod::current(),
+            MonthlyUsageMode::HardLimit,
+            u64::MAX,
+        );
+        assert_eq!(
+            huge.monthly_memory_check_after(1),
+            Some(Duration::from_nanos(u64::MAX))
+        );
+    }
+
+    #[test]
+    fn monthly_memory_check_after_has_no_zero_or_inapplicable_horizon() {
+        let period = AccountUsagePeriod::current();
+        let hard = memory_entry(period, MonthlyUsageMode::HardLimit, 1);
+        assert_eq!(hard.monthly_memory_check_after(0), None);
+        let exhausted = memory_entry(period, MonthlyUsageMode::HardLimit, 0);
+        assert_eq!(exhausted.monthly_memory_check_after(1), None);
+        let overage = memory_entry(period, MonthlyUsageMode::AllowOverage, 1);
+        assert_eq!(overage.monthly_memory_check_after(1), None);
+        let disabled = compute_entry(period, MonthlyUsageMode::HardLimit, 1);
+        assert_eq!(disabled.monthly_memory_check_after(1), None);
+        hard.usage_revision_state
+            .lock()
+            .unwrap()
+            .monthly_policy
+            .as_mut()
+            .unwrap()
+            .period = AccountUsagePeriod {
+            year: 2000,
+            month: 1,
+        };
+        assert_eq!(hard.monthly_memory_check_after(1), None);
     }
 
     fn storage_entry(

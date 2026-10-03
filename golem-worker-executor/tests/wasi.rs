@@ -3783,8 +3783,11 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use anyhow::Context as _;
     use golem_common::data_value;
-    use golem_common::model::oplog::PublicOplogEntry;
+    use golem_common::model::oplog::{
+        PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+    };
     use std::collections::HashSet;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -3839,15 +3842,41 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         .map(|entry| entry.oplog_index)
         .unwrap_or(OplogIndex::INITIAL);
 
+    let key = IdempotencyKey::fresh();
+    let invocation_key = key.clone();
+    let method_counts = |oplog: &[PublicOplogEntryWithIndex]| {
+        let mut current_is_method = false;
+        let mut admitted = 0;
+        let mut finished = 0;
+        for entry in oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > before_invocation)
+        {
+            match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(start) => {
+                    current_is_method = matches!(&start.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.idempotency_key == key && method.method_name == "tcp_collect_p3");
+                    admitted += usize::from(current_is_method);
+                }
+                PublicOplogEntry::AgentInvocationFinished(_) if current_is_method => {
+                    finished += 1;
+                }
+                _ => {}
+            }
+        }
+        (admitted, finished)
+    };
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let agent_id_clone = agent_id.clone();
     let fiber = spawn(
         async move {
             executor_clone
-                .invoke_and_await_agent(
+                .invoke_and_await_agent_with_key(
                     &component_clone,
                     &agent_id_clone,
+                    &invocation_key,
                     "tcp_collect_p3",
                     data_value!(port),
                 )
@@ -3860,8 +3889,10 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     // Wait for the receive parent and chunk Starts, and require both to remain open while the
     // retained invocation has no Finished entry.
     tokio::time::timeout(Duration::from_secs(30), connected_rx.recv())
-        .await?
+        .await
+        .context("P3 TCP initial connection acceptance")?
         .ok_or_else(|| anyhow!("tcp server stopped before the guest connected"))?;
+    let mut pending_summary = String::from("no oplog sample");
     let (receive_start, chunk_start) = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             executor.commit_oplog(&worker_id).await?;
@@ -3899,18 +3930,17 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let admitted = oplog
-                .iter()
-                .filter(|entry| entry.oplog_index > before_invocation)
-                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
-                .count();
-            let finished = oplog
-                .iter()
-                .filter(|entry| entry.oplog_index > before_invocation)
-                .filter(|entry| {
-                    matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
-                })
-                .count();
+            let (admitted, finished) = method_counts(&oplog);
+            let open_names = oplog.iter().filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if !terminal_starts.contains(&entry.oplog_index) => {
+                    Some(start.function_name.chars().take(100).collect::<String>())
+                }
+                _ => None,
+            }).take(6).collect::<Vec<_>>();
+            pending_summary = format!(
+                "method Started/Finished={admitted}/{finished}, receive Starts={}, chunk Starts={}, open names={open_names:?}",
+                receive_starts.len(), chunk_starts.len(),
+            );
             if receive_starts.len() == 1
                 && chunk_starts.len() == 1
                 && !terminal_starts.contains(&receive_starts[0])
@@ -3923,12 +3953,16 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
-    .await??;
+    .await
+    .with_context(|| format!("P3 TCP open receive parent and chunk Starts with one unfinished invocation: {pending_summary}"))??;
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 
-    executor.interrupt(&worker_id).await?;
+    executor
+        .interrupt(&worker_id)
+        .await
+        .context("P3 TCP interrupt request")?;
 
-    let result = fiber.await?;
+    let result = fiber.await.context("P3 TCP interrupted invocation join")?;
     assert!(result.is_err());
     let err_msg = format!("{}", result.err().unwrap());
     assert!(
@@ -3942,11 +3976,13 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
             AgentStatus::Interrupted,
             Duration::from_secs(10),
         )
-        .await?;
+        .await
+        .context("P3 TCP Interrupted status after stop")?;
 
     assert!(
         tokio::time::timeout(Duration::from_secs(10), closed_rx.recv())
-            .await?
+            .await
+            .context("P3 TCP physical socket closure after interrupt")?
             .unwrap_or(false),
         "interrupting the worker must close the in-flight TCP connection"
     );
@@ -3972,13 +4008,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
         );
     }
     assert_eq!(
-        before_resume
-            .iter()
-            .filter(|entry| entry.oplog_index > before_invocation)
-            .filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
-            })
-            .count(),
+        method_counts(&before_resume).1,
         0,
         "the interrupted retained invocation must remain unfinished before resume"
     );
@@ -3986,21 +4016,16 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     // Resume must reconstruct and finish the retained invocation before any fresh invocation is
     // submitted. The completed connect is replayed from the oplog, so reconstruction need not
     // open a second external connection.
-    executor.resume(&worker_id, false).await?;
+    executor
+        .resume(&worker_id, false)
+        .await
+        .context("P3 TCP resume request")?;
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
-        .await?;
+        .await
+        .context("P3 TCP retained invocation reaches Idle after resume")?;
     let after_resume = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let admitted = after_resume
-        .iter()
-        .filter(|entry| entry.oplog_index > before_invocation)
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
-        .count();
-    let finished = after_resume
-        .iter()
-        .filter(|entry| entry.oplog_index > before_invocation)
-        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-        .count();
+    let (admitted, finished) = method_counts(&after_resume);
     assert_eq!(
         (admitted, finished),
         (1, 1),
@@ -4086,7 +4111,8 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 
     let result2 = executor
         .invoke_and_await_agent(&component, &agent_id, "tcp_collect_p3", data_value!(port))
-        .await?
+        .await
+        .context("P3 TCP fresh liveness invocation")?
         .into_typed::<Result<String, String>>()?;
     assert_eq!(result2, Ok("hello".to_string()));
     assert_eq!(

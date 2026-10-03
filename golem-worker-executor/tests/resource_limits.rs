@@ -635,8 +635,10 @@ async fn unloading_window_joins_first_stop_and_retains_late_stop(
         Err(tokio::sync::oneshot::error::TryRecvError::Empty)
     ));
     assert!(worker.concurrent_agent_permit_is_held().await);
+    let acquisitions = worker.permit_acquisitions_for_test();
     release_close.send(false).unwrap();
     second.await?;
+    assert_eq!(worker.permit_acquisitions_for_test(), acquisitions);
     assert!(!worker.concurrent_agent_permit_is_held().await);
     assert_eq!(worker.resident_generation_for_test(), generation);
     release_second.send(false).unwrap();

@@ -341,6 +341,12 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 break;
             }
             if self.permit_state.is_none() {
+                if let Err(error) = self.parent.join_stop_progress().await {
+                    self.parent
+                        .complete_startup(self.start_attempt, Err(error.clone()));
+                    self.stop_cleanup_failed(error).await;
+                    break;
+                }
                 let parent = self.parent.clone();
                 let permit_agent_id = self.owned_agent_id.agent_id().clone();
                 let permit = parent
@@ -4408,6 +4414,7 @@ mod tests {
                     startup_failure: None,
                 },
                 pending_live_invocations: PendingLiveInvocationDisposition::Preserve,
+                concurrent_agent_permit_held: Arc::new(AtomicBool::new(false)),
             },
             final_state,
         );

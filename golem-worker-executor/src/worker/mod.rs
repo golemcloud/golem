@@ -664,6 +664,17 @@ impl WorkerInstance {
         }
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
+    fn concurrent_agent_permit_is_held(&self) -> bool {
+        match self.deletion_runtime() {
+            Self::Running(running) => running.concurrent_agent_permit_held.load(Ordering::Acquire),
+            Self::Stopping(stopping) => stopping
+                .concurrent_agent_permit_held
+                .load(Ordering::Acquire),
+            _ => false,
+        }
+    }
+
     fn deletion_runtime_mut(&mut self) -> &mut Self {
         match self {
             Self::Deleting(deleting) => &mut deleting.runtime,
@@ -10341,6 +10352,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // drop the running worker, this signals to the invocation loop to start exiting.
                     // `stop()` consumes the RunningWorker and drops everything but
                     // its join handle, releasing its memory grant back to the gate.
+                    #[cfg(any(test, feature = "test-utils"))]
+                    let concurrent_agent_permit_held = running.concurrent_agent_permit_held.clone();
                     let run_loop_handle = running.stop(unload_request);
                     let notify = OneShotEvent::new();
                     crate::metrics::workers::dec_worker_memory_resident();
@@ -10348,6 +10361,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         notify: notify.clone(),
                         final_state,
                         pending_live_invocations,
+                        #[cfg(any(test, feature = "test-utils"))]
+                        concurrent_agent_permit_held,
                     });
                     StopResult::NeedsWaitForLoopExit {
                         run_loop_handle,
@@ -12776,6 +12791,8 @@ struct StoppingWorker {
     notify: OneShotEvent,
     final_state: FinalWorkerState,
     pending_live_invocations: PendingLiveInvocationDisposition,
+    #[cfg(any(test, feature = "test-utils"))]
+    concurrent_agent_permit_held: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -14182,6 +14199,7 @@ mod tests {
                 startup_failure: None,
             },
             pending_live_invocations: PendingLiveInvocationDisposition::Preserve,
+            concurrent_agent_permit_held: Arc::new(AtomicBool::new(false)),
         });
 
         merge_run_loop_failure(&mut instance, error);

@@ -98,6 +98,38 @@ async fn all_off_pending_close_retains_task_and_permit_after_observer_drop() {
 
 #[test]
 #[timeout("5s")]
+async fn stopping_instance_reports_real_permit_release_before_state_transition() {
+    let (window, held) = unmetered_window().await;
+    let instance = WorkerInstance::Stopping(super::super::StoppingWorker {
+        notify: golem_common::one_shot::OneShotEvent::new(),
+        final_state: super::super::FinalWorkerState::Unloaded {
+            startup_failure: None,
+        },
+        pending_live_invocations: super::super::PendingLiveInvocationDisposition::Preserve,
+        concurrent_agent_permit_held: held.clone(),
+    });
+    let progress = window.stop_progress.clone();
+    let (release, wait) = tokio::sync::oneshot::channel();
+    progress
+        .lock()
+        .unwrap()
+        .tasks
+        .push(async move { wait.await.unwrap() }.boxed().shared());
+    let closing = window.close(Instant::now() + Duration::from_secs(1));
+    let successor = progress.lock().unwrap().release.clone().unwrap();
+    assert!(held.load(Ordering::Acquire));
+    assert!(instance.concurrent_agent_permit_is_held());
+    assert!(successor.clone().now_or_never().is_none());
+    release.send(Ok(())).unwrap();
+    successor.await.unwrap();
+    closing.await.unwrap();
+    assert!(matches!(instance, WorkerInstance::Stopping(_)));
+    assert!(!held.load(Ordering::Acquire));
+    assert!(!instance.concurrent_agent_permit_is_held());
+}
+
+#[test]
+#[timeout("5s")]
 async fn all_off_ready_close_converts_panic_and_keeps_the_failed_seal() {
     let (window, held) = unmetered_window().await;
     let progress = window.stop_progress.clone();

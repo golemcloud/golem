@@ -329,6 +329,13 @@ impl ResourceUsageMeteringWindow {
         }
     }
 
+    pub(crate) fn monthly_memory_tracker(&self) -> Option<LinearMemoryTracker> {
+        let shared = self.shared.as_ref()?;
+        shared
+            .memory_enabled
+            .then(|| shared.account.linear_memory.clone())
+    }
+
     pub(crate) fn usage_flusher(&self) -> Option<Weak<dyn ResourceUsageFlusher>> {
         let meter: Arc<dyn ResourceUsageFlusher> = self.shared.as_ref()?.meter.upgrade()?;
         Some(Arc::downgrade(&meter))
