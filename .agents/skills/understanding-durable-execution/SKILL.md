@@ -347,7 +347,7 @@ Neither classification depends on error text. Independent guest traps, owner inf
 and tail-work failures keep their original classification. Tests in
 `tests/api/monthly_lifecycle_regressions.rs` gate the frozen publisher against real monthly admission
 and verify that a consumed Suspend cannot survive joined unload into the next activation. A timeout selected before stop acceptance remains authoritative.
-Real Worker tests in `tests/api/monthly_deadline.rs` expire the actual invocation timer while
+Real Worker tests in `tests/api/monthly/selection.rs` expire the actual invocation timer while
 silent TCP receive is pending and the accepted stop driver is held before publication. A result
 selected first retains its writer completion through the existing commit receipt and waiter
 notification. A later stop waits for that completion before fencing or signalling, and cannot
@@ -358,8 +358,8 @@ without publishing a success or failure result. Selection stays authoritative, a
 retirement still joins physical cleanup before removing the exact old generation. A missing receipt
 or panic remains a lost-writer error; a latched lost-shard reason never erases cleanup health.
 `tests/api/fenced_outcome.rs` gates both selected success and guest failure through epoch takeover,
-physical release, old-generation removal and higher-epoch regrant. Tests in `tests/api/monthly_cause.rs`,
-`tests/api/monthly_cutoff.rs` and `tests/resource_limits/stop_cause.rs` gate publication and
+physical release, old-generation removal and higher-epoch regrant. Tests in `tests/api/monthly/selection.rs`
+and `tests/resource_limits/stop_cause.rs` gate publication and
 selection on real Workers, including silent TCP and a blocked concurrent-agent permit.
 
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
