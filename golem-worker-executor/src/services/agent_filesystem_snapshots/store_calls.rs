@@ -697,10 +697,20 @@ impl StoreCalls {
         else {
             return Err(CallError::Stopped(Withdrawal::Stopped));
         };
-        match handle.await.unwrap_or(CallResult::ShutDown) {
+        let started = Instant::now();
+        let copied = match handle.await.unwrap_or(CallResult::ShutDown) {
             CallResult::Done(result) => result,
             CallResult::ShutDown => Err(CallError::Stopped(Withdrawal::Stopped)),
-        }
+        };
+        crate::metrics::filesystem_snapshots::record_copy(
+            match &copied {
+                Ok(()) => "copied",
+                Err(CallError::Stopped(_)) => "stopped",
+                Err(CallError::Failed(_)) => "failed",
+            },
+            started.elapsed(),
+        );
+        copied
     }
 
     /// Runs `op`, a store operation of `agent`, in a task of the jobs. The begin transition and

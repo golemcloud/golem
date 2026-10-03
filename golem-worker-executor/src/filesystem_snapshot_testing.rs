@@ -14,9 +14,10 @@
 
 //! A filesystem snapshot store for the tests of the executor.
 //!
-//! The store keeps the snapshots in memory. A clone shares the snapshots, so a test keeps its
-//! store across a restart of the executor; a shutdown stops only the clone that was shut down. A test can make saves fail, slow or held, make
-//! restores fail, and count the calls.
+//! The store keeps the snapshots in memory. A clone shares the snapshots, so a test keeps its store
+//! across a restart of the executor; a shutdown stops only the clone that was shut down. A test can
+//! make saves fail, slow or held, make restores and copies fail, hold a copy, and count the
+//! calls.
 
 use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore,
@@ -51,6 +52,10 @@ struct Faults {
     restored: Mutex<Vec<Box<str>>>,
     /// The names of the restores that gave a tree, in the order of their ends.
     completed_restores: Mutex<Vec<Box<str>>>,
+    copies: AtomicUsize,
+    failing_copies: AtomicUsize,
+    /// The hold of the next copy, when a test asked for one.
+    copy_hold: Mutex<Option<SaveHold>>,
 }
 
 /// The store side of a held save: the save reports its name, then waits for the release.
@@ -60,23 +65,24 @@ struct SaveHold {
 }
 
 impl SaveHold {
-    /// Reports `name` as the held save, and waits until the test releases the save or drops its
+    /// Reports `name` as the held call, and waits until the test releases the call or drops its
     /// [`HeldSave`].
-    async fn hold(mut self, name: &SnapshotName) {
-        self.started.send_replace(Some(Box::from(name.as_str())));
+    async fn hold(mut self, name: &str) {
+        self.started.send_replace(Some(Box::from(name)));
         let _ = self.released.wait_for(|released| *released).await;
     }
 }
 
-/// The test side of a held save, which [`TestFilesystemSnapshotStore::hold_next_save`] gives.
-/// The save stays held until [`HeldSave::release`] or a drop of this value.
+/// The test side of a held save or copy, which [`TestFilesystemSnapshotStore::hold_next_save`]
+/// and [`TestFilesystemSnapshotStore::hold_next_copy`] give. The call stays held until
+/// [`HeldSave::release`] or a drop of this value.
 pub struct HeldSave {
     started: watch::Receiver<Option<Box<str>>>,
     released: watch::Sender<bool>,
 }
 
 impl HeldSave {
-    /// The name of the held save, once it started.
+    /// The name of the held save, or the target of the held copy, once it started.
     pub fn name(&self) -> Option<String> {
         self.started.borrow().as_deref().map(String::from)
     }
@@ -141,6 +147,35 @@ impl TestFilesystemSnapshotStore {
             started: started_receiver,
             released,
         }
+    }
+
+    /// Holds the next copy that starts: it reports its target, then waits before it copies
+    /// anything, until the test releases it or drops the [`HeldSave`].
+    pub fn hold_next_copy(&self) -> HeldSave {
+        let (started, started_receiver) = watch::channel(None);
+        let (released, released_receiver) = watch::channel(false);
+        *self
+            .faults
+            .copy_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SaveHold {
+            started,
+            released: released_receiver,
+        });
+        HeldSave {
+            started: started_receiver,
+            released,
+        }
+    }
+
+    /// Makes the next `count` copies fail, as a copy does whose storage fails in each run.
+    pub fn fail_next_copies(&self, count: usize) {
+        self.faults.failing_copies.store(count, Ordering::SeqCst);
+    }
+
+    /// The number of copies that started.
+    pub fn copy_count(&self) -> usize {
+        self.faults.copies.load(Ordering::SeqCst)
     }
 
     /// The directory of the tree of each save that started, in the order of the saves.
@@ -246,16 +281,12 @@ impl TestFilesystemSnapshotStore {
         }
     }
 
-    /// Runs an injected failed save as the store runs a save whose storage fails in each run: a
-    /// run under a slot, the wait after the failed run, and a second run under a slot. A
-    /// withdrawal at a take, or a shutdown, gives `Stopped`, and a deadline after the first run
-    /// gives `Failed`.
+    /// Ends an injected failed save as the store ends a save whose storage fails in each run,
+    /// after its first run under a slot: the wait after the failed run, and a second run under a
+    /// slot. A withdrawal at a take, or a shutdown, gives `Stopped`, and a deadline after the
+    /// first run gives `Failed`.
     async fn failed_runs(&self, slots: &dyn RunSlots) -> SaveError {
         let failed = || SaveError::Failed(Failed::new(anyhow::anyhow!("an injected save failure")));
-        match self.inner.slot(slots).await {
-            Ok(slot) => drop(slot),
-            Err(cause) => return SaveError::Stopped(cause),
-        }
         slots.waiting_after_failure();
         match slots.take(false).await {
             Ok(slot) => {
@@ -291,6 +322,9 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(Box::from(tree));
+        // The first run takes its slot before it does anything, as a run of the store does, so a
+        // held or slow save holds its slot.
+        let slot = self.inner.slot(slots).await.map_err(SaveError::Stopped)?;
         let hold = self
             .faults
             .hold
@@ -298,7 +332,7 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .unwrap_or_else(PoisonError::into_inner)
             .take();
         if let Some(hold) = hold {
-            hold.hold(name).await;
+            hold.hold(name.as_str()).await;
         }
         let delay = *self
             .faults
@@ -316,12 +350,15 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             })
             .is_ok();
         if failing {
+            drop(slot);
             return Err(self.failed_runs(slots).await);
         }
         let info = self
             .inner
-            .save(agent, name, tree, parent, cancel, slots)
-            .await?;
+            .save(agent, name, tree, parent, cancel, &Unlimited)
+            .await;
+        drop(slot);
+        let info = info?;
         let offset = *self
             .faults
             .clock_offset
@@ -422,6 +459,28 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         to: &AgentSnapshots,
         slots: &dyn RunSlots,
     ) -> Result<(), CallError> {
+        self.faults.copies.fetch_add(1, Ordering::SeqCst);
+        let hold = self
+            .faults
+            .copy_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(hold) = hold {
+            hold.hold(&format!("{to:?}")).await;
+        }
+        let failing = self
+            .faults
+            .failing_copies
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok();
+        if failing {
+            return Err(CallError::Failed(Failed::new(anyhow::anyhow!(
+                "an injected copy failure"
+            ))));
+        }
         self.inner.copy_all(from, to, slots).await
     }
 

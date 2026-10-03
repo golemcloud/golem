@@ -972,7 +972,7 @@ impl RusticSnapshotStore {
                 error = %format!("{error:#}"),
                 "A prune of the filesystem snapshots of an agent failed; the next delete prunes again"
             );
-            crate::metrics::filesystem_snapshots::record_leaked_cleanup("prune");
+            crate::metrics::filesystem_snapshots::record_failed_space_reclaim();
             #[cfg(test)]
             self.failed_prunes
                 .lock()

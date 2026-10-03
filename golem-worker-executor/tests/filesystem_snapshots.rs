@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
@@ -25,6 +25,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, Co
 use golem_common::model::oplog::{
     MultipartPartData, OplogEntry, OplogPayload, PublicOplogEntry, PublicSnapshotData,
 };
+use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId,
 };
@@ -41,7 +42,7 @@ use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start_with_overrides,
 };
-use pretty_assertions::assert_eq;
+use pretty_assertions::{assert_eq, assert_ne};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -86,21 +87,26 @@ async fn start_snapshotting(
     confirmation_wait: Duration,
     root: Option<&Path>,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_overrides(deps, context, snapshotting(store, confirmation_wait, root)).await
+}
+
+/// The overrides of an executor that takes a snapshot after each invocation and keeps filesystem
+/// snapshots in `store`. With `root`, the agent filesystems live under it.
+fn snapshotting(
+    store: &TestFilesystemSnapshotStore,
+    confirmation_wait: Duration,
+    root: Option<&Path>,
+) -> TestExecutorOverrides {
     let root: Option<Box<Path>> = root.map(Box::from);
-    start_with_overrides(
-        deps,
-        context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir =
-                    root.as_deref().map(Path::to_path_buf);
-                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
-            })),
-            filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
-            ..TestExecutorOverrides::default()
-        },
-    )
-    .await
+    TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.filesystem_storage.deterministic_root_dir =
+                root.as_deref().map(Path::to_path_buf);
+            config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+        })),
+        filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
+        ..TestExecutorOverrides::default()
+    }
 }
 
 /// Starts an executor without snapshots, whose agent filesystems live under the empty `root`. A
@@ -2949,11 +2955,16 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
         "{failed:?}"
     );
     assert_eq!(capture.len(), 1);
-    assert!(!capture[0].exists(), "the capture {capture:?} stays");
     assert!(
         took < Duration::from_secs(10),
         "the update ended after {took:?}"
     );
+    // The save that the interrupt stopped runs to its end, and the capture goes after it
+    // returned.
+    eventually(Duration::from_secs(90), || async {
+        Ok((!capture[0].exists()).then_some(()))
+    })
+    .await?;
     Ok(())
 }
 
@@ -3203,5 +3214,686 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
         invocation_shape(&executor.stored_oplog(&worker_id).await),
         InvocationShape::settled()
     );
+    Ok(())
+}
+
+/// Waits until the store holds exactly the snapshots `names` of the incarnation `incarnation`, in
+/// any order, and gives the names that it holds.
+async fn store_holds(
+    store: &TestFilesystemSnapshotStore,
+    incarnation: &(OwnedAgentId, AgentFingerprint),
+    names: &[&str],
+) -> anyhow::Result<Vec<String>> {
+    let mut expected = names
+        .iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    expected.sort();
+    eventually(Duration::from_secs(60), || {
+        let expected = expected.clone();
+        async move {
+            let mut held = store.snapshot_names(&incarnation.0, incarnation.1).await;
+            held.sort();
+            Ok((held == expected).then_some(held))
+        }
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_deleted_agent_leaves_no_filesystem_snapshot_in_the_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(&executor, &context, initial_file_system, "deleted", &[]).await?;
+    let (_, name) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "kept.txt",
+                content: "kept",
+            },
+        )
+        .await?;
+    let incarnation = agent.incarnation(&executor, &context).await?;
+    store_holds(&store, &incarnation, &[name.as_str()]).await?;
+
+    executor.delete_worker(&agent.worker_id).await?;
+    let left = store_holds(&store, &incarnation, &[]).await?;
+
+    assert_eq!(left, Vec::<String>::new());
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_recreated_agent_keeps_the_snapshots_of_its_new_incarnation_after_the_delete_of_the_old_one(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let old = Agent::start(&executor, &context, initial_file_system, "recreated", &[]).await?;
+    old.apply_and_confirm(
+        &executor,
+        Operation::Write {
+            path: "old.txt",
+            content: "old",
+        },
+    )
+    .await?;
+    let old_incarnation = old.incarnation(&executor, &context).await?;
+    executor.delete_worker(&old.worker_id).await?;
+    store_holds(&store, &old_incarnation, &[]).await?;
+
+    let new = Agent::start(&executor, &context, initial_file_system, "recreated", &[]).await?;
+    let (_, name) = new
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "new.txt",
+                content: "new",
+            },
+        )
+        .await?;
+    let new_incarnation = new.incarnation(&executor, &context).await?;
+    let held = store_holds(&store, &new_incarnation, &[name.as_str()]).await?;
+
+    assert_ne!(old_incarnation.1, new_incarnation.1);
+    assert_eq!(held, vec![name]);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_revert_deletes_the_snapshots_of_the_dropped_region_and_a_start_restores_the_previous_one(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(&executor, &context, initial_file_system, "reverted", &[]).await?;
+    let (first_index, first) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "first.txt",
+                content: "first",
+            },
+        )
+        .await?;
+    let before = agent.describe(&executor).await?;
+    let (_, second) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "second.txt",
+                content: "second",
+            },
+        )
+        .await?;
+    let incarnation = agent.incarnation(&executor, &context).await?;
+    store_holds(&store, &incarnation, &[first.as_str(), second.as_str()]).await?;
+
+    executor
+        .revert(
+            &agent.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: first_index,
+            }),
+        )
+        .await?;
+    let held = store_holds(&store, &incarnation, &[first.as_str()]).await?;
+    let restores = store.restored_names().len();
+    // The revert unloads the agent, so the next invocation starts it from the kept snapshot.
+    let tree = agent.describe(&executor).await?;
+
+    assert_eq!(held, vec![first.clone()]);
+    assert_eq!(tree, before);
+    assert_eq!(store.restored_names().get(restores..), Some(&[first][..]));
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_revert_keeps_a_name_that_a_record_before_the_cut_uses_and_the_start_restores_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(&executor, &context, initial_file_system, "reused", &[]).await?;
+    let (first_index, first) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "first.txt",
+                content: "first",
+            },
+        )
+        .await?;
+    // The tree does not change, so the next records reuse the name of the first record.
+    let tree = agent.describe(&executor).await?;
+    agent.describe(&executor).await?;
+    let incarnation = agent.incarnation(&executor, &context).await?;
+
+    executor
+        .revert(
+            &agent.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: first_index,
+            }),
+        )
+        .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let held = store_holds(&store, &incarnation, &[first.as_str()]).await?;
+    let restores = store.restored_names().len();
+    // The revert unloads the agent, so the next invocation starts it from the kept snapshot.
+    let restored = agent.describe(&executor).await?;
+
+    assert_eq!(held, vec![first.clone()]);
+    assert_eq!(restored, tree);
+    assert_eq!(store.restored_names().get(restores..), Some(&[first][..]));
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_fork_target_restores_the_copied_snapshot_of_the_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor = crate::fork::start_with_local_resume_and(
+        deps,
+        &context,
+        snapshotting(&store, Duration::from_secs(30), None),
+    )
+    .await?;
+    let source = Agent::start(&executor, &context, initial_file_system, "fork-source", &[]).await?;
+    let (cut, name) = source
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "copied.txt",
+                content: "copied",
+            },
+        )
+        .await?;
+    let tree = source.describe(&executor).await?;
+    let target_agent =
+        golem_common::phantom_agent_id!(AGENT_TYPE, uuid::Uuid::new_v4(), "fork-source");
+    let target = Agent {
+        component: source.component.clone(),
+        worker_id: AgentId::from_agent_id(source.component.id, &target_agent)
+            .map_err(anyhow::Error::msg)?,
+        agent: target_agent,
+    };
+
+    executor
+        .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
+        .await?;
+    let target_incarnation = target.incarnation(&executor, &context).await?;
+    let copied = store_holds(&store, &target_incarnation, &[name.as_str()]).await?;
+    let restores = store.restored_names().len();
+    let (_, restored) = target.restart_and_describe(&executor, &context).await?;
+
+    assert_eq!(copied, vec![name.clone()]);
+    assert_eq!(restored, tree);
+    assert_eq!(store.restored_names().get(restores..), Some(&[name][..]));
+    Ok(())
+}
+
+impl Agent {
+    /// A target of a fork of this agent, which does not exist yet.
+    fn fork_target(&self, name: &str) -> anyhow::Result<Agent> {
+        let agent = golem_common::phantom_agent_id!(AGENT_TYPE, uuid::Uuid::new_v4(), name);
+        Ok(Agent {
+            component: self.component.clone(),
+            worker_id: AgentId::from_agent_id(self.component.id, &agent)
+                .map_err(anyhow::Error::msg)?,
+            agent,
+        })
+    }
+
+    /// The index of the oldest oplog entry that `matches`.
+    async fn first_index(
+        &self,
+        executor: &TestWorkerExecutor,
+        matches: impl Fn(&PublicOplogEntry) -> bool,
+    ) -> anyhow::Result<OplogIndex> {
+        executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .find(|entry| matches(&entry.entry))
+            .map(|entry| entry.oplog_index)
+            .ok_or_else(|| anyhow!("no oplog entry matches"))
+    }
+}
+
+/// The names of the manual-update snapshots of the incarnation in `store`.
+async fn update_names(
+    store: &TestFilesystemSnapshotStore,
+    incarnation: &(OwnedAgentId, AgentFingerprint),
+) -> Vec<String> {
+    store
+        .snapshot_names(&incarnation.0, incarnation.1)
+        .await
+        .into_iter()
+        .filter(|name| name.starts_with("u-"))
+        .collect()
+}
+
+/// Deletes each periodic snapshot of the incarnation from `store`, so a start can restore only
+/// a manual-update snapshot.
+async fn lose_periodic_snapshots(
+    store: &TestFilesystemSnapshotStore,
+    incarnation: &(OwnedAgentId, AgentFingerprint),
+) {
+    futures::stream::iter(store.snapshot_names(&incarnation.0, incarnation.1).await)
+        .filter(|name| std::future::ready(name.starts_with("p-")))
+        .for_each(|name| async move { store.lose(&incarnation.0, incarnation.1, &name).await })
+        .await;
+}
+
+/// Starts an agent that writes a file, takes three successful manual updates, and gives the
+/// agent, its incarnation, the component and the update name of each update.
+async fn three_manual_updates(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    store: &TestFilesystemSnapshotStore,
+    component: &PrecompiledComponent,
+    name: &str,
+) -> anyhow::Result<(
+    Agent,
+    (OwnedAgentId, AgentFingerprint),
+    Vec<ComponentDto>,
+    Vec<String>,
+)> {
+    let declared = || entry("baz.txt", "/config.txt", AgentFilePermissions::ReadWrite);
+    let agent = Agent::start(executor, context, component, name, &[declared()]).await?;
+    agent
+        .apply_all(
+            executor,
+            &[Operation::Write {
+                path: "state.db",
+                content: "rows",
+            }],
+        )
+        .await?;
+    agent
+        .confirmed(executor)
+        .await
+        .context("the first snapshot is not confirmed")?;
+    let incarnation = agent.incarnation(executor, context).await?;
+    let (components, names) = futures::stream::iter(0..3)
+        .then(|_| async {
+            store.advance_clock(Duration::from_secs(10 * 60));
+            let before = update_names(store, &incarnation).await;
+            let updated = agent
+                .manual_update(executor, vec![declared()])
+                .await
+                .context("a manual update gave no outcome")?;
+            let after = update_names(store, &incarnation).await;
+            let new = after
+                .into_iter()
+                .find(|name| !before.contains(name))
+                .ok_or_else(|| anyhow!("the manual update saved no snapshot"))?;
+            anyhow::Ok((updated, new))
+        })
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .unzip();
+    Ok((agent, incarnation, components, names))
+}
+
+#[test]
+#[timeout("6m")]
+async fn three_manual_updates_and_a_revert_behind_the_first_restore_its_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // Retention keeps two manual-update snapshots that no update uses. Each successful update
+    // uses its own, so the first one stays after the third update.
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let (agent, incarnation, components, names) = three_manual_updates(
+        &executor,
+        &context,
+        &store,
+        initial_file_system,
+        "three-updates",
+    )
+    .await?;
+    // Retention runs after each confirmation, so the names that it keeps settle.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut held_after_the_updates = update_names(&store, &incarnation).await;
+    held_after_the_updates.sort();
+    let mut all_names = names.clone();
+    all_names.sort();
+    let first_update = agent
+        .first_index(&executor, |entry| {
+            matches!(entry, PublicOplogEntry::SuccessfulUpdate(_))
+        })
+        .await?;
+    let updated = |component: &ComponentDto| Agent {
+        component: component.clone(),
+        agent: agent.agent.clone(),
+        worker_id: agent.worker_id.clone(),
+    };
+    // The updates change no file, so the tree after the third update is the tree after the first.
+    let expected = updated(&components[2])
+        .describe(&executor)
+        .await
+        .context("the describe before the revert failed")?;
+
+    executor
+        .revert(
+            &agent.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: first_update,
+            }),
+        )
+        .await
+        .context("the revert failed")?;
+    let held_after_the_revert = match eventually(Duration::from_secs(60), || async {
+        let held = update_names(&store, &incarnation).await;
+        Ok((held == [names[0].clone()]).then_some(held))
+    })
+    .await
+    {
+        Ok(held) => held,
+        Err(_) => update_names(&store, &incarnation).await,
+    };
+    lose_periodic_snapshots(&store, &incarnation).await;
+    let restores = store.restored_names().len();
+    let tree = updated(&components[0])
+        .describe(&executor)
+        .await
+        .context("the describe after the revert failed")?;
+
+    assert_eq!(held_after_the_updates, all_names);
+    assert_eq!(held_after_the_revert, vec![names[0].clone()], "{names:?}");
+    assert_eq!(store.restored_names().get(restores..), Some(&names[..1]));
+    assert_eq!(tree, expected);
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+async fn a_fork_whose_cut_lies_in_a_region_a_later_revert_dropped_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The revert drops the region of the third update and deletes its snapshot. A fork whose cut
+    // lies after that update copies the update as its baseline, and the copy lacks its snapshot.
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor = crate::fork::start_with_local_resume_and(
+        deps,
+        &context,
+        snapshotting(&store, Duration::from_secs(30), None),
+    )
+    .await?;
+    let (agent, incarnation, _, names) = three_manual_updates(
+        &executor,
+        &context,
+        &store,
+        initial_file_system,
+        "fork-dropped-region",
+    )
+    .await?;
+    let oplog = executor
+        .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+        .await?;
+    let updates = oplog
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    let (second_update, third_update) = (updates[1], updates[2]);
+    executor
+        .revert(
+            &agent.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: second_update,
+            }),
+        )
+        .await?;
+    eventually(Duration::from_secs(60), || async {
+        Ok((!update_names(&store, &incarnation).await.contains(&names[2])).then_some(()))
+    })
+    .await?;
+    let target = agent.fork_target("fork-dropped-region")?;
+
+    let forked = executor
+        .fork_worker(&agent.worker_id, &target.agent.to_string(), third_update)
+        .await;
+    let target_oplog = executor
+        .get_oplog(&target.worker_id, OplogIndex::INITIAL)
+        .await
+        .map(|oplog| oplog.len())
+        .unwrap_or_default();
+
+    let error = format!("{:?}", forked.err());
+    assert!(
+        error.contains(&format!("Cannot fork worker at oplog index {third_update}"))
+            && error.contains(&names[2])
+            && error.contains("is not in the store"),
+        "{error}"
+    );
+    assert_eq!(target_oplog, 0);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_fork_whose_snapshot_copy_fails_fails_and_publishes_no_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor = crate::fork::start_with_local_resume_and(
+        deps,
+        &context,
+        snapshotting(&store, Duration::from_secs(30), None),
+    )
+    .await?;
+    let source = Agent::start(&executor, &context, initial_file_system, "copy-fails", &[]).await?;
+    let (cut, _) = source
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "copied.txt",
+                content: "copied",
+            },
+        )
+        .await?;
+    let target = source.fork_target("copy-fails")?;
+    store.fail_next_copies(1);
+
+    let forked = executor
+        .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
+        .await;
+    let target_oplog = executor
+        .get_oplog(&target.worker_id, OplogIndex::INITIAL)
+        .await
+        .map(|oplog| oplog.len())
+        .unwrap_or_default();
+
+    let error = format!("{:?}", forked.err());
+    assert!(
+        error.contains("Failed to copy the filesystem snapshots of the fork source"),
+        "{error}"
+    );
+    assert_eq!((store.copy_count(), target_oplog), (1, 0));
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn concurrent_attempts_of_one_fork_copy_once_and_both_succeed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The store holds the copy of the first attempt, so the second attempt of the same request
+    // waits for it, then finds the published target.
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor = crate::fork::start_with_local_resume_and(
+        deps,
+        &context,
+        snapshotting(&store, Duration::from_secs(30), None),
+    )
+    .await?;
+    let source = Agent::start(&executor, &context, initial_file_system, "one-flight", &[]).await?;
+    let (cut, name) = source
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "copied.txt",
+                content: "copied",
+            },
+        )
+        .await?;
+    let target = source.fork_target("one-flight")?;
+    let held = store.hold_next_copy();
+    let target_name = target.agent.to_string();
+    let fork = || executor.fork_worker(&source.worker_id, &target_name, cut);
+
+    let (first, second, ()) = futures::join!(fork(), fork(), async move {
+        eventually(Duration::from_secs(30), || async {
+            Ok(held.name().map(|_| ()))
+        })
+        .await
+        .ok();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        held.release();
+    });
+    let target_incarnation = target.incarnation(&executor, &context).await?;
+    let copied = store_holds(&store, &target_incarnation, &[name.as_str()]).await?;
+
+    assert!(first.is_ok(), "{first:?}");
+    assert!(second.is_ok(), "{second:?}");
+    assert_eq!((store.copy_count(), copied), (1, vec![name]));
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
+async fn a_retry_of_a_published_fork_succeeds_after_the_source_lost_its_baseline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The fork copies the baseline of its update, and publishes the target. Then the source loses
+    // that snapshot. A retry of the same request finds the published target before it copies, so
+    // it never refuses for the missing baseline.
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor = crate::fork::start_with_local_resume_and(
+        deps,
+        &context,
+        snapshotting(&store, Duration::from_secs(30), None),
+    )
+    .await?;
+    let (agent, incarnation, _, names) = three_manual_updates(
+        &executor,
+        &context,
+        &store,
+        initial_file_system,
+        "fork-retry",
+    )
+    .await?;
+    let cut = executor
+        .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map(|entry| entry.oplog_index)
+        .ok_or_else(|| anyhow!("the oplog of the source is empty"))?;
+    let target = agent.fork_target("fork-retry")?;
+    executor
+        .fork_worker(&agent.worker_id, &target.agent.to_string(), cut)
+        .await?;
+    store.lose(&incarnation.0, incarnation.1, &names[2]).await;
+
+    let retried = executor
+        .fork_worker(&agent.worker_id, &target.agent.to_string(), cut)
+        .await;
+
+    assert!(retried.is_ok(), "{retried:?}");
+    assert_eq!(store.copy_count(), 1);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn an_ephemeral_agent_with_a_snapshot_policy_makes_no_store_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The executor takes a snapshot after each invocation. An ephemeral agent keeps no files, so
+    // the snapshot service makes no store call for it.
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .store()
+        .await?;
+    let agent = agent_id!("EphemeralEchoAgent", "ephemeral-snapshots");
+
+    let answers = futures::stream::iter(0..3)
+        .then(|_| async {
+            executor
+                .invoke_and_await_agent(&component, &agent, "changeAndGet", data_value!())
+                .await?
+                .into_typed::<String>()
+        })
+        .try_collect::<Vec<_>>()
+        .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    assert_eq!(answers.len(), 3);
+    assert_eq!((store.save_count(), store.copy_count()), (0, 0));
     Ok(())
 }

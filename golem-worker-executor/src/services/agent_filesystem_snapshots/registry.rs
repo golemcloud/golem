@@ -68,6 +68,9 @@ impl Registry {
             let next = rule(std::mem::take(&mut *state));
             let wakes = next.wakes();
             let (next, answer) = next.into_parts();
+            crate::metrics::filesystem_snapshots::set_cleanups_pending(
+                rules::agents_with_cleanups(&next),
+            );
             *state = next;
             (answer, wakes)
         };
