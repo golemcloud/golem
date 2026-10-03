@@ -1012,6 +1012,7 @@ async fn resource_metering_configuration_controls_startup_and_invocation(
 macro_rules! resource_metering_configuration_test {
     ($name:ident, $compute:literal, $memory:literal, $filesystem:literal) => {
         #[test]
+        #[test_r::tag(group5)]
         #[tracing::instrument]
         #[timeout("2m")]
         async fn $name(
@@ -1043,6 +1044,51 @@ resource_metering_configuration_test!(resource_metering_100, true, false, false)
 resource_metering_configuration_test!(resource_metering_101, true, false, true);
 resource_metering_configuration_test!(resource_metering_110, true, true, false);
 resource_metering_configuration_test!(resource_metering_111, true, true, true);
+
+test_r::tag_suite!(fenced_outcome, group5);
+test_r::tag_suite!(monthly, group5);
+test_r::tag_suite!(monthly_admission_owner_election, group5);
+test_r::tag_suite!(monthly_blob_filesystem, group5);
+test_r::tag_suite!(monthly_cause, group5);
+test_r::tag_suite!(monthly_compute, group5);
+test_r::tag_suite!(monthly_cutoff, group5);
+test_r::tag_suite!(monthly_deadline, group5);
+test_r::tag_suite!(monthly_deletion, group5);
+test_r::tag_suite!(monthly_entity, group5);
+test_r::tag_suite!(monthly_failure, group5);
+test_r::tag_suite!(monthly_frontend_streams, group5);
+test_r::tag_suite!(monthly_health, group5);
+test_r::tag_suite!(monthly_http_peer, group5);
+test_r::tag_suite!(monthly_lifecycle_regressions, group5);
+test_r::tag_suite!(monthly_p2_http, group5);
+test_r::tag_suite!(monthly_p2_http_body, group5);
+test_r::tag_suite!(monthly_p2_http_prefix, group5);
+test_r::tag_suite!(monthly_p2_http_prefix_peer, group5);
+test_r::tag_suite!(monthly_p2_http_resend, group5);
+test_r::tag_suite!(monthly_p2_http_resend_peer, group5);
+test_r::tag_suite!(monthly_p2_http_retry_delay, group5);
+test_r::tag_suite!(monthly_p2_http_retry_delay_peer, group5);
+test_r::tag_suite!(monthly_p2_http_skip, group5);
+test_r::tag_suite!(monthly_p2_input, group5);
+test_r::tag_suite!(monthly_p2_multi_poll, group5);
+test_r::tag_suite!(monthly_p2_poll, group5);
+test_r::tag_suite!(monthly_p2_sleep, group5);
+test_r::tag_suite!(monthly_p3_http, group5);
+test_r::tag_suite!(monthly_p3_http_body, group5);
+test_r::tag_suite!(monthly_p3_promise, group5);
+test_r::tag_suite!(monthly_p3_sleep, group5);
+test_r::tag_suite!(monthly_p3_udp, group5);
+test_r::tag_suite!(monthly_pending, group5);
+test_r::tag_suite!(monthly_preparation, group5);
+test_r::tag_suite!(monthly_replay, group5);
+test_r::tag_suite!(monthly_rpc, group5);
+test_r::tag_suite!(monthly_sleep, group5);
+test_r::tag_suite!(monthly_stale_target, group5);
+test_r::tag_suite!(monthly_storage, group5);
+test_r::tag_suite!(monthly_tail, group5);
+test_r::tag_suite!(monthly_tick, group5);
+test_r::tag_suite!(monthly_websocket, group5);
+test_r::tag_suite!(p2_ready, group5);
 
 mod fenced_outcome;
 mod monthly;
@@ -1491,6 +1537,7 @@ async fn monthly_memory_exhaustion_interrupts_silent_tcp(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+#[test_r::tag(group5)]
 async fn durable_monthly_memory_exhaustion_interrupts_silent_tcp_and_recovers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1511,6 +1558,7 @@ async fn durable_monthly_memory_exhaustion_interrupts_silent_tcp_and_recovers(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+#[test_r::tag(group5)]
 async fn ephemeral_monthly_memory_exhaustion_interrupts_silent_tcp_with_terminal_error(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1531,6 +1579,7 @@ async fn ephemeral_monthly_memory_exhaustion_interrupts_silent_tcp_with_terminal
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+#[test_r::tag(group5)]
 async fn all_disabled_monthly_metering_preserves_per_agent_memory_limit(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1605,6 +1654,7 @@ async fn all_disabled_monthly_metering_preserves_per_agent_memory_limit(
 #[test]
 #[tracing::instrument]
 #[timeout("2m")]
+#[test_r::tag(group5)]
 async fn durable_storage_month_rollover_reconstructs_and_runs_pending_invocation_once(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

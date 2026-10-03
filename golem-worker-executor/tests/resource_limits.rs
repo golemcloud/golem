@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+test_r::tag_suite!(stop_cause, group5);
+
 mod stop_cause;
 
 use crate::Tracing;
@@ -60,6 +62,7 @@ inherit_test_dep!(
 #[test]
 #[tracing::instrument]
 #[timeout("30s")]
+#[test_r::tag(group5)]
 async fn production_context_memory_admission_is_isolated_from_shared_rss(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -298,6 +301,7 @@ async fn concurrent_agent_limit_allows_rpc_progress(
 
 #[test]
 #[timeout("2m")]
+#[test_r::tag(group5)]
 async fn waiting_start_restart_receipt_precedes_permit_release(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -469,6 +473,7 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
 
 #[test]
 #[timeout("2m")]
+#[test_r::tag(group5)]
 async fn closing_window_routes_late_stops_to_retained_successor(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -562,6 +567,7 @@ async fn closing_window_routes_late_stops_to_retained_successor(
 
 #[test]
 #[timeout("2m")]
+#[test_r::tag(group5)]
 async fn unloading_window_joins_first_stop_and_retains_late_stop(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
