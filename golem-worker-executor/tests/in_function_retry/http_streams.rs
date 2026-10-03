@@ -19,7 +19,9 @@ use golem_common::model::oplog::{
     PublicAgentInvocation, PublicOplogEntry,
 };
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AgentId, IdempotencyKey, RetryConfig, RetryPolicyState};
+use golem_common::model::{
+    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, RetryConfig, RetryPolicyState,
+};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::{HttpClientConfig, HttpClientEnabledConfig};
@@ -50,7 +52,7 @@ use super::http_servers::{
     start_gated_partial_response_http_server,
     start_gated_partial_response_http_server_with_resume_send_failures,
     start_partial_response_http_server, start_recovery_gated_partial_response_http_server,
-    start_write_zeroes_validation_server,
+    start_withheld_body_resume_http_server, start_write_zeroes_validation_server,
 };
 
 async fn run_response_body_pool_limit_control(
@@ -160,6 +162,136 @@ async fn http_resuming_response_body_with_two_pool_slots(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     run_response_body_pool_limit_control(2, false, last_unique_id, deps, http_tests).await
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_body_resume_header_wait_observes_interrupt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.retry = RetryConfig {
+                max_attempts: 2,
+                min_delay: Duration::from_millis(1),
+                max_delay: Duration::from_millis(5),
+                multiplier: 1.0,
+                max_jitter_factor: None,
+            };
+            config.max_in_function_retry_delay = Duration::from_secs(1);
+            config.http_client = HttpClientConfig::Enabled(HttpClientEnabledConfig {
+                connect_timeout: Duration::from_secs(30),
+                max_connections_per_host: 1,
+                max_total_connections: 1,
+                ..Default::default()
+            });
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let (port, attempts, requests, mut replacement) =
+        start_withheld_body_resume_http_server().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), port.to_string());
+    let authority = format!("127.0.0.1:{port}");
+    let agent_id = agent_id!("HttpClient4");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let invocation_key = IdempotencyKey::fresh();
+
+    let invocation = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent_id,
+        &invocation_key,
+        "get_and_read_body_p2_blocking",
+        data_value!(authority.clone()),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        _ = replacement.accepted() => {}
+        result = &mut invocation => {
+            panic!("invocation completed before replacement headers were withheld: {result:?}")
+        }
+    }
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].request_line, "GET / HTTP/1.1");
+        assert_eq!(requests[0].range, None);
+        assert_eq!(requests[1].request_line, "GET / HTTP/1.1");
+        assert_eq!(requests[1].range.as_deref(), Some("bytes=3-"));
+    }
+    assert!(executor.worker_is_loaded(&owned_agent_id).await);
+
+    timeout(Duration::from_secs(2), executor.interrupt(&worker_id))
+        .await
+        .context("interrupt waited for replacement response headers")??;
+    let error = timeout(Duration::from_secs(2), &mut invocation)
+        .await
+        .context("interrupted body read did not return promptly")?
+        .expect_err("interrupted body read must not return an HTTP result");
+    assert!(
+        error.to_string().contains("Interrupted via the Golem API"),
+        "expected lifecycle interruption, got: {error}"
+    );
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, Duration::from_secs(2))
+        .await?;
+    assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+    timeout(Duration::from_secs(2), replacement.peer_closed())
+        .await
+        .context("replacement response owner did not abort its request task")?;
+    assert_eq!(
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?,
+        1
+    );
+
+    executor.resume(&worker_id, false).await?;
+    let resumed = executor.invoke_and_await_agent_with_key(
+        &component,
+        &agent_id,
+        &invocation_key,
+        "get_and_read_body_p2_blocking",
+        data_value!(authority),
+    );
+    tokio::pin!(resumed);
+    tokio::select! {
+        _ = replacement.resumed_accepted() => {}
+        result = &mut resumed => {
+            panic!("invocation completed before reconstructed request was gated: {result:?}")
+        }
+    }
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2].request_line, "GET / HTTP/1.1");
+        assert_eq!(requests[2].range, None);
+    }
+    replacement.release_resumed();
+    let resumed = timeout(Duration::from_secs(5), &mut resumed)
+        .await
+        .context("interrupted body resume did not reconstruct")??
+        .into_typed::<String>()?;
+    assert_eq!(resumed, "200 resumed-body");
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?,
+        1,
+        "reconstruction must reuse the persisted body retry decision"
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -604,6 +736,145 @@ async fn http_resuming_response_body_inline_retry_on_body_read_failure(
         "Expected at least 1 in-function retry error entry in oplog for response-body resumption, got {retry_count}"
     );
 
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+async fn http_body_resume_after_jump_counts_only_replacement_prefix(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for supports_range in [true, false] {
+        let context = TestContext::new(last_unique_id);
+        let overrides = TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.retry = RetryConfig {
+                    max_attempts: 3,
+                    min_delay: Duration::from_millis(1),
+                    max_delay: Duration::from_millis(5),
+                    multiplier: 1.0,
+                    max_jitter_factor: None,
+                };
+                config.max_in_function_retry_delay = Duration::from_secs(1);
+            })),
+            ..Default::default()
+        };
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let (requests_tx, mut requests) = tokio::sync::mpsc::unbounded_channel();
+        let release_second = Arc::new(tokio::sync::Notify::new());
+        let server = spawn({
+            let release_second = release_second.clone();
+            async move {
+                for attempt in 0..3 {
+                    let (mut stream, _) = listener.accept().await?;
+                    let mut headers = Vec::new();
+                    let mut byte = [0];
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        stream.read_exact(&mut byte).await?;
+                        headers.push(byte[0]);
+                    }
+                    let headers = String::from_utf8(headers)?;
+                    let range = headers.lines().find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("range")
+                            .then(|| value.trim().to_string())
+                    });
+                    requests_tx.send(range)?;
+                    if attempt < 2 {
+                        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nh").await?;
+                        if attempt == 0 {
+                            // The peer stays healthy until reconstruction closes its socket.
+                            assert_eq!(stream.read(&mut byte).await?, 0);
+                        } else {
+                            release_second.notified().await;
+                        }
+                    } else if supports_range {
+                        stream.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1-1/2\r\nContent-Length: 1\r\nConnection: close\r\n\r\ni").await?;
+                    } else {
+                        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi").await?;
+                    }
+                }
+                anyhow::Ok(())
+            }
+        });
+        let component = executor
+            .component_dep(&context.default_environment_id, http_tests)
+            .store()
+            .await?;
+        let agent_id = agent_id!("HttpClient4");
+        let worker_id = executor
+            .start_agent_with(
+                &component.id,
+                agent_id.clone(),
+                HashMap::from([("PORT".to_string(), port.to_string())]),
+                Vec::new(),
+            )
+            .await?;
+        let invocation = executor.invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "get_and_read_body_p2",
+            data_value!(),
+        );
+        let control = async {
+            let expected_prefix = HostResponse::from(HostResponseStreamChunk {
+                result: Ok(b"h".to_vec()),
+            })
+            .into_typed_schema_value()?;
+            let mut read_ends = Vec::new();
+            for attempt in 0..2 {
+                assert_eq!(requests.recv().await, Some(None));
+                loop {
+                    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                    read_ends = oplog
+                        .iter()
+                        .filter_map(|entry| match &entry.entry {
+                            PublicOplogEntry::End(params)
+                                if params.response.as_ref() == Some(&expected_prefix) =>
+                            {
+                                Some(entry.oplog_index)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if read_ends.len() == attempt + 1 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                if attempt == 0 {
+                    executor.simulated_crash(&worker_id).await?;
+                }
+            }
+            assert!(executor.instance_load_count(&worker_id) >= 2);
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            assert!(oplog.iter().any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Jump(params) if params.jump.contains(read_ends[0]) && !params.jump.contains(read_ends[1])
+            )));
+            release_second.notify_one();
+            assert_eq!(requests.recv().await, Some(Some("bytes=1-".to_string())));
+            anyhow::Ok(())
+        };
+        let ((), result) = timeout(Duration::from_secs(60), async {
+            tokio::try_join!(control, invocation)
+        })
+        .await
+        .context("body resume after reconstruction timed out")??;
+        assert_eq!(result.into_typed::<String>()?, "200 hi");
+        server.await??;
+        assert_eq!(
+            count_oplog_errors_containing(&executor, &worker_id, "in-function retry").await?,
+            1
+        );
+    }
     Ok(())
 }
 

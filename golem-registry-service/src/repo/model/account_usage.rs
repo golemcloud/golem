@@ -62,6 +62,7 @@ pub enum UsageType {
     MonthlyDurableAgentStorageByteSeconds = 10,
     MonthlyEphemeralStorageByteSeconds = 11,
     MonthlyMemoryGbSeconds = 12,
+    TotalBlobStorageBytes = 13,
 }
 
 impl UsageType {
@@ -72,6 +73,7 @@ impl UsageType {
             | UsageType::TotalComponentCount
             | UsageType::TotalWorkerConnectionCount
             | UsageType::TotalComponentStorageBytes => UsageGrouping::Total,
+            UsageType::TotalBlobStorageBytes => UsageGrouping::Total,
             UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes
             | UsageType::MonthlyHttpCalls
@@ -88,6 +90,7 @@ impl UsageType {
             UsageType::TotalEnvCount => UsageTracking::SelectTotalEnvCount,
             UsageType::TotalComponentCount => UsageTracking::SelectTotalComponentCount,
             UsageType::TotalComponentStorageBytes => UsageTracking::SelectTotalComponentSize,
+            UsageType::TotalBlobStorageBytes => UsageTracking::Stats,
             UsageType::TotalWorkerConnectionCount
             | UsageType::MonthlyGasLimit
             | UsageType::MonthlyComponentUploadLimitBytes
@@ -708,6 +711,10 @@ impl AccountUsage {
         let available_rpc_calls =
             rpc_limit.saturating_sub(self.final_value(UsageType::MonthlyRpcCalls));
 
+        let blob_storage_limit = self.plan.limit(UsageType::TotalBlobStorageBytes);
+        let available_blob_storage_bytes =
+            blob_storage_limit.saturating_sub(self.final_value(UsageType::TotalBlobStorageBytes));
+
         Ok(ResourceLimits {
             monthly_usage_mode_revision: self.monthly_usage_mode_revision,
             monthly_policy_revision: self.monthly_policy_revision,
@@ -739,6 +746,7 @@ impl AccountUsage {
             per_invocation_rpc_call_limit: self.plan.per_invocation_rpc_call_limit.get(),
             available_http_calls,
             available_rpc_calls,
+            available_blob_storage_bytes,
             max_concurrent_agents_per_executor: self.plan.max_concurrent_agents_per_executor.get(),
             oplog_writes_per_second: self.plan.oplog_writes_per_second.get(),
             usage_update_applied: true,
@@ -771,6 +779,7 @@ mod tests {
 
     fn test_plan() -> PlanRecord {
         PlanRecord {
+            total_blob_storage_bytes: u64::MAX.into(),
             plan_id: Uuid::new_v4(),
             name: "resource-limits".to_string(),
             max_memory_per_worker: NumericU64::new(u64::MAX),

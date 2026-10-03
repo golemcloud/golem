@@ -198,6 +198,7 @@ fn plan_record(plan: &PrecreatedPlan) -> PlanRecord {
         total_env_count: plan.env_limit.into(),
         total_component_count: plan.component_limit.into(),
         total_component_storage_bytes: plan.storage_limit.into(),
+        total_blob_storage_bytes: plan.blob_storage_limit.into(),
         total_worker_connection_count: plan.worker_connection_limit.into(),
         monthly_component_upload_limit_bytes: plan.monthly_upload_limit.into(),
         monthly_gas_limit: plan.monthly_gas_limit.into(),

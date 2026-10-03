@@ -6,7 +6,7 @@ import {
   HttpServerRequest,
   HttpServerRespondable,
   HttpServerResponse,
-} from "effect/unstable/http"
+} from "effect/http"
 import {
   copyHttpHeaders,
   HttpRouterError,

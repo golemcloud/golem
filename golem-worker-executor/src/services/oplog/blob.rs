@@ -15,7 +15,7 @@
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveResult};
 use crate::services::oplog::reader::{OplogReadError, OplogReadSource, verify_persisted_entries};
 use crate::services::oplog::{
-    CompressedOplogChunk, OplogArchiveService, decode_scan_cursor, next_scan_cursor,
+    CompressedOplogChunk, OplogArchiveService, OplogError, decode_scan_cursor, next_scan_cursor,
 };
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
@@ -23,7 +23,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, OwnedAgentId, ScanCursor, ShardEpoch};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
@@ -56,10 +56,14 @@ impl BlobOplogArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for BlobOplogArchiveService {
+    /// Accepts the owner's epoch and asserts nothing with it: blob storage has no conditional
+    /// write, so a newer owner's generation cannot refuse this layer's writes. This layer stays
+    /// outside the shard-epoch fence.
     async fn open(
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         match BlobOplogArchive::try_new(
             owned_agent_id.clone(),
@@ -91,6 +95,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        _shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         Arc::new(BlobOplogArchive::new_fresh(
             owned_agent_id.clone(),
@@ -133,7 +138,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let archive = self.open(owned_agent_id, agent_mode).await;
+        let archive = self.open(owned_agent_id, agent_mode, None).await;
         archive.read_source(idx, n).await.unwrap_or_else(|error| {
             panic!("Oplog archive read failed for {owned_agent_id}: {error}")
         })
@@ -336,8 +341,12 @@ impl OplogArchive for LazyBlobOplogArchive {
         self.open().await?.read_source(idx, n).await
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<u64> {
-        self.open().await?.append(chunk).await
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
+        self.open()
+            .await
+            .map_err(OplogError::Maintenance)?
+            .append(chunk)
+            .await
     }
 
     async fn verify_persisted(
@@ -351,8 +360,12 @@ impl OplogArchive for LazyBlobOplogArchive {
         self.open().await?.current_oplog_index().await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> OplogArchiveResult<u64> {
-        self.open().await?.drop_prefix(last_dropped_id).await
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
+        self.open()
+            .await
+            .map_err(OplogError::Maintenance)?
+            .drop_prefix(last_dropped_id)
+            .await
     }
 
     async fn length(&self) -> OplogArchiveResult<u64> {
@@ -690,8 +703,10 @@ impl OplogArchive for BlobOplogArchive {
         Ok(result)
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> OplogArchiveResult<u64> {
-        self.ensure_is_created().await?;
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
+        self.ensure_is_created()
+            .await
+            .map_err(OplogError::Maintenance)?;
 
         if chunk.is_empty() {
             return Ok(0);
@@ -707,8 +722,9 @@ impl OplogArchive for BlobOplogArchive {
             let entries: Vec<OplogEntry> =
                 sub_chunk.iter().map(|(_, entry)| entry.clone()).collect();
 
-            let compressed_chunk = CompressedOplogChunk::compress(entries)
-                .map_err(|error| format!("failed to compress oplog chunk: {error}"))?;
+            let compressed_chunk = CompressedOplogChunk::compress(entries).map_err(|error| {
+                OplogError::Maintenance(format!("failed to compress oplog chunk: {error}"))
+            })?;
 
             let namespace = BlobStorageNamespace::CompressedOplog {
                 environment_id: self.owned_agent_id.environment_id(),
@@ -726,34 +742,34 @@ impl OplogArchive for BlobOplogArchive {
                     .get::<CompressedOplogChunk>(namespace.clone(), &path)
                     .await
                     .map_err(|error| {
-                        format!(
+                        OplogError::Maintenance(format!(
                             "failed to reconcile compressed oplog chunk for worker {} in blob storage: {error}",
                             self.owned_agent_id.agent_id
-                        )
+                        ))
                     })?
             {
                 let existing_entries = existing.decompress().map_err(|error| {
-                    format!(
+                    OplogError::Maintenance(format!(
                         "failed to decode existing compressed oplog chunk for worker {}: {error}",
                         self.owned_agent_id.agent_id
-                    )
+                    ))
                 })?;
                 let existing_start = oplog_index
                     .as_u64()
                     .checked_sub(existing.count.saturating_sub(1))
                     .ok_or_else(|| {
-                        format!(
+                        OplogError::Maintenance(format!(
                             "existing compressed oplog chunk ending at {oplog_index} has invalid count {}",
                             existing.count
-                        )
+                        ))
                     })?;
                 let incoming_start = sub_chunk.first().unwrap().0.as_u64();
                 if existing_entries.len() as u64 != existing.count {
-                    return Err(format!(
+                    return Err(OplogError::Maintenance(format!(
                         "existing compressed oplog chunk ending at {oplog_index} declares {} entries but contains {}",
                         existing.count,
                         existing_entries.len()
-                    ));
+                    )));
                 }
                 let overlap_start = existing_start.max(incoming_start);
                 let expected = &sub_chunk[(overlap_start - incoming_start) as usize..];
@@ -766,7 +782,7 @@ impl OplogArchive for BlobOplogArchive {
                     })
                     .collect();
                 verify_persisted_entries(OplogReadSource::Archive(self.level), expected, actual)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| OplogError::Maintenance(error.to_string()))?;
                 if existing_start <= incoming_start {
                     self.entries.lock().unwrap().insert(oplog_index, path);
                     self.uncertain_writes.lock().unwrap().remove(&oplog_index);
@@ -789,10 +805,10 @@ impl OplogArchive for BlobOplogArchive {
                 )
                 .await
                 .map_err(|error| {
-                    format!(
+                    OplogError::Maintenance(format!(
                         "failed to store compressed oplog chunk for worker {} in blob storage: {error}",
                         self.owned_agent_id.agent_id
-                    )
+                    ))
                 })?;
 
             self.entries.lock().unwrap().insert(oplog_index, path);
@@ -830,8 +846,10 @@ impl OplogArchive for BlobOplogArchive {
             .unwrap_or_else(|| OplogIndex::from_u64(0)))
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> OplogArchiveResult<u64> {
-        self.ensure_is_created().await?;
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
+        self.ensure_is_created()
+            .await
+            .map_err(OplogError::Maintenance)?;
 
         let idx_to_drop = {
             let entries = self.entries.lock().unwrap();
@@ -884,16 +902,16 @@ impl OplogArchive for BlobOplogArchive {
                         }
                         Ok(Some(_)) => {
                             self.deleting.lock().unwrap().remove(idx);
-                            return Err(format!(
+                            return Err(OplogError::Maintenance(format!(
                                 "failed to drop compressed oplog chunk for worker {} in blob storage: {error}",
                                 self.owned_agent_id.agent_id
-                            ));
+                            )));
                         }
                         Err(reconcile_error) => {
-                            return Err(format!(
+                            return Err(OplogError::Maintenance(format!(
                                 "failed to drop compressed oplog chunk for worker {} in blob storage: {error}; failed to reconcile the delete: {reconcile_error}",
                                 self.owned_agent_id.agent_id
-                            ));
+                            )));
                         }
                     }
                 }

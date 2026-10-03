@@ -172,6 +172,7 @@ pub struct ResourceLimits {
     pub per_invocation_rpc_call_limit: u64,
     pub available_http_calls: u64,
     pub available_rpc_calls: u64,
+    pub available_blob_storage_bytes: u64,
     pub max_concurrent_agents_per_executor: u64,
     pub oplog_writes_per_second: u64,
     pub usage_update_applied: bool,
@@ -243,6 +244,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
             available_http_calls: value.available_http_calls,
             available_rpc_calls: value.available_rpc_calls,
+            available_blob_storage_bytes: value.available_blob_storage_bytes,
             max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
             oplog_writes_per_second: value.oplog_writes_per_second,
             usage_update_applied: value.usage_update_applied,
@@ -330,6 +332,7 @@ impl TryFrom<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceL
             per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
             available_http_calls: value.available_http_calls,
             available_rpc_calls: value.available_rpc_calls,
+            available_blob_storage_bytes: value.available_blob_storage_bytes,
             max_concurrent_agents_per_executor: normalize_concurrent_agents_limit(
                 value.max_concurrent_agents_per_executor,
             ),
@@ -673,6 +676,7 @@ mod tests {
             per_invocation_rpc_call_limit: 0,
             available_http_calls: 0,
             available_rpc_calls: 0,
+            available_blob_storage_bytes: 0,
             max_concurrent_agents_per_executor: 0,
             oplog_writes_per_second: 0,
             usage_update_applied: false,
@@ -700,6 +704,7 @@ mod tests {
             per_invocation_rpc_call_limit: 0,
             available_http_calls: 0,
             available_rpc_calls: 0,
+            available_blob_storage_bytes: 9,
             max_concurrent_agents_per_executor: 7,
             oplog_writes_per_second: 500,
             usage_update_applied: true,
@@ -711,6 +716,7 @@ mod tests {
 
         assert_eq!(converted.max_concurrent_agents_per_executor, 7);
         assert_eq!(converted.oplog_writes_per_second, 500);
+        assert_eq!(converted.available_blob_storage_bytes, 9);
         assert_eq!(converted.monthly_usage_mode_revision, 6);
         assert_eq!(converted.monthly_policy_revision, 7);
         assert_eq!(converted.monthly_policy.period.year, 2026);
@@ -744,6 +750,7 @@ mod tests {
     #[test]
     fn resource_limits_monthly_resource_policy_converts_to_proto() {
         let limits = super::ResourceLimits {
+            available_blob_storage_bytes: u64::MAX,
             monthly_usage_mode_revision: 6,
             monthly_policy_revision: 7,
             monthly_policy: super::MonthlyResourcePolicy {

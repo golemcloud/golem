@@ -27319,6 +27319,7 @@ components:
     Plan:
       example:
         appLimit: 10
+        blobStorageLimit: 18446744073709551615
         componentLimit: 100
         envLimit: 40
         maxConcurrentAgentsPerExecutor: 100
@@ -27371,6 +27372,9 @@ components:
           type: integer
           format: uint64
         storageLimit:
+          type: integer
+          format: uint64
+        blobStorageLimit:
           type: integer
           format: uint64
         monthlyUploadLimit:
@@ -27437,6 +27441,7 @@ components:
       - componentLimit
       - workerConnectionLimit
       - storageLimit
+      - blobStorageLimit
       - monthlyUploadLimit
       - monthlyComputeGcu
       - monthlyMemoryGbSeconds

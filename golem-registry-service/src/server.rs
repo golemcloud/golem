@@ -77,10 +77,12 @@ fn main() -> anyhow::Result<()> {
 async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let config = RegistryServiceConfig::default();
     let mut join_set = JoinSet::<anyhow::Result<()>>::new();
-    let services = Services::new(&config, &mut join_set).await?;
+    let services = Services::new_without_component_builtins(&config, &mut join_set).await?;
 
     let open_api_service = make_open_api_service(&services);
-    print!("{}", open_api_service.spec_yaml());
+    let spec_yaml = open_api_service.spec_yaml();
+    join_set.shutdown().await;
+    print!("{spec_yaml}");
     Ok(())
 }
 

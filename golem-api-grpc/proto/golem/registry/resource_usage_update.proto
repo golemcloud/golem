@@ -22,4 +22,5 @@ message ResourceUsageUpdate {
   uint64 ephemeral_storage_byte_nanoseconds_remainder = 14;
   golem.common.AccountUsagePeriod period = 15;
   uint64 monthly_policy_revision = 16;
+  int64 blob_storage_bytes_delta = 17;
 }

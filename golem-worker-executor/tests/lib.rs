@@ -253,6 +253,24 @@ test_component!(
     "golem:typescript-tools"
 );
 test_component!(
+    git_tool,
+    "git_tool",
+    "../builtin-tools/git-tool",
+    "golem:git-tool"
+);
+test_component!(
+    git_network_probe,
+    "git_network_probe",
+    "golem_it_git_network_probe",
+    "golem-it:git-network-probe"
+);
+test_component!(
+    web_fetch,
+    "web_fetch",
+    "../builtin-tools/web-fetch",
+    "golem:web-fetch"
+);
+test_component!(
     tool_streaming_ts_provider,
     "tool_streaming_ts_provider",
     "golem_it_tool_streaming_ts_provider",

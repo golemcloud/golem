@@ -14,9 +14,6 @@
 
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::{
-    RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
-};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailure,
@@ -41,6 +38,9 @@ use golem_common::model::invocation_session_public::{
 use golem_common::model::{AgentId, IdempotencyKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
+use golem_schema::proto::golem::schema::{
+    RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
+};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -598,7 +598,7 @@ impl TrustedInvocationSession {
     fn stream_identity(
         &self,
         transport_stream_id: u64,
-    ) -> anyhow::Result<golem_api_grpc::proto::golem::common::Uuid> {
+    ) -> anyhow::Result<golem_schema::proto::golem::common::Uuid> {
         self.mappings
             .get(&transport_stream_id)
             .and_then(|mapping| mapping.handle.as_ref())

@@ -83,7 +83,8 @@ pub(crate) fn classify_blob_store_error(err: &BlobStoreError) -> HostFailureKind
         BlobStoreError::NotFound(_)
         | BlobStoreError::AlreadyExists(_)
         | BlobStoreError::PermissionDenied(_)
-        | BlobStoreError::InvalidInput(_) => HostFailureKind::Permanent,
+        | BlobStoreError::InvalidInput(_)
+        | BlobStoreError::LimitExceeded(_) => HostFailureKind::Permanent,
         BlobStoreError::TransientBackend(_) | BlobStoreError::Other(_) => {
             HostFailureKind::Transient
         }
@@ -300,9 +301,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = loop {
                 let result = await_blob_provider(
                     self.create_interrupt_signal(),
-                    self.state
-                        .blob_store_service
-                        .delete_container(environment_id, name.clone()),
+                    self.state.blob_store_service.delete_container(
+                        self.account_resource_limits(),
+                        environment_id,
+                        name.clone(),
+                    ),
                 )
                 .await
                 .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
@@ -321,14 +324,16 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     STORAGE_TYPE_BLOB_STORE,
                     &account_id,
                     &environment_id_str,
-                    1,
+                    result
+                        .as_ref()
+                        .map_or(0, |mutation| mutation.objects_deleted),
                 );
             }
             handle
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -453,6 +458,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let result = await_blob_provider(
                     self.create_interrupt_signal(),
                     self.state.blob_store_service.copy_object(
+                        self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
@@ -474,7 +480,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -531,6 +537,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let result = await_blob_provider(
                     self.create_interrupt_signal(),
                     self.state.blob_store_service.move_object(
+                        self.account_resource_limits(),
                         environment_id,
                         input.source_container.clone(),
                         input.source_object.clone(),
@@ -552,7 +559,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .complete(
                     self,
                     HostResponseBlobStoreUnit {
-                        result: result.map_err(|err| err.to_string()),
+                        result: result.map(|_| ()).map_err(|err| err.to_string()),
                     },
                 )
                 .await?
@@ -573,7 +580,7 @@ pub(super) async fn await_blob_provider<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::await_blob_provider;
+    use super::{BlobStoreError, HostFailureKind, await_blob_provider, classify_blob_store_error};
     use golem_service_base::error::worker_executor::InterruptKind;
     use test_r::test;
 
@@ -593,6 +600,14 @@ mod tests {
         assert_eq!(
             await_blob_provider(std::future::ready(kind), std::future::pending::<()>()).await,
             Err(kind)
+        );
+    }
+
+    #[test]
+    fn quota_rejections_are_guest_visible_without_internal_retry() {
+        assert_eq!(
+            classify_blob_store_error(&BlobStoreError::LimitExceeded("quota".to_string())),
+            HostFailureKind::Permanent
         );
     }
 }

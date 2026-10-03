@@ -32,6 +32,7 @@ use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::invocation_request;
 use golem_api_grpc::proto::golem::worker::{
     ExternalToolInvocation, InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
@@ -222,11 +223,24 @@ fn public_invocation_graph(
     }
 }
 
+/// Checks a trusted resume request built from a public session against the invocation session
+/// protocol before it is dispatched, so a malformed request produced by the public adapter
+/// fails here with its protocol error instead of reaching the executor.
+fn validate_trusted_resume_request(request: &InvocationRequest) -> Result<(), WorkerServiceError> {
+    InvocationSessionState::default()
+        .validate_trusted_request(request)
+        .map_err(|error| {
+            WorkerServiceError::Internal(format!(
+                "public resume produced an invalid trusted request: {error}"
+            ))
+        })
+}
+
 fn validate_one_shot_invocation_is_stream_free(
     component: &Component,
     agent_id: &AgentId,
     method_name: &str,
-    method_parameters: &golem_api_grpc::proto::golem::schema::SchemaValue,
+    method_parameters: &golem_schema::proto::golem::schema::SchemaValue,
 ) -> WorkerResult<()> {
     let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
@@ -314,16 +328,16 @@ fn invocation_method_uses_streams(
 }
 
 pub(crate) fn decode_public_session_schema_value(
-    value: golem_api_grpc::proto::golem::schema::SchemaValue,
+    value: golem_schema::proto::golem::schema::SchemaValue,
 ) -> Result<SchemaValue, String> {
     decode_public_schema_value(value, true)
 }
 
 fn decode_public_schema_value(
-    value: golem_api_grpc::proto::golem::schema::SchemaValue,
+    value: golem_schema::proto::golem::schema::SchemaValue,
     allow_stream_references: bool,
 ) -> Result<SchemaValue, String> {
-    use golem_api_grpc::proto::golem::schema::{result_value, schema_value};
+    use golem_schema::proto::golem::schema::{result_value, schema_value};
 
     let value = value
         .value
@@ -438,9 +452,7 @@ fn decode_public_schema_value(
             "stream reference {} is not valid in constructor parameters",
             reference.stream_id
         )),
-        value => {
-            golem_api_grpc::proto::golem::schema::SchemaValue { value: Some(value) }.try_into()
-        }
+        value => golem_schema::proto::golem::schema::SchemaValue { value: Some(value) }.try_into(),
     }
 }
 
@@ -710,7 +722,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-        expected: Option<golem_api_grpc::proto::golem::common::Uuid>,
+        expected: Option<golem_schema::proto::golem::common::Uuid>,
     ) -> WorkerResult<AgentFingerprint> {
         if let Some(expected) = expected {
             let expected = uuid::Uuid::from(expected);
@@ -1780,7 +1792,7 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -2393,6 +2405,7 @@ impl WorkerService {
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
         };
+        validate_trusted_resume_request(&initial_request)?;
         let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
         let responses = self
             .worker_client
@@ -2505,7 +2518,7 @@ impl WorkerService {
             PublicStreamReferencePolicy::None,
             |_, _| unreachable!("stream references are rejected by the public value codec"),
         )?;
-        let input = golem_api_grpc::proto::golem::schema::TypedSchemaValue {
+        let input = golem_schema::proto::golem::schema::TypedSchemaValue {
             graph: Some(input_schema.clone().into()),
             value: Some(input.try_into().map_err(WorkerServiceError::TypeChecker)?),
         };
@@ -2645,6 +2658,7 @@ impl WorkerService {
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
         };
+        validate_trusted_resume_request(&initial_request)?;
         let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
         let responses = self
             .worker_client
@@ -2721,7 +2735,7 @@ impl WorkerService {
         component: &Component,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -2827,7 +2841,7 @@ impl WorkerService {
         validation_component: Option<&Component>,
         agent_id: AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: IdempotencyKey,
@@ -3471,7 +3485,7 @@ impl WorkerService {
         .into_parts()
         .1;
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             method_parameters.try_into().map_err(|error| {
                 WorkerServiceError::TypeChecker(format!(
                     "Agent method parameters cannot cross the worker boundary: {error}"
@@ -4662,7 +4676,7 @@ mod tests {
             &self,
             agent_id: &AgentId,
             _: Option<String>,
-            _: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+            _: Option<golem_schema::proto::golem::schema::SchemaValue>,
             mode: i32,
             schedule_at: Option<::prost_types::Timestamp>,
             idempotency_key: IdempotencyKey,
@@ -5872,7 +5886,7 @@ mod tests {
 
     #[test]
     async fn public_invocation_session_validates_and_preserves_live_stream_references() {
-        use golem_api_grpc::proto::golem::schema::{
+        use golem_schema::proto::golem::schema::{
             RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
         };
 
@@ -6088,7 +6102,7 @@ mod tests {
 
     #[test]
     fn public_invocation_values_reject_capabilities_and_constructor_streams_recursively() {
-        use golem_api_grpc::proto::golem::schema::{
+        use golem_schema::proto::golem::schema::{
             RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, SecretValue,
             schema_value,
         };

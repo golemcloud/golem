@@ -13,7 +13,6 @@ use super::{
     DurableStreamsHandler, MAX_ITEMS, body_response, has_header, rejection_response, response,
     route_method, route_stream_load_key,
 };
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     AppendToStreamSlotRequest, ExternalStreamProducer, StreamSessionCreationIntent,
     StreamSessionExpiryPolicy, TypedStreamSlotItems, append_to_stream_slot_request::Payload,
@@ -21,6 +20,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::model::AgentId;
 use golem_common::schema::{FieldSource, SchemaGraph, SchemaType};
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::render::from_untrusted_json_value;
 use golem_service_base::custom_api::CallAgentBehaviour;
 use golem_service_base::model::auth::AuthCtx;

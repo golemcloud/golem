@@ -210,7 +210,7 @@ impl Services {
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
         let initial_agent_files = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
-        let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage));
+        let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage.clone()));
 
         let component_compilation_service =
             crate::services::component_compilation::configured(&config.component_compilation);
@@ -254,9 +254,18 @@ impl Services {
             repos.account_resource_override_repo.clone(),
             account_service.clone(),
         ));
+        // Distributed registry and executor services are guaranteed to share the S3 namespace.
+        // Process-local and filesystem backends may point at different storage, where a sweep
+        // would incorrectly replace valid incremental usage with zero.
+        let blob_storage_reconciliation_enabled =
+            matches!(&config.blob_storage, BlobStorageConfig::S3(_));
         let account_usage_service = Arc::new(AccountUsageService::new(
             repos.account_usage_repo,
             account_service.clone(),
+            repos.environment_repo.clone(),
+            blob_storage,
+            blob_storage_reconciliation_enabled,
+            crate::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
         ));
 
         let token_service = Arc::new(TokenService::new(
@@ -374,6 +383,8 @@ impl Services {
         let tool_middleware_release_service = Arc::new(ToolMiddlewareReleaseService::new(
             repos.tool_middleware_release_repo.clone(),
             account_service.clone(),
+            component_service.clone(),
+            builtin_tool_owner_account_id,
         ));
         let environment_tool_middleware_grant_service =
             Arc::new(EnvironmentToolMiddlewareGrantService::new(
@@ -563,6 +574,7 @@ impl Services {
                 &deployment_service,
                 &deployment_write_service,
                 &tool_release_service,
+                &tool_middleware_release_service,
             )
             .await
             .map_err(|error| anyhow::anyhow!("Failed to provision built-in tools: {error}"))?;

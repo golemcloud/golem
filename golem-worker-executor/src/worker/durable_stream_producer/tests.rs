@@ -156,10 +156,33 @@ async fn explicit_retirement_does_not_wait_for_ephemeral_responses() {
     assert!(futures::poll!(archive.as_mut()).is_pending());
     slot.fence();
     assert!(archive.await.is_none());
-    assert!(slot.retain_response_or_wait_for_archive().await.is_err());
+    let error = match slot.retain_response_or_wait_for_archive().await {
+        Err(error) => error,
+        Ok(_) => panic!("explicit retirement admitted a response"),
+    };
+    assert_eq!(
+        crate::services::rpc::DurableStreamRemoteError::from_producer(error, |error| error),
+        crate::services::rpc::DurableStreamRemoteError::Unavailable,
+    );
     assert!(producer.ensure_healthy().is_err());
     assert!(slot.retain_response().is_err());
     slot.shutdown().await.unwrap();
+}
+
+#[test]
+async fn cancelling_an_admitted_response_releases_normal_archival() {
+    let slot = Arc::new(DurableStreamProducerSlot::default());
+    let response = slot.retain_response().unwrap();
+    let operation = tokio::spawn(async move {
+        let _response = response;
+        futures::future::pending::<()>().await;
+    });
+    let mut archive = Box::pin(slot.wait_for_responses_and_fence());
+    assert!(futures::poll!(archive.as_mut()).is_pending());
+
+    operation.abort();
+    assert!(operation.await.unwrap_err().is_cancelled());
+    assert!(archive.await.is_some());
 }
 
 #[test]

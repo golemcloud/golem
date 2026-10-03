@@ -133,7 +133,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     let agent_id = agent_id!("StreamingRpcTarget", "rejected-schedule");
     let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
     let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
-    let input: golem_api_grpc::proto::golem::schema::SchemaValue =
+    let input: golem_schema::proto::golem::schema::SchemaValue =
         input.try_into().map_err(anyhow::Error::msg)?;
     let component_id = component.id.to_string();
     let blobs_before = files_below(&deps.blob_storage_root())?

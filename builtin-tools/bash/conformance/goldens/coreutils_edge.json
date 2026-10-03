@@ -1,0 +1,938 @@
+{
+ "cases": {
+  "coreutils: base64 -D is not a GNU option": {
+   "script": "d7af3f93532560dc",
+   "status": 0,
+   "stderr": {
+    "text": "base64: invalid option -- 'D'\nTry 'base64 --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: base64 -d rejects a stray CR": {
+   "script": "70c2572d686a55ac",
+   "status": 0,
+   "stderr": {
+    "text": "base64: invalid input\n"
+   },
+   "stdout": {
+    "text": "hello\ns=1\n"
+   }
+  },
+  "coreutils: chmod refuses canonically instead of pretending to succeed": {
+   "script": "accd48886b420fe2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "coreutils: cmp -b reports GNU's byte/char wording": {
+   "script": "c0c977a3ed0f4229",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/cb1 /tmp/cb2 differ: byte 1, line 1 is   7 ^G   1 ^A\n"
+   }
+  },
+  "coreutils: cmp -l pads the offset column to the compared length": {
+   "script": "fb63406d68cf9267",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 3 143 130\n"
+   }
+  },
+  "coreutils: cmp -lb names every control and high-bit byte": {
+   "script": "3e9d370951844769",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1   0 ^@   377 M-^?\n 2   1 ^A   376 M-~\n 3  11 ^I   366 M-v\n 4  40      337 M-_\n 5 101 A    226 M-^V\n 6 176 ~    126 V\n 7 177 ^?    17 ^O\n 8 200 M-^@  16 ^N\n 9 233 M-^[  15 ^M\n10 310 M-H   14 ^L\n11 377 M-^?  13 ^K\n"
+   }
+  },
+  "coreutils: cp -a and cp -rp keep a directory's and a symlink's times": {
+   "script": "53ab111cb9710193",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nst=0\na 981173106\na/sub 981173106\na/l 1015218367\np 981173106\np/sub 981173106\np/l 1015218367\n"
+   }
+  },
+  "coreutils: cp -p copies from a /dev/fd/N pipe instead of refusing it": {
+   "script": "ab5f504a2a77d8db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\ns=0\n"
+   }
+  },
+  "coreutils: cp refuses a symlink of the same file instead of emptying it": {
+   "script": "ea494bf5074ddf26",
+   "status": 0,
+   "stderr": {
+    "text": "cp: 'f' and 'l' are the same file\n"
+   },
+   "stdout": {
+    "text": "s=1\nimportant-data"
+   }
+  },
+  "coreutils: cp refuses two symlinks to the same file": {
+   "script": "89b34a8703df0d7f",
+   "status": 0,
+   "stderr": {
+    "text": "cp: 'a' and 'b' are the same file\n"
+   },
+   "stdout": {
+    "text": "s=1\ndata"
+   }
+  },
+  "coreutils: cp still copies a genuinely different file onto a symlink": {
+   "script": "3e48213eb41d74c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\none"
+   }
+  },
+  "coreutils: cut -c splits on characters, not UTF-8 bytes": {
+   "script": "5b39b2fc86f9860c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "café\n"
+   }
+  },
+  "coreutils: dd conv=notrunc seek writes into the middle of an existing file": {
+   "script": "6626e110319c0189",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AAAXXAAAAA\n"
+   }
+  },
+  "coreutils: dd if/of/skip/count with status=none matches byte-for-byte": {
+   "script": "dc280c1d1633bc29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "234\n"
+   }
+  },
+  "coreutils: du -a lists every path in the tree, not just directories": {
+   "script": "225d21de768fcfd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dutree\ndutree/f1\ndutree/sub\ndutree/sub/f2\n"
+   }
+  },
+  "coreutils: du -c prints a grand total line after the named operands": {
+   "script": "b68c5e4763dab6f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "da\ndb\ntotal\n"
+   }
+  },
+  "coreutils: expr accepts a non-UTF-8 byte in its argument": {
+   "script": "b5f78a392efce229",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\ns=1\n"
+   }
+  },
+  "coreutils: expr length/substr count characters": {
+   "script": "bf52d05a8d994cc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nhél\n"
+   }
+  },
+  "coreutils: factor rejects a padded operand": {
+   "script": "2d4bddf9010fd5dd",
+   "status": 0,
+   "stderr": {
+    "text": "factor: ‘ 15 ’ is not a valid positive integer\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: file does not recognize JSON with trailing garbage": {
+   "script": "200019332165832a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jx.json: ASCII text, with no line terminators\n"
+   }
+  },
+  "coreutils: file does not recognize a bare JSON scalar": {
+   "script": "f67d3ef70706ea4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jn.json: ASCII text, with no line terminators\njt.json: ASCII text, with no line terminators\n"
+   }
+  },
+  "coreutils: file does not recognize invalid JSON": {
+   "script": "e3c65093101f787c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "j4.json: ASCII text, with no line terminators\n"
+   }
+  },
+  "coreutils: file recognizes JSON with leading whitespace and nesting": {
+   "script": "4f17923dc4926cbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "j3.json: JSON text data\n"
+   }
+  },
+  "coreutils: file recognizes a JSON object and array": {
+   "script": "7364a99595b7c1a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "j1.json: JSON text data\nj2.json: JSON text data\n"
+   }
+  },
+  "coreutils: file recognizes a large JSON array": {
+   "script": "670d04e4b5d09c2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "jbig.json: JSON text data\n"
+   }
+  },
+  "coreutils: file's --mime-type and -i for JSON": {
+   "script": "d2cb6569d469305b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "j5.json: application/json\nj5.json: application/json; charset=us-ascii\n"
+   }
+  },
+  "coreutils: find -exec does not run shell builtins": {
+   "script": "e36ce17166c65cf6",
+   "status": 0,
+   "stderr": {
+    "text": "find: ‘cd’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "find s=0 pwd=/tmp\n"
+   }
+  },
+  "coreutils: find -mtime excludes a file well under N days old": {
+   "script": "c64eb28cfc52c178",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./fresh\n"
+   }
+  },
+  "coreutils: find -mtime matches a file well over N days old": {
+   "script": "300c38a69379d6e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./old\n"
+   }
+  },
+  "coreutils: find -printf refuses an oversized field width": {
+   "script": "66873245bcb86025",
+   "status": 0,
+   "stderr": {
+    "text": "find: ‘standard output’: Value too large for data type\n"
+   },
+   "stdout": {
+    "text": "\ns=1\n"
+   }
+  },
+  "coreutils: fmt fills to GNU's actual goal width, not one word short": {
+   "script": "75770f31b765a66f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27\n28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51\n52 53 54 55 56 57 58 59 60\n"
+   }
+  },
+  "coreutils: fmt's sentence spacing doesn't overflow the requested width": {
+   "script": "5bc8f9cc5078569d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "The quick brown fox jumps over the\nlazy dog. It barked.  Then it ran away\nquickly. The end.\n"
+   }
+  },
+  "coreutils: fold -b still splits on bytes even in a UTF-8 locale": {
+   "script": "8005577ac8b69151",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaaaa\naaaaa\naaa\n"
+   }
+  },
+  "coreutils: hostname answers from GOLEM_WORKER_NAME": {
+   "script": "888f013d4d983d59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7c5823421497\ns=0\n"
+   }
+  },
+  "coreutils: install -D creates the destination's parents and copies": {
+   "script": "83d7f678ef40f9c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "his=0\n"
+   }
+  },
+  "coreutils: install -b backs up an existing destination": {
+   "script": "84387970e42d17eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "newolds=0\n"
+   }
+  },
+  "coreutils: install -d creates a directory tree": {
+   "script": "0479c9e22e8cf8ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\ns=0\n"
+   }
+  },
+  "coreutils: install -m/-o/-g are accepted and ignored": {
+   "script": "3c6bb012e2ad4176",
+   "status": 0,
+   "stderr": {
+    "text": "install: cannot change ownership of 'imdest': Operation not permitted\n"
+   },
+   "stdout": {
+    "text": "xs=0\n"
+   }
+  },
+  "coreutils: install -t copies several sources into a target directory": {
+   "script": "2dde5617350ad887",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ita\nitb\ns=0\n"
+   }
+  },
+  "coreutils: install -v reports what it did": {
+   "script": "911b3994f9bcc46e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'ivsrc' -> 'ivdest'\ns=0\ninstall: creating directory 'ivdir'\ns=0\n"
+   }
+  },
+  "coreutils: install copies a single file": {
+   "script": "5707f00faf93589f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hellos=0\n"
+   }
+  },
+  "coreutils: install refuses a directory source": {
+   "script": "680ec12070e4f34a",
+   "status": 0,
+   "stderr": {
+    "text": "install: omitting directory 'idsrc'\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: install with no operands is an error": {
+   "script": "4bfffa57fe207906",
+   "status": 0,
+   "stderr": {
+    "text": "install: missing file operand\nTry 'install --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: join drops a phantom trailing field from trailing whitespace": {
+   "script": "3c9b46d073ec642a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 a b\n"
+   }
+  },
+  "coreutils: ln of a missing source says failed to access": {
+   "script": "cc0404c9491e4a04",
+   "status": 0,
+   "stderr": {
+    "text": "ln: failed to access '/tmp/nosuch-src': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: ls -C at a width wide enough for one line uses plain spaces, not tabs": {
+   "script": "8e354fd1968e4594",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaa  bb  ccccccc  d  ee  fffffffffff  g  hhhhh\n"
+   }
+  },
+  "coreutils: ls -C columns and their tab-stop fill at a middling width": {
+   "script": "f760623d06d017d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaa  ccccccc  ee\t   g\nbb   d\t      fffffffffff  hhhhh\n"
+   }
+  },
+  "coreutils: ls -C wraps to one column when nothing wider fits": {
+   "script": "13f08e46dab7df2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaa\nbb\nccccccc\nd\nee\nfffffffffff\n"
+   }
+  },
+  "coreutils: ls -x fills left-to-right instead of top-to-bottom": {
+   "script": "2595e2c490b3ed96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aaa  bb     ccccccc  d\tee  fffffffffff\ng    hhhhh\n"
+   }
+  },
+  "coreutils: md5sum -c prints a non-ASCII name as characters": {
+   "script": "4f5ef218b5c2c5bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é: OK\n"
+   }
+  },
+  "coreutils: mv into a missing directory names both paths": {
+   "script": "d9001442f4d4059c",
+   "status": 0,
+   "stderr": {
+    "text": "mv: cannot move '/tmp/mvsrc' to '/tmp/nosuchdir/mvdst': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: nl -s pads an unnumbered line to the real separator width": {
+   "script": "38a66cafd431f323",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000                       1   :       a  \\n                        \n0000020          \\n                       2   :       b  \\n\n0000035\n"
+   }
+  },
+  "coreutils: nl -v accepts a negative starting number": {
+   "script": "d9daeb0fed599048",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "coreutils: nproc reports this sandbox's one logical core": {
+   "script": "1cfcb266641285dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18\ns=0\n"
+   }
+  },
+  "coreutils: numfmt --suffix accepts a non-UTF-8 byte": {
+   "script": "d2a07b9a91d9c733",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "Nf8Kcz0wCg=="
+   }
+  },
+  "coreutils: numfmt normalizes a tab separator to a space, not verbatim": {
+   "script": "4d525447bdc849a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2.0K  a\n"
+   }
+  },
+  "coreutils: numfmt preserves a run of spaces beyond the first": {
+   "script": "0826678940a7792e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2.0K   a   b\n"
+   }
+  },
+  "coreutils: numfmt refuses an oversized --padding": {
+   "script": "e3e82f1b09d13b91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100000000\ns=0\n"
+   }
+  },
+  "coreutils: od -t f4 uses scientific notation for a large float": {
+   "script": "adf6ca8b9e9cf312",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "    1.761127e+14\n"
+   }
+  },
+  "coreutils: od -t f8 uses scientific notation for a large float": {
+   "script": "05f26345a97ae95c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "                    1e+15\n"
+   }
+  },
+  "coreutils: readlink -f of an empty path fails": {
+   "script": "eb756ff6311afa0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: rmdir accepts a trailing slash": {
+   "script": "77011c6a1bdc60ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "s=0\n"
+   }
+  },
+  "coreutils: seq format with no directive is an error": {
+   "script": "1a1e4cd8e74352df",
+   "status": 0,
+   "stderr": {
+    "text": "seq: format ‘x’ has no % directive\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: seq large integer increment does not overshoot": {
+   "script": "5b053503817aa259",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n10000000001\n20000000001\n"
+   }
+  },
+  "coreutils: seq long-form separator and format take a space-separated argument": {
+   "script": "cecd786f420f2ea4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,2,3\n1\n2\n3\n"
+   }
+  },
+  "coreutils: seq rejects nan": {
+   "script": "34b420da84c6838f",
+   "status": 0,
+   "stderr": {
+    "text": "seq: invalid ‘not-a-number’ argument: ‘nan’\nTry 'seq --help' for more information.\nseq: invalid ‘not-a-number’ argument: ‘nan’\nTry 'seq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "s=1\ns=1\n"
+   }
+  },
+  "coreutils: seq with a huge end streams": {
+   "script": "55fce4f664cf6bf3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n"
+   }
+  },
+  "coreutils: seq with an infinite end streams until head stops it": {
+   "script": "15e5c63a09099e9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\ns=0\n5\n6\n"
+   }
+  },
+  "coreutils: sort -t accepts a non-UTF-8 byte separator": {
+   "script": "1fd6efb26abfce54",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a1\nb2\ns=0\n"
+   }
+  },
+  "coreutils: sort keeps each file's unterminated last line separate": {
+   "script": "10e3824100763172",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "coreutils: stat %F says regular empty file for a zero-byte file": {
+   "script": "0a25f0a8ba11303b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "regular empty file\nregular file\n"
+   }
+  },
+  "coreutils: stat %N quotes the name and shows a symlink's target": {
+   "script": "81b1e0a419d39364",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'f'\n'l' -> 'f'\n"
+   }
+  },
+  "coreutils: stat %a/%A/%U/%G/%u/%g report this sandbox's fixed defaults": {
+   "script": "93e58b7415cccdce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "644|-rw-r--r--|UNKNOWN:UNKNOWN|1000:1000\n755|drwxr-xr-x\n"
+   }
+  },
+  "coreutils: stat --printf has no trailing newline of its own": {
+   "script": "0e26981191cfb3b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\ns=0\n"
+   }
+  },
+  "coreutils: stat -f is refused": {
+   "script": "94d9c969c04972dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  File: \"f\"\n    ID: 287f85786d592c13 Namelen: 255     Type: overlayfs\nBlock size: 4096       Fundamental block size: 4096\nBlocks: Total: 479173502  Free: 476243127  Available: 451883998\nInodes: Total: 121782272  Free: 121547649\ns=0\n"
+   }
+  },
+  "coreutils: stat -t is refused": {
+   "script": "ef14292e833a5611",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f 3 8 81a4 1000 1000 35 11412 1 0 0 1790340593 1790340593 1790340593 1790340593 4096\ns=0\n"
+   }
+  },
+  "coreutils: stat rejects an unknown long option": {
+   "script": "d8974b056b92b77e",
+   "status": 0,
+   "stderr": {
+    "text": "stat: unrecognized option '--bogus'\nTry 'stat --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: stat rejects an unknown short option": {
+   "script": "a84dd03c9f085b17",
+   "status": 0,
+   "stderr": {
+    "text": "stat: invalid option -- '@'\nTry 'stat --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: tr rejects an equivalence class in string2 when translating": {
+   "script": "c8154f47845b9f13",
+   "status": 0,
+   "stderr": {
+    "text": "tr: [=c=] expressions may not appear in string2 when translating\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: truncate rejects a hex size": {
+   "script": "45356cf423c255ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "truncate: Invalid number: ‘0x10’\ns=1\n"
+   }
+  },
+  "coreutils: uname -a reports this sandbox's fixed, synthetic fields": {
+   "script": "9a289ab7a4c98086",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Linux b79846f17250 7.0.12-linuxkit #1 SMP PREEMPT Thu Aug 27 14:02:21 UTC 2026 aarch64 GNU/Linux\ns=0\n"
+   }
+  },
+  "coreutils: wc files0-from zero-length entry does not widen the other rows": {
+   "script": "5c46802f68b91d6d",
+   "status": 0,
+   "stderr": {
+    "text": "wc: list0:2: invalid zero-length file name\n"
+   },
+   "stdout": {
+    "text": "1 1 3 a.txt\n1 1 3 total\ns=1\n"
+   }
+  },
+  "coreutils: wc mixed file and stdin widens like GNU": {
+   "script": "6662d05ce2dcf49d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      1 -\n      3 f\n      4 total\n"
+   }
+  },
+  "coreutils: wc multi-file widens by summed byte size": {
+   "script": "a3fd754c8773949a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 3 f\n 2 g\n 5 total\n"
+   }
+  },
+  "coreutils: wc redirected stdin sizes from its own counts": {
+   "script": "5773ed2be0bc9a41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   5    5 5005\n5\n   5 5005\n"
+   }
+  },
+  "coreutils: wc single file no padding": {
+   "script": "e4474f512185da62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 f\n3\n"
+   }
+  },
+  "coreutils: wc single file width from its own counts, not byte size": {
+   "script": "e78e57eb11ab4665",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 f\n5\n"
+   }
+  },
+  "coreutils: wc true pipe still widens to 7": {
+   "script": "6989d78b194891c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      5       5    5005\n5\n"
+   }
+  },
+  "coreutils: which finds this crate's own commands and Brush builtins that are real programs": {
+   "script": "b98df1c67656ff26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/bin/sed\ns=0\n/bin/cat\n/bin/ls\ns=0\n/bin/echo\ns=0\ns=1\n"
+   }
+  },
+  "coreutils: which with no operands is an error": {
+   "script": "8746c858cc767d89",
+   "status": 0,
+   "stderr": {
+    "text": "BusyBox v1.37.0 (2026-01-10 15:38:28 UTC) multi-call binary.\n\nUsage: which [-a] COMMAND...\n\nLocate COMMAND\n\n\t-a\tShow all matches\n"
+   },
+   "stdout": {
+    "text": "s=1\n"
+   }
+  },
+  "coreutils: xargs and find -exec still run echo (a real GNU program, not a shell builtin)": {
+   "script": "3d0293b943843387",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\ns=0\nhi /tmp\n"
+   }
+  },
+  "coreutils: xargs and find -exec still run this crate's own commands": {
+   "script": "fb986c0eefd8b3c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n/tmp\n"
+   }
+  },
+  "coreutils: xargs does not run shell builtins": {
+   "script": "0019af293f33bc0d",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: cd: No such file or directory\nxargs: export: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "s=127 pwd=/\ns=127 X=unset\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

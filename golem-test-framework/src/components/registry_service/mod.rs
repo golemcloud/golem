@@ -261,6 +261,10 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__UNLIMITED__BLOB_STORAGE_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__UNLIMITED__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
@@ -327,6 +331,10 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__STORAGE_LIMIT",
             "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_FUEL__BLOB_STORAGE_LIMIT",
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_FUEL__WORKER_CONNECTION_LIMIT",
@@ -418,6 +426,10 @@ async fn env_vars(
             "10000000000000000".to_string(),
         )
         .with(
+            "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__BLOB_STORAGE_LIMIT",
+            "1000000000000000000".to_string(),
+        )
+        .with(
             "GOLEM__INITIAL_PLANS__LOW_DISK_SPACE__WORKER_CONNECTION_LIMIT",
             "10000000000000000".to_string(),
         )
@@ -485,6 +497,10 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__STORAGE_LIMIT",
             "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__BLOB_STORAGE_LIMIT",
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_HTTP_CALLS__WORKER_CONNECTION_LIMIT",
@@ -562,6 +578,10 @@ async fn env_vars(
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__STORAGE_LIMIT",
             "10000000000000000".to_string(),
+        )
+        .with(
+            "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__BLOB_STORAGE_LIMIT",
+            "1000000000000000000".to_string(),
         )
         .with(
             "GOLEM__INITIAL_PLANS__LOW_RPC_CALLS__WORKER_CONNECTION_LIMIT",

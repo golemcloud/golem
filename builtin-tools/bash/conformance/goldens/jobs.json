@@ -1,0 +1,1438 @@
+{
+ "cases": {
+  "jobs: $! inside a subshell": {
+   "script": "9cfd5e7ea123ee29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inherited\n"
+   }
+  },
+  "jobs: $! survives disown and wait -n": {
+   "script": "69365679d3b11c67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "disown\nwaitn\n"
+   }
+  },
+  "jobs: $! survives wait": {
+   "script": "6b05ca3e8eb5a124",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kept\n"
+   }
+  },
+  "jobs: BASHPID differs in every subshell": {
+   "script": "88355db97d344f22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\nsubst\nstage\nmain\n"
+   }
+  },
+  "jobs: EXIT trap in a background group": {
+   "script": "f2f8c47ae75690b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "job\njob-exit\ndone\n"
+   }
+  },
+  "jobs: EXIT trap in a background subshell": {
+   "script": "cde7099abcb9328e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed\n"
+   }
+  },
+  "jobs: EXIT trap in a command substitution": {
+   "script": "4476aada67fb8b44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[body\ninner-exit]\n"
+   }
+  },
+  "jobs: EXIT trap in a job killed in a loop": {
+   "script": "adcdb11fd3ddeeff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "job-cleanup\nst=143\n"
+   }
+  },
+  "jobs: EXIT trap in a job killed while it sleeps": {
+   "script": "76b3f00a3ce8ad14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "job-cleanup\nst=143\n"
+   }
+  },
+  "jobs: EXIT trap in a pipeline stage": {
+   "script": "af710af826504695",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "stage-body\nstage-exit\n"
+   }
+  },
+  "jobs: EXIT trap in a subshell that kills itself": {
+   "script": "21dc1f0565fa0616",
+   "status": 0,
+   "stderr": {
+    "text": "Terminated                 ( trap 'echo sub-exit' EXIT; kill $BASHPID; echo not )\n"
+   },
+   "stdout": {
+    "text": "sub-exit\nst=143\n"
+   }
+  },
+  "jobs: EXIT trap of a child shell ended by a signal": {
+   "script": "3a0565c095f89fae",
+   "status": 0,
+   "stderr": {
+    "text": "Terminated                 bash -c 'trap \"echo child-exit\" EXIT; kill $$' 2> /dev/null\n"
+   },
+   "stdout": {
+    "text": "child-exit\nst=143\n"
+   }
+  },
+  "jobs: EXIT trap of a stage ended by SIGPIPE": {
+   "script": "973346afe2305eae",
+   "status": 0,
+   "stderr": {
+    "text": "bye\n"
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "jobs: EXIT trap of a substitution ended by a signal": {
+   "script": "57dc93785954ce2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[bye] 143\n"
+   }
+  },
+  "jobs: EXIT trap of sh -c writes to its redirection": {
+   "script": "afc3e299559f77e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nin\nbye\n"
+   }
+  },
+  "jobs: EXIT trap runs after HUP": {
+   "script": "8349f2a32660b67a",
+   "status": 129,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exit-trap\n"
+   }
+  },
+  "jobs: EXIT trap runs after INT": {
+   "script": "b4b7f29b1c87bb82",
+   "status": 130,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exit-trap\n"
+   }
+  },
+  "jobs: EXIT trap runs when a signal ends the script": {
+   "script": "10759592adadc436",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cleanup\n"
+   }
+  },
+  "jobs: EXIT trap runs when a watchdog kills the script": {
+   "script": "4de0ac1abd609f7a",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cleanup\n"
+   }
+  },
+  "jobs: EXIT trap writes to the subshell's redirection": {
+   "script": "e4173a4094c3e615",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nin\nsub\n"
+   }
+  },
+  "jobs: EXIT trap's exit keeps the signal status": {
+   "script": "1e9bd12386084722",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cleanup\n"
+   }
+  },
+  "jobs: INT is ignored once a job runs": {
+   "script": "ff48df502a332265",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\n"
+   }
+  },
+  "jobs: INT reaches a job that has not started": {
+   "script": "328564902242ad66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=130\n"
+   }
+  },
+  "jobs: KILL ends a stopped job": {
+   "script": "c90585577d8871b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=137\n"
+   }
+  },
+  "jobs: KILL skips the EXIT trap": {
+   "script": "9fa75e427dc36365",
+   "status": 137,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "jobs: STOP and CONT": {
+   "script": "b27e4f39cb391c82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "before\nt\nst=0\n"
+   }
+  },
+  "jobs: TERM to a stopped job waits for CONT": {
+   "script": "d696ec8328e549e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nst=143\n"
+   }
+  },
+  "jobs: USR1 terminates a job by default": {
+   "script": "c4a063707b99eeca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=138\n"
+   }
+  },
+  "jobs: a HUP handler that computes before exiting": {
+   "script": "4cb02a6411518a1e",
+   "status": 1,
+   "stderr": {
+    "text": "cat: /tmp/h: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "main\n"
+   }
+  },
+  "jobs: a disowned job is stopped and reported at the end of the call": {
+   "script": "e0062bbf0bd04145",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "started\nlate\n"
+   }
+  },
+  "jobs: a job catches USR1": {
+   "script": "761bc2c1a846639a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "got-usr1\nst=143\n"
+   }
+  },
+  "jobs: a job continues a stopped script": {
+   "script": "0eb35fa985f4228a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "resumed 0\n"
+   }
+  },
+  "jobs: a job orphaned by its subshell is stopped and reported at the end of the call": {
+   "script": "b0015ca88b89db03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  },
+  "jobs: a job started by bash -c outlives it": {
+   "script": "8b02294f8f2f739a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "late\n"
+   }
+  },
+  "jobs: a job started in a pipeline stage outlives the stage": {
+   "script": "b7b845293a7fc876",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "late\nend\n"
+   }
+  },
+  "jobs: a job started in a subshell keeps its effect": {
+   "script": "7b6df1c8bfa2754c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "written\n"
+   }
+  },
+  "jobs: a job started in a subshell outlives it": {
+   "script": "45883f64ffb6ba36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "late\nend\n"
+   }
+  },
+  "jobs: a redirected background subshell catches signals itself": {
+   "script": "17e141d6ac85b74c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=3\ncaught\n"
+   }
+  },
+  "jobs: a redirected background subshell keeps its redirected input": {
+   "script": "c4162bada33dcbfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "jobs: a second wait on a pid": {
+   "script": "22f73f01883c4f26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "jobs: a stage lists the parent's jobs": {
+   "script": "73b018eb7c3f4f3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]+  Running                    sleep 0.3 &\n"
+   }
+  },
+  "jobs: ambiguous job name": {
+   "script": "ee7afe4a2ce3b3fc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: sleep: ambiguous job spec\n"
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "jobs: background job in a nested subshell reads nothing": {
+   "script": "18a43fadbc682333",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "jobs: background job in a piped function": {
+   "script": "b707291440b9f2d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "jobs: background job reads a piped group's input": {
+   "script": "b1ad5b9f05334241",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "jobs: background job reads a piped subshell's input": {
+   "script": "e755645a97448f32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "jobs: background job reads a redirected group's input": {
+   "script": "28222beaa488fe00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "jobs: background jobs ignore QUIT": {
+   "script": "56a7eea55637fd88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\n"
+   }
+  },
+  "jobs: background jobs share piped input": {
+   "script": "4ef51cff08a24eb6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20000\n"
+   }
+  },
+  "jobs: bash -c gets its own $$": {
+   "script": "d32017fe7381e55b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "differs\n"
+   }
+  },
+  "jobs: break in a pipeline stage": {
+   "script": "fdcc06d35480af59",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in 1\nin 2\nst=0\n"
+   }
+  },
+  "jobs: children do not run the caller's EXIT trap": {
+   "script": "fa3fd3e37f046a36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nsub\njob\nP\n"
+   }
+  },
+  "jobs: cksum interleaves under 2>&1": {
+   "script": "5b634faa76fddafd",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2418082923 2 /tmp/a\ncksum: /tmp/missing: No such file or directory\n2418082923 2 /tmp/a\n"
+   }
+  },
+  "jobs: command substitution does not wait for a job writing elsewhere": {
+   "script": "2e835ecf3bad457b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\n"
+   }
+  },
+  "jobs: command substitution waits for a job holding its output": {
+   "script": "0f5f1f92b667e21a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[hi]\n"
+   }
+  },
+  "jobs: concurrent sh -c children do not share $$": {
+   "script": "bdffd9af09945e91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "job 1\njob 2\njob 3\n3\n"
+   }
+  },
+  "jobs: declare -f prints pipelines and redirections as bash does": {
+   "script": "5875dc0f9b7766b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f () \n{ \n    a | b 2>&1;\n    ( c;\n    d ) > /dev/null;\n    { \n        e\n    } 1>&2 2>&1;\n    cat 0<&3\n}\n"
+   }
+  },
+  "jobs: exec a descriptor into a process substitution": {
+   "script": "d09389b0d2986c6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "into3\nend\n"
+   }
+  },
+  "jobs: exec stdout and stderr into tee": {
+   "script": "a4de2c6dc18865e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hello\nworld\nhello\nworld\n"
+   }
+  },
+  "jobs: exec stdout into a filter": {
+   "script": "c30b3bcd3ca503bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HELLO\n"
+   }
+  },
+  "jobs: exec stdout into tee": {
+   "script": "9aa13c81f7ca6f1a",
+   "status": 0,
+   "stderr": {
+    "text": "hello\nworld\n"
+   },
+   "stdout": {
+    "text": "hello\nworld\n"
+   }
+  },
+  "jobs: exit in a single-command stage": {
+   "script": "c61289107bec080a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after 3\n"
+   }
+  },
+  "jobs: exit in the last pipeline stage": {
+   "script": "b8a1802833d18466",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "continued 1\n"
+   }
+  },
+  "jobs: job cap bounds a fork tree": {
+   "script": "b45c4e3eef05d26a",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "uncapped\n"
+   }
+  },
+  "jobs: job cap counts disowned jobs": {
+   "script": "847481c25fefec4d",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "refused=0\n"
+   }
+  },
+  "jobs: job cap counts jobs of every subshell": {
+   "script": "2d940b67def1a8e7",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "refused=0\n"
+   }
+  },
+  "jobs: job numbers restart after reaping": {
+   "script": "684d5c211cf29710",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=143\n"
+   }
+  },
+  "jobs: jobs -l for a pipeline job": {
+   "script": "1d079fa4d61142ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11:Running                    sleep 0.3\n36:| cat\n36:| cat &\n"
+   }
+  },
+  "jobs: jobs -l for a simple job": {
+   "script": "0802b582709bd2c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11:Running                    sleep 0.3 &\n"
+   }
+  },
+  "jobs: jobs -n": {
+   "script": "85e71f1719ddeac5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]+  Running                    sleep 0.3 &\nst=0\nst=0\n[1]+  Done                       true\nst=0\nst=0\n"
+   }
+  },
+  "jobs: jobs -p for a pipeline job": {
+   "script": "ae76c3b8595399c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "jobs: jobs -x in a stage and a subshell": {
+   "script": "aada88ca06e1d632",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "stage\n%1\n"
+   }
+  },
+  "jobs: jobs -x options": {
+   "script": "798fac9b712684e6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: jobs: no other options allowed with `-x'\n"
+   },
+   "stdout": {
+    "text": "st=1\nhi\nst=0\nhi\ndashdash\n"
+   }
+  },
+  "jobs: jobs -x passes other words through": {
+   "script": "18b89f1f7449b97e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "%2 %sleepy\nst=0\n%1\nst=0\n"
+   }
+  },
+  "jobs: jobs -x replaces job specs": {
+   "script": "201828884bae0049",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "groups a%1 %1 x\n"
+   }
+  },
+  "jobs: jobs -x runs functions, statuses and missing commands": {
+   "script": "482d212e2afcde43",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuchcmd: command not found\nbash: line 1: x=2: command not found\n"
+   },
+   "stdout": {
+    "text": "f:2\nst=0\nst=1\nst=0\nst=127\nst=127 x=1\n"
+   }
+  },
+  "jobs: jobs keeps the status of a job it reported": {
+   "script": "8c78c0ea4330b11b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "jobs: jobs prints subshells and groups on one line": {
+   "script": "b0c1d5a188b0e3b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]   Running                    ( sleep 0.3; echo x > /dev/null ) &\n[2]-  Running                    { sleep 0.3; true; } &\n[3]+  Running                    sleep 0.3 | cat &\n"
+   }
+  },
+  "jobs: jobs shows a job killed by a signal": {
+   "script": "ab14a9292e3665a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]+  Terminated                 sleep 5\nst=0\n"
+   }
+  },
+  "jobs: jobs states after a job ends": {
+   "script": "baf7cc39da19d3d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]+  Exit 3                     ( exit 3 )\n[1]+  Killed                     sleep 5\n[1]+  User defined signal 1      sleep 5\n"
+   }
+  },
+  "jobs: jobs text of redirected and nested commands": {
+   "script": "8966bff108dfa689",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]   Running                    ( sleep 0.3; echo x ) > /dev/null &\n[2]   Running                    { sleep 0.3; } 2> /dev/null &\n[3]   Running                    { true & sleep 0.3; } &\n[4]-  Running                    echo x | ( cat ) > /dev/null &\n[5]+  Running                    x=1 sleep 0.3 > /dev/null 2>&1 &\n"
+   }
+  },
+  "jobs: jobs that finish at once never hit the cap": {
+   "script": "37d6a5e97084891c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "300\n"
+   }
+  },
+  "jobs: jobs with job specs": {
+   "script": "2f2d1efe0f5a6ec4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: jobs: %2: no such job\n"
+   },
+   "stdout": {
+    "text": "[1]+  Running                    sleep 0.2 &\nst=1\n"
+   }
+  },
+  "jobs: kill $$ in bash -c ends only the child": {
+   "script": "75dd91da092e79ab",
+   "status": 0,
+   "stderr": {
+    "text": "Terminated                 bash -c 'kill $$; echo not'\n"
+   },
+   "stdout": {
+    "text": "after child: 143\n"
+   }
+  },
+  "jobs: kill $BASHPID ends only the subshell": {
+   "script": "010ddad8863e4722",
+   "status": 0,
+   "stderr": {
+    "text": "Terminated                 ( kill $BASHPID; echo x )\n"
+   },
+   "stdout": {
+    "text": "main=143\n"
+   }
+  },
+  "jobs: kill %1 from a stage": {
+   "script": "f885b6a868b27e49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "jobs: kill %1 from a stage reports no such job": {
+   "script": "4645d4f7c9092672",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: %1: no such job\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "jobs: kill -l names": {
+   "script": "2c0e2d60a6d4f8a7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: bogus: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "10\n12\n35\n36\n63\nRTMIN\nRTMAX-14\nRTMAX-1\nQUIT\nKILL\nUSR1\nINT\nHUP\nRTMAX\n1\n1\nst=1\n[0]\nKILL\n"
+   }
+  },
+  "jobs: kill -l numbers and statuses": {
+   "script": "11ed56f4e454aa08",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: 65: invalid signal specification\nbash: line 1: kill: 127: invalid signal specification\nbash: line 1: kill: 128: invalid signal specification\nbash: line 1: kill: 256: invalid signal specification\nbash: line 1: kill: 271: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "TERM\nTERM\n15\n15\nKILL\nRTMAX\nEXIT\nst=1\n"
+   }
+  },
+  "jobs: kill -l of a death status": {
+   "script": "cf7658f9e538820d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "TERM\n"
+   }
+  },
+  "jobs: kill -l table": {
+   "script": "b432d018170c3d8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 4) SIGILL\t 5) SIGTRAP\n 6) SIGABRT\t 7) SIGBUS\t 8) SIGFPE\t 9) SIGKILL\t10) SIGUSR1\n11) SIGSEGV\t12) SIGUSR2\t13) SIGPIPE\t14) SIGALRM\t15) SIGTERM\n16) SIGSTKFLT\t17) SIGCHLD\t18) SIGCONT\t19) SIGSTOP\t20) SIGTSTP\n21) SIGTTIN\t22) SIGTTOU\t23) SIGURG\t24) SIGXCPU\t25) SIGXFSZ\n26) SIGVTALRM\t27) SIGPROF\t28) SIGWINCH\t29) SIGIO\t30) SIGPWR\n31) SIGSYS\t35) SIGRTMIN\t36) SIGRTMIN+1\t37) SIGRTMIN+2\t38) SIGRTMIN+3\n39) SIGRTMIN+4\t40) SIGRTMIN+5\t41) SIGRTMIN+6\t42) SIGRTMIN+7\t43) SIGRTMIN+8\n44) SIGRTMIN+9\t45) SIGRTMIN+10\t46) SIGRTMIN+11\t47) SIGRTMIN+12\t48) SIGRTMIN+13\n49) SIGRTMIN+14\t50) SIGRTMAX-14\t51) SIGRTMAX-13\t52) SIGRTMAX-12\t53) SIGRTMAX-11\n54) SIGRTMAX-10\t55) SIGRTMAX-9\t56) SIGRTMAX-8\t57) SIGRTMAX-7\t58) SIGRTMAX-6\n59) SIGRTMAX-5\t60) SIGRTMAX-4\t61) SIGRTMAX-3\t62) SIGRTMAX-2\t63) SIGRTMAX-1\n64) SIGRTMAX\t\nst=0\n"
+   }
+  },
+  "jobs: kill 0 ends background jobs with the script": {
+   "script": "61a71af749c33e89",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "started\n"
+   }
+  },
+  "jobs: kill 0 ends the script": {
+   "script": "0ad060c247a1fe8b",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "jobs: kill 0 from a subshell": {
+   "script": "599fbb620dbdcee9",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "jobs: kill 0 reaches a job whose subshell has ended": {
+   "script": "cd4a31ad783933a4",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "started\n"
+   }
+  },
+  "jobs: kill 0 with a TERM trap": {
+   "script": "3afeebe2ea914104",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught\nafter 0\n"
+   }
+  },
+  "jobs: kill by job name": {
+   "script": "a975e733b047a308",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: %sleep: no such job\n"
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "jobs: kill by job substring": {
+   "script": "ce372fd4f1e6b302",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n143\n"
+   }
+  },
+  "jobs: kill of something that is not a pid": {
+   "script": "0d7968deeddf8446",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: `abc': not a pid or valid job spec\nbash: line 1: kill: `-abc': not a pid or valid job spec\nbash: line 1: kill: `1.5': not a pid or valid job spec\nbash: line 1: kill: `': not a pid or valid job spec\n"
+   },
+   "stdout": {
+    "text": "1\n1\n1\n1\n"
+   }
+  },
+  "jobs: kill signal specification errors": {
+   "script": "38b6c3e4065dfaf5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: 99: invalid signal specification\nbash: line 1: kill: 99: invalid signal specification\nbash: line 1: kill: 99: invalid signal specification\nbash: line 1: kill: 9x: invalid signal specification\nbash: line 1: kill: 9x: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "st=1\nst=1\nst=1\nst=1\nst=1\n"
+   }
+  },
+  "jobs: kill usage": {
+   "script": "d7bc01fa155b7fac",
+   "status": 0,
+   "stderr": {
+    "text": "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\nkill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\nbash: line 1: kill: -s: option requires an argument\n"
+   },
+   "stdout": {
+    "text": "st=2\nst=2\nst=1\n"
+   }
+  },
+  "jobs: loop input reaches a background job": {
+   "script": "cc18df76ffc021f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "got a\nb\nc\n"
+   }
+  },
+  "jobs: ls diagnostics before the listing under 2>&1": {
+   "script": "42cc8d01d51be7fc",
+   "status": 2,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: cannot access '/tmp/nosuch': No such file or directory\n/tmp/f\n"
+   }
+  },
+  "jobs: many waited jobs stay fast": {
+   "script": "666b960998fe6206",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "jobs: md5sum -c interleaves under 2>&1": {
+   "script": "b17ff0f5869faa13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a: OK\nmd5sum: /tmp/missing: No such file or directory\n/tmp/missing: FAILED open or read\n/tmp/a: OK\nmd5sum: WARNING: 1 listed file could not be read\nst=1\n"
+   }
+  },
+  "jobs: md5sum interleaves under 2>&1": {
+   "script": "8082b25267a01805",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "60b725f10c9c85c70d97880dfe8191b3  /tmp/a\nmd5sum: /tmp/missing: No such file or directory\n3b5d5c3712955042212316173ccf37be  /tmp/b\n"
+   }
+  },
+  "jobs: nl interleaves under 2>&1": {
+   "script": "6dd6a931554ae1dc",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta\nnl: /tmp/missing: No such file or directory\n     2\ta\n"
+   }
+  },
+  "jobs: real-time signal names": {
+   "script": "e03fc3a8cc57c379",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo x' SIGRTMIN\ntrap -- 'echo y' SIGRTMAX-2\ntrap -- 'echo z' 34\n"
+   }
+  },
+  "jobs: redirected function call does not keep input": {
+   "script": "192b532d9a905341",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "jobs: return in a pipeline stage": {
+   "script": "d0a66ece9597599c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after 5\nf=0\n"
+   }
+  },
+  "jobs: rm interleaves under 2>&1": {
+   "script": "b87b6274ddc2351a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "rm: cannot remove '/tmp/missing': No such file or directory\nremoved '/tmp/a'\n"
+   }
+  },
+  "jobs: separate streams keep their contents": {
+   "script": "97e5abcddfc573b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "60b725f10c9c85c70d97880dfe8191b3  /tmp/a\n60b725f10c9c85c70d97880dfe8191b3  /tmp/a\nmd5sum: /tmp/missing: No such file or directory\n"
+   }
+  },
+  "jobs: signals whose default action is to ignore": {
+   "script": "a099e75bcb40b8e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alive\nst=143\n"
+   }
+  },
+  "jobs: stopped-job note is one line": {
+   "script": "3213d196ae3b23d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "started\n"
+   }
+  },
+  "jobs: suspend without job control": {
+   "script": "ee72801119ab1522",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: suspend: cannot suspend: no job control\n"
+   },
+   "stdout": {
+    "text": "st=1\n"
+   }
+  },
+  "jobs: trap -l table": {
+   "script": "c9ad037b41ab8f7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 4) SIGILL\t 5) SIGTRAP\n 6) SIGABRT\t 7) SIGBUS\t 8) SIGFPE\t 9) SIGKILL\t10) SIGUSR1\n11) SIGSEGV\t12) SIGUSR2\t13) SIGPIPE\t14) SIGALRM\t15) SIGTERM\n16) SIGSTKFLT\t17) SIGCHLD\t18) SIGCONT\t19) SIGSTOP\t20) SIGTSTP\n21) SIGTTIN\t22) SIGTTOU\t23) SIGURG\t24) SIGXCPU\t25) SIGXFSZ\n26) SIGVTALRM\t27) SIGPROF\t28) SIGWINCH\t29) SIGIO\t30) SIGPWR\n31) SIGSYS\t35) SIGRTMIN\t36) SIGRTMIN+1\t37) SIGRTMIN+2\t38) SIGRTMIN+3\n39) SIGRTMIN+4\t40) SIGRTMIN+5\t41) SIGRTMIN+6\t42) SIGRTMIN+7\t43) SIGRTMIN+8\n44) SIGRTMIN+9\t45) SIGRTMIN+10\t46) SIGRTMIN+11\t47) SIGRTMIN+12\t48) SIGRTMIN+13\n49) SIGRTMIN+14\t50) SIGRTMAX-14\t51) SIGRTMAX-13\t52) SIGRTMAX-12\t53) SIGRTMAX-11\n54) SIGRTMAX-10\t55) SIGRTMAX-9\t56) SIGRTMAX-8\t57) SIGRTMAX-7\t58) SIGRTMAX-6\n59) SIGRTMAX-5\t60) SIGRTMAX-4\t61) SIGRTMAX-3\t62) SIGRTMAX-2\t63) SIGRTMAX-1\n64) SIGRTMAX\t\nst=0\n"
+   }
+  },
+  "jobs: trap accepts KILL and STOP": {
+   "script": "4eb9685433ac0ac3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nst=0\ntrap -- 'echo x' SIGKILL\ntrap -- 'echo y' SIGSTOP\n"
+   }
+  },
+  "jobs: trap by signal numbers": {
+   "script": "17fac0f0c55f1a44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\ntrap -- 'echo cleanup' SIGQUIT\ncleanup\n"
+   }
+  },
+  "jobs: trap clears and ignores signal lists": {
+   "script": "8cd80d80b27b24b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\nst=0\ntrap -- '' SIGQUIT\n"
+   }
+  },
+  "jobs: trap installs every signal of a list": {
+   "script": "4d797cb9c357c7f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\ncleanup\n"
+   }
+  },
+  "jobs: trap keeps the valid handlers around an invalid name": {
+   "script": "edf3df2d0fa314d2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: BOGUS: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "st=1\ntrap -- 'echo cleanup' SIGTERM\ncleanup\n"
+   }
+  },
+  "jobs: trapped signal interrupts wait": {
+   "script": "f1d047550de7cd37",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "stopped\n"
+   }
+  },
+  "jobs: wait -n for a parent's job in a stage": {
+   "script": "1b1c478205f6a3dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "127 0\n"
+   }
+  },
+  "jobs: wait -n honours its ids": {
+   "script": "f7ccb015d0e35e02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "jobs: wait -n in a background job": {
+   "script": "5af2869b49844e63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "job 5\n"
+   }
+  },
+  "jobs: wait -n in a command substitution": {
+   "script": "18c2e53563e2ca11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\n"
+   }
+  },
+  "jobs: wait -n in a pipeline stage": {
+   "script": "3aae6aaea0e2fa88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "stage 3\n"
+   }
+  },
+  "jobs: wait -n reaps the job it reports": {
+   "script": "3e36939892de6c7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n7\n127\n"
+   }
+  },
+  "jobs: wait -n reports jobs in the order they end": {
+   "script": "560f401fbbf02a2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n1\n"
+   }
+  },
+  "jobs: wait -n returns for a trapped signal": {
+   "script": "ffb137c2af286fa1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught\nst=143\n"
+   }
+  },
+  "jobs: wait -n with a non-child": {
+   "script": "c41f38ac68323692",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: `99999': not a pid or valid job spec\nbash: line 1: wait: `99999': not a pid or valid job spec\n"
+   },
+   "stdout": {
+    "text": "127\n0\n"
+   }
+  },
+  "jobs: wait -n with nothing to wait for": {
+   "script": "d9f8fed0a784d3c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "127\n"
+   }
+  },
+  "jobs: wait for a disowned pid": {
+   "script": "b50e8b1b859e37e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "st=0\n"
+   }
+  },
+  "jobs: wait for a job spec twice": {
+   "script": "7ed1a357eca8a77a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n3\n"
+   }
+  },
+  "jobs: wait for a parent's job in a stage": {
+   "script": "b03fc6712a474457",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "127 0\n"
+   }
+  },
+  "jobs: wait for a sibling from a job": {
+   "script": "38e42cc8d136b72d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in job 127\n"
+   }
+  },
+  "jobs: wait in a stage has no jobs to wait for": {
+   "script": "636bbcd9c259576d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 0\n"
+   }
+  },
+  "jobs: wait on a reaped job spec": {
+   "script": "a81f90d94c8069f2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: %1: no such job\n"
+   },
+   "stdout": {
+    "text": "127\n"
+   }
+  },
+  "jobs: wait on an ambiguous job name": {
+   "script": "92b6d5924c3b5a27",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: sleep: ambiguous job spec\n"
+   },
+   "stdout": {
+    "text": "127\n"
+   }
+  },
+  "jobs: wait on something that is not a job": {
+   "script": "8cbd8dbedcbe2b46",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: wait: `abc': not a pid or valid job spec\nbash: line 1: wait: %abc: no such job\nbash: line 1: wait: %: no such job\n"
+   },
+   "stdout": {
+    "text": "1\n127\n127\n"
+   }
+  },
+  "jobs: wait returns 128 plus the trapped signal": {
+   "script": "e511e00edb9ba2d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught\nst=143\n"
+   }
+  },
+  "jobs: wait without operands keeps no statuses": {
+   "script": "2701c34cd309ceee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "127\n"
+   }
+  },
+  "jobs: waited jobs leave the table": {
+   "script": "4f10d2c40c5b4e10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "end\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

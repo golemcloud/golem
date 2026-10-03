@@ -9,7 +9,7 @@ const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const manifest = JSON.parse(readFileSync(resolve(packageDirectory, "package.json"), "utf8"))
 const rootBundle = readFileSync(resolve(packageDirectory, manifest.exports["."].import), "utf8")
 
-if (rootBundle.includes("effect-golem/ai") || rootBundle.includes("effect/unstable/ai")) {
+if (rootBundle.includes("effect-golem/ai") || rootBundle.includes("effect/ai")) {
   throw new Error("The root bundle includes the optional AI integration")
 }
 for (const dependencies of [manifest.dependencies, manifest.optionalDependencies]) {

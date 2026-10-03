@@ -191,6 +191,7 @@ async fn account_usage_reports_all_customer_dimensions(
                     durable_storage_byte_seconds_delta,
                     ephemeral_storage_byte_seconds_delta,
                     memory_gb_seconds_delta: 7,
+                    blob_storage_bytes_delta: 0,
                     metering: ResourceUsageMetering::all_enabled(),
                 },
             )]))
@@ -375,6 +376,7 @@ async fn account_owner_explicitly_changes_monthly_usage_mode(
         .batch_update_resource_usage(HashMap::from([(
             AccountId(user.account_id.0),
             ResourceUsageUpdate {
+                blob_storage_bytes_delta: 0,
                 period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,
@@ -606,6 +608,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
                 durable_storage_byte_seconds_delta: 0,
                 ephemeral_storage_byte_seconds_delta: 0,
                 memory_gb_seconds_delta: 0,
+                blob_storage_bytes_delta: 0,
                 metering: ResourceUsageMetering::default(),
             },
         )]))
@@ -648,6 +651,7 @@ async fn account_usage_history_is_authenticated_and_empty_for_new_account(
                 durable_storage_byte_seconds_delta: 0,
                 ephemeral_storage_byte_seconds_delta: 0,
                 memory_gb_seconds_delta: 0,
+                blob_storage_bytes_delta: 0,
                 metering: ResourceUsageMetering::all_enabled(),
             },
         )]))
@@ -948,6 +952,7 @@ async fn admin_resource_grant_endpoints_authorize_validate_and_resolve(
         .batch_update_resource_usage(HashMap::from([(
             user.account_id,
             ResourceUsageUpdate {
+                blob_storage_bytes_delta: 0,
                 period: AccountUsagePeriod::current(),
                 monthly_usage_mode_revision: 0,
                 monthly_policy_revision: 0,

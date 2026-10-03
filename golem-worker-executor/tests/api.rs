@@ -222,6 +222,7 @@ fn resource_limits_response(
     monthly_usage_mode_revision: u64,
 ) -> golem_service_base::model::ResourceLimits {
     golem_service_base::model::ResourceLimits {
+        available_blob_storage_bytes: u64::MAX,
         monthly_policy,
         max_memory_per_worker: u64::MAX,
         max_table_elements_per_worker: u64::MAX,

@@ -185,9 +185,12 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p tmp/builtin-artifacts
+          cp builtin-tools/bash.wasm tmp/builtin-artifacts/
           cp builtin-tools/filesystem-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/git-tool.wasm tmp/builtin-artifacts/
           cp builtin-tools/javascript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
           cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
 
   worker-tests:

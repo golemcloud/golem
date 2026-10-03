@@ -1595,19 +1595,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn find_durable_stream_worker<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<Option<Arc<Self>>, WorkerExecutorError>
+    ) -> Result<
+        Option<(Arc<Self>, Option<Arc<EphemeralResponseLease>>)>,
+        DurableStreamRemoteError<WorkerExecutorError>,
+    >
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        if Self::get_latest_metadata(deps, owned_agent_id)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
-        Self::get_existing_suspended(deps, owned_agent_id, Principal::anonymous())
+        loop {
+            let worker = match Self::get_exact_existing_suspended(
+                deps,
+                owned_agent_id,
+                Principal::anonymous(),
+            )
             .await
-            .map(Some)
+            {
+                Ok(worker) => worker,
+                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            if worker.agent_mode() != AgentMode::Ephemeral {
+                return Ok(Some((worker, None)));
+            }
+            match worker
+                .durable_stream_producer
+                .retain_response_or_wait_for_archive()
+                .await
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                })? {
+                Some(lease) => return Ok(Some((worker, Some(lease)))),
+                None => continue,
+            }
+        }
     }
 
     pub(crate) fn is_resolved(&self) -> bool {
@@ -8004,12 +8024,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let encoded = prepared.attempt.invocation.invocation_value.as_slice();
-        let typed = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
-            .map_err(|error| {
+        let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(encoded).map_err(
+            |error| {
                 WorkerExecutorError::runtime(format!(
                     "failed to decode persisted durable invocation input: {error}"
                 ))
-            })?;
+            },
+        )?;
         let graph = typed
             .graph
             .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input graph"))?

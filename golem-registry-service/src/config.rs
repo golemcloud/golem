@@ -418,6 +418,7 @@ impl Default for RegistryServiceConfig {
                 component_limit: 100,
                 worker_connection_limit: 100,
                 storage_limit: 500000000,
+                blob_storage_limit: default_unlimited(),
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 monthly_compute_gcu: 0,
@@ -786,6 +787,7 @@ pub struct PrecreatedPlan {
     pub component_limit: u64,
     pub worker_connection_limit: u64,
     pub storage_limit: u64,
+    pub blob_storage_limit: u64,
     /// Executor fuel allowance. Monthly account policy uses `monthly_compute_gcu`.
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
@@ -892,7 +894,7 @@ mod tests {
         let config = BuiltinArtifactsConfig::default();
         assert!(config.source_overrides.is_empty());
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 4);
+        assert_eq!(artifacts.len(), 7);
         for (artifact_id, source) in artifacts {
             assert!(
                 source
@@ -924,10 +926,12 @@ mod tests {
         };
 
         let artifacts = config.resolved_artifacts().unwrap();
-        assert_eq!(artifacts.len(), 4);
+        assert_eq!(artifacts.len(), 7);
         assert_eq!(artifacts["javascript_tools"].url, override_source.url);
         assert_eq!(artifacts["javascript_tools"].sha256, None);
+        assert!(artifacts["git_tool"].sha256.is_some());
         assert!(artifacts["typescript_tools"].sha256.is_some());
+        assert!(artifacts["web_fetch"].sha256.is_some());
     }
 
     #[test]
