@@ -109,6 +109,8 @@ pub(super) struct State {
     /// The fork attempts that run on this executor.
     #[cfg_attr(not(test), allow(dead_code))]
     flights: HashMap<Flight, ForkPhase>,
+    /// The number of reverts of each agent that hold the deletes of its jobs.
+    reverts: HashMap<AgentSnapshots, NonZeroU32>,
     limits: Limits,
 }
 
@@ -263,6 +265,8 @@ enum Transition {
     CleanupEnded,
     BeginCall,
     StoreCallEnded,
+    RevertBegan,
+    RevertEnded,
     #[cfg_attr(not(test), allow(dead_code))]
     ForkBegan,
     #[cfg_attr(not(test), allow(dead_code))]
@@ -290,6 +294,8 @@ fn wakes(transition: Transition) -> bool {
         | Transition::Unwatch
         | Transition::TakeReady
         | Transition::BeginCall
+        | Transition::RevertBegan
+        | Transition::RevertEnded
         | Transition::ForkBegan
         | Transition::ForkPublishing => false,
     }
@@ -347,6 +353,9 @@ pub(super) struct Admitted {
     /// The stop of the job that the admission replaced. The caller cancels it after the
     /// transition.
     pub(super) replaced: Option<CancellationToken>,
+    /// Whether a revert of the agent holds the deletes of its jobs. The caller then cancels the
+    /// stop of the deletes of the new job after the transition.
+    pub(super) under_revert: bool,
 }
 
 /// Whether an agent in `mode` keeps filesystem snapshots. Only a durable agent does: nothing
@@ -417,7 +426,36 @@ pub(super) fn admit(
     } else {
         Transition::Admit
     };
-    Next::of(transition, state, Ok(Admitted { id, replaced }))
+    let under_revert = state.reverts.contains_key(agent);
+    Next::of(
+        transition,
+        state,
+        Ok(Admitted {
+            id,
+            replaced,
+            under_revert,
+        }),
+    )
+}
+
+/// A revert of `agent` begins to hold the deletes of its jobs. Gives the stop of the deletes of
+/// the job that runs for the agent, which the caller cancels; each job that is admitted while the
+/// hold lives gets its deletes stopped too.
+pub(super) fn revert_began(
+    mut state: State,
+    agent: &AgentSnapshots,
+) -> Next<Option<CancellationToken>> {
+    state.reverts = with_one_more(state.reverts, agent);
+    let retention_stop = state.jobs.get(agent).map(|job| job.retention_stop.clone());
+    Next::of(Transition::RevertBegan, state, retention_stop)
+}
+
+/// A revert of `agent` ends its hold. A hold that is not there changes nothing.
+pub(super) fn revert_ended(mut state: State, agent: &AgentSnapshots) -> Next<()> {
+    if state.reverts.contains_key(agent) {
+        state.reverts = with_one_less(state.reverts, agent);
+    }
+    Next::of(Transition::RevertEnded, state, ())
 }
 
 /// Whether an admission replaces `job`: a periodic job that waits for its next run after a failed
@@ -1724,11 +1762,88 @@ mod tests {
                     true
                 )
                 .wakes(),
+                super::revert_began(fresh(), &agent).wakes(),
+                super::revert_ended(super::revert_began(fresh(), &agent).into_parts().0, &agent)
+                    .wakes(),
             ],
             [
                 false, false, true, true, true, true, false, false, true, true, false, true, false,
-                true, false, false, true
+                true, false, false, true, false, false
             ]
+        );
+    }
+
+    /// Admits a periodic job for `agent` and gives whether the deletes of the new job must stop.
+    fn admitted_under_revert(state: &mut State, agent: &AgentSnapshots) -> Option<bool> {
+        admit_kind(
+            state,
+            agent,
+            &FilesystemSnapshotName::periodic(),
+            SnapshotKind::Periodic,
+            CancellationToken::new(),
+            CancellationToken::new(),
+            true,
+        )
+        .ok()
+        .map(|admitted| admitted.under_revert)
+    }
+
+    #[test]
+    fn a_revert_hold_stops_the_deletes_of_the_running_job_and_of_each_job_admitted_while_it_lives()
+    {
+        let mut state = State::default();
+        let agent = agent_snapshots("revert-hold");
+        let other = agent_snapshots("revert-hold-other");
+        let retention_stop = CancellationToken::new();
+        let running = admit(
+            &mut state,
+            &agent,
+            &FilesystemSnapshotName::periodic(),
+            CancellationToken::new(),
+            retention_stop.clone(),
+            true,
+        )
+        .unwrap();
+        let before = step(&mut state, |state| revert_began(state, &other));
+
+        let held = step(&mut state, |state| revert_began(state, &agent));
+        end_job(&mut state, &agent, running);
+        let during = admitted_under_revert(&mut state, &agent);
+        let other_during = admitted_under_revert(&mut state, &other);
+        step(&mut state, |state| revert_ended(state, &agent));
+        let id = state.jobs.get(&agent).map(|job| job.id).unwrap();
+        end_job(&mut state, &agent, id);
+        let after = admitted_under_revert(&mut state, &agent);
+
+        assert_eq!(
+            (
+                before.is_none(),
+                held.is_some_and(|stop| stop == retention_stop),
+                during,
+                other_during,
+                after
+            ),
+            (true, true, Some(true), Some(true), Some(false))
+        );
+    }
+
+    #[test]
+    fn two_reverts_hold_until_both_end_and_an_end_without_a_hold_changes_nothing() {
+        let mut state = State::default();
+        let agent = agent_snapshots("two-reverts");
+        step(&mut state, |state| revert_ended(state, &agent));
+        step(&mut state, |state| revert_began(state, &agent));
+        step(&mut state, |state| revert_began(state, &agent));
+
+        step(&mut state, |state| revert_ended(state, &agent));
+        let after_one = state.reverts.contains_key(&agent);
+        step(&mut state, |state| revert_ended(state, &agent));
+        let after_two = state.reverts.contains_key(&agent);
+        step(&mut state, |state| revert_ended(state, &agent));
+
+        assert_eq!(
+            (after_one, after_two, state.reverts.is_empty()),
+            (true, false, true)
         );
     }
 
@@ -2559,15 +2674,11 @@ mod tests {
                     running: Some(running(4))
                 }),
                 waits_for(Refusal {
-                    skip: SnapshotSkip::Disabled,
-                    running: None
-                }),
-                waits_for(Refusal {
                     skip: SnapshotSkip::UploadInFlight,
                     running: None
                 }),
             ],
-            [Some(4), None, None, None, None]
+            [Some(4), None, None, None]
         );
     }
 

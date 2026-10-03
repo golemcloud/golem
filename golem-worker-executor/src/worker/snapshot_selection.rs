@@ -301,7 +301,6 @@ pub(crate) fn selectable_names(status: &AgentStatusRecord) -> Box<[FilesystemSna
 /// The update snapshot names that a valid cut of the agent can still make a baseline: the names
 /// of the successful updates and of the pending updates in the status. A revert rebuilds the
 /// status, so the names of updates in its dropped region are not in it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn update_names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapshotName]> {
     status
         .successful_updates

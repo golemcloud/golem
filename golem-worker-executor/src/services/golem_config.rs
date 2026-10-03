@@ -2431,7 +2431,9 @@ pub struct FilesystemSnapshotUploadConfig {
     /// A revert restores exactly only from a periodic snapshot that the store still holds, so this
     /// number sets how far back a revert can go without a full replay.
     retained_periodic_snapshots: NonZeroUsize,
-    /// The number of manual-update snapshots that retention keeps for each agent.
+    /// The number of manual-update snapshots that retention keeps for each agent among those that
+    /// no successful or pending update of the agent uses. The snapshot of each successful or
+    /// pending update stays.
     retained_update_snapshots: NonZeroUsize,
     /// The largest number of snapshot names of one agent that wait for deletion. When it is
     /// reached, a new delete request of the agent is refused and counted as a leaked clean-up;

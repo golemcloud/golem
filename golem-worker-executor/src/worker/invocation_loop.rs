@@ -3125,8 +3125,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     }
                     Some(Err(_)) => CommandOutcome::BreakInnerLoop(RetryDecision::Immediate),
                     Some(Ok(_)) => {
+                        // The status holds the new pending update by now, so its name is kept.
                         if let Some(retention) = retention {
-                            retention.delete_older_snapshots();
+                            retention.delete_older_snapshots(
+                                &crate::worker::snapshot_selection::update_names_in_use(
+                                    &self.parent.last_known_status.load(),
+                                ),
+                            );
                         }
                         CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
                     }
@@ -3809,10 +3814,6 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
 
     fn lost_shard_signal(&self) -> tokio::sync::watch::Receiver<bool> {
         self.invocation.parent.lost_shard_signal()
-    }
-
-    async fn kept_baseline(&self) -> Option<FilesystemSnapshotName> {
-        self.invocation.parent.manual_update_baseline_name().await
     }
 }
 

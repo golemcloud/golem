@@ -148,7 +148,8 @@ pub(super) struct JobTicket {
 impl JobTicket {
     /// Admits a job of `kind` with `name` for `agent`. `stop` stops the job, and `room` tells
     /// whether the volume has room for a capture. This is the only place that makes the stop of
-    /// the deletes of a job: a child of `stop`, which the state of the job holds too. Gives the
+    /// the deletes of a job: a child of `stop`, which the state of the job holds too. It is
+    /// cancelled at once while a revert of the agent holds the deletes of its jobs. Gives the
     /// ticket and the stop of the job that the admission replaced, which the caller cancels.
     pub(super) fn admit(
         registry: &Arc<Registry>,
@@ -170,6 +171,9 @@ impl JobTicket {
                 room,
             )
         })?;
+        if admitted.under_revert {
+            retention_stop.cancel();
+        }
         Ok((
             Self {
                 registry: Arc::clone(registry),
