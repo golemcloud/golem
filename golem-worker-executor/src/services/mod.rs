@@ -68,7 +68,10 @@ use tokio_util::sync::CancellationToken;
 use wasmtime_wasi_http::HttpConnectionPool;
 
 #[derive(Clone)]
-pub struct NoAdditionalDeps {}
+pub struct NoAdditionalDeps {
+    #[cfg(feature = "test-utils")]
+    worker_deletion_hook: Arc<std::sync::Mutex<Option<Arc<dyn crate::worker::WorkerDeletionHook>>>>,
+}
 
 impl Default for NoAdditionalDeps {
     fn default() -> Self {
@@ -78,7 +81,29 @@ impl Default for NoAdditionalDeps {
 
 impl NoAdditionalDeps {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            #[cfg(feature = "test-utils")]
+            worker_deletion_hook: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn set_worker_deletion_hook(&self, hook: Arc<dyn crate::worker::WorkerDeletionHook>) {
+        *self.worker_deletion_hook.lock().unwrap() = Some(hook);
+    }
+
+    pub(crate) fn worker_deletion_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::worker::WorkerDeletionHook>> {
+        #[cfg(feature = "test-utils")]
+        {
+            self.worker_deletion_hook.lock().unwrap().clone()
+        }
+        #[cfg(not(feature = "test-utils"))]
+        {
+            None
+        }
     }
 }
 

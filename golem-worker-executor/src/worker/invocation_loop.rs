@@ -170,6 +170,12 @@ struct PendingFilesystemLimitUpdate {
     senders: Vec<Sender<Result<(), WorkerExecutorError>>>,
 }
 
+#[derive(Default)]
+struct DelayedRetryCommands {
+    resume_replay: bool,
+    filesystem_limit_updates: Vec<Sender<Result<(), WorkerExecutorError>>>,
+}
+
 enum ResidentWakeup {
     Command(WorkerCommand),
     FilesystemTerminalFailure,
@@ -216,8 +222,59 @@ fn coalesce_filesystem_limit_update(
     update
 }
 
+fn coalesce_delayed_retry_prefix<Ctx: WorkerCtx>(
+    receiver: &mut UnboundedReceiver<WorkerCommand>,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+    prefix_len: usize,
+) -> DelayedRetryCommands {
+    let mut commands = DelayedRetryCommands::default();
+    let mut work_available = false;
+
+    for _ in 0..prefix_len {
+        let Ok(command) = receiver.try_recv() else {
+            break;
+        };
+        match command {
+            WorkerCommand::WorkAvailable => work_available = true,
+            WorkerCommand::InternalStatusChanged => {}
+            WorkerCommand::ResumeReplay => commands.resume_replay = true,
+            WorkerCommand::UpdateFilesystemLimit { sender, .. } => {
+                commands.filesystem_limit_updates.push(sender);
+            }
+        }
+    }
+
+    if work_available {
+        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::WorkAvailable);
+    }
+
+    commands
+}
+
+fn apply_delayed_retry_commands_after_unload<Ctx: WorkerCtx>(
+    commands: DelayedRetryCommands,
+    final_decision: &mut Option<RetryDecision>,
+    has_recovery_failure: bool,
+    deferred_wakeups: &mut VecDeque<WorkerCommand>,
+) {
+    let delayed = matches!(final_decision, Some(RetryDecision::Delayed(_)));
+    if delayed {
+        for sender in commands.filesystem_limit_updates {
+            let _ = sender.send(Ok(()));
+        }
+    }
+    if commands.resume_replay {
+        InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, WorkerCommand::ResumeReplay);
+        if delayed && !has_recovery_failure {
+            *final_decision = Some(RetryDecision::Immediate);
+        }
+    }
+}
+
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
-    async fn pending_interrupt(&self) -> Option<PendingWorkerInterrupt> {
+    async fn pending_interrupt(
+        &self,
+    ) -> Result<Option<PendingWorkerInterrupt>, WorkerExecutorError> {
         take_pending_interrupt(&self.interrupt_signal).await
     }
 
@@ -285,6 +342,22 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .await;
                 break;
             }
+            let pending_interrupt = match self.pending_interrupt().await {
+                Ok(interrupt) => interrupt,
+                Err(error) => {
+                    self.stop_cleanup_failed(error).await;
+                    break;
+                }
+            };
+            if let Some(interrupt) = pending_interrupt {
+                if self
+                    .handle_unloaded_interrupt(interrupt, retry_was_live)
+                    .await
+                {
+                    break;
+                }
+                continue;
+            }
             if self.permit_state.is_none() {
                 let parent = self.parent.clone();
                 let permit_agent_id = self.owned_agent_id.agent_id().clone();
@@ -294,7 +367,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     .instrument(agent_phase_span!(self, "acquire_concurrent_agent_permit"));
                 tokio::pin!(permit);
                 loop {
-                    if let Some(interrupt) = self.pending_interrupt().await
+                    let pending_interrupt = match self.pending_interrupt().await {
+                        Ok(interrupt) => interrupt,
+                        Err(error) => {
+                            self.stop_cleanup_failed(error).await;
+                            break 'outer;
+                        }
+                    };
+                    if let Some(interrupt) = pending_interrupt
                         && self
                             .handle_unloaded_interrupt(interrupt, retry_was_live)
                             .await
@@ -310,7 +390,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         }
                         permit = &mut permit => {
                             self.permit_state.install_tracked(permit);
-                            break;
+                            continue 'outer;
                         }
                         command = self.receiver.recv() => {
                             let Some(command) = command else {
@@ -323,7 +403,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 .await;
                                 break 'outer;
                             };
-                            if let Some(interrupt) = self.pending_interrupt().await
+                            let pending_interrupt = match self.pending_interrupt().await {
+                                Ok(interrupt) => interrupt,
+                                Err(error) => {
+                                    self.stop_cleanup_failed(error).await;
+                                    break 'outer;
+                                }
+                            };
+                            if let Some(interrupt) = pending_interrupt
                                 && self
                                     .handle_unloaded_interrupt(interrupt, retry_was_live)
                                     .await
@@ -355,8 +442,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 } => (*agent, window, recovery_decision),
                 CreateInstanceResult::Interrupted(kind) => {
                     self.release_concurrent_agent_permit();
-                    let pending_interrupt = take_pending_interrupt(&self.interrupt_signal).await;
+                    let pending_interrupt =
+                        match take_pending_interrupt(&self.interrupt_signal).await {
+                            Ok(interrupt) => interrupt,
+                            Err(error) => {
+                                self.stop_cleanup_failed(error).await;
+                                break;
+                            }
+                        };
                     let kind = pending_interrupt
+                        .as_ref()
                         .map(|interrupt| interrupt.kind)
                         .unwrap_or(kind);
                     if self.parent.initial_worker_metadata.owner_kind
@@ -413,6 +508,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     None,
                                     resident_work_disposition(
                                         pending_interrupt
+                                            .as_ref()
                                             .map(|interrupt| interrupt.unload_request.reason)
                                             .unwrap_or(UnloadReason::Suspend),
                                     ),
@@ -453,7 +549,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         self.stop_startup_retired().await;
                         break;
                     }
-                    if let Some(interrupt) = self.pending_interrupt().await {
+                    let pending_interrupt = match self.pending_interrupt().await {
+                        Ok(interrupt) => interrupt,
+                        Err(error) => {
+                            self.stop_cleanup_failed(error).await;
+                            break;
+                        }
+                    };
+                    if let Some(interrupt) = pending_interrupt {
                         if self
                             .handle_unloaded_interrupt(interrupt, retry_was_live)
                             .await
@@ -473,7 +576,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail).await;
                                     break 'outer;
                                 };
-                                if let Some(interrupt) = self.pending_interrupt().await {
+                                let pending_interrupt = match self.pending_interrupt().await {
+                                    Ok(interrupt) => interrupt,
+                                    Err(error) => {
+                                        self.stop_cleanup_failed(error).await;
+                                        break 'outer;
+                                    }
+                                };
+                                if let Some(interrupt) = pending_interrupt {
                                     if self.handle_unloaded_interrupt(interrupt, retry_was_live).await {
                                         break 'outer;
                                     }
@@ -508,8 +618,16 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             let mut final_unload_request = None;
             let mut cleanup_ephemeral_worker = false;
 
+            let pending_interrupt = match self.pending_interrupt().await {
+                Ok(interrupt) => interrupt,
+                Err(error) => {
+                    recovery_failure = Some(error);
+                    final_decision = Some(RetryDecision::None);
+                    None
+                }
+            };
             if recovery_failure.is_none()
-                && let Some(interrupt) = self.pending_interrupt().await
+                && let Some(interrupt) = pending_interrupt
             {
                 let kind = interrupt.kind;
                 let decision = interrupt.retry_decision();
@@ -619,11 +737,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     .data()
                                     .durable_ctx()
                                     .begin_stream_runtime_teardown();
-                                if let Some(active_agent) = self
-                                    .parent
-                                    .active_agents()
-                                    .try_get_active_agent(&self.owned_agent_id)
-                                    .await
+                                if let Some(active_agent) =
+                                    self.parent.active_agent_for_this_owner().await
                                 {
                                     let owner_failure = failure.clone().map_or_else(
                                         || {
@@ -696,18 +811,54 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     final_interrupt = result.final_interrupt;
                     final_unload_request = result.unload_request;
                     recovery_failure = result.recovery_failure;
-                    if let Some(interrupt) = self.pending_interrupt().await {
-                        let kind = interrupt.kind;
-                        let decision = interrupt.retry_decision();
-                        if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
-                            final_interrupt = Some(kind);
+                    match self.pending_interrupt().await {
+                        Err(error) => {
+                            recovery_failure = Some(error);
+                            final_decision = Some(RetryDecision::None);
+                            final_interrupt = None;
                         }
-                        final_unload_request = Some(interrupt.unload_request);
-                        final_decision = Some(decision);
+                        Ok(Some(interrupt)) => {
+                            let kind = interrupt.kind;
+                            let decision = interrupt.retry_decision();
+                            if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                                final_interrupt = Some(kind);
+                            }
+                            final_unload_request = Some(interrupt.unload_request);
+                            final_decision = Some(decision);
+                        }
+                        Ok(None) => {}
                     }
                     cleanup_ephemeral_worker = result.cleanup_ephemeral_worker;
                     break 'resident;
                 }
+            }
+
+            let delayed_retry_commands = matches!(final_decision, Some(RetryDecision::Delayed(_)))
+                .then(|| {
+                    let prefix_len = self.receiver.len();
+                    coalesce_delayed_retry_prefix::<Ctx>(
+                        &mut self.receiver,
+                        &mut deferred_wakeups,
+                        prefix_len,
+                    )
+                });
+
+            match self.pending_interrupt().await {
+                Err(error) => {
+                    recovery_failure = Some(error);
+                    final_decision = Some(RetryDecision::None);
+                    final_interrupt = None;
+                }
+                Ok(Some(interrupt)) => {
+                    let kind = interrupt.kind;
+                    let decision = interrupt.retry_decision();
+                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                        final_interrupt = Some(kind);
+                    }
+                    final_unload_request = Some(interrupt.unload_request);
+                    final_decision = Some(decision);
+                }
+                Ok(None) => {}
             }
 
             if self.parent.initial_worker_metadata.owner_kind == OwnerKind::EphemeralExternalTool {
@@ -765,11 +916,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             if (recovery_failure.is_none()
                 || final_interrupt.is_some()
                 || self.parent.retired_for_lost_shard())
-                && let Some(active_agent) = self
-                    .parent
-                    .active_agents()
-                    .try_get_active_agent(&self.owned_agent_id)
-                    .await
+                && let Some(active_agent) = self.parent.active_agent_for_this_owner().await
             {
                 // A lost shard wins: the bodies must not report an API interrupt or a fault for an
                 // agent that simply has a new owner.
@@ -810,6 +957,22 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             if let Some(error) = unloading.await {
                 self.stop_cleanup_failed(error).await;
                 break;
+            }
+            if self.parent.owner_retirement_requested.is_cancelled()
+                && !self.parent.retired_for_lost_shard()
+                && let Some(error) = recovery_failure.take()
+            {
+                self.stop_cleanup_failed(error).await;
+                break;
+            }
+
+            if let Some(commands) = delayed_retry_commands {
+                apply_delayed_retry_commands_after_unload::<Ctx>(
+                    commands,
+                    &mut final_decision,
+                    recovery_failure.is_some(),
+                    &mut deferred_wakeups,
+                );
             }
 
             match final_decision {
@@ -880,7 +1043,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     }
                                 };
 
-                                if let Some(interrupt) = self.pending_interrupt().await {
+                                let pending_interrupt = match self.pending_interrupt().await {
+                                    Ok(interrupt) => interrupt,
+                                    Err(error) => {
+                                        self.stop_cleanup_failed(error).await;
+                                        break 'outer;
+                                    }
+                                };
+                                if let Some(interrupt) = pending_interrupt {
                                     let kind = interrupt.kind;
                                     let decision = interrupt.retry_decision();
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
@@ -1029,6 +1199,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         interrupt: PendingWorkerInterrupt,
         retry_was_live: bool,
     ) -> bool {
+        if interrupt.establishment.failed() {
+            self.stop_cleanup_failed(WorkerExecutorError::runtime(
+                "Worker interruption establishment failed",
+            ))
+            .await;
+            return true;
+        }
         let kind = interrupt.kind;
         let decision = interrupt.retry_decision();
         debug!(
@@ -1112,12 +1289,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 WorkerExecutorError::unknown("Worker stopped before startup completed")
             })),
         );
-        if let Some(active_agent) = self
-            .parent
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await
-        {
+        if let Some(active_agent) = self.parent.active_agent_for_this_owner().await {
             let failure = if self.parent.retired_for_lost_shard() {
                 OwnerFailureWinner::Lifecycle(InterruptKind::ShardLost)
             } else {
@@ -1146,12 +1318,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     async fn stop_cleanup_failed(&self, error: WorkerExecutorError) {
         self.parent
             .complete_startup(self.start_attempt, Err(error.clone()));
-        if let Some(active_agent) = self
-            .parent
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await
-        {
+        if let Some(active_agent) = self.parent.active_agent_for_this_owner().await {
             active_agent
                 .fence_entity_bodies(OwnerFailureWinner::Infrastructure(error.clone()))
                 .await;
@@ -1766,14 +1933,21 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             let outcome = match cmd {
                 WorkerCommand::WorkAvailable | WorkerCommand::InternalStatusChanged => {
                     loop {
-                        if let Some(interrupt) =
-                            take_pending_interrupt(&self.interrupt_signal).await
-                        {
-                            if interrupt.is_terminal() {
-                                final_interrupt = Some(interrupt.kind);
+                        match take_pending_interrupt(&self.interrupt_signal).await {
+                            Ok(Some(interrupt)) => {
+                                if interrupt.is_terminal() {
+                                    final_interrupt = Some(interrupt.kind);
+                                }
+                                unload_request = Some(interrupt.unload_request);
+                                break self.interrupt(interrupt).await;
                             }
-                            unload_request = Some(interrupt.unload_request);
-                            break self.interrupt(interrupt).await;
+                            Ok(None) => {}
+                            Err(error) => {
+                                break CommandOutcome::BreakInnerLoopForRecovery {
+                                    decision: RetryDecision::None,
+                                    error,
+                                };
+                            }
                         }
 
                         let result = match self.select_next_work().await {
@@ -2535,8 +2709,12 @@ fn mark_idle(idle_since_millis: &AtomicU64) {
 
 async fn take_pending_interrupt(
     signal: &Mutex<WorkerInterruptState>,
-) -> Option<PendingWorkerInterrupt> {
-    signal.lock().await.take()
+) -> Result<Option<PendingWorkerInterrupt>, WorkerExecutorError> {
+    let interrupt = signal.lock().await.take();
+    if let Some(interrupt) = &interrupt {
+        interrupt.establishment.wait().await?;
+    }
+    Ok(interrupt)
 }
 
 fn resident_work_disposition(reason: UnloadReason) -> PendingLiveInvocationDisposition {
@@ -2715,6 +2893,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             result
         };
 
+        if let Some(hook) = Ctx::worker_deletion_hook(&self.parent.extra_deps()) {
+            hook.before_invocation_terminal_selection(&self.owned_agent_id)
+                .await;
+        }
+
         match result {
             Ok(InvokeResult::Succeeded {
                 result: invocation_result,
@@ -2723,6 +2906,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let mut interrupt_state = self.parent.interrupt_signal.lock().await;
                 if let Some(interrupt) = interrupt_state.claim_pending_terminal() {
                     drop(interrupt_state);
+                    if let Err(error) = interrupt.establishment.wait().await {
+                        return CommandOutcome::BreakInnerLoopForRecovery {
+                            decision: RetryDecision::None,
+                            error,
+                        };
+                    }
                     self.agent_invocation_failed(
                         &display_name,
                         &invocation_idempotency_key,
@@ -2745,12 +2934,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
             }
             result @ Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
-                    self.parent
-                        .interrupt_signal
-                        .lock()
-                        .await
-                        .claim_pending_terminal();
+                let terminal =
+                    if !matches!(interrupt_kind, InterruptKind::Restart | InterruptKind::Jump) {
+                        self.parent
+                            .interrupt_signal
+                            .lock()
+                            .await
+                            .claim_pending_terminal()
+                    } else {
+                        None
+                    };
+                if let Some(terminal) = terminal
+                    && let Err(error) = terminal.establishment.wait().await
+                {
+                    return CommandOutcome::BreakInnerLoopForRecovery {
+                        decision: RetryDecision::None,
+                        error,
+                    };
                 }
                 self.agent_invocation_failed(&display_name, &invocation_idempotency_key, result)
                     .await
@@ -3720,7 +3920,8 @@ mod tests {
     use super::{
         CommandOutcome, ConcurrentAgentPermitState, InvocationLoop, OwnerFailureWinner,
         PeriodicSnapshotAction, ResidentAgentOwnership, ResidentWakeup,
-        catch_invocation_loop_panic, close_usage_before_delete, coalesce_filesystem_limit_update,
+        apply_delayed_retry_commands_after_unload, catch_invocation_loop_panic,
+        close_usage_before_delete, coalesce_delayed_retry_prefix, coalesce_filesystem_limit_update,
         failed_agent_invocation_outcome, finish_filesystem_limit_unload,
         periodic_snapshot_failure_outcome, publish_unload_outcome, run_invocation_loop_task,
         selected_infrastructure_recovery_error, snapshot_action_at, snapshot_baseline_timestamp,
@@ -3989,6 +4190,75 @@ mod tests {
             deferred_wakeups.pop_front(),
             Some(WorkerCommand::WorkAvailable)
         ));
+    }
+
+    #[test]
+    async fn delayed_retry_coalesces_only_the_captured_work_prefix() {
+        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (limit_sender, limit_result) = futures::channel::oneshot::channel();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        commands.send(WorkerCommand::InternalStatusChanged).unwrap();
+        commands.send(WorkerCommand::ResumeReplay).unwrap();
+        commands
+            .send(WorkerCommand::UpdateFilesystemLimit {
+                allocated_bytes: 4096,
+                sender: limit_sender,
+            })
+            .unwrap();
+        let prefix_len = receiver.len();
+
+        commands.send(WorkerCommand::WorkAvailable).unwrap();
+        let mut deferred_wakeups = VecDeque::new();
+        let captured = coalesce_delayed_retry_prefix::<Context>(
+            &mut receiver,
+            &mut deferred_wakeups,
+            prefix_len,
+        );
+
+        assert!(captured.resume_replay);
+        assert_eq!(captured.filesystem_limit_updates.len(), 1);
+        assert_eq!(deferred_wakeups.len(), 1);
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::WorkAvailable)
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(WorkerCommand::WorkAvailable)
+        ));
+
+        let _ = captured
+            .filesystem_limit_updates
+            .into_iter()
+            .next()
+            .unwrap()
+            .send(Ok(()));
+        assert!(limit_result.await.unwrap().is_ok());
+    }
+
+    #[test]
+    fn delayed_retry_preserves_replay_request_when_restart_wins() {
+        let (commands, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        commands.send(WorkerCommand::ResumeReplay).unwrap();
+        let mut deferred_wakeups = VecDeque::new();
+        let captured =
+            coalesce_delayed_retry_prefix::<Context>(&mut receiver, &mut deferred_wakeups, 1);
+        let mut final_decision = Some(RetryDecision::Immediate);
+
+        apply_delayed_retry_commands_after_unload::<Context>(
+            captured,
+            &mut final_decision,
+            false,
+            &mut deferred_wakeups,
+        );
+
+        assert!(matches!(final_decision, Some(RetryDecision::Immediate)));
+        assert!(matches!(
+            deferred_wakeups.pop_front(),
+            Some(WorkerCommand::ResumeReplay)
+        ));
+        assert!(deferred_wakeups.is_empty());
     }
 
     #[test]
