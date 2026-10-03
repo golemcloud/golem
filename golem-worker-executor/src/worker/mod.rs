@@ -4468,15 +4468,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     && Arc::ptr_eq(&active.primary(), &worker)
                     && worker.resident_generation.load(Ordering::Acquire) == resident_generation
                 {
-                    active
-                        .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(pending.kind))
-                        .await;
-                    if !matches!(active.execution().tool_operations().selected_owner_failure(),
-                        Some(OwnerFailureWinner::Lifecycle(kind)) if kind == pending.kind)
-                    {
-                        return Err(WorkerExecutorError::runtime(
-                            "Stop lost the owner failure election",
-                        ));
+                    // The captured permit-wait task cannot publish a resident generation.
+                    // Any retained owner failure belongs to a previous runtime, not this
+                    // startup attempt.
+                    if !was_waiting {
+                        active
+                            .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(pending.kind))
+                            .await;
+                        if !matches!(active.execution().tool_operations().selected_owner_failure(),
+                            Some(OwnerFailureWinner::Lifecycle(kind)) if kind == pending.kind)
+                        {
+                            return Err(WorkerExecutorError::runtime(
+                                "Stop lost the owner failure election",
+                            ));
+                        }
                     }
                     {
                         let lifecycle = worker.instance.lock().await;
