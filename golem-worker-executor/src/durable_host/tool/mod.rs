@@ -2565,6 +2565,16 @@ async fn invoke_tool_sidecar<Ctx: WorkerCtx>(
             )
             .as_trap_type::<Ctx>()
             .expect("a failed tool guest call must classify as a trap");
+            if let crate::model::TrapType::Interrupt(kind) = &trap
+                && !replaying_completed
+                && !local_cancellation_selected
+            {
+                let worker = store.data().durable_ctx().public_state.worker();
+                let kind = worker.terminal_teardown_cause(*kind).await;
+                let _ = operation
+                    .select_failure(operation::OwnerFailureWinner::Lifecycle(kind))
+                    .await;
+            }
             let output_failure = guest_trap_output_failure(
                 &operation,
                 trap.clone(),

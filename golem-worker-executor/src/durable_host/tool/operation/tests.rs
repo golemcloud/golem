@@ -1174,6 +1174,45 @@ async fn nonterminal_unload_preserves_independent_owner_failures() {
 }
 
 #[test]
+#[timeout("5s")]
+async fn guest_lifecycle_interrupt_does_not_elect_a_trap() {
+    let timestamp = golem_common::model::Timestamp::now_utc();
+    for kind in [
+        InterruptKind::Suspend(timestamp),
+        InterruptKind::Interrupt(timestamp),
+        InterruptKind::Restart,
+        InterruptKind::Jump,
+        InterruptKind::ShardLost,
+    ] {
+        let owner = OwnerToolOperations::new();
+        let operation = accept_provisional(owner.create(context()), 2);
+        let failure = super::super::guest_trap_output_failure(
+            &operation,
+            TrapType::Interrupt(kind),
+            false,
+            false,
+        )
+        .await;
+        assert!(matches!(failure, ByteStreamFailure::Cancelled));
+        assert!(owner.selected_owner_failure().is_none());
+        assert!(matches!(
+            operation.winner_if_active(),
+            Some(ToolOperationWinner::Open)
+        ));
+        assert!(
+            owner
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(kind))
+                .await
+        );
+        assert!(matches!(
+            owner.selected_owner_failure(),
+            Some(OwnerFailureWinner::Lifecycle(selected)) if selected == kind
+        ));
+        operation.settle().await;
+    }
+}
+
+#[test]
 async fn lifecycle_winner_forces_a_losing_guest_trap_output_to_cancelled() {
     let owner = OwnerToolOperations::new();
     let operation = accept_provisional(owner.create(context()), 2);

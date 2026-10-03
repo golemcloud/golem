@@ -1456,6 +1456,10 @@ impl OwnerToolOperation {
     /// every sibling that is still open. An ordinary/cancellation terminal selection already in
     /// progress must resolve before trap election is attempted.
     pub(crate) async fn select_trap(&self, trap: TrapType) -> bool {
+        // Worker accepts and elects lifecycle control flow, not the guest-trap path.
+        if matches!(trap, TrapType::Interrupt(_)) {
+            return false;
+        }
         loop {
             let wait = self.owner.changed.notified();
             let selected = {

@@ -62,7 +62,29 @@ pub(super) async fn invoke<Ctx: WorkerCtx>(
                 .entity_invocation_scope()
                 .is_some_and(|scope| scope.mode() == InvocationExecutionMode::ReplayingCompleted);
             if !completed && let Some(operation) = durable.entity_tool_operation() {
-                operation.select_trap(trap.clone()).await;
+                match &trap {
+                    crate::model::TrapType::Interrupt(kind) => {
+                        let local_cancellation_selected = durable
+                            .entity_cancellation()
+                            .is_some_and(|cancellation| cancellation.is_cancelled())
+                            && operation.claim_local_cancellation_interruption();
+                        if !local_cancellation_selected {
+                            let kind = durable
+                                .public_state
+                                .worker()
+                                .terminal_teardown_cause(*kind)
+                                .await;
+                            operation
+                                .select_failure(super::operation::OwnerFailureWinner::Lifecycle(
+                                    kind,
+                                ))
+                                .await;
+                        }
+                    }
+                    _ => {
+                        operation.select_trap(trap.clone()).await;
+                    }
+                }
             }
             Err(trap
                 .as_golem_error("")

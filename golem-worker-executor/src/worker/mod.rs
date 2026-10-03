@@ -4322,9 +4322,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    // Teardown and the retained driver must fence with the same elected cause,
-    // even when admission stopped the invocation before any signal was published.
-    async fn terminal_teardown_cause(&self, kind: InterruptKind) -> InterruptKind {
+    // Entity control flow, teardown and the retained driver must fence with the same
+    // elected cause, even when admission stopped the invocation before publication.
+    pub(crate) async fn terminal_teardown_cause(&self, kind: InterruptKind) -> InterruptKind {
         self.set_interrupting(kind).await;
         let mut interrupts = self.interrupt_signal.lock().await;
         let admission = self.stop_progress.lock().unwrap();
