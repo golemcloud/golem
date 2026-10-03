@@ -29,9 +29,12 @@ use super::{
 };
 use crate::durable_host::durable_stream::{DurableStreamStore, StreamStoreError};
 use crate::durable_host::websocket::WebSocketConnectionPool;
+use crate::filesystem_snapshot::AgentSnapshots;
 use crate::metrics::workers::record_worker_call;
 use crate::model::ExecutionStatus;
-use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
+use crate::services::agent_filesystem_snapshots::{
+    AgentFilesystemSnapshots, Baseline, ForkCopy, PublishFound, fork_flight,
+};
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogServiceOps};
@@ -54,6 +57,7 @@ use crate::services::{HasAgentFilesystemSnapshots, HasRdbmsService, HasWorkerFor
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use futures::FutureExt;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRequest, ForkStreamSlotResponse,
 };
@@ -66,13 +70,15 @@ use golem_common::model::card::{AgentCardHolder, CardHolder};
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
-    DurableStreamEventSummary, OplogEntry, OplogIndex, OplogIndexRange,
+    DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex, OplogIndexRange,
 };
-use golem_common::model::{AgentFingerprint, AgentMetadata, Timestamp};
+use golem_common::model::{AgentFingerprint, AgentMetadata, PendingUpdateKind, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use publication::ExistingFork;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::runtime::Handle;
@@ -579,7 +585,15 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         )>,
         max_copied_bytes: Option<u64>,
         export: Option<&export::Candidate>,
-    ) -> Result<(Arc<dyn Oplog>, u64, AgentFingerprint), WorkerExecutorError> {
+    ) -> Result<
+        (
+            Arc<dyn Oplog>,
+            u64,
+            AgentFingerprint,
+            Option<FilesystemSnapshotName>,
+        ),
+        WorkerExecutorError,
+    > {
         record_worker_call("fork");
 
         tracing::debug!(
@@ -783,7 +797,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // Track unmatched work so the fork can cancel unrelated queued invocations and
         // updates. Export forks retain their selected invocation and its constructor.
         let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
-        let mut pending_update_revisions: Vec<ComponentRevision> = Vec::new();
+        let mut updates = ForkUpdates::default();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
         let mut copied_bytes = initial_size;
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
@@ -881,18 +895,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 continue;
             }
             let entry = read_source(oplog_index).await;
-            match &entry {
-                OplogEntry::PendingUpdate { description, .. } => {
-                    pending_update_revisions.push(*description.target_revision());
-                }
-                OplogEntry::SuccessfulUpdate { .. } | OplogEntry::FailedUpdate { .. }
-                    // Pop front to match calculate_update_fields semantics
-                    if !pending_update_revisions.is_empty() => {
-                        pending_update_revisions.remove(0);
-                    }
-                _ => {}
-            }
+            updates = updates.after(&entry);
         }
+        let (pending_update_revisions, baseline) = updates.into_parts();
 
         // The marker precedes every target-authored cancellation or synthetic result.
         let now = Timestamp::now_utc();
@@ -1002,6 +1007,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             new_oplog,
             copied_bytes.saturating_add(external_payload_bytes.load(Ordering::Relaxed)),
             AgentFingerprint(instance_id),
+            baseline,
         ))
     }
 
@@ -1031,71 +1037,33 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             publication::request_hash(source, source_metadata.fingerprint, cut, None, guest_result)
                 .map_err(WorkerExecutorError::runtime)?;
         let target = OwnedAgentId::new(source.environment_id, target_agent_id);
-        if !publication::existing_fork(self.oplog_service.as_ref(), &target, cut, hash).await? {
-            let stage_id = Uuid::new_v4();
-            let result = async {
-                let (oplog, _, _) = self
-                    .copy_source_oplog(
-                        fork_account_id,
-                        source,
-                        target_agent_id,
-                        cut,
-                        source_metadata.fingerprint,
-                        stage_id,
-                        hash,
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?;
-                if let Some((scope, phantom)) = guest_result {
-                    publication::write_guest_result(oplog.as_ref(), scope, phantom).await?;
-                }
-                oplog.commit(CommitLevel::Always).await?;
-                let last = oplog.current_oplog_index().await;
-                drop(oplog);
-                let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;
-                let publication = self
-                    .oplog_service
-                    .publish_staged(&target, AgentMode::Durable, stage_id, last)
-                    .await;
-                let result = match publication {
-                    Ok(true) => Ok(()),
-                    outcome => {
-                        if publication::existing_fork(
-                            self.oplog_service.as_ref(),
-                            &target,
-                            cut,
-                            hash,
-                        )
-                        .await?
-                        {
-                            Ok(())
-                        } else {
-                            Err(WorkerExecutorError::runtime(outcome.err().unwrap_or_else(
-                                || "Fork publication lost its target before reconciliation".into(),
-                            )))
-                        }
-                    }
-                };
-                drop(target_lifecycle);
-                result
+        let reconcile =
+            || publication::existing_fork(self.oplog_service.as_ref(), &target, cut, hash);
+        if !reconcile().await?.matches(&target)? {
+            // The fork holds the snapshots of its source from before its read of the source
+            // oplog. An attempt that waited for another attempt of the same request reconciles
+            // again, so it finds the target that the other attempt published.
+            let fork = self
+                .agent_filesystem_snapshots
+                .begin_fork(
+                    &AgentSnapshots::agent(source, source_metadata.fingerprint),
+                    fork_flight(target_agent_id, hash),
+                )
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+            if !(fork.waited() && reconcile().await?.matches(&target)?) {
+                self.fork_once(
+                    fork,
+                    fork_account_id,
+                    source,
+                    &target,
+                    cut,
+                    source_metadata.fingerprint,
+                    hash,
+                    guest_result,
+                )
+                .await?;
             }
-            .await;
-            // Each attempt has its own writer. Cleanup must never remove the winner's payloads.
-            let cleanup = self
-                .oplog_service
-                .discard_staged(&target, AgentMode::Durable, stage_id)
-                .await;
-            if let Err(error) = cleanup {
-                tracing::warn!(
-                    agent_id = %target,
-                    stage_id = %stage_id,
-                    error = %error,
-                    "Failed to discard hidden fork stage"
-                );
-            }
-            result?;
         }
         // Resume can fail after publication, so retries reconcile the immutable marker and
         // retry this operation without replacing the fork or appending a second synthetic result.
@@ -1105,6 +1073,111 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .map_err(|error| {
                 WorkerExecutorError::failed_to_resume_worker(target_agent_id.clone(), error.into())
             })
+    }
+
+    /// One attempt of a plain fork with a new stage: the copy of the source oplog into the stage,
+    /// the copy of the snapshots of the source into the snapshots of the stage, the check of the
+    /// baseline of the target, and the publication. Each check that refuses the fork reconciles
+    /// first, so a target that a parallel attempt published is never refused.
+    #[allow(clippy::too_many_arguments)]
+    async fn fork_once(
+        &self,
+        fork: ForkCopy,
+        fork_account_id: AccountId,
+        source: &OwnedAgentId,
+        target: &OwnedAgentId,
+        cut: OplogIndex,
+        source_fingerprint: AgentFingerprint,
+        hash: [u8; 32],
+        guest_result: Option<(Option<OplogIndex>, Uuid)>,
+    ) -> Result<(), WorkerExecutorError> {
+        let reconcile =
+            || publication::existing_fork(self.oplog_service.as_ref(), target, cut, hash);
+        let stage_id = Uuid::new_v4();
+        let result = async {
+            let (oplog, _, _, baseline) = self
+                .copy_source_oplog(
+                    fork_account_id,
+                    source,
+                    &target.agent_id,
+                    cut,
+                    source_fingerprint,
+                    stage_id,
+                    hash,
+                    None,
+                    None,
+                    None,
+                )
+                .await?;
+            if let Some((scope, phantom)) = guest_result {
+                publication::write_guest_result(oplog.as_ref(), scope, phantom).await?;
+            }
+            oplog.commit(CommitLevel::Always).await?;
+            let last = oplog.current_oplog_index().await;
+            drop(oplog);
+            let copied = fork
+                .copy(target, stage_id, baseline.as_ref())
+                .await
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to copy the filesystem snapshots of the fork source: {error}"
+                    ))
+                })?;
+            if let Baseline::Missing(name) = copied.baseline() {
+                return match reconcile().await? {
+                    ExistingFork::Matching(live) => {
+                        copied.lost_to(live);
+                        Ok(())
+                    }
+                    ExistingFork::Other(live) => {
+                        copied.lost_to(live);
+                        Err(publication::conflict(target))
+                    }
+                    ExistingFork::Absent => Err(WorkerExecutorError::invalid_request(format!(
+                        "Cannot fork worker at oplog index {cut}: the filesystem snapshot {name} of the target's baseline is not in the store"
+                    ))),
+                };
+            }
+            let target_lifecycle = self.oplog_service.lock_lifecycle(&target.agent_id).await;
+            let published = copied
+                .publish(
+                    |publication| {
+                        async move {
+                            let outcome = self
+                                .oplog_service
+                                .publish_staged(target, AgentMode::Durable, publication, last)
+                                .await;
+                            match outcome {
+                                Ok(true) => PublishFound::Published(Ok(())),
+                                outcome => {
+                                    publication::found_after(target, outcome, reconcile().await)
+                                }
+                            }
+                        }
+                        .boxed()
+                    },
+                    || publication::live_instance(self.oplog_service.as_ref(), target).boxed(),
+                )
+                .await
+                .and_then(|published| published);
+            drop(target_lifecycle);
+            published
+        }
+        .await;
+        // Each attempt has its own writer. Cleanup must never remove the winner's payloads.
+        let cleanup = self
+            .oplog_service
+            .discard_staged(target, AgentMode::Durable, stage_id)
+            .await;
+        if let Err(error) = cleanup {
+            tracing::warn!(
+                agent_id = %target,
+                stage_id = %stage_id,
+                error = %error,
+                "Failed to discard hidden fork stage"
+            );
+        }
+        result
     }
 
     pub fn update_agent_id(
@@ -1230,6 +1303,59 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             auth_ctx,
         )
         .await
+    }
+}
+
+/// The updates of the copied prefix of a fork, in the order of the oplog and outside the deleted
+/// regions: the pending updates that no outcome follows, which the fork cancels, and the
+/// filesystem snapshot name of the manual-update baseline of the target. The fold pairs a pending
+/// update with its outcome as the status does.
+#[derive(Debug, Default)]
+pub(crate) struct ForkUpdates {
+    /// The pending updates without an outcome, each with its kind.
+    pending: VecDeque<(ComponentRevision, PendingUpdateKind)>,
+    baseline: Option<FilesystemSnapshotName>,
+}
+
+impl ForkUpdates {
+    /// The updates after `entry`.
+    pub(crate) fn after(mut self, entry: &OplogEntry) -> Self {
+        match entry {
+            OplogEntry::PendingUpdate { description, .. } => {
+                self.pending.push_back((
+                    *description.target_revision(),
+                    PendingUpdateKind::of(description),
+                ));
+            }
+            OplogEntry::SuccessfulUpdate { .. } => {
+                if let Some((
+                    _,
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot,
+                    },
+                )) = self.pending.pop_front()
+                {
+                    self.baseline = filesystem_snapshot;
+                }
+            }
+            OplogEntry::FailedUpdate { .. } => {
+                self.pending.pop_front();
+            }
+            _ => {}
+        }
+        self
+    }
+
+    /// The target revisions of the pending updates that the fork cancels, in the order of the
+    /// oplog, and the name of the baseline.
+    pub(crate) fn into_parts(self) -> (Vec<ComponentRevision>, Option<FilesystemSnapshotName>) {
+        (
+            self.pending
+                .into_iter()
+                .map(|(revision, _)| revision)
+                .collect(),
+            self.baseline,
+        )
     }
 }
 

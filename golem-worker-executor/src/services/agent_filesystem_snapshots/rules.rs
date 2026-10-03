@@ -23,9 +23,9 @@ use crate::sandbox_filesystem::FilesystemSpace;
 use crate::services::golem_config::{
     FilesystemPressureConfig, FilesystemSnapshotStoreConfig, FilesystemSnapshotsConfig,
 };
-use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::FilesystemSnapshotName;
+use golem_common::model::{AgentFingerprint, AgentId};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
@@ -114,7 +114,6 @@ pub(super) struct State {
     /// The number of pending names over all agents.
     pending_names_total: usize,
     /// The fork attempts that run on this executor.
-    #[cfg_attr(not(test), allow(dead_code))]
     flights: HashMap<Flight, ForkPhase>,
     /// The number of reverts of each agent that hold the deletes of its jobs.
     reverts: HashMap<AgentSnapshots, NonZeroU32>,
@@ -220,7 +219,6 @@ pub(super) enum CallKind {
 }
 
 /// Where a fork attempt is.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ForkPhase {
     /// The attempt copies, or has not reached its publication.
@@ -230,18 +228,57 @@ enum ForkPhase {
 }
 
 /// What the end of a fork attempt does to the snapshots of its stage.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ForkEnd {
-    /// The attempt never reached its publication, so nothing can publish its stage, and the
-    /// delete of all snapshots of the stage is requested. `overflow` tells whether the bound of
-    /// the clean-ups dropped that request or evicted other work.
+    /// Nothing can publish the stage of the attempt: it never reached its publication, or the
+    /// live target has another instance id. The delete of all snapshots of the stage is
+    /// requested. `overflow` tells whether the bound of the clean-ups dropped that request or
+    /// evicted other work.
     StageDeleted { overflow: bool },
     /// The attempt did not finish its publication. Its stage can be published, so its snapshots
     /// stay.
     StageLeaked,
     /// The attempt published its stage.
     Done,
+}
+
+/// What a fork attempt found about the live target, after its publication or a reconciliation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ForkFound {
+    /// The publication made the stage of this attempt the target.
+    Published,
+    /// A read of the `Create` of the live target gave this instance id.
+    Live(AgentFingerprint),
+    /// The publication was refused, and a read of the live target gave this instance id, or no
+    /// live target.
+    RefusedThenLive(Option<AgentFingerprint>),
+    /// The outcome of the publication is not known.
+    Unknown,
+}
+
+/// How the publication of a fork attempt ended for the snapshots of its stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ForkOutcome {
+    /// The stage of the attempt is the live target.
+    Published,
+    /// Another stage is the live target, so nothing can publish the stage of the attempt.
+    Lost,
+    /// The live target is not known.
+    Unknown,
+}
+
+/// Decides how a fork attempt whose stage has the instance id `stage` ended, from what it
+/// `found`. Only a live target with another instance id makes the stage lost: a refused
+/// publication alone does not, and a live target with the own id is the own publication.
+pub(super) fn fork_outcome(found: ForkFound, stage: AgentFingerprint) -> ForkOutcome {
+    match found {
+        ForkFound::Published => ForkOutcome::Published,
+        ForkFound::Live(live) | ForkFound::RefusedThenLive(Some(live)) if live == stage => {
+            ForkOutcome::Published
+        }
+        ForkFound::Live(_) | ForkFound::RefusedThenLive(Some(_)) => ForkOutcome::Lost,
+        ForkFound::RefusedThenLive(None) | ForkFound::Unknown => ForkOutcome::Unknown,
+    }
 }
 
 /// What a request of clean-up work gave.
@@ -274,11 +311,8 @@ enum Transition {
     StoreCallEnded,
     RevertBegan,
     RevertEnded,
-    #[cfg_attr(not(test), allow(dead_code))]
     ForkBegan,
-    #[cfg_attr(not(test), allow(dead_code))]
     ForkPublishing,
-    #[cfg_attr(not(test), allow(dead_code))]
     ForkEnded,
 }
 
@@ -1007,7 +1041,6 @@ pub(super) fn store_call_ended(
 /// The fork attempt `flight` holds the snapshots of its source `from` before it reads the oplog of
 /// the source. It is refused while a delete of all snapshots of the source is pending or runs, and
 /// while another attempt of the same flight runs.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn fork_began(mut state: State, from: &AgentSnapshots, flight: &Flight) -> Next<bool> {
     let began = !all_requested(&state, from) && !state.flights.contains_key(flight);
     if began {
@@ -1018,7 +1051,6 @@ pub(super) fn fork_began(mut state: State, from: &AgentSnapshots, flight: &Fligh
 }
 
 /// The fork attempt `flight` starts its publication.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn fork_publishing(mut state: State, flight: &Flight) -> Next<()> {
     if let Some(phase) = state.flights.get_mut(flight) {
         *phase = ForkPhase::Publishing;
@@ -1026,27 +1058,31 @@ pub(super) fn fork_publishing(mut state: State, flight: &Flight) -> Next<()> {
     Next::of(Transition::ForkPublishing, state, ())
 }
 
-/// The fork attempt `flight` of the source `from` into `stage` ended, after its publication when
-/// `published`. Its hold of the source ends. An attempt that never reached its publication can
-/// never publish `stage`, so the delete of all snapshots of `stage` is requested in the same
-/// transition.
-#[cfg_attr(not(test), allow(dead_code))]
+/// The fork attempt `flight` of the source `from` ended, with the snapshots of its stage in
+/// `stage` once its copy began, and with the `outcome` of its publication or of a reconciliation
+/// once it knows one. Its hold of the source ends. When nothing can publish `stage`, because the
+/// attempt never reached its publication or another stage is live, the delete of all snapshots of
+/// `stage` is requested in the same transition. An attempt whose publication began and whose
+/// outcome is not known leaves `stage`.
 pub(super) fn fork_ended(
     mut state: State,
     from: &AgentSnapshots,
     flight: &Flight,
-    stage: &AgentSnapshots,
-    published: bool,
+    stage: Option<&AgentSnapshots>,
+    outcome: Option<ForkOutcome>,
 ) -> Next<ForkEnd> {
     state.busy = with_one_less(state.busy, from);
-    let end = match state.flights.remove(flight) {
-        Some(ForkPhase::Copying) => {
+    let phase = state.flights.remove(flight);
+    let end = match (phase, outcome, stage) {
+        (None, _, _) | (_, Some(ForkOutcome::Published), _) | (_, _, None) => ForkEnd::Done,
+        (Some(ForkPhase::Copying), _, Some(stage)) | (_, Some(ForkOutcome::Lost), Some(stage)) => {
             let overflow = add_all(&mut state, stage);
             push_if_ready(&mut state, stage);
             ForkEnd::StageDeleted { overflow }
         }
-        Some(ForkPhase::Publishing) if !published => ForkEnd::StageLeaked,
-        Some(ForkPhase::Publishing) | None => ForkEnd::Done,
+        (Some(ForkPhase::Publishing), Some(ForkOutcome::Unknown) | None, Some(_)) => {
+            ForkEnd::StageLeaked
+        }
     };
     push_if_ready(&mut state, from);
     Next::of(Transition::ForkEnded, state, end)
@@ -1744,8 +1780,8 @@ mod tests {
                     fork_began(fresh(), &agent, &flight).into_parts().0,
                     &agent,
                     &flight,
-                    &agent,
-                    true
+                    Some(&agent),
+                    Some(ForkOutcome::Published)
                 )
                 .wakes(),
                 super::revert_began(fresh(), &agent).wakes(),
@@ -2142,7 +2178,13 @@ mod tests {
                 step(&mut state, |state| fork_publishing(state, &flight));
             }
             let end = step(&mut state, |state| {
-                fork_ended(state, &source, &flight, &stage, published)
+                fork_ended(
+                    state,
+                    &source,
+                    &flight,
+                    Some(&stage),
+                    published.then_some(ForkOutcome::Published),
+                )
             });
             (
                 began,
@@ -2169,6 +2211,94 @@ mod tests {
                 ),
                 (true, false, ForkEnd::StageLeaked, false, 0),
                 (true, false, ForkEnd::Done, false, 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_live_target_with_the_own_stage_id_is_published_not_deleted() {
+        let own = AgentFingerprint(uuid::Uuid::new_v4());
+        let other = AgentFingerprint(uuid::Uuid::new_v4());
+
+        assert_eq!(
+            [
+                fork_outcome(ForkFound::Published, own),
+                fork_outcome(ForkFound::Live(own), own),
+                fork_outcome(ForkFound::Live(other), own),
+                fork_outcome(ForkFound::Unknown, own),
+            ],
+            [
+                ForkOutcome::Published,
+                ForkOutcome::Published,
+                ForkOutcome::Lost,
+                ForkOutcome::Unknown
+            ]
+        );
+    }
+
+    #[test]
+    fn a_refused_publication_whose_target_is_the_own_stage_keeps_it() {
+        let own = AgentFingerprint(uuid::Uuid::new_v4());
+        let other = AgentFingerprint(uuid::Uuid::new_v4());
+
+        assert_eq!(
+            [
+                fork_outcome(ForkFound::RefusedThenLive(Some(own)), own),
+                fork_outcome(ForkFound::RefusedThenLive(Some(other)), own),
+                fork_outcome(ForkFound::RefusedThenLive(None), own),
+            ],
+            [
+                ForkOutcome::Published,
+                ForkOutcome::Lost,
+                ForkOutcome::Unknown
+            ]
+        );
+    }
+
+    #[test]
+    fn the_end_of_a_fork_attempt_deletes_its_stage_only_when_nothing_can_publish_it() {
+        let source = agent_snapshots("source");
+        let flight = (
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target".to_string(),
+            },
+            [8; 32],
+        );
+        let end_of = |publishing: bool, stage: bool, outcome: Option<ForkOutcome>| {
+            let mut state = State::default();
+            let staged = agent_snapshots("stage");
+            step(&mut state, |state| fork_began(state, &source, &flight));
+            if publishing {
+                step(&mut state, |state| fork_publishing(state, &flight));
+            }
+            let end = step(&mut state, |state| {
+                fork_ended(state, &source, &flight, stage.then_some(&staged), outcome)
+            });
+            (end, all_requested(&state, &staged))
+        };
+        let deleted = (ForkEnd::StageDeleted { overflow: false }, true);
+
+        assert_eq!(
+            [
+                end_of(false, false, None),
+                end_of(false, true, None),
+                end_of(false, true, Some(ForkOutcome::Lost)),
+                end_of(false, true, Some(ForkOutcome::Published)),
+                end_of(true, true, Some(ForkOutcome::Lost)),
+                end_of(true, true, Some(ForkOutcome::Unknown)),
+                end_of(true, true, None),
+                end_of(true, true, Some(ForkOutcome::Published)),
+            ],
+            [
+                (ForkEnd::Done, false),
+                deleted,
+                deleted,
+                (ForkEnd::Done, false),
+                deleted,
+                (ForkEnd::StageLeaked, false),
+                (ForkEnd::StageLeaked, false),
+                (ForkEnd::Done, false),
             ]
         );
     }
@@ -2351,7 +2481,7 @@ mod tests {
                     Step::ForkEnded(index, published) => {
                         if !forks.is_empty() {
                             let (from, flight, stage, _) = forks.remove(index % forks.len());
-                            step(&mut state, |state| fork_ended(state, &from, &flight, &stage, published));
+                            step(&mut state, |state| fork_ended(state, &from, &flight, Some(&stage), published.then_some(ForkOutcome::Published)));
                         }
                     }
                     Step::RunGranted(agent) => {

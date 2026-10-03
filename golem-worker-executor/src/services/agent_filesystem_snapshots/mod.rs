@@ -25,6 +25,7 @@
 //! store.
 
 mod cleanup;
+mod fork;
 mod job;
 mod registry;
 mod retention;
@@ -36,7 +37,7 @@ mod tests;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::filesystem_snapshot::FilesystemSnapshotStore;
 use crate::filesystem_snapshot::{
-    AgentSnapshots, CallError, ChangeDetection, InvalidSnapshotName, SaveError, SnapshotInfo,
+    AgentSnapshots, ChangeDetection, InvalidSnapshotName, ReadError, SaveError, SnapshotInfo,
     SnapshotName,
 };
 use crate::sandbox_filesystem::FilesystemVolume;
@@ -56,6 +57,9 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+pub(crate) use fork::{
+    Baseline, ForkCopy, ForkStopped, PublicationKey, PublishFound, flight as fork_flight,
+};
 pub(crate) use store_calls::{StoreKey, StoreRestore};
 
 /// The kind of a filesystem snapshot. It gives the prefix of the name.
@@ -828,16 +832,33 @@ impl AgentFilesystemSnapshots {
         }
     }
 
-    /// Copies each filesystem snapshot of `from` into `to`, which holds none.
-    #[allow(dead_code)]
-    pub(crate) async fn copy_all_snapshots(
+    /// Begins a fork attempt of the request `flight` from the snapshots of `from`. The attempt
+    /// holds the snapshots of `from` until it ends: a delete of all snapshots of `from` waits for
+    /// it. It waits while such a delete is pending or runs, and while another attempt of the same
+    /// request runs; [`ForkCopy::waited`] tells whether it waited. A shutdown ends the wait with
+    /// [`ForkStopped`]. A disabled service gives an attempt that copies nothing.
+    pub(crate) async fn begin_fork(
         &self,
         from: &AgentSnapshots,
-        to: &AgentSnapshots,
-    ) -> Result<(), CallError> {
+        flight: (golem_common::model::AgentId, [u8; 32]),
+    ) -> Result<ForkCopy, ForkStopped> {
         match &self.core {
-            Some(core) => core.calls.copy(from, to).await,
-            None => Ok(()),
+            Some(core) => fork::begin(core, from, flight).await,
+            None => Ok(fork::without_snapshots()),
+        }
+    }
+
+    /// Tells whether the store does not hold the snapshot `name` of `agent`, with one read of the
+    /// store, bounded by `store_check_limit`. A disabled service holds nothing to check, and
+    /// gives `false`.
+    pub(crate) async fn missing(
+        &self,
+        agent: &AgentSnapshots,
+        name: &FilesystemSnapshotName,
+    ) -> Result<bool, ReadError> {
+        match &self.core {
+            Some(core) => fork::missing(core, agent, name).await,
+            None => Ok(false),
         }
     }
 

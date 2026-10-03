@@ -1629,7 +1629,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     );
     assert!(
         service
-            .publish_staged(&owned, AgentMode::Ephemeral, stage_id, OplogIndex::INITIAL)
+            .publish_staged(
+                &owned,
+                AgentMode::Ephemeral,
+                StagePublication::for_tests(stage_id),
+                OplogIndex::INITIAL
+            )
             .await
             .is_err()
     );
@@ -1710,7 +1715,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                stage_id,
+                StagePublication::for_tests(stage_id),
                 OplogIndex::from_u64(3)
             )
             .await
@@ -1773,7 +1778,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     drop(losing);
     assert!(
         !service
-            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .publish_staged(
+                &owned,
+                AgentMode::Durable,
+                StagePublication::for_tests(losing_id),
+                OplogIndex::INITIAL
+            )
             .await
             .unwrap()
     );
@@ -1784,7 +1794,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     );
     assert!(
         !service
-            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .publish_staged(
+                &owned,
+                AgentMode::Durable,
+                StagePublication::for_tests(losing_id),
+                OplogIndex::INITIAL
+            )
             .await
             .unwrap()
     );
