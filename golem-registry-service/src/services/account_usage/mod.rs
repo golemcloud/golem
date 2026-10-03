@@ -438,23 +438,52 @@ impl AccountUsageService {
                         )
                     });
                     match self.account_usage_repo.add(&account_usage).await {
-                        Ok(_) => match {
+                        Ok(_) => {
                             self.trigger_blob_storage_reconciliation(account_id);
-                            self.get_account_usage_for_resource_limits(account_id).await
-                        } {
-                            Ok(account_usage) => match account_usage.resource_limits() {
-                                Ok(limits) => {
-                                    limits_of_updated_accounts.insert(account_id, limits);
+                            let reloaded_usage =
+                                self.get_account_usage_for_resource_limits(account_id).await;
+                            match reloaded_usage {
+                                Ok(account_usage) => match account_usage.resource_limits() {
+                                    Ok(limits) => {
+                                        limits_of_updated_accounts.insert(account_id, limits);
+                                    }
+                                    Err(error) => {
+                                        tracing::error!(
+                                            %account_id,
+                                            %error,
+                                            "Failed to resolve resource limits after usage update"
+                                        );
+                                        limits_of_updated_accounts.insert(
+                                            account_id,
+                                            fallback_limits.clone().unwrap_or_else(|| {
+                                                Self::fenced_resource_limits(
+                                                    monthly_usage_mode_revision,
+                                                    monthly_policy_revision,
+                                                    true,
+                                                )
+                                            }),
+                                        );
+                                    }
+                                },
+                                Err(AccountUsageError::AccountNotfound(_)) => {
+                                    limits_of_updated_accounts.insert(
+                                        account_id,
+                                        Self::fenced_resource_limits(
+                                            monthly_usage_mode_revision,
+                                            monthly_policy_revision,
+                                            true,
+                                        ),
+                                    );
                                 }
                                 Err(error) => {
                                     tracing::error!(
                                         %account_id,
                                         %error,
-                                        "Failed to resolve resource limits after usage update"
+                                        "Failed to reload account usage after resource update"
                                     );
                                     limits_of_updated_accounts.insert(
                                         account_id,
-                                        fallback_limits.clone().unwrap_or_else(|| {
+                                        fallback_limits.unwrap_or_else(|| {
                                             Self::fenced_resource_limits(
                                                 monthly_usage_mode_revision,
                                                 monthly_policy_revision,
@@ -463,35 +492,8 @@ impl AccountUsageService {
                                         }),
                                     );
                                 }
-                            },
-                            Err(AccountUsageError::AccountNotfound(_)) => {
-                                limits_of_updated_accounts.insert(
-                                    account_id,
-                                    Self::fenced_resource_limits(
-                                        monthly_usage_mode_revision,
-                                        monthly_policy_revision,
-                                        true,
-                                    ),
-                                );
                             }
-                            Err(error) => {
-                                tracing::error!(
-                                    %account_id,
-                                    %error,
-                                    "Failed to reload account usage after resource update"
-                                );
-                                limits_of_updated_accounts.insert(
-                                    account_id,
-                                    fallback_limits.unwrap_or_else(|| {
-                                        Self::fenced_resource_limits(
-                                            monthly_usage_mode_revision,
-                                            monthly_policy_revision,
-                                            true,
-                                        )
-                                    }),
-                                );
-                            }
-                        },
+                        }
                         Err(error) => {
                             tracing::error!(
                                 %account_id,
