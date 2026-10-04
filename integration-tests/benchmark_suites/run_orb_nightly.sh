@@ -120,24 +120,33 @@ publish_root="$artifact_dir/benchmark-results-publish"
 for attempt in 1 2 3; do
     rm -rf "$publish_root"
     if git clone --depth 1 "$results_repository" "$publish_root" && (
-        cd "$publish_root"
-        node scripts/append-results.mjs "$results"
-        if git diff --quiet -- results/results.json; then
+        cd "$publish_root" || exit $?
+        node scripts/append-results.mjs "$results" || exit $?
+        if git diff --quiet -- public/data/index.json; then
             echo "Benchmark run is already published at $(git rev-parse HEAD)"
             exit 0
         fi
 
-        npm ci
-        npm test
-        npm run build
-        git add results/results.json
-        if [[ "$(git diff --cached --name-only)" != "results/results.json" ]]; then
+        npm ci || exit $?
+        npm test || exit $?
+        npm run build || exit $?
+        git add public/data || exit $?
+        mapfile -t staged_files < <(git diff --cached --name-only)
+        if ((${#staged_files[@]} != 2)) ||
+            [[ ! " ${staged_files[*]} " =~ " public/data/index.json " ]]; then
             echo "Publisher attempted to commit unexpected files" >&2
             exit 1
         fi
+        for staged_file in "${staged_files[@]}"; do
+            if [[ "$staged_file" != "public/data/index.json" &&
+                ! "$staged_file" =~ ^public/data/runs/[0-9a-f]{24}\.json$ ]]; then
+                echo "Publisher attempted to commit unexpected file $staged_file" >&2
+                exit 1
+            fi
+        done
         git -c user.name="Golem Benchmark Bot" \
             -c user.email="benchmark-bot@golem.cloud" \
-            commit -m "Append Amp orb benchmark results for ${source_commit:0:12}"
+            commit -m "Append Amp orb benchmark results for ${source_commit:0:12}" || exit $?
         git push origin HEAD:master
     ); then
         published_commit="$(git -C "$publish_root" rev-parse HEAD)"
@@ -148,7 +157,7 @@ for attempt in 1 2 3; do
             exit 1
         fi
         node "$publish_root/scripts/analyze-regressions.mjs" \
-            "$publish_root/results/results.json" \
+            "$publish_root/public/data/index.json" \
             --runner "$runner_id" \
             --suite CI \
             --timestamp "$run_timestamp" \
