@@ -60,8 +60,10 @@ jobs:
         run: |
           cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' \
             --primary-only \
+            --retain-details \
+            --retain-selected-zero-counts \
             suite \
-            --add-to-json benchmark-results/results/results.json \
+            --save-to-json "$RUNNER_TEMP/github-actions-benchmark-results.json" \
             --runner-id github-actions-blacksmith-32vcpu \
             --runner-label "GitHub Actions (Blacksmith 32 vCPU)" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -70,13 +72,79 @@ jobs:
             integration-tests/benchmark_suites/ci.yaml \
             spawned
 
-      - name: Commit results
+      - name: Validate and publish results
+        env:
+          RESULTS_PATH: ${{ runner.temp }}/github-actions-benchmark-results.json
+          ANALYSIS_PATH: ${{ runner.temp }}/github-actions-benchmark-analysis.json
         run: |
+          set -euo pipefail
           cd benchmark-results
           git config user.name  'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add results/results.json
-          git diff --staged --quiet || (git commit -m "Appended new benchmark results" && git push)
+
+          published=false
+          for attempt in 1 2 3; do
+            git fetch origin master
+            git reset --hard origin/master
+            node scripts/append-results.mjs "$RESULTS_PATH"
+
+            if git diff --quiet -- public/data/index.json; then
+              echo "Benchmark run is already published at $(git rev-parse HEAD)"
+              published=true
+              break
+            fi
+
+            npm ci
+            npm test
+            npm run build
+            git add public/data
+
+            mapfile -t staged_files < <(git diff --cached --name-only)
+            if ((${#staged_files[@]} != 2)) ||
+              [[ ! " ${staged_files[*]} " =~ " public/data/index.json " ]]; then
+              echo "Publisher attempted to commit unexpected files" >&2
+              exit 1
+            fi
+            for staged_file in "${staged_files[@]}"; do
+              if [[ "$staged_file" != "public/data/index.json" &&
+                ! "$staged_file" =~ ^public/data/runs/[0-9a-f]{24}\.json$ ]]; then
+                echo "Publisher attempted to commit unexpected file $staged_file" >&2
+                exit 1
+              fi
+            done
+
+            git commit -m "Append GitHub Actions benchmark results for ${GITHUB_SHA:0:12}"
+            if git push origin HEAD:master; then
+              published=true
+              break
+            fi
+            echo "Publish attempt $attempt lost a race; retrying from current master" >&2
+          done
+
+          if [[ "$published" != true ]]; then
+            echo "Failed to publish benchmark results after three attempts" >&2
+            exit 1
+          fi
+
+          run_timestamp="$(jq -er '.runs | select(length == 1) | .[0].timestamp' "$RESULTS_PATH")"
+          node scripts/analyze-regressions.mjs \
+            public/data/index.json \
+            --runner github-actions-blacksmith-32vcpu \
+            --suite CI \
+            --timestamp "$run_timestamp" \
+            --output "$ANALYSIS_PATH"
+          jq -e '.status != "run-not-found" and .status != "no-runs"' "$ANALYSIS_PATH" >/dev/null
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-results-attempt${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/github-actions-benchmark-results.json
+            ${{ runner.temp }}/github-actions-benchmark-analysis.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Fail on recorded benchmark failures
         if: steps.benchmark.outcome != 'success'
