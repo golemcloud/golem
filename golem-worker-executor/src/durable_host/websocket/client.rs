@@ -12,12 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "test-utils")]
-use super::WebSocketReconnectOutcomeForTest;
-#[cfg(feature = "test-utils")]
-use super::WebSocketReconnectPathForTest;
-#[cfg(feature = "test-utils")]
-use super::WebSocketReconnectWaitForTest;
 use crate::durable_host::authorization::targets::websocket_target;
 use crate::durable_host::concurrent::{
     CallReplayOutcome, DurableCallSession, LeaveIncompleteOnDrop, NotCancellable, ResolvedCall,
@@ -30,7 +24,6 @@ use crate::workerctx::WorkerCtx;
 use futures::future::Either;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt, pin_mut};
-use golem_common::model::OplogIndex;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::payload::types::{
     SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
@@ -206,11 +199,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         };
 
-        let interrupt_signal = self
-            .execution_status
-            .read()
-            .unwrap()
-            .create_await_interrupt_signal();
+        let interrupt_signal = self.create_interrupt_signal();
 
         let connect_fut = connect_async(request);
         pin_mut!(connect_fut);
@@ -287,7 +276,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         }
 
-        match ensure_websocket_connection_live(self, &self_, call.start_index()).await {
+        match ensure_websocket_connection_live(self, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketSendResponse {
@@ -301,11 +290,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         }
 
-        let interrupt_signal = self
-            .execution_status
-            .read()
-            .unwrap()
-            .create_await_interrupt_signal();
+        let interrupt_signal = self.create_interrupt_signal();
 
         let mut view = self.as_wasi_view();
         let entry = match view.table().get(&self_) {
@@ -405,7 +390,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         }
 
-        match ensure_websocket_connection_live(self, &self_, call.start_index()).await {
+        match ensure_websocket_connection_live(self, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketCloseResponse {
@@ -419,11 +404,7 @@ impl<Ctx: WorkerCtx> HostWebsocketConnection for DurableWorkerCtx<Ctx> {
             }
         }
 
-        let interrupt_signal = self
-            .execution_status
-            .read()
-            .unwrap()
-            .create_await_interrupt_signal();
+        let interrupt_signal = self.create_interrupt_signal();
 
         let mut view = self.as_wasi_view();
         let entry = match view.table().get(&self_) {
@@ -547,7 +528,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(accessor, &self_, call.start_index()).await {
+        match ensure_websocket_connection_live_access(accessor, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveResponse {
@@ -665,7 +646,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             }
         }
 
-        match ensure_websocket_connection_live_access(accessor, &self_, call.start_index()).await {
+        match ensure_websocket_connection_live_access(accessor, &self_).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 let resp = HostResponseWebsocketReceiveWithTimeoutResponse {
@@ -765,28 +746,42 @@ enum ReconnectEntryAction {
     /// The entry is still the same replayed handle this call gated on: this
     /// call performs the live reconnect.
     Reconnect,
-    /// The entry changed while this call queued (another call reconnected this
-    /// handle, or a fresh replay replaced it): use the current entry and take
-    /// no pool permit.
+    /// The entry is a live connection another call published while this call
+    /// queued: use the current entry and take no pool permit.
     UseCurrentEntry,
     /// The entry was terminally closed while this call queued: fail with the
     /// entry's terminal error.
     Fail(TerminalWebSocketError),
+    /// The entry carries a different replay incarnation than the gate this
+    /// call queued on. The handle's `send`/`receive`/`receive-with-timeout`/
+    /// `close` calls borrow the resource, so the guest cannot drop the handle
+    /// while one of its calls queues on the gate, and a fresh table after
+    /// reconstruction discards the queued call — a call holding the gate can
+    /// only ever see its own incarnation in the entry. A different incarnation
+    /// is therefore an invariant violation of the gate protocol, not a
+    /// reconnect this call may perform.
+    InconsistentReplayGate,
 }
 
 fn classify_reconnect_entry(
     entry: &WebSocketConnectionEntry,
-    gate: Option<&Arc<Mutex<()>>>,
+    gate: &Arc<Mutex<()>>,
 ) -> ReconnectEntryAction {
     match entry {
-        WebSocketConnectionEntry::Replay(entry_gate) => match gate {
-            Some(gate) if Arc::ptr_eq(gate, entry_gate) => ReconnectEntryAction::Reconnect,
-            Some(_) => ReconnectEntryAction::UseCurrentEntry,
-            None => ReconnectEntryAction::Reconnect,
-        },
+        WebSocketConnectionEntry::Replay(entry_gate) if Arc::ptr_eq(gate, entry_gate) => {
+            ReconnectEntryAction::Reconnect
+        }
         WebSocketConnectionEntry::Live(_) => ReconnectEntryAction::UseCurrentEntry,
         WebSocketConnectionEntry::Terminal(error) => ReconnectEntryAction::Fail(error.clone()),
+        WebSocketConnectionEntry::Replay(_) => ReconnectEntryAction::InconsistentReplayGate,
     }
+}
+
+fn inconsistent_replay_gate_error() -> anyhow::Error {
+    golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
+        "websocket connection entry changed replay incarnation while its reconnect gate was held",
+    )
+    .into()
 }
 
 /// Races a reconnect-path wait (per-handle gate or pool permit) against
@@ -810,11 +805,7 @@ async fn wait_or_interrupt<T>(
 async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: &Resource<WebSocketConnectionEntry>,
-    start: OplogIndex,
 ) -> anyhow::Result<Result<(), Error>> {
-    #[cfg(not(feature = "test-utils"))]
-    let _ = start;
-
     let rep = resource.rep();
     let gate = {
         let mut view = ctx.as_wasi_view();
@@ -838,33 +829,11 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         return Ok(Ok(()));
     };
 
-    #[cfg(feature = "test-utils")]
-    let invocation_key = ctx.state.get_current_idempotency_key();
     let pool = ctx.websocket_connection_pool.clone();
     // At most one call at a time reconnects this handle: the gate is held from
     // here until the reconnect outcome is published, so concurrent calls queue
     // here instead of independently taking a second pool permit.
-    #[cfg(feature = "test-utils")]
-    let gate_observer = pool.websocket_reconnect_wait_observer_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Direct,
-        WebSocketReconnectWaitForTest::Gate,
-    );
-    let gate_fut = async {
-        #[cfg(feature = "test-utils")]
-        {
-            match gate_observer {
-                Some(observer) => observer.observe(gate.lock()).await,
-                None => gate.lock().await,
-            }
-        }
-        #[cfg(not(feature = "test-utils"))]
-        {
-            gate.lock().await
-        }
-    };
-    let _gate_guard = match wait_or_interrupt(gate_fut, ctx.create_interrupt_signal()).await {
+    let _gate_guard = match wait_or_interrupt(gate.lock(), ctx.create_interrupt_signal()).await {
         Ok(guard) => guard,
         Err(interrupt_kind) => return Err(interrupt_kind.into()),
     };
@@ -875,12 +844,15 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     let action = {
         let mut view = ctx.as_wasi_view();
         let entry = view.table().get(resource)?;
-        classify_reconnect_entry(entry, Some(&gate))
+        classify_reconnect_entry(entry, &gate)
     };
     match action {
         ReconnectEntryAction::Reconnect => {}
         ReconnectEntryAction::UseCurrentEntry => return Ok(Ok(())),
         ReconnectEntryAction::Fail(error) => return Ok(Err(error.to_error())),
+        ReconnectEntryAction::InconsistentReplayGate => {
+            return Err(inconsistent_replay_gate_error());
+        }
     }
 
     let info = {
@@ -892,13 +864,6 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         fresh.unwrap_or(info)
     };
 
-    #[cfg(feature = "test-utils")]
-    pool.emit_websocket_reconnect_decided_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Direct,
-    );
-
     // The read-only side-effect trap fires earlier: every caller of this helper
     // (`send` / `receive` / `receive-with-timeout` / `close`) goes through
     // `DurableCallSession::start` with `WriteRemote` first, which routes through
@@ -907,72 +872,23 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         Ok(request) => request,
         Err(err) => {
             let error = Error::ConnectionFailure(err.clone());
-            #[cfg(feature = "test-utils")]
-            ctx.websocket_connection_pool
-                .emit_websocket_reconnect_published_for_test(
-                    invocation_key,
-                    start,
-                    WebSocketReconnectPathForTest::Direct,
-                    WebSocketReconnectOutcomeForTest::Terminal,
-                );
-            mark_websocket_terminal(
+            mark_websocket_reconnect_failure_terminal(
                 ctx,
                 resource,
+                &gate,
                 TerminalWebSocketError::ConnectionFailure(err),
             )?;
             return Ok(Err(error));
         }
     };
 
-    #[cfg(feature = "test-utils")]
-    let pool_observer = pool.websocket_reconnect_wait_observer_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Direct,
-        WebSocketReconnectWaitForTest::Pool,
-    );
-    let acquire_fut = async {
-        #[cfg(feature = "test-utils")]
-        {
-            match pool_observer {
-                Some(observer) => observer.observe(pool.acquire()).await,
-                None => pool.acquire().await,
-            }
-        }
-        #[cfg(not(feature = "test-utils"))]
-        {
-            pool.acquire().await
-        }
-    };
-    let permit = match wait_or_interrupt(acquire_fut, ctx.create_interrupt_signal()).await {
+    let permit = match wait_or_interrupt(pool.acquire(), ctx.create_interrupt_signal()).await {
         Ok(permit) => permit?,
         Err(interrupt_kind) => return Err(interrupt_kind.into()),
     };
-    let interrupt_signal = ctx
-        .execution_status
-        .read()
-        .unwrap()
-        .create_await_interrupt_signal();
+    let interrupt_signal = ctx.create_interrupt_signal();
 
-    #[cfg(feature = "test-utils")]
-    let handshake_observer = pool.websocket_reconnect_handshake_observer_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Direct,
-    );
-    let connect_fut = async {
-        #[cfg(feature = "test-utils")]
-        {
-            match handshake_observer {
-                Some(observer) => observer.observe(connect_async(request)).await,
-                None => connect_async(request).await,
-            }
-        }
-        #[cfg(not(feature = "test-utils"))]
-        {
-            connect_async(request).await
-        }
-    };
+    let connect_fut = connect_async(request);
     pin_mut!(connect_fut);
     let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
         Either::Left((result, _)) => result,
@@ -987,16 +903,10 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         Err(err) => {
             let reason = err.to_string();
             let error = Error::ConnectionFailure(reason.clone());
-            #[cfg(feature = "test-utils")]
-            pool.emit_websocket_reconnect_published_for_test(
-                invocation_key,
-                start,
-                WebSocketReconnectPathForTest::Direct,
-                WebSocketReconnectOutcomeForTest::Terminal,
-            );
-            mark_websocket_terminal(
+            mark_websocket_reconnect_failure_terminal(
                 ctx,
                 resource,
+                &gate,
                 TerminalWebSocketError::ConnectionFailure(reason),
             )?;
             return Ok(Err(error));
@@ -1013,7 +923,7 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
     let published = {
         let mut view = ctx.as_wasi_view();
         let entry = view.table().get_mut(resource)?;
-        let action = classify_reconnect_entry(entry, Some(&gate));
+        let action = classify_reconnect_entry(entry, &gate);
         if matches!(action, ReconnectEntryAction::Reconnect) {
             *entry = new_entry;
         }
@@ -1023,14 +933,10 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
         ReconnectEntryAction::Reconnect => {}
         ReconnectEntryAction::UseCurrentEntry => return Ok(Ok(())),
         ReconnectEntryAction::Fail(error) => return Ok(Err(error.to_error())),
+        ReconnectEntryAction::InconsistentReplayGate => {
+            return Err(inconsistent_replay_gate_error());
+        }
     }
-    #[cfg(feature = "test-utils")]
-    pool.emit_websocket_reconnect_published_for_test(
-        invocation_key,
-        start,
-        WebSocketReconnectPathForTest::Direct,
-        WebSocketReconnectOutcomeForTest::Live,
-    );
 
     Ok(Ok(()))
 }
@@ -1042,11 +948,7 @@ async fn ensure_websocket_connection_live<Ctx: WorkerCtx>(
 async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerCtx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     resource: &Resource<WebSocketConnectionEntry>,
-    start: OplogIndex,
 ) -> anyhow::Result<Result<(), Error>> {
-    #[cfg(not(feature = "test-utils"))]
-    let _ = start;
-
     let rep = resource.rep();
 
     let (gate, info, pool) = match accessor.with(|mut access| {
@@ -1085,31 +987,8 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
     // At most one call at a time reconnects this handle: the gate is held from
     // here until the reconnect outcome is published, so concurrent calls queue
     // here instead of independently taking a second pool permit.
-    #[cfg(feature = "test-utils")]
-    let invocation_key =
-        accessor.with(|mut access| access.get().state.get_current_idempotency_key());
-    #[cfg(feature = "test-utils")]
-    let gate_observer = pool.websocket_reconnect_wait_observer_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Accessor,
-        WebSocketReconnectWaitForTest::Gate,
-    );
-    let gate_fut = async {
-        #[cfg(feature = "test-utils")]
-        {
-            match gate_observer {
-                Some(observer) => observer.observe(gate.lock()).await,
-                None => gate.lock().await,
-            }
-        }
-        #[cfg(not(feature = "test-utils"))]
-        {
-            gate.lock().await
-        }
-    };
     let _gate_guard = match wait_or_interrupt(
-        gate_fut,
+        gate.lock(),
         accessor.with(|mut access| access.get().create_interrupt_signal()),
     )
     .await
@@ -1125,12 +1004,15 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         let ctx = access.get();
         let mut view = ctx.as_wasi_view();
         let entry = view.table().get(resource)?;
-        Ok::<_, anyhow::Error>(classify_reconnect_entry(entry, Some(&gate)))
+        Ok::<_, anyhow::Error>(classify_reconnect_entry(entry, &gate))
     })?;
     match action {
         ReconnectEntryAction::Reconnect => {}
         ReconnectEntryAction::UseCurrentEntry => return Ok(Ok(())),
         ReconnectEntryAction::Fail(error) => return Ok(Err(error.to_error())),
+        ReconnectEntryAction::InconsistentReplayGate => {
+            return Err(inconsistent_replay_gate_error());
+        }
     }
 
     let info = {
@@ -1142,13 +1024,6 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         fresh.unwrap_or(info)
     };
 
-    #[cfg(feature = "test-utils")]
-    pool.emit_websocket_reconnect_decided_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Accessor,
-    );
-
     // The read-only side-effect trap fires earlier: every caller of this helper goes through
     // `DurableCallSession::start_access` with `WriteRemote` first, which routes through
     // `DurabilityHost::begin_durable_function` — the single central read-only guard.
@@ -1156,17 +1031,11 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         Ok(request) => request,
         Err(err) => {
             let error = Error::ConnectionFailure(err.clone());
-            #[cfg(feature = "test-utils")]
-            pool.emit_websocket_reconnect_published_for_test(
-                invocation_key,
-                start,
-                WebSocketReconnectPathForTest::Accessor,
-                WebSocketReconnectOutcomeForTest::Terminal,
-            );
             accessor.with(|mut access| {
-                mark_websocket_terminal(
+                mark_websocket_reconnect_failure_terminal(
                     access.get(),
                     resource,
+                    &gate,
                     TerminalWebSocketError::ConnectionFailure(err),
                 )
             })?;
@@ -1174,28 +1043,8 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         }
     };
 
-    #[cfg(feature = "test-utils")]
-    let pool_observer = pool.websocket_reconnect_wait_observer_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Accessor,
-        WebSocketReconnectWaitForTest::Pool,
-    );
-    let acquire_fut = async {
-        #[cfg(feature = "test-utils")]
-        {
-            match pool_observer {
-                Some(observer) => observer.observe(pool.acquire()).await,
-                None => pool.acquire().await,
-            }
-        }
-        #[cfg(not(feature = "test-utils"))]
-        {
-            pool.acquire().await
-        }
-    };
     let permit = match wait_or_interrupt(
-        acquire_fut,
+        pool.acquire(),
         accessor.with(|mut access| access.get().create_interrupt_signal()),
     )
     .await
@@ -1205,25 +1054,7 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
     };
     let interrupt_signal = accessor.with(|mut access| access.get().create_interrupt_signal());
 
-    #[cfg(feature = "test-utils")]
-    let handshake_observer = pool.websocket_reconnect_handshake_observer_for_test(
-        invocation_key.clone(),
-        start,
-        WebSocketReconnectPathForTest::Accessor,
-    );
-    let connect_fut = async {
-        #[cfg(feature = "test-utils")]
-        {
-            match handshake_observer {
-                Some(observer) => observer.observe(connect_async(request)).await,
-                None => connect_async(request).await,
-            }
-        }
-        #[cfg(not(feature = "test-utils"))]
-        {
-            connect_async(request).await
-        }
-    };
+    let connect_fut = connect_async(request);
     pin_mut!(connect_fut);
     let connect_result = match futures::future::select(connect_fut, interrupt_signal).await {
         Either::Left((result, _)) => result,
@@ -1238,17 +1069,11 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         Err(err) => {
             let reason = err.to_string();
             let error = Error::ConnectionFailure(reason.clone());
-            #[cfg(feature = "test-utils")]
-            pool.emit_websocket_reconnect_published_for_test(
-                invocation_key,
-                start,
-                WebSocketReconnectPathForTest::Accessor,
-                WebSocketReconnectOutcomeForTest::Terminal,
-            );
             accessor.with(|mut access| {
-                mark_websocket_terminal(
+                mark_websocket_reconnect_failure_terminal(
                     access.get(),
                     resource,
+                    &gate,
                     TerminalWebSocketError::ConnectionFailure(reason),
                 )
             })?;
@@ -1262,7 +1087,7 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         let ctx = access.get();
         let mut view = ctx.as_wasi_view();
         let entry = view.table().get_mut(resource)?;
-        let action = classify_reconnect_entry(entry, Some(&gate));
+        let action = classify_reconnect_entry(entry, &gate);
         if matches!(action, ReconnectEntryAction::Reconnect) {
             *entry = new_entry;
         }
@@ -1272,16 +1097,40 @@ async fn ensure_websocket_connection_live_access<U: Send + 'static, Ctx: WorkerC
         ReconnectEntryAction::UseCurrentEntry => return Ok(Ok(())),
         ReconnectEntryAction::Fail(error) => return Ok(Err(error.to_error())),
         ReconnectEntryAction::Reconnect => {}
+        ReconnectEntryAction::InconsistentReplayGate => {
+            return Err(inconsistent_replay_gate_error());
+        }
     }
-    #[cfg(feature = "test-utils")]
-    pool.emit_websocket_reconnect_published_for_test(
-        invocation_key,
-        start,
-        WebSocketReconnectPathForTest::Accessor,
-        WebSocketReconnectOutcomeForTest::Live,
-    );
 
     Ok(Ok(()))
+}
+
+/// Failure-path terminal publication for a reconnect attempt that holds
+/// `gate`: only terminally closes the handle if the entry still carries the
+/// same replay incarnation this call gated on. A replayed response may have
+/// terminally closed the handle, or a concurrent call may have published a
+/// live connection, while this attempt awaited its handshake — those
+/// publications own the entry's outcome, and this failure must not supersede
+/// them. The re-verification and the publication run in one synchronous store
+/// window, so no further change can interleave here.
+fn mark_websocket_reconnect_failure_terminal<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    resource: &Resource<WebSocketConnectionEntry>,
+    gate: &Arc<Mutex<()>>,
+    error: TerminalWebSocketError,
+) -> anyhow::Result<()> {
+    let still_reconnecting = {
+        let mut view = ctx.as_wasi_view();
+        let entry = view.table().get(resource)?;
+        matches!(
+            classify_reconnect_entry(entry, gate),
+            ReconnectEntryAction::Reconnect
+        )
+    };
+    if still_reconnecting {
+        mark_websocket_terminal(ctx, resource, error)?;
+    }
+    Ok(())
 }
 
 fn mark_websocket_terminal<Ctx: WorkerCtx>(
@@ -1456,32 +1305,25 @@ mod tests {
         let entry = WebSocketConnectionEntry::Replay(gate.clone());
 
         assert!(matches!(
-            classify_reconnect_entry(&entry, Some(&gate)),
+            classify_reconnect_entry(&entry, &gate),
             ReconnectEntryAction::Reconnect
         ));
     }
 
     #[test]
-    fn replay_entry_with_a_fresh_gate_uses_the_current_entry() {
-        // A fresh `Replay` entry means the handle was re-created (fresh replay
-        // after recovery) while this call queued on the old gate.
+    fn replay_entry_with_a_different_gate_is_an_inconsistent_replay_gate() {
+        // The guest cannot drop a handle while one of its calls queues on the
+        // gate (`send`/`receive`/`receive-with-timeout`/`close` borrow the
+        // resource), and reconstruction discards queued calls, so a call
+        // holding the gate can only ever see its own replay incarnation in the
+        // entry. A different incarnation is an invariant violation of the gate
+        // protocol, not a reconnect this call may perform.
         let queued_gate = Arc::new(Mutex::new(()));
         let entry = WebSocketConnectionEntry::Replay(Arc::new(Mutex::new(())));
 
         assert!(matches!(
-            classify_reconnect_entry(&entry, Some(&queued_gate)),
-            ReconnectEntryAction::UseCurrentEntry
-        ));
-    }
-
-    #[test]
-    fn replay_entry_without_a_gate_reconnects() {
-        // Gate-free classification is used only by defensive re-checks.
-        let entry = WebSocketConnectionEntry::Replay(Arc::new(Mutex::new(())));
-
-        assert!(matches!(
-            classify_reconnect_entry(&entry, None),
-            ReconnectEntryAction::Reconnect
+            classify_reconnect_entry(&entry, &queued_gate),
+            ReconnectEntryAction::InconsistentReplayGate
         ));
     }
 
@@ -1496,7 +1338,7 @@ mod tests {
             "peer refused".to_string(),
         ));
 
-        match classify_reconnect_entry(&entry, Some(&gate)) {
+        match classify_reconnect_entry(&entry, &gate) {
             ReconnectEntryAction::Fail(TerminalWebSocketError::ConnectionFailure(reason)) => {
                 assert_eq!(reason, "peer refused");
             }
