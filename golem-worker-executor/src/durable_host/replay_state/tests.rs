@@ -6195,6 +6195,59 @@ async fn atomic_suffix_rollback_closes_crossing_regions() {
 }
 
 #[test]
+async fn runtime_suffix_rollback_closes_completed_crossing_regions() {
+    let oplog = InMemoryOplog::new();
+    for entry in [
+        noop(),
+        begin_atomic_region(),
+        begin_atomic_region(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(2),
+        },
+        start_now(),
+        noop(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(3),
+        },
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    assert_eq!(
+        super::rollback::suffix_rollback_region(
+            &oplog,
+            &DeletedRegions::default(),
+            OplogIndex::from_u64(7),
+            Some(OplogIndex::from_u64(6)),
+        )
+        .await,
+        Some(OplogRegion::from_range(3..=7)),
+    );
+}
+
+#[test]
+async fn attempt_suffix_counts_foreign_work_but_not_abandoned_history() {
+    let rs = replay_state_over(vec![noop(), start_now(), noop()]).await;
+    assert!(rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    rs.register_replay_jump(vec![OplogRegion::from_range(3..=3)])
+        .await
+        .unwrap();
+    assert!(!rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 41)]).await;
+    assert!(rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        OplogEntry::jump(None, OplogRegion::from_range(3..=3)),
+    ])
+    .await;
+    assert!(!rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+}
+
+#[test]
 async fn atomic_suffix_rollback_distinguishes_delivery_from_lifecycle_hints() {
     let oplog = InMemoryOplog::new();
     for entry in [start_now(), begin_atomic_region(), delivered_for(1)] {

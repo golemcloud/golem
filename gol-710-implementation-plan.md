@@ -1,5 +1,60 @@
 # GOL-710 implementation plan
 
+## Final implementation and validation record
+
+The current implementation uses complete suffix rollback, not ownership-filtered deletion.
+The discussion below is historical where it conflicts with this record.
+
+1. **Status authority (committed):** the status actor owns repair through the acknowledged
+   horizon. Invocation completion can acknowledge its commit before projection repair; later
+   authoritative reads remain actor-ordered. The asserted non-detached getter is removed.
+2. **Atomic recovery (committed):** normalize incomplete atomic suffixes before Store
+   construction, including crossing atomic regions, dependent sibling work, and transaction
+   commits in the abandoned suffix. Keep the surviving Begin and reload startup metadata.
+3. **HTTP/transaction recovery (implemented locally):** accept a minimum cut on the Worker,
+   interrupt the resident generation, and commit the suffix cut only during replacement startup.
+   Serialize acceptance with invocation success publication. Preserve HTTP scope Starts; create
+   a fresh transaction Begin only when the retained scope has no visible attempt suffix.
+4. **Old writer boundary (implemented locally):** permanently seal deferred HTTP frame/custom
+   initiation recording admission and await accepted recordings before choosing the horizon.
+   Temporarily fence and drain durable-stream producer mutations through the cut; poison old
+   producer handles and reload against repaired history. Drive tool cancellation settlement in
+   the Store event loop, retaining the owner fence across secondary task errors.
+5. **Invocation-prefix optimization (implemented locally):** retain one Arc to the committed
+   status prefix preceding the current invocation. Reuse existing baseline validation and
+   persisted-checkpoint/full-fold fallback. Receipt gaps can miss this optimization; they do
+   not change correctness. No extra storage write, oplog entry, or foreground wait is added.
+   Existing snapshot-aligned checkpoints are unchanged.
+6. **Verification:** Oracle approved runtime recovery and the prefix optimization; their
+   required test execution is complete. Bug-finder found and reproduced a repeated-Jump regression;
+   the visible-empty-suffix correction fixed it. Subsequent runtime and final fence/prefix
+   bug-finder reviews reported no bugs. Final combined verification is recorded below.
+
+Current passing checks:
+
+- `CARGO_INCREMENTAL=0 cargo test -p golem-worker-executor --lib -- durable_host::replay_state::tests request_body::tests wrapped_replay_jump durable_stream_producer::tests tool::operation::tests worker::status::tests worker::state_actor::tests --report-time`
+  — 257 passed (`tmp/gol-710-final-combined-unit.log`).
+- `CARGO_INCREMENTAL=0 cargo test -p golem-worker-executor --lib -- worker::status::test state_actor::test tool::operation::test status_checkpointer::test --report-time`
+  — 173 passed (`tmp/gol-710-final-status-operation-unit.log`; overlaps the first suite).
+- The actual Store-owned secondary-Jump/cancellation regression passed, as did the retained
+  invocation-prefix test. Gated body recording and producer-fence tests passed.
+- `CARGO_INCREMENTAL=0 cargo test -p golem-worker-executor --test integration -- outgoing_http_ transactions:: incomplete_entity_atomic_rollback_recovers_dependent_sibling typed_tool_output_tcp_atomic_checkpoint_survives_executor_restart rust_tool_trap_retries_owner_without_replay_overflow --report-time`
+  — 34 passed on the final implementation (`tmp/gol-710-final-integration.log`). The HTTP body
+  regression forces a second executor reconstruction with a fresh invocation and exact counts.
+- `CARGO_INCREMENTAL=0 cargo test -p golem-worker-executor --test integration -- http_clock_ --report-time`
+  — all four original schedules passed (`tmp/gol-710-final-http-clock-matrix.log`): claim before
+  cut request, request before claim, already-issued sibling, and ordinary retained-Start control.
+  These assert no orphan End/Delivered references, a real second reconstruction, and no repeated
+  completed HTTP effect.
+- `cargo fmt --check` and `git diff --check` pass. Updated walkthrough paragraphs were rendered
+  in Chromium and inspected. Incremental compilation was disabled after its caches repeatedly
+  filled the 64 GB orb; ordinary test profile semantics were retained.
+
+Delivery: all implementation stages are complete and validated locally. Nothing has been pushed,
+merged, or deployed. Repository-wide CI remains the broader safety net; it was not run here.
+
+## Historical investigation and superseded alternatives
+
 **Current disposition: ownership-filtered replacement rejected.** Section 6 is
 an investigation record, not an executable approved plan. Observations from HTTP,
 streaming invocations, and entities can influence operations outside their ownership

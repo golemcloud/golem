@@ -24,6 +24,30 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
+/// Append producers may outlive their Store (for example an HTTP body held by a transport).
+/// Sealing a generation rejects new recordings while preserving every already accepted append.
+#[derive(Default)]
+pub(crate) struct RuntimeAppendTasks {
+    sealed: Mutex<bool>,
+    tasks: TaskTracker,
+}
+
+impl RuntimeAppendTasks {
+    pub(crate) fn register(&self) -> Option<TaskTrackerToken> {
+        let sealed = self.sealed.lock().unwrap();
+        (!*sealed).then(|| self.tasks.token())
+    }
+
+    pub(crate) async fn seal_and_wait(&self) {
+        {
+            let mut sealed = self.sealed.lock().unwrap();
+            *sealed = true;
+            self.tasks.close();
+        }
+        self.tasks.wait().await;
+    }
+}
+
 /// Task lifetime shared by every worker shell using the same open oplog generation.
 #[derive(Clone, Default)]
 pub struct WorkerTasks(Arc<Inner>, Option<Weak<dyn Send + Sync>>);

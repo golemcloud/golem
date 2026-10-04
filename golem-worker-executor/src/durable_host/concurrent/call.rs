@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::durable_host::replay_state::{ReplayStartClaimOutcome, StartClaim};
-use crate::durable_host::{ActiveAtomicRegion, commit_replay_jumps, register_atomic_region_call};
+use crate::durable_host::{ActiveAtomicRegion, register_atomic_region_call};
 use crate::workerctx::ReplayAdmissionStage;
 use golem_common::model::entity::{
     AgentEntity, EntityInvocationRequestIdentity, InvocationExecutionMode, OwnerRuntime,
@@ -2722,32 +2722,23 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             prepared.retry.durable_execution_state().assume_idempotence,
                         ) =>
                     {
-                        let pending = match prepared.begin_switch_to_live().await.map_err(
-                            |error| {
-                                (
-                                    error,
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                )
-                            },
-                        )? {
-                            BeginReplayToLive::ReplayResumed => {
-                                return Err((
-                                    WorkerExecutorError::runtime(
-                                        "replay target grew while an accessor batched write was settling",
-                                    ),
-                                    AccessStartCleanup {
-                                        atomic_lease: prepared.atomic_lease.clone(),
-                                    },
-                                ));
-                            }
-                            BeginReplayToLive::Pending(pending) => pending,
-                        };
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(),
-                            end: pending.replay_target().next(),
-                        };
+                        if !prepared.replay_state.has_attempt_suffix(begin_index).await {
+                            switch_prepared_access_to_live(prepared, store, get_ctx)
+                                .await
+                                .map_err(|error| {
+                                    (
+                                        error,
+                                        AccessStartCleanup {
+                                            atomic_lease: prepared.atomic_lease.clone(),
+                                        },
+                                    )
+                                })?;
+                            return Ok(AccessOpenedScope {
+                                begin_index,
+                                replay_handle: None,
+                                switched_to_live: true,
+                            });
+                        }
                         if let Some(hook) = store
                             .with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
                         {
@@ -2757,21 +2748,11 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             )
                             .await;
                         }
-                        commit_replay_jumps(
-                            &prepared.public_state.worker(),
-                            &prepared.replay_state,
-                            prepared.entity_parent_start_index,
-                            vec![deleted_region],
-                        )
-                        .await
-                        .map_err(|error| {
-                            (
-                                error,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
+                        prepared
+                            .public_state
+                            .worker()
+                            .request_runtime_jump(begin_index.next())
+                            .await;
                         if let Some(hook) = store
                             .with(|mut access| get_ctx(access.data_mut()).replay_admission_hook())
                         {
@@ -2781,27 +2762,14 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                             )
                             .await;
                         }
-                        finish_prepared_access_to_live(
-                            pending,
-                            prepared.primary_runtime,
-                            store,
-                            get_ctx,
-                        )
-                        .await
-                        .and_then(FinishReplayToLive::require_live)
-                        .map_err(|error| {
-                            (
-                                error,
-                                AccessStartCleanup {
-                                    atomic_lease: prepared.atomic_lease.clone(),
-                                },
-                            )
-                        })?;
-                        Ok(AccessOpenedScope {
-                            begin_index,
-                            replay_handle: None,
-                            switched_to_live: true,
-                        })
+                        Err((
+                            WorkerExecutorError::Interrupted {
+                                kind: InterruptKind::Jump,
+                            },
+                            AccessStartCleanup {
+                                atomic_lease: prepared.atomic_lease.clone(),
+                            },
+                        ))
                     }
                     OplogEntryLookupResult::NotFound { .. } => {
                         switch_prepared_access_to_live(prepared, store, get_ctx)
@@ -4772,9 +4740,19 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         .await?;
                     let partial_payload = upload_partial_response(&oplog, partial).await?;
                     let call = guard.call().expect("terminal guard is armed").clone();
+                    let cancelled = OplogEntry::Cancelled {
+                        timestamp: Timestamp::now_utc(),
+                        start_index: call.start_idx,
+                        partial: partial_payload,
+                        span_finished: call.span_finished.clone(),
+                    };
+                    call.notify_span_closed();
+                    // Reserve the cancellation in oplog order before spawning its waiter. A cut
+                    // accepted immediately afterward can then choose a horizon that includes it.
+                    let append = oplog.enqueue_add(cancelled);
                     let terminal = tokio::spawn(async move {
-                        call.append_cancelled_with_oplog(oplog, partial_payload)
-                            .await
+                        append.await?;
+                        Ok(())
                     });
                     // Cancellation terminal: never a discarded completion, no marker.
                     guard.cleanup_after_terminal(terminal, None);

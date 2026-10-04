@@ -1074,6 +1074,21 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   The complete suffix is abandoned, including sibling work influenced by raw output and any
   transaction commits within it. Crossing atomic regions move the cut backward; the surviving
   Begin resumes without another destructive Jump. Entity admission does not modify history.
+- Incomplete batched-write and remote-transaction recovery also requests a Worker-owned suffix
+  cut and returns a typed Jump instead of editing history inside the resident Store. Cut acceptance
+  is serialized with final invocation-success publication and survives cancellation of the
+  requester. Startup combines the earliest request with atomic normalization at a fixed committed
+  horizon; retained HTTP scope Starts resume, while an empty retained transaction scope records a
+  fresh Begin before running its replacement transaction.
+- Startup seals deferred append admission for the old runtime and waits for accepted HTTP frame
+  recordings and custom-call initiation coordinators. A transport-held old body cannot append
+  after sealing. Destructive cuts also fence and drain the durable-stream producer, then reload
+  it from repaired history. Tool failure election keeps driving Store tasks across secondary
+  task errors until cancellation selections and lane drainage finish.
+- The status actor retains the committed prefix preceding the current invocation in memory.
+  Detached repair tries it through ordinary baseline validation before the persisted checkpoint;
+  Jump/Revert invalidation or a missed receipt falls back without changing correctness. Retention
+  adds no storage write or foreground wait; existing snapshot checkpoints remain unchanged.
 
 Detailed mechanics, including scheduling and memory admission: `reference/tools.md`.
 

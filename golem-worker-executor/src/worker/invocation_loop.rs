@@ -585,7 +585,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     ?decision,
                     "Invocation queue loop interrupted after recovery"
                 );
-                if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                if !matches!(kind, InterruptKind::Restart) {
                     final_interrupt = Some(kind);
                 }
                 final_unload_request = Some(interrupt.unload_request);
@@ -763,7 +763,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     if let Some(interrupt) = self.pending_interrupt().await {
                         let kind = interrupt.kind;
                         let decision = interrupt.retry_decision();
-                        if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                        if !matches!(kind, InterruptKind::Restart) {
                             final_interrupt = Some(kind);
                         }
                         final_unload_request = Some(interrupt.unload_request);
@@ -981,7 +981,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                     let kind = interrupt.kind;
                                     let decision = interrupt.retry_decision();
                                     debug!(%agent_id, ?decision, "Invocation queue loop interrupted during delayed retry");
-                                    if !matches!(kind, InterruptKind::Restart | InterruptKind::Jump) {
+                                    if !matches!(kind, InterruptKind::Restart) {
                                         let current_idempotency_key = self
                                             .parent
                                             .get_last_known_status()
@@ -1856,7 +1856,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                         if let Some(interrupt) =
                             take_pending_interrupt(&self.interrupt_signal).await
                         {
-                            if interrupt.is_terminal() {
+                            if !matches!(interrupt.kind, InterruptKind::Restart) {
                                 final_interrupt = Some(interrupt.kind);
                             }
                             unload_request = Some(interrupt.unload_request);
@@ -3027,6 +3027,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     return CommandOutcome::BreakInnerLoop(RetryDecision::None);
                 }
                 if self.uses_streams
+                    && !matches!(kind, InterruptKind::Jump)
                     && let Err(error) = self
                         .parent
                         .fail_durable_streaming_session(idempotency_key, kind.to_string())

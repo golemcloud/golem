@@ -3491,6 +3491,29 @@ impl ReplayState {
             .store(!log_hashes.is_empty(), Ordering::Relaxed);
     }
 
+    /// Includes foreign work: another scope may have observed bytes from the incomplete attempt.
+    pub(crate) async fn has_attempt_suffix(&self, start: OplogIndex) -> bool {
+        !matches!(
+            self.lookup_oplog_entry_with_condition(
+                start,
+                |entry, _| !matches!(
+                    entry,
+                    OplogEntry::Jump { .. }
+                        | OplogEntry::Suspend { .. }
+                        | OplogEntry::Interrupted { .. }
+                        | OplogEntry::Restart { .. }
+                        | OplogEntry::Error { .. }
+                        | OplogEntry::RecoverySucceeded { .. }
+                ),
+                |_, _| true,
+            )
+            .await,
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: false
+            }
+        )
+    }
+
     pub async fn lookup_oplog_entry(
         &self,
         begin_idx: OplogIndex,

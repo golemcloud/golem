@@ -5006,6 +5006,30 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
     }
 }
 
+pub(crate) async fn fence_tool_operations_for_jump<Ctx: WorkerCtx>(
+    store: &mut wasmtime::StoreContextMut<'_, Ctx>,
+) -> Result<(), WorkerExecutorError> {
+    let operations = store.data().durable_ctx().owner_execution.tool_operations();
+    let worker = store.data().durable_ctx().public_state.worker();
+    let mut shard_lost = false;
+    operations.fence_for_jump(store, |error| {
+        let failure = error.root_cause().downcast_ref::<WorkerExecutorError>().cloned()
+            .or_else(|| error.root_cause().downcast_ref::<crate::services::oplog::OplogError>()
+                .cloned().map(WorkerExecutorError::from));
+        if let Some(failure) = failure {
+            shard_lost |= worker.retire_if_shard_lost(&failure);
+        }
+        tracing::debug!(error = %error, "Abandoned Store task failed while draining Jump fence");
+    }).await;
+    if shard_lost {
+        Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,

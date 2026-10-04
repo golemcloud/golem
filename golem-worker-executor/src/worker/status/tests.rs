@@ -3141,6 +3141,26 @@ async fn bounded_fold_excludes_later_jump_and_rejects_ahead_baseline() {
 }
 
 #[test]
+async fn invocation_prefix_repairs_jump_without_reading_persisted_checkpoint() {
+    let (test_case, invocation_prefix, _, final_expected) = jump_repair_fixture(AgentMode::Durable);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        final_expected.oplog_idx,
+    );
+    let repaired =
+        calculate_status_with_reader(&test_case, &reader, Some(invocation_prefix), || async {
+            panic!("a surviving invocation prefix must avoid the storage checkpoint read")
+        })
+        .await
+        .unwrap();
+    assert_eq!(repaired, Some(final_expected));
+    assert!(!test_case.read_starts.lock().unwrap().contains(&1));
+}
+
+#[test]
 async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
     let (test_case, checkpoint, stale_live, final_expected) =
         jump_repair_fixture(AgentMode::Durable);

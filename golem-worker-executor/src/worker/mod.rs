@@ -699,6 +699,10 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
     interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
+    /// Earliest oplog index requested for deletion by runtime recovery. The same lock is the
+    /// publication gate between accepting a cut and publishing a successful invocation.
+    pending_runtime_jump: Arc<Mutex<Option<OplogIndex>>>,
+    runtime_append_tasks: StdMutex<Arc<tasks::RuntimeAppendTasks>>,
     infrastructure_recovery_retry_config: RetryConfig,
     infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
@@ -2503,6 +2507,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::new(async_lock::Mutex::new(WorkerInterruptState::default())),
             interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
+            pending_runtime_jump: Arc::new(Mutex::new(None)),
+            runtime_append_tasks: StdMutex::new(Arc::default()),
             infrastructure_recovery_retry_config: deps.config().retry.clone(),
             infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
@@ -3869,6 +3875,44 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             false,
         )
         .await
+    }
+
+    /// Accepts a destructive replay cut without depending on the requesting Store future to
+    /// remain polled. The owner loop performs teardown and commits the cut before constructing the
+    /// replacement Store. Competing requests collapse to the earliest deleted index.
+    pub(crate) async fn request_runtime_jump(self: &Arc<Self>, first_deleted: OplogIndex) {
+        {
+            let mut pending = self.pending_runtime_jump.lock().await;
+            // Publish the stream fence in the same non-yielding section that accepts the cut. Its
+            // detached drain is joined by startup, so requester cancellation cannot reopen it.
+            let _recovery = self.durable_stream_producer.begin_recovery();
+            *pending = Some(pending.map_or(first_deleted, |current| current.min(first_deleted)));
+        }
+
+        let worker = Arc::clone(self);
+        tokio::spawn(async move {
+            // A delayed wakeup from an already committed proposal must not interrupt the
+            // replacement generation.
+            let pending = worker.pending_runtime_jump.lock().await;
+            if pending.is_some()
+                && worker
+                    .queue_interrupt(InterruptKind::Jump, false, UnloadReason::Restart, false)
+                    .await
+            {
+                worker.notify_queued_interrupt(InterruptKind::Jump).await;
+            }
+            drop(pending);
+        });
+    }
+
+    pub(crate) fn runtime_append_tasks(&self) -> Arc<tasks::RuntimeAppendTasks> {
+        self.runtime_append_tasks.lock().unwrap().clone()
+    }
+
+    pub(crate) async fn runtime_jump_publication_gate(
+        &self,
+    ) -> tokio::sync::MutexGuard<'_, Option<OplogIndex>> {
+        self.pending_runtime_jump.lock().await
     }
 
     async fn set_interrupting_internal(
@@ -11137,6 +11181,19 @@ impl RunningWorker {
             });
         };
 
+        // Transport-owned bodies and custom begin coordinators can outlive their Stores. Seal
+        // their old admission handle permanently before fixing the committed replay horizon.
+        parent.runtime_append_tasks().seal_and_wait().await;
+        *parent.runtime_append_tasks.lock().unwrap() = Arc::default();
+
+        if parent.durable_stream_producer.is_recovering() {
+            parent
+                .durable_stream_producer
+                .begin_recovery()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        }
+
         // Drain buffered work from the previous runtime before constructing its replacement.
         parent
             .commit_oplog_and_update_state(CommitLevel::Always)
@@ -11393,22 +11450,45 @@ impl RunningWorker {
             last_snapshot_source = Some(SnapshotSource::Automatic);
         }
 
-        if parent.agent_mode() == AgentMode::Durable
-            && let Some(region) = crate::durable_host::replay_state::atomic_rollback_region(
+        if parent.agent_mode() == AgentMode::Durable {
+            let mut pending_runtime_jump = parent.pending_runtime_jump.lock().await;
+            let region = crate::durable_host::replay_state::suffix_rollback_region(
                 parent.oplog.as_ref(),
                 &skipped_regions,
                 worker_metadata.last_known_status.oplog_idx,
+                *pending_runtime_jump,
             )
-            .await
-        {
-            parent
-                .add_and_commit_oplog(OplogEntry::jump(None, region))
-                .await
-                .map_err(WorkerExecutorError::from)?;
-            return Err(WorkerExecutorError::Interrupted {
-                kind: InterruptKind::Jump,
+            .await;
+            if let Some(region) = region {
+                if !parent.durable_stream_producer.is_recovering() {
+                    parent
+                        .durable_stream_producer
+                        .begin_recovery()
+                        .await
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?;
+                    // The first horizon was only a prediction. Commit every accepted stream
+                    // mutation, then reload metadata and plan the cut at the resulting fixed tip.
+                    parent
+                        .commit_oplog_and_update_state(CommitLevel::Always)
+                        .await
+                        .map_err(WorkerExecutorError::from)?;
+                    drop(pending_runtime_jump);
+                    return Box::pin(Self::create_instance(parent, concurrent_agent_permit)).await;
+                }
+                parent
+                    .add_and_commit_oplog(OplogEntry::jump(None, region))
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
+                *pending_runtime_jump = None;
+                return Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                }
+                .into());
             }
-            .into());
+            *pending_runtime_jump = None;
+            parent.durable_stream_producer.finish_recovery();
         }
 
         let filesystems = parent.active_agents().agent_filesystems();

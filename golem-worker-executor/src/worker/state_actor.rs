@@ -270,6 +270,9 @@ struct StatusState<Ctx: WorkerCtx> {
     /// The published worker status. Written only by this task (and during worker construction,
     /// before the actor exists); read lock-free everywhere else.
     last_known_status: Arc<ArcSwap<AgentStatusRecord>>,
+    /// Last committed prefix preceding the current invocation. Retained in memory only; repair
+    /// validates it through the same Jump/Revert checks as persisted checkpoint baselines.
+    invocation_start_status: arc_swap::ArcSwapOption<AgentStatusRecord>,
     /// Whether the published status is detached from the oplog (no longer incrementally
     /// foldable). Written only by this task; read lock-free elsewhere.
     detached: Arc<AtomicBool>,
@@ -322,6 +325,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             created_by,
             oplog,
             last_known_status,
+            invocation_start_status: arc_swap::ArcSwapOption::empty(),
             detached,
             metrics_status,
             status_flusher: status_flusher.clone(),
@@ -845,6 +849,12 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             .count() as u64;
 
         let old_status = self.last_known_status.load_full();
+        if new_entries.iter().any(|(index, entry)| {
+            *index > old_status.oplog_idx
+                && matches!(entry, OplogEntry::AgentInvocationStarted { .. })
+        }) {
+            self.invocation_start_status.store(Some(old_status.clone()));
+        }
         let (updated_status, receipt_gap, horizon) = fold_committed_status(
             &self.deps,
             &self.owned_agent_id,
@@ -869,7 +879,11 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     Some(self.oplog.as_ref()),
                     horizon,
                 );
-                let status = calculate_status_with_reader(&self.deps, &reader, None, || async {
+                let baseline = self
+                    .invocation_start_status
+                    .load_full()
+                    .map(|status| status.as_ref().clone());
+                let status = calculate_status_with_reader(&self.deps, &reader, baseline, || async {
                     self.deps.worker_service()
                         .read_status_checkpoint(&self.owned_agent_id, self.fingerprint, self.agent_mode)
                         .await

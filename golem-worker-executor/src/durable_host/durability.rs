@@ -1929,6 +1929,11 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
         };
 
         let Some(claimed) = claimed else {
+            let recording = worker.runtime_append_tasks().register().ok_or(
+                WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                },
+            )?;
             let (verdict_tx, verdict_rx) = oneshot::channel();
             let lifecycle = CustomBeginLifecycle::new(verdict_tx, child_initiation, cleanup_sink);
             let coordinator_lifecycle = lifecycle.clone();
@@ -1960,6 +1965,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> durability::HostWithStore<U>
             let cancellation_worker =
                 accessor.with(|mut access| access.get().public_state.worker());
             let coordinator = tokio::spawn(async move {
+                let _recording = recording;
                 let start_result = start
                     .await
                     .map_err(|err| {

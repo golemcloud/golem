@@ -152,7 +152,9 @@ mod rollback;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
+#[cfg(test)]
 pub(crate) use rollback::atomic_rollback_region;
+pub(crate) use rollback::suffix_rollback_region;
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {

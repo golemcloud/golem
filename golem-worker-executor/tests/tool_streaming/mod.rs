@@ -2003,7 +2003,6 @@ async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, 
     });
     (port, task, requests)
 }
-<<<<<<< HEAD
 
 struct WebFetchHttpServers {
     source_port: u16,

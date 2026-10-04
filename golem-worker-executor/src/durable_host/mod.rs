@@ -3373,36 +3373,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             if matches!(recovery_failure, OplogEntryLookupResult::Found { .. }) {
                                 scope_replay_handle = Some(scope_handle);
                                 Ok(begin_index)
-                            } else if self.state.assume_idempotence {
-                                let pending = match self.begin_switch_to_live().await? {
-                                    BeginReplayToLive::ReplayResumed => {
-                                        return Err(WorkerExecutorError::runtime(
-                                            "replay target grew while a batched write was settling",
-                                        ));
-                                    }
-                                    BeginReplayToLive::Pending(pending) => pending,
-                                };
-
-                                // But this is not enough, because if the retried batched write operation succeeds,
-                                // and later we replay it, we need to skip the first attempt and only replay the second.
-                                // Se we add a Jump entry to the oplog that registers a deleted region.
-                                let deleted_region = OplogRegion {
-                                    start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
-                                    end: pending.replay_target().next(), // skipping the Jump entry too
-                                };
-                                commit_replay_jumps(
-                                    &self.public_state.worker(),
-                                    &self.state.replay_state,
-                                    self.entity_parent_start_index(),
-                                    vec![deleted_region],
-                                )
-                                .await?;
-
-                                self.finish_switch_to_live(pending).await?.require_live()?;
-                                // Switched to live and re-running the body: the scope `End` will be
-                                // appended live by `end_function`, so do not store the (now incomplete)
-                                // replay handle.
+                            } else if self.state.assume_idempotence
+                                && !self
+                                    .state
+                                    .replay_state
+                                    .has_attempt_suffix(begin_index)
+                                    .await
+                            {
+                                self.switch_to_live().await?;
                                 Ok(begin_index)
+                            } else if self.state.assume_idempotence {
+                                // Destructive recovery belongs to the worker generation boundary.
+                                // Keep the scope Start, abandon the complete suffix, and discard
+                                // this Store before any sibling can publish against erased history.
+                                self.public_state
+                                    .worker()
+                                    .request_runtime_jump(begin_index.next())
+                                    .await;
+                                Err(WorkerExecutorError::Interrupted {
+                                    kind: InterruptKind::Jump,
+                                })
                             } else {
                                 // Recovery retains the original HTTP scope so method-level repair
                                 // can decide whether resending is safe. Without Recovery, an
@@ -3778,6 +3768,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // reading the scope `End` positionally. The handle is stored only when the transaction
         // continues replaying (not when recovery restarts it live).
         let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
+        if !self
+            .state
+            .replay_state
+            .has_attempt_suffix(scope_start_index)
+            .await
+        {
+            // A runtime cut intentionally preserves the transaction scope Start but removes its
+            // Begin marker. Only that precisely empty retained scope starts a replacement
+            // transaction; a malformed recorded Begin is still rejected below.
+            self.switch_to_live().await?;
+            let (tx_id, tx) = handler.create_new().await?;
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
+                    tx_id,
+                    Some(scope_start_index),
+                ))
+                .await
+                .map_err(WorkerExecutorError::from)?;
+            self.state
+                .push_durable_scope(scope_start_index, DurableScopeKind::Transaction, None);
+            self.state.current_retry_point = scope_start_index;
+            return Ok((scope_start_index, tx));
+        }
         let (begin_index, begin_entry) =
             crate::get_oplog_entry!(self, OplogEntry::BeginRemoteTransaction)?;
         // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
@@ -3881,58 +3895,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
 
         let (result, tx) = if should_restart {
-            let pending = match self.begin_switch_to_live().await? {
-                BeginReplayToLive::ReplayResumed => {
-                    return Err(WorkerExecutorError::runtime(
-                        "replay target grew while a remote transaction was settling",
-                    )
-                    .into());
-                }
-                BeginReplayToLive::Pending(pending) => pending,
-            };
-
             if !assume_idempotence {
-                self.finish_switch_to_live(pending).await?.require_live()?;
+                self.switch_to_live().await?;
                 Err(WorkerExecutorError::runtime(
                     "Non-idempotent remote write operation was not completed, cannot retry",
                 ))
             } else {
-                // But this is not enough, because if the retried batched write operation succeeds,
-                // and later we replay it, we need to skip the first attempt and only replay the second.
-                // Se we add a Jump entry to the oplog that registers a deleted region.
-                let deleted_region = OplogRegion {
-                    // Delete the previous `BeginRemoteTransaction` entry (and everything after),
-                    // because we'll get a new tx id. The transaction scope `Start` lives at
-                    // `scope_start_index < begin_index`, so it is preserved.
-                    start: begin_index,
-                    end: pending.replay_target().next(), // skipping the Jump entry too
-                };
-                commit_replay_jumps(
-                    &self.public_state.worker(),
-                    &self.state.replay_state,
-                    self.entity_parent_start_index(),
-                    vec![deleted_region],
-                )
-                .await?;
-
-                self.finish_switch_to_live(pending).await?.require_live()?;
-
-                let (tx_id, tx) = handler.create_new().await?;
-                // The restarted transaction runs its statements once this returns, so a
-                // refused begin has to stop it; `tx` is dropped unused.
                 self.public_state
                     .worker()
-                    .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
-                        tx_id,
-                        Some(original_begin_index),
-                    ))
-                    .await
-                    .map_err(WorkerExecutorError::from)?;
-
-                // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
-                // be appended live by the transaction terminal, so do not store the (now
-                // incomplete) replay handle.
-                Ok((original_begin_index, tx))
+                    .request_runtime_jump(begin_index)
+                    .await;
+                return Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                }
+                .into());
             }
         } else {
             scope_replay_handle = Some(scope_handle);
@@ -5565,6 +5541,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             return RetryDecision::None;
         }
 
+        // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
+        // ordinary semantic dropped-call close, which could await replay scopes or append
+        // terminals into the suffix the accepted cut is about to erase.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
+            return RetryDecision::Immediate;
+        }
+
         if self.state.is_live()
             && !self.state.snapshotting_mode
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
@@ -5593,11 +5576,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
                 _ => {}
             }
-        }
-
-        // Jump reconstructs the runtime immediately without charging an application retry.
-        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
-            return RetryDecision::Immediate;
         }
 
         let latest_status_before = self.public_state.worker().get_last_known_status().await;
@@ -5835,6 +5813,22 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         if is_live && !self.state.durability_is_suppressed() {
+            if self.state.entity_execution_mode.is_none() {
+                self.state
+                    .replay_state
+                    .release_retained_starts_at_live_invocation_end()
+                    .await?;
+            }
+            // Serialize the final live publication with destructive-cut acceptance. Everything
+            // that can await entity or dropped-call settlement has already happened above; keep
+            // this gate through Finished commit and completion publication.
+            let worker = self.public_state.worker();
+            let runtime_jump_gate = worker.runtime_jump_publication_gate().await;
+            if runtime_jump_gate.is_some() {
+                return Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                });
+            }
             let component_revision = output.component_revision.ok_or_else(|| {
                 WorkerExecutorError::runtime(
                     "component_revision missing in AgentInvocationOutput during replay",
@@ -5867,13 +5861,6 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 AgentInvocationResult::AgentMethod { .. } => Some(full_function_name.to_string()),
                 _ => None,
             };
-
-            if self.state.entity_execution_mode.is_none() {
-                self.state
-                    .replay_state
-                    .release_retained_starts_at_live_invocation_end()
-                    .await?;
-            }
 
             let finished_index = self
                 .public_state
@@ -5938,6 +5925,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     is_live,
                 );
             }
+            drop(runtime_jump_gate);
         }
         debug!("Function {full_function_name} finished");
 
@@ -7476,6 +7464,7 @@ impl FinishReplayToLive {
 
 #[must_use = "replay cleanup must finish before live attachment admission is finalized"]
 pub(crate) struct PendingReplayToLive {
+    #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
     replay_target: OplogIndex,
     role: ReplayToLiveRole,
     replaying_incomplete_entity: bool,
@@ -7485,6 +7474,7 @@ pub(crate) struct PendingReplayToLive {
 }
 
 impl PendingReplayToLive {
+    #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
     pub(crate) fn replay_target(&self) -> OplogIndex {
         self.replay_target
     }
