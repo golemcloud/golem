@@ -1659,7 +1659,7 @@ fn terminal_guard_distinguishes_guest_drop_from_owner_teardown() {
         let probe = fenced.clone();
         let guard = AccessTerminalGuard::<Cancellable>::new(
             call,
-            Some(tx),
+            Some(tx.clone()),
             None,
             Arc::new(move || probe.load(Ordering::Acquire)),
         );

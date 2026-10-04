@@ -37,6 +37,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::retry_policy::RetryProperties;
 use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -55,6 +56,7 @@ fn classify_rdbms_error(error: &RdbmsError) -> HostFailureKind {
         RdbmsError::QueryExecutionFailure(_) => HostFailureKind::Transient,
         RdbmsError::QueryParameterFailure(_) => HostFailureKind::Permanent,
         RdbmsError::QueryResponseFailure(_) => HostFailureKind::Permanent,
+        RdbmsError::RuntimeJump => HostFailureKind::Transient,
         RdbmsError::Other(_) => HostFailureKind::Transient,
     }
 }
@@ -304,6 +306,10 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
+        Err(RdbmsError::RuntimeJump) => Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        }
+        .into()),
         Err(error) => Ok(Err(error.into())),
     }
 }

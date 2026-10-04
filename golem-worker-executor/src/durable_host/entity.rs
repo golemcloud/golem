@@ -674,9 +674,8 @@ impl EntityInvocationDurability {
     }
 
     /// Converts a replayed incomplete Start into its live-repair handle before a body exists.
-    /// Filesystem-capable tools can remain in input staging while the primary owner replays later
-    /// sibling calls, so retaining their historical reconstruction fence until body dispatch would
-    /// deadlock the primary's transition to the live tail.
+    /// An empty replay-visible entity scope must release its historical reconstruction fence before
+    /// dispatch, so the primary owner can transition to the live tail.
     pub(crate) async fn enter_incomplete_live_repair_before_body_access<T, D, Ctx>(
         self,
         store: &Accessor<T, D>,

@@ -299,6 +299,7 @@ impl From<crate::services::rdbms::RdbmsError> for Error {
             crate::services::rdbms::RdbmsError::QueryResponseFailure(v) => {
                 Self::QueryResponseFailure(v)
             }
+            crate::services::rdbms::RdbmsError::RuntimeJump => Self::Other("RuntimeJump".into()),
             crate::services::rdbms::RdbmsError::Other(v) => Self::Other(v),
         }
     }

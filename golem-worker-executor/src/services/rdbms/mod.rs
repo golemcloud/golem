@@ -317,6 +317,7 @@ pub enum RdbmsError {
     QueryParameterFailure(String),
     QueryExecutionFailure(String),
     QueryResponseFailure(String),
+    RuntimeJump,
     Other(String),
 }
 
@@ -345,6 +346,7 @@ impl Display for RdbmsError {
             RdbmsError::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {msg}"),
             RdbmsError::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {msg}"),
             RdbmsError::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {msg}"),
+            RdbmsError::RuntimeJump => write!(f, "RuntimeJump"),
             RdbmsError::Other(msg) => write!(f, "Other: {msg}"),
         }
     }
@@ -363,6 +365,7 @@ impl From<RdbmsError> for SerializableRdbmsError {
             RdbmsError::QueryResponseFailure(msg) => {
                 SerializableRdbmsError::QueryResponseFailure(msg)
             }
+            RdbmsError::RuntimeJump => SerializableRdbmsError::Other("RuntimeJump".to_string()),
             RdbmsError::Other(msg) => SerializableRdbmsError::Other(msg),
         }
     }
@@ -388,7 +391,16 @@ impl From<SerializableRdbmsError> for RdbmsError {
 
 impl From<WorkerExecutorError> for RdbmsError {
     fn from(value: WorkerExecutorError) -> Self {
-        Self::other_response_failure(value)
+        if matches!(
+            value,
+            WorkerExecutorError::Interrupted {
+                kind: golem_service_base::error::worker_executor::InterruptKind::Jump
+            }
+        ) {
+            Self::RuntimeJump
+        } else {
+            Self::other_response_failure(value)
+        }
     }
 }
 

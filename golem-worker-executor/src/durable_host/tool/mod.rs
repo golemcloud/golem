@@ -3513,24 +3513,19 @@ where
         )
         .await;
     }
-    let pre_body_live_admission_cancelled =
-        if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
-            match durability
-                .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
-                .await?
-            {
-                IncompleteLiveRepairBeforeBody::Ready(ready) => {
-                    durability = ready;
-                    false
-                }
-                IncompleteLiveRepairBeforeBody::Cancelled(cancelled) => {
-                    durability = cancelled;
-                    true
-                }
-            }
-        } else {
+    let pre_body_live_admission_cancelled = match durability
+        .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
+        .await?
+    {
+        IncompleteLiveRepairBeforeBody::Ready(ready) => {
+            durability = ready;
             false
-        };
+        }
+        IncompleteLiveRepairBeforeBody::Cancelled(cancelled) => {
+            durability = cancelled;
+            true
+        }
+    };
     let execution_mode = durability.scope().mode();
     let discard_stdout = call_mode == EntityCallMode::FireAndForget
         && matches!(
