@@ -44,13 +44,6 @@ jobs:
       - name: Build benchmark test components
         run: cargo make build-benchmark-components
 
-      - name: Checkout benchmark results repository
-        uses: actions/checkout@v5
-        with:
-          repository: 'golemcloud/benchmark-results'
-          token: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
-          path: benchmark-results
-
       # The suite exits non-zero when any benchmark recorded failed attempts,
       # after the results JSON has been written. The results are committed
       # either way; the last step turns the recorded failures into a red run.
@@ -74,66 +67,12 @@ jobs:
 
       - name: Validate and publish results
         env:
-          RESULTS_PATH: ${{ runner.temp }}/github-actions-benchmark-results.json
-          ANALYSIS_PATH: ${{ runner.temp }}/github-actions-benchmark-analysis.json
-        run: |
-          set -euo pipefail
-          cd benchmark-results
-          git config user.name  'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-
-          published=false
-          for attempt in 1 2 3; do
-            git fetch origin master
-            git reset --hard origin/master
-            node scripts/append-results.mjs "$RESULTS_PATH"
-
-            if git diff --quiet -- public/data/index.json; then
-              echo "Benchmark run is already published at $(git rev-parse HEAD)"
-              published=true
-              break
-            fi
-
-            npm ci
-            npm test
-            npm run build
-            git add public/data
-
-            mapfile -t staged_files < <(git diff --cached --name-only)
-            if ((${#staged_files[@]} != 2)) ||
-              [[ ! " ${staged_files[*]} " =~ " public/data/index.json " ]]; then
-              echo "Publisher attempted to commit unexpected files" >&2
-              exit 1
-            fi
-            for staged_file in "${staged_files[@]}"; do
-              if [[ "$staged_file" != "public/data/index.json" &&
-                ! "$staged_file" =~ ^public/data/runs/[0-9a-f]{24}\.json$ ]]; then
-                echo "Publisher attempted to commit unexpected file $staged_file" >&2
-                exit 1
-              fi
-            done
-
-            git commit -m "Append GitHub Actions benchmark results for ${GITHUB_SHA:0:12}"
-            if git push origin HEAD:master; then
-              published=true
-              break
-            fi
-            echo "Publish attempt $attempt lost a race; retrying from current master" >&2
-          done
-
-          if [[ "$published" != true ]]; then
-            echo "Failed to publish benchmark results after three attempts" >&2
-            exit 1
-          fi
-
-          run_timestamp="$(jq -er '.runs | select(length == 1) | .[0].timestamp' "$RESULTS_PATH")"
-          node scripts/analyze-regressions.mjs \
-            public/data/index.json \
-            --runner github-actions-blacksmith-32vcpu \
-            --suite CI \
-            --timestamp "$run_timestamp" \
-            --output "$ANALYSIS_PATH"
-          jq -e '.status != "run-not-found" and .status != "no-runs"' "$ANALYSIS_PATH" >/dev/null
+          BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
+          GOLEM_BENCHMARK_RESULTS_INPUT: ${{ runner.temp }}/github-actions-benchmark-results.json
+          GOLEM_BENCHMARK_RESULTS_ANALYSIS: ${{ runner.temp }}/github-actions-benchmark-analysis.json
+          GOLEM_BENCHMARK_PUBLISH_DIR: ${{ runner.temp }}/benchmark-results-publish
+          GOLEM_BENCHMARK_RUNNER_ID: github-actions-blacksmith-32vcpu
+        run: cargo make publish-benchmark-results
 
       - name: Upload benchmark artifacts
         if: always()
