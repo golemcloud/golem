@@ -23,7 +23,6 @@ use crate::durable_host::suspendable_wait::{
 };
 use crate::durable_host::{
     ActiveAtomicRegion, BeginReplayToLive, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
-    commit_replay_jumps,
 };
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
@@ -848,21 +847,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             }
                             BeginReplayToLive::Pending(pending) => pending,
                         };
-
-                        // But this is not enough, because if the retried transactional block succeeds,
-                        // and later we replay it, we need to skip the first attempt and only replay the second.
-                        // Se we add a Jump entry to the oplog that registers a deleted region.
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                            end: pending.replay_target().next(), // skipping the Jump entry too
-                        };
-                        commit_replay_jumps(
-                            &self.public_state.worker(),
-                            &self.state.replay_state,
-                            None,
-                            vec![deleted_region],
-                        )
-                        .await?;
 
                         self.finish_switch_to_live(pending).await?.require_live()?;
                     }

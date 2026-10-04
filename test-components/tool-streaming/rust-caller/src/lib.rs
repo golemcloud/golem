@@ -464,6 +464,7 @@ pub trait ToolStreamingCaller {
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
     async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
     async fn clean_stdout_then_trap(&self);
+    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String>;
     async fn trap_with_blocked_sibling(&self);
     async fn drop_trapping_result(&self);
     async fn fire_and_forget_trap(&self);
@@ -652,6 +653,12 @@ fn decode_middleware_probe_result(result: tool_host::InvocationResult) -> String
         decode_typed_schema_value_owned(result.result.expect("middleware probe returns a result"))
             .expect("decode middleware probe result");
     String::from_value(value.value()).expect("middleware probe result is a string")
+}
+
+fn decode_no_stream_result(result: tool_host::InvocationResult) -> String {
+    let value = decode_typed_schema_value_owned(result.result.expect("no-stream returns a result"))
+        .expect("decode no-stream result");
+    String::from_value(value.value()).expect("no-stream result is a string")
 }
 
 fn decode_dynamic_mcp_result(result: tool_host::InvocationResult) -> String {
@@ -2973,6 +2980,35 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         raw_result(&result)
             .await
             .expect("owner trap must abort this result observation");
+    }
+
+    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let changing = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("changing-stdout-in-atomic-region"),
+            Some(raw_stdin(Vec::new())),
+            Some(stdout_target),
+            None,
+        );
+        let observed = String::from_utf8(read_all(stdout).await).expect("stdout is UTF-8");
+        let sibling = rpc.async_invoke_and_await(
+            &["no-stream".to_string()],
+            raw_no_stream_input(&observed),
+            None,
+            None,
+            None,
+        );
+        let sibling = decode_no_stream_result(
+            raw_result(&sibling)
+                .await
+                .expect("dependent sibling invocation succeeds"),
+        );
+        raw_result(&changing)
+            .await
+            .expect("changing invocation completes after recovery");
+        vec![observed, sibling]
     }
 
     async fn trap_with_blocked_sibling(&self) {

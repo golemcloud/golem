@@ -1088,12 +1088,37 @@ impl Streaming for StreamingImpl {
             wait_at_crash_checkpoint(&(), "provider-clean-stdout-before-trap").await;
             panic!("deterministic streaming tool trap after clean stdout");
         }
+        if mode == "changing-stdout-in-atomic-region" {
+            golem_rust::atomically_async(|| async {
+                let first_attempt = is_first_trap_attempt().await;
+                stdout
+                    .write(if first_attempt {
+                        b"first".to_vec()
+                    } else {
+                        b"second".to_vec()
+                    })
+                    .await
+                    .expect("publish attempt-dependent stdout");
+                stdout
+                    .finish()
+                    .await
+                    .expect("finish attempt-dependent stdout");
+                if first_attempt {
+                    wait_at_crash_checkpoint(&(), "provider-changing-stdout").await;
+                }
+            })
+            .await;
+            return Ok(summary);
+        }
 
         let _ = stdout.finish().await;
         Ok(summary)
     }
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError> {
+        if value == "first" || value == "second" {
+            let _ = golem_rust::get_oplog_index();
+        }
         if value == "hold-attempt-identity" {
             wait_at_crash_checkpoint(&value, "attempt-identity-accepted").await;
         }

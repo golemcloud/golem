@@ -11393,6 +11393,24 @@ impl RunningWorker {
             last_snapshot_source = Some(SnapshotSource::Automatic);
         }
 
+        if parent.agent_mode() == AgentMode::Durable
+            && let Some(region) = crate::durable_host::replay_state::atomic_rollback_region(
+                parent.oplog.as_ref(),
+                &skipped_regions,
+                worker_metadata.last_known_status.oplog_idx,
+            )
+            .await
+        {
+            parent
+                .add_and_commit_oplog(OplogEntry::jump(None, region))
+                .await
+                .map_err(WorkerExecutorError::from)?;
+            return Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Jump,
+            }
+            .into());
+        }
+
         let filesystems = parent.active_agents().agent_filesystems();
         let initial_files = parent
             .parsed_agent_id

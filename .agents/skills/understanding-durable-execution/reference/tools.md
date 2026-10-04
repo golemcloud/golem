@@ -269,9 +269,18 @@ pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
 
-For an incomplete entity, `entity.rs` finds that entity's abandoned atomic regions, commits their
-`Jump`s, and registers the rollback before its body or descendants can claim history. The rollback
-is scoped to those regions; unrelated ownership entries remain available to their owners.
+Before constructing any Store, `RunningWorker::create_instance` normalizes incomplete atomic
+regions against a fixed committed horizon and the effective snapshot/skipped prefix. It preserves
+the earliest unmatched Begin and deletes the complete suffix, moving the boundary backward across
+crossing atomic regions whose Ends would otherwise disappear. It commits one Jump and restarts
+initialization to reload status and snapshot selection. No entity body claims history before this
+cut. Entity admission only classifies the surviving Start as completed or incomplete.
+
+Ownership is not causal isolation: raw stdout can influence sibling work before the producer's
+atomic region completes. That sibling's records must disappear with the abandoned suffix too.
+Transaction commits within the suffix may execute again; rollback does not undo external effects.
+Existing durable RPC and peer idempotency contracts still apply. Recovery/lifecycle markers alone
+do not trigger another Jump, but stream data and completion markers do count as new attempt work.
 
 `AcceptedToolCall::attachment_counterparty` separates two attachment protocols. A guest
 counterparty shares the body's causal lane: filesystem-capable guest tools retain EOF stdin

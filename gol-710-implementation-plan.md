@@ -1,6 +1,100 @@
 # GOL-710 implementation plan
 
-2026-10-02. **Implementation plan — steps 5–6 reopened at design review.** The original final review
+**Current disposition: ownership-filtered replacement rejected.** Section 6 is
+an investigation record, not an executable approved plan. Observations from HTTP,
+streaming invocations, and entities can influence operations outside their ownership
+tree. The user rejected extending ownership filtering as a replacement for deleted
+regions. The uncommitted behavioral draft must not ship. This does not invalidate
+the separately approved status-actor correction in steps 1–4.
+
+Review of existing entity rollback found a concrete missing isolation invariant:
+filesystem-incapable tools can publish raw stdout before their entity terminal or
+an enclosing atomic block ends. `HostToolOutputWriterWithStore::write` writes to
+an in-memory attachment; `create_output` exposes that attachment directly, without
+a durable consumer journal. Existing `clean_stdout_then_trap` coverage proves
+early observation, not atomic rollback safety. Recovery can delete the entity's
+input observation while retaining caller/sibling work derived from its output.
+The Oracle independently confirmed the code path. The focused experiment below
+now reproduces recovery blocking with a foreign positional entry.
+
+Required focused experiment: an incapable entity reads a changing value inside an
+atomic block, publishes it on raw stdout, and parks before atomic/entity completion.
+The caller observes it and completes a sibling invocation whose input contains that
+value. Crash and reconstruct after both are persisted. Check whether entity-local
+rollback regenerates different bytes against the retained sibling invocation.
+Ordinary result publication and capable-tool guest-output staging do not cover this
+path. Durable stream journals are a separate mechanism and must not be assumed to
+protect raw attachments. No new general recovery design is approved by this review.
+
+### Entity causal rollback experiment and remaining decision
+
+The rejected HTTP/transaction ownership draft has been removed. The atomic suffix
+replacement is now implemented locally on top of the approved status-actor fix.
+
+`incomplete_entity_atomic_rollback_recovers_dependent_sibling` runs a provider
+atomic block that reads `first`, publishes raw stdout, and parks before completion.
+The caller completes a sibling from those bytes before the crash. Recovery reads
+`second`. The pure-echo sibling control passes both recovery and an actual executor
+drop/restart followed by `replay_probe`, with two external reads total. An idle
+`simulated_crash` is not a reconstruction: the lifecycle intentionally ignores it.
+
+Adding `get_oplog_index()` to the sibling makes recovery time out. In the observed
+history, the changing entity starts at 12 with atomic Begin 15; sibling Start 35,
+NoOp 44 and End 46 remain outside the entity-owned Jump masks. The provider retries
+and reads `second`, but the old sibling's positional obligation blocks recovery.
+This establishes blocking, not an observed wrong result or explicit divergence
+error. The weaker control can drain and later discard unclaimed closed Start/End
+records; it therefore does not establish causal consistency.
+
+Commands/evidence:
+
+- Build/copy the tool-streaming fixtures through `golem-cli --preset release`.
+- `cargo test -p golem-worker-executor --test integration -- incomplete_entity_atomic_rollback_recovers_dependent_sibling --report-time --nocapture`
+- Pure-echo real-restart control: `tmp/gol-710-entity-real-restart.log`, 1 passed.
+- Positional regression: `tmp/gol-710-entity-noop.log`, 1 failed after the 60-second
+  recovery deadline; external reads = 2. This is an intentional red regression,
+  captured before the fix. Oracle approved the regression; bug-finder reported no
+  bugs in the test/fixtures.
+
+The implemented atomic stage moves suffix normalization before Store construction,
+removes entity admission-time masking and the primary Begin-time destructive Jump,
+and reloads startup metadata after committing the cut. Oracle approved the planner
+and integrated stage; bug-finder reported no bugs in both stages. Verification:
+
+- `cargo test -p golem-worker-executor --lib -- durable_host::replay_state::tests --report-time`:
+  166 passed (`tmp/gol-710-atomic-integration-unit.log`).
+- The formerly failing causal guest regression: 1 passed, including actual executor
+  restart, external reads remaining at two, and a Jump covering the old sibling's
+  Start through End (`tmp/gol-710-atomic-integration-guest.log`).
+- Sync/async primary atomic tests, typed tool atomic restart, and owner trap retry:
+  4 passed (`tmp/gol-710-atomic-regressions.log`).
+- Scoped Rust formatting and `git diff --check` pass. The changed walkthrough
+  paragraph was rendered and inspected; durable-execution skill text is aligned.
+
+This approval does not close HTTP/transaction runtime-Jump repair, invocation-start
+status baseline optimization, or final combined verification. Nothing is pushed.
+
+The reviewed direction is to normalize ordinary incomplete atomic regions before
+constructing any Store or admitting replay claims. After old-generation terminal
+writers are drained, use a fixed committed horizon H; find the earliest unmatched
+Begin B; move B backward to a fixed point across earlier atomic regions whose Ends
+would be erased; commit one suffix Jump `[B.next(), H]`; reload authoritative status
+and snapshot selection before instantiation. Pair Ends by begin index, not a global
+nesting stack. Ignore already-skipped work and recovery-only hints when deciding
+whether another Jump is needed. Remove entity claim-time masking and prevent a
+second destructive atomic cut after claims have started. Starts before the cut
+whose terminals are removed become incomplete and reconstruct normally.
+
+The user resolved the transaction question: resetting an outer atomic region reruns
+the work within its abandoned suffix, including transaction commits. Do not preserve
+settled foreign transactions specially, introduce an outcome journal, or add a new
+overlap rejection policy. Rollback does not undo an external database commit; the
+retried region may execute transactional work again. Existing durable RPC identity
+and peer-specific idempotency contracts remain unchanged. This is the intended retry
+semantics, not a blocker to the suffix normalizer. HTTP/transaction runtime recovery
+otherwise remains a separate stage.
+
+2026-10-02. **Implementation plan — ownership-based replacement for steps 5–6.** The original final review
 returned “APPROVE — no blockers to implementation” and required no further
 pre-implementation experiment. Approval covers this handoff, not correctness of
 an unimplemented fix or permission to ship partial work. The step-5 integration
@@ -9,8 +103,12 @@ section 5 below. Do not implement an all-scope publication barrier as currently
 written without resolving that dependency.
 
 Implementation is in progress locally. Steps 1–4 have Oracle and bug-finder
-approval. Step 5 has been investigated but has no implementation or approval.
-Steps 5–8 remain outstanding. No changes have been committed, pushed, or deployed.
+approval and are checkpointed in local commit `4fe88a2c9`.
+The behavior-preserving entity rollback extraction also has both approvals and
+166 passing replay-state tests; it is committed locally as `ea67d4f50`.
+Behavioral replacement of steps 5–6 and steps 7–8 remain outstanding.
+Nothing has been pushed or deployed. Section 6 supersedes the broad-suffix
+abandonment design in the original steps 5–6 and the proposed barrier in section 5.
 The original final plan was uploaded to GOL-710 before implementation began.
 
 This is the implementation handoff. It supersedes the open alternatives and
@@ -397,3 +495,155 @@ been reproduced. Step-5 Oracle/bug-finder implementation approval remains pendin
 The separate step-4 export-fork test also still needs a default-stack comparison:
 it passed with `RUST_MIN_STACK=16777216` after overflowing the default stack;
 whether that failure is pre-existing has not been established.
+
+## 6. Ownership-based recovery revision
+
+The user selected the entity rollback pattern for HTTP, transactions, and atomic
+regions, keeping implementation in this checkout and separating refactoring from
+behavior changes. The original entity work in PR #3914 installs discontiguous
+owned masks before entity body claims, rather than deleting a physical suffix.
+Keep the actor projection correction independent of execution-recovery ownership.
+
+### A. Extract the existing planner — complete
+
+Moved `entity_atomic_rollback_regions` unchanged from `cursor.rs` into
+`replay_state/rollback.rs`; preserved signature, call timing, raw ancestry before
+deleted-entry filtering, exclusions, and chunking. Oracle approved the actual
+diff; bug-finder `gol710-rollback-extraction` run 1 was clean.
+
+Verification: `cargo fmt -p golem-worker-executor -- --check` passed;
+`cargo test -p golem-worker-executor --lib -- durable_host::replay_state:: --report-time`
+reported **166 passed, 0 failed**. Log:
+`tmp/gol-710-rollback-extraction-tests.log`.
+
+### B. Establish complete ownership and recovery admission — blocked on causal replay
+
+The ownership planner is implemented as an uncommitted draft, not an approved
+behavioral stage. The initial 168 replay-state tests passed, but they establish
+record selection, not safe resumption. The Oracle rejected propagating primary
+scope-local Live: primary authorization, card-event synchronization, and completion
+ordering use Store-wide liveness. The attempted local admission helper has been
+removed. The remaining draft still uses global Live switching and must not ship.
+
+- Correct top-level custom-invocation entity attribution using existing parent
+  fields, without confusing the entity root with an active custom parent used
+  for logical invocation IDs. Audit observational ownership against the existing
+  custom-subtree replay rules before extending the projection.
+- Plan HTTP/transaction rollback under the existing synthetic scope Start,
+  retaining that root and preserving foreign sibling records. Transaction
+  selection includes the paired initial begin and subsequent protocol markers.
+- Install the selected mask before the scope's descendants can claim deleted
+  history. Accepted commit-and-install work must survive caller cancellation and
+  finish without holding the cursor/Store across persistence waits.
+- Replace global replay-to-live switching on these recovery paths with a
+  recovery protocol validated against the causal case below. Smaller regions alone are insufficient:
+  `switch_cursor_to_live` clamps shared replay and releases sibling resolvers.
+  Do not substitute primary scope-local Live or weaken authorization assertions.
+  Audit child admission, authorization, retry policy, scope close, and span cleanup;
+  preserve unread as well as retained independent siblings.
+- Keep method/idempotence, reconstructable request-body, and remote transaction
+  outcome checks. Missing-Start recovery remains a separate case without a
+  recorded scope root. Do not interpret selective rollback as permission to
+  repeat arbitrary non-idempotent effects.
+
+### C. Extend pre-body atomic rollback to the primary invocation
+
+Install the plan before primary guest replay, not when guest code eventually
+reaches `mark_begin_operation`. Preserve independent pre-existing entity trees;
+discard the complete descendant tree of an entity belonging to the abandoned
+primary interval. Explicitly classify worker-wide records; lack of attribution
+is not proof of primary ownership. Preserve ancestry through partial Jump commits.
+
+The user selected **persisted initiation-time membership** for this separate
+stage. A tool can capture
+its logical key and initiation context before `BeginAtomicRegion`, but persist
+its Start afterward. Existing resident leases use initiation-time membership;
+the simple historical projection uses durable record order. Do not silently
+equate these. Capture membership at initiation, persist it with the operation's
+durable attribution, and use it during cold reconstruction; do not infer membership
+from physical Start order or wait for every asynchronous effect to finish.
+Implement only after HTTP/transaction recovery is working and separately reviewed.
+No new primary atomic behavior has been implemented or approved.
+
+### D. Verify before replacing the adversarial baseline
+
+Required coverage includes unread/retained siblings, overlapping transactions,
+pre-existing and newly owned entities, custom/observational descendants, pre-begin
+Start with post-begin terminal/delivery, delayed Start persistence across atomic
+begin with stable effect keys, cancellation after acceptance, partial multi-Jump
+commit, and two reconstructions. Run the four original HTTP/clock schedules and
+count external effects. Obtain Oracle and bug-finder approval for each behavioral
+stage, then continue the baseline optimization and combined verification.
+
+### E. Causal replay review checkpoint
+
+Ownership is not causal independence. A possible guest schedule is:
+
+```text
+open transaction/scope R
+await owned operation Q; observe its result
+await unrelated clock C
+crash before R closes
+```
+
+An ownership-only mask removes Q's Start, result and delivery but keeps C's
+Start, result and delivery. Waiting for ordinary replay exhaustion before repairing
+Q is not generally valid: the guest may need Q's result before initiating C,
+while replay cannot exhaust until C is observed. Reconstructing the Store does
+not remove that dependency. Likewise, appending Q's new delivery after the
+retained C delivery needs a durable ordering explanation for the next reconstruction.
+
+The Oracle recommends ordinary Jump reconstruction after committing nonempty
+ownership masks rather than primary scope-local Live. That is only a candidate:
+the empty-mask continuation still needs a causal-progress design. An empty mask
+must not cause another reconstruction forever. Transaction recovery also must
+handle its original Begin being deleted before it attempts a positional Begin read.
+
+Bug-finder run 1 (`gol710-http-ownership`) surfaced
+`retained-sibling-delivery-blocks-scope-recovery` as SPEC_CONFLICT. Its provisional
+test failed, but did not call the ownership planner or the production scope-open
+lookup; the latter uses a non-consuming scan, not `await_resolution_outcome`.
+Therefore that failure is not accepted as a production regression or proof that
+classification blocks. The concern remains open; the provisional test was replaced
+with `scope_rollback_does_not_release_retained_sibling_delivery`. This checks the
+actual planner and natural-tail wait on history containing an owned result/delivery
+before a foreign result/delivery, and verifies that only the foreign guest delivery
+releases the tail. It is a replay-mechanics test, not a guest-level reproduction.
+
+Before claiming this stage approved, establish a guest-level causal schedule and
+choose a recovery protocol that preserves its observations or accounts for its
+dependencies. Do not silently turn permitted overlapping reads into errors, delete
+all foreign history, or bypass completion ordering. No final protocol for this case
+has been approved; atomic implementation remains deferred behind this stage.
+
+Follow-up Oracle review distinguishes two protocols:
+
+- **HTTP partial-response recovery:** retain and replay already-observed body
+  results, then reconstruct the transport at the consumed offset at the first
+  missing result, after ordinary live admission. P2 repairable scoped calls and
+  P3 response-body Range/full-response resumption provide local precedents.
+  P3 scope-open and demand-stream incomplete-call handling do not yet compose
+  these mechanisms. Preserve method/idempotence and request-body restrictions;
+  do not resend merely because a replayed body is dropped. This is a candidate
+  for a bounded implementation, not verified behavior in the current draft.
+- **Transaction reconstruction:** replaying retained SQL results does not restore
+  database state. `create_replay` creates a closed handle and replayed SQL does
+  not execute. Reexecuting statements in a new transaction can produce different
+  results (for example, `INSERT ... RETURNING id` returns 42 instead of the
+  recorded 41). Assuming idempotence does not imply result equality.
+
+The outstanding user-visible choice is whether transaction recovery may replace
+old observations and abandon causally dependent guest work, or must retain those
+observations and report a recovery conflict when a replacement transaction cannot
+reproduce them. Preserving fresh-transaction retry semantics is the recommendation;
+that requires more than ownership attribution to distinguish dependencies from
+independent siblings. A mismatch-failure policy would be a new restriction, not a
+silent implementation simplification. A real transaction fixture with deliberately
+changing returned values remains necessary before final implementation approval.
+
+Current verification after replacing the provisional test:
+`cargo test -p golem-worker-executor --lib -- durable_host::replay_state:: --report-time`
+reported **169 passed, 0 failed** in
+`tmp/gol-710-ownership-delivery-tests.log`. Scoped formatting and `git diff --check`
+passed. This verifies replay/planner mechanics only; neither review approved the
+HTTP/transaction behavioral stage. All work in this stage remains uncommitted.
