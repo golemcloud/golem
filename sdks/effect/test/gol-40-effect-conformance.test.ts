@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest"
-import { Effect, Stream } from "effect"
+import { Effect, Result, Stream } from "effect"
 import { ToolTransport } from "../src/Tool.js"
 import { ToolType } from "../src/ToolReflection.js"
 import { compileDefinition, resetTools } from "../src/internal/tool/model.js"
@@ -162,7 +162,10 @@ describe("GOL-40 Effect conformance fixture", () => {
               },
               stdin(),
             )
-            .pipe(Effect.flatMap((started) => started.collect)),
+            .pipe(
+              Effect.flatMap((started) => started.collect),
+              Effect.map(({ result }) => result.pipe(Result.getOrThrow)),
+            ),
         ),
       ).pipe(
         Effect.provideService(ToolTransport, transport),
