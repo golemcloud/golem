@@ -851,8 +851,9 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Tells whether the store does not hold the snapshot `name` of `agent`, with one read of the
-    /// store, bounded by `store_check_limit`. A disabled service holds nothing to check, and
-    /// gives `false`.
+    /// store, bounded by `store_check_limit`. A disabled service holds no snapshot, so each name
+    /// is missing, as the copy of a fork of such a service gives: an export fork refuses a
+    /// baseline that names a snapshot before it reserves anything.
     pub(crate) async fn missing(
         &self,
         agent: &AgentSnapshots,
@@ -860,7 +861,7 @@ impl AgentFilesystemSnapshots {
     ) -> Result<bool, ReadError> {
         match &self.core {
             Some(core) => fork::missing(core, agent, name).await,
-            None => Ok(false),
+            None => Ok(true),
         }
     }
 

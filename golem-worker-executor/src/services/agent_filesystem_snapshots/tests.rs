@@ -4645,8 +4645,8 @@ fn a_revert_delete_of_the_source_waits_for_the_fork() {
     })
 }
 
-/// A disabled service copies nothing, so a target whose baseline names a filesystem snapshot
-/// lacks it, and the fork refuses to publish it.
+/// A disabled service holds no snapshot: its check of a named snapshot gives missing, and its
+/// copy leaves the snapshot out of the target, so a fork whose baseline names one is refused.
 #[test]
 fn the_copy_of_a_fork_of_a_disabled_service_misses_a_named_baseline() {
     paused(async {
@@ -4668,12 +4668,19 @@ fn the_copy_of_a_fork_of_a_disabled_service_misses_a_named_baseline() {
             }
         };
 
+        let source_check = snapshots.missing(&source, &name).await.unwrap();
+
+        // The source check of an export fork and the copy of a plain fork agree: the named
+        // snapshot is missing.
         assert_eq!(
-            [
-                baseline_of(Some(name.clone())).await,
-                baseline_of(None).await
-            ],
-            [Baseline::Missing(name), Baseline::NotChecked]
+            (
+                source_check,
+                [
+                    baseline_of(Some(name.clone())).await,
+                    baseline_of(None).await
+                ]
+            ),
+            (true, [Baseline::Missing(name), Baseline::NotChecked])
         );
     })
 }
