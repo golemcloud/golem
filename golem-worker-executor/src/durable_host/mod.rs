@@ -278,6 +278,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -3690,14 +3691,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn begin_transaction_function<Tx, Err>(
         &mut self,
         handler: impl RemoteTransactionHandler<Tx, Err>,
-    ) -> Result<(OplogIndex, Tx), Err>
+    ) -> Result<ControlFlow<InterruptKind, (OplogIndex, Tx)>, Err>
     where
         Err: From<WorkerExecutorError>,
     {
         if self.state.durability_is_suppressed() {
             let (_, tx) = handler.create_new().await?;
             let begin_index = self.state.current_oplog_index().await;
-            return Ok((begin_index, tx));
+            return Ok(ControlFlow::Continue((begin_index, tx)));
         }
 
         let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
@@ -3756,7 +3757,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .push_durable_scope(begin_index, DurableScopeKind::Transaction, None);
             self.state.current_retry_point = begin_index;
 
-            return Ok((begin_index, tx));
+            return Ok(ControlFlow::Continue((begin_index, tx)));
         };
 
         // The transaction scope `Start` is preserved across restarts, so its index is the
@@ -3790,7 +3791,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             self.state
                 .push_durable_scope(scope_start_index, DurableScopeKind::Transaction, None);
             self.state.current_retry_point = scope_start_index;
-            return Ok((scope_start_index, tx));
+            return Ok(ControlFlow::Continue((scope_start_index, tx)));
         }
         let (begin_index, begin_entry) =
             crate::get_oplog_entry!(self, OplogEntry::BeginRemoteTransaction)?;
@@ -3905,10 +3906,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .worker()
                     .request_runtime_jump(begin_index)
                     .await;
-                return Err(WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Jump,
-                }
-                .into());
+                return Ok(ControlFlow::Break(InterruptKind::Jump));
             }
         } else {
             scope_replay_handle = Some(scope_handle);
@@ -3920,7 +3918,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .push_durable_scope(result, DurableScopeKind::Transaction, scope_replay_handle);
         self.state.current_retry_point = original_begin_index;
 
-        Ok((result, tx))
+        Ok(ControlFlow::Continue((result, tx)))
     }
 
     pub async fn pre_commit_transaction_function(
