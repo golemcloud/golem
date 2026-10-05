@@ -6217,7 +6217,7 @@ async fn runtime_suffix_rollback_closes_completed_crossing_regions() {
         oplog.add(entry).await.unwrap();
     }
     assert_eq!(
-        super::rollback::suffix_rollback_region(
+        super::rollback::folded_suffix_rollback_region(
             &oplog,
             &DeletedRegions::default(),
             OplogIndex::from_u64(7),

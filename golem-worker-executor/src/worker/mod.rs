@@ -11453,12 +11453,11 @@ impl RunningWorker {
         if parent.agent_mode() == AgentMode::Durable {
             let mut pending_runtime_jump = parent.pending_runtime_jump.lock().await;
             let region = crate::durable_host::replay_state::suffix_rollback_region(
-                parent.oplog.as_ref(),
+                &worker_metadata.last_known_status.atomic_rollback,
                 &skipped_regions,
                 worker_metadata.last_known_status.oplog_idx,
                 *pending_runtime_jump,
-            )
-            .await;
+            )?;
             if let Some(region) = region {
                 if !parent.durable_stream_producer.is_recovering() {
                     parent

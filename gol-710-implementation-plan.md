@@ -5,6 +5,38 @@
 The current implementation uses complete suffix rollback, not ownership-filtered deletion.
 The discussion below is historical where it conflicts with this record.
 
+### Scan-free rollback follow-up
+
+The startup history scanner is replaced by `AgentStatusRecord.atomic_rollback`. This is
+derived, persisted status: visible atomic Begin/End intervals, open batched-write/transaction
+scope Starts, the last visible work index, and the boundary through which intervals were retired.
+Completed intervals remain until an `AgentInvocationFinished` with no open atomic regions or
+recovery scopes. A transaction can survive an invocation, and a terminal can drain after a cut
+is accepted, so neither a count-only summary nor retirement on scope End is sufficient.
+
+The production planner is synchronous and accepts no oplog handle. It closes the same complete
+suffix backward across crossing atomic intervals and rejects cuts into retired history rather
+than scanning. The previous scanner exists only as a test reference. Snapshot selection masks
+the prefix without modifying the summary; baseline validation checks both newly hidden and
+newly exposed prefix entries. Existing status reconstruction remains responsible for Jump/Revert
+repair and cache loss. There is no additional recovery-specific scan or fallback scan.
+
+Summary size follows the unretired recovery window. Normal completed invocations clear it;
+indefinitely open transactions can retain a larger window. The summary is included in existing
+status writes, with no new oplog entry or independent write.
+
+Validation: `CARGO_INCREMENTAL=0 cargo test -p golem-worker-executor --lib -- worker::status::test worker::state_actor::test services::worker::tests durable_host::replay_state::tests --report-time`
+passed 327 tests, 0 failed (`tmp/gol710-folded-rollback-all-affected.log`). Coverage includes
+serialized warm-cache tail-only reads, chunk-independent retirement, transaction scopes spanning
+invocation completion, snapshot rejection, failed-update prefix restoration, Jump/Revert repair,
+and differential cut comparison against the previous scanner. The library check, scoped formatting
+check, and whitespace check passed. The walkthrough and explainer changes were rendered and
+inspected. Oracle approved the stage after tests passed; bug-finder's test-fixture compile finding
+was fixed and its second run reported no new reproducible in-scope bugs. PR CI remains separate
+from these local results. The original validation record below predates this follow-up.
+
+### Original implementation
+
 1. **Status authority (committed):** the status actor owns repair through the acknowledged
    horizon. Invocation completion can acknowledge its commit before projection repair; later
    authoritative reads remain actor-ordered. The asserted non-detached getter is removed.

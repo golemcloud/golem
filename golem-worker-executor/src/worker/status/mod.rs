@@ -647,16 +647,22 @@ fn baseline_is_invalidated(
     } else {
         skipped_regions.clone()
     };
-    new_without_overrides != baseline_without_overrides
-        && new_without_overrides.regions().any(|new_region| {
-            if new_region.start > baseline.oplog_idx {
+    // Removing a temporary snapshot override exposes prefix entries absent from the baseline.
+    // Both newly hidden and newly visible prefix entries require a different baseline.
+    let has_uncovered_prefix = |regions: &DeletedRegions, other: &DeletedRegions| {
+        regions.regions().any(|region| {
+            if region.start > baseline.oplog_idx {
                 return false;
             }
-            let relevant_end = new_region.end.min(baseline.oplog_idx);
-            !baseline_without_overrides.regions().any(|old_region| {
-                old_region.start <= new_region.start && old_region.end >= relevant_end
+            let relevant_end = region.end.min(baseline.oplog_idx);
+            !other.regions().any(|other_region| {
+                other_region.start <= region.start && other_region.end >= relevant_end
             })
         })
+    };
+    new_without_overrides != baseline_without_overrides
+        && (has_uncovered_prefix(&new_without_overrides, &baseline_without_overrides)
+            || has_uncovered_prefix(&baseline_without_overrides, &new_without_overrides))
 }
 
 fn update_status_with_precomputed_regions(
@@ -669,6 +675,14 @@ fn update_status_with_precomputed_regions(
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<AgentStatusRecord, String> {
     let active_plugins = last_known.active_plugins.clone();
+    let mut atomic_rollback = last_known.atomic_rollback;
+    for (index, entry) in &new_entries {
+        if !skipped_regions.is_in_deleted_region(*index)
+            && !deleted_regions.is_in_deleted_region(*index)
+        {
+            atomic_rollback.observe(*index, entry);
+        }
+    }
 
     let (status, last_error_kind, current_retry_state, overridden_retry_config) =
         calculate_latest_worker_status(
@@ -810,6 +824,7 @@ fn update_status_with_precomputed_regions(
         pending_invocations,
         pending_card_events,
         skipped_regions,
+        atomic_rollback,
         pending_updates,
         failed_updates,
         successful_updates,

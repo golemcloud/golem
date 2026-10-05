@@ -1074,6 +1074,14 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   The complete suffix is abandoned, including sibling work influenced by raw output and any
   transaction commits within it. Crossing atomic regions move the cut backward; the surviving
   Begin resumes without another destructive Jump. Entity admission does not modify history.
+- Rollback planning reads `AgentStatusRecord.atomic_rollback`, never scans the oplog. The fold
+  retains atomic Begin/End intervals, open batched/transaction scope Starts, and the last visible
+  work index. Only an invocation finish with no open atomic regions or recovery scopes retires
+  completed intervals; an End alone cannot retire history an accepted cut may still cross.
+  A cut into retired history errors instead of scanning. Snapshot selection masks a prefix
+  without mutating the summary. Jump/Revert and removed snapshot overrides use ordinary status
+  baseline validation; losing all usable baselines requires rebuilding status, not a separate
+  rollback scan. Summary size follows the unfinished recovery window, not total worker history.
 - Incomplete batched-write and remote-transaction recovery also requests a Worker-owned suffix
   cut and returns a typed Jump instead of editing history inside the resident Store. Cut acceptance
   is serialized with final invocation-success publication and survives cancellation of the
