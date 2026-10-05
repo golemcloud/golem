@@ -363,14 +363,20 @@ fn a_call_tries_again_only_after_a_failure_with_tries_and_time_left_and_the_wind
 
 /// A storage whose first `refused` calls give an error after `delay`, and whose later calls pass.
 fn refusing_first(refused: usize, delay: Duration) -> Arc<ScriptedBlobStorage> {
-    let calls = std::sync::atomic::AtomicUsize::new(0);
-    ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |_, _| {
-        if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < refused {
-            Script::RefuseAfter(delay)
-        } else {
-            Script::Pass
-        }
-    })
+    ScriptedBlobStorage::with_state(
+        Arc::new(InMemoryBlobStorage::new()),
+        0usize,
+        move |calls, _, _| {
+            (
+                if *calls < refused {
+                    Script::RefuseAfter(delay)
+                } else {
+                    Script::Pass
+                },
+                calls + 1,
+            )
+        },
+    )
 }
 
 #[test]

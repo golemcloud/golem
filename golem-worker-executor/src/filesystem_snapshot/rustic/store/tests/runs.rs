@@ -138,15 +138,13 @@ fn refusing(
     refused: usize,
     selected: impl Fn(&str, &Path) -> bool + Send + Sync + 'static,
 ) -> Arc<ScriptedBlobStorage> {
-    let seen = AtomicUsize::new(0);
-    ScriptedBlobStorage::new(
+    ScriptedBlobStorage::with_state(
         Arc::new(InMemoryBlobStorage::new()),
-        move |op_label, path| {
-            if selected(op_label, path) && seen.fetch_add(1, Ordering::SeqCst) < refused {
-                Script::Refuse
-            } else {
-                Script::Pass
-            }
+        0usize,
+        move |seen, op_label, path| match selected(op_label, path) {
+            true if *seen < refused => (Script::Refuse, seen + 1),
+            true => (Script::Pass, seen + 1),
+            false => (Script::Pass, *seen),
         },
     )
 }
@@ -298,12 +296,11 @@ fn scripted_publish(
     inner: Arc<InMemoryBlobStorage>,
     script: impl Fn(usize) -> Script + Send + Sync + 'static,
 ) -> Arc<ScriptedBlobStorage> {
-    let tries = AtomicUsize::new(0);
-    ScriptedBlobStorage::new(inner, move |op_label, _| {
+    ScriptedBlobStorage::with_state(inner, 0usize, move |tries, op_label, _| {
         if op_label == "publish" {
-            script(tries.fetch_add(1, Ordering::SeqCst) + 1)
+            (script(tries + 1), tries + 1)
         } else {
-            Script::Pass
+            (Script::Pass, *tries)
         }
     })
 }
@@ -1508,18 +1505,21 @@ fn holding_the_third_open(
     held: Held,
     vanishing: impl Fn(&str, &Path) -> bool + Send + Sync + 'static,
 ) -> Arc<ScriptedBlobStorage> {
-    let config_calls = AtomicUsize::new(0);
-    ScriptedBlobStorage::new(inner, move |op_label, path| {
+    ScriptedBlobStorage::with_state(inner, 0usize, move |config_calls, op_label, path| {
         if op_label == held.label() && path == Path::new("config") {
-            if config_calls.fetch_add(1, Ordering::SeqCst) + 1 == held.number() {
-                Script::WaitForGate
-            } else {
-                Script::Pass
-            }
+            let number = config_calls + 1;
+            (
+                if number == held.number() {
+                    Script::WaitForGate
+                } else {
+                    Script::Pass
+                },
+                number,
+            )
         } else if vanishing(op_label, path) {
-            Script::Vanish
+            (Script::Vanish, *config_calls)
         } else {
-            Script::Pass
+            (Script::Pass, *config_calls)
         }
     })
 }
@@ -2513,15 +2513,11 @@ fn scripted_first_pack(
     first: Script,
     other: impl Fn(&str, &Path) -> Script + Send + Sync + 'static,
 ) -> Arc<ScriptedBlobStorage> {
-    let packs = AtomicUsize::new(0);
-    ScriptedBlobStorage::new(inner, move |op_label, path| {
-        if op_label == "write"
-            && path.starts_with("data")
-            && packs.fetch_add(1, Ordering::SeqCst) == 0
-        {
-            first
-        } else {
-            other(op_label, path)
+    ScriptedBlobStorage::with_state(inner, 0usize, move |packs, op_label, path| {
+        match op_label == "write" && path.starts_with("data") {
+            true if *packs == 0 => (first, packs + 1),
+            true => (other(op_label, path), packs + 1),
+            false => (other(op_label, path), *packs),
         }
     })
 }

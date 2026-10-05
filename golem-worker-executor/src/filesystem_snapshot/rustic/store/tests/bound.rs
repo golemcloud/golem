@@ -173,15 +173,14 @@ fn case_strategy(marking_after: bool) -> impl Strategy<Value = Case> {
         )
 }
 
-/// The flags of the phases of a case, which the rules of the storages read.
-#[derive(Default)]
-struct Phases {
-    /// The save and the marking prune run.
-    racing: AtomicBool,
-    /// The pack writes of the save that the storage refused.
-    refused_packs: AtomicUsize,
-    /// The first index write of the save got its script.
-    first_index: AtomicBool,
+/// What the storage of the save saw of the writes of the save while the save and the marking
+/// prune race.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SaveSeen {
+    /// The pack writes of the save that got a script.
+    packs: usize,
+    /// Whether the first index write of the save got its script.
+    first_index: bool,
 }
 
 /// Gives a script that passes after `delay`.
@@ -193,31 +192,44 @@ fn delayed(delay: Duration) -> Script {
     }
 }
 
-/// Gives the script of a call of the store of the save while the save runs.
-fn save_script(case: Case, phases: &Phases, op_label: &str, path: &Path) -> Script {
-    if !phases.racing.load(Ordering::SeqCst) {
-        return Script::Pass;
-    }
+/// Gives the script of a call of the store of the save, and what the storage saw after it, when
+/// the save and the marking prune race when `racing`, and the storage saw `seen` before. The
+/// first `refused_packs` pack writes of the race are refused, and the first index write lands
+/// late.
+fn save_script(
+    case: Case,
+    racing: bool,
+    seen: SaveSeen,
+    op_label: &str,
+    path: &Path,
+) -> (Script, SaveSeen) {
     match op_label {
-        "write" if path.starts_with("data") => {
-            if phases.refused_packs.fetch_add(1, Ordering::SeqCst) < case.refused_packs {
+        "write" if racing && path.starts_with("data") => (
+            if seen.packs < case.refused_packs {
                 Script::Refuse
             } else {
                 delayed(case.pack_delay)
-            }
-        }
-        "write"
-            if path.starts_with("index") && !phases.first_index.swap(true, Ordering::SeqCst) =>
-        {
-            Script::LandAfter(case.late_index)
-        }
-        _ => Script::Pass,
+            },
+            SaveSeen {
+                packs: seen.packs + 1,
+                ..seen
+            },
+        ),
+        "write" if racing && path.starts_with("index") && !seen.first_index => (
+            Script::LandAfter(case.late_index),
+            SaveSeen {
+                first_index: true,
+                ..seen
+            },
+        ),
+        _ => (Script::Pass, seen),
     }
 }
 
-/// Gives the script of a call of the store of the prunes while the marking prune runs.
-fn prune_script(case: Case, phases: &Phases, op_label: &str, path: &Path) -> Script {
-    if !phases.racing.load(Ordering::SeqCst) {
+/// Gives the script of a call of the store of the prunes, when the save and the marking prune
+/// race when `racing`.
+fn prune_script(case: Case, racing: bool, op_label: &str, path: &Path) -> Script {
+    if !racing {
         return Script::Pass;
     }
     match (op_label, case.refresh) {
@@ -344,14 +356,17 @@ fn calls_after_the_lease(
 async fn broken(case: Case) -> Vec<String> {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
-    let phases = Arc::new(Phases::default());
-    let save_storage = ScriptedBlobStorage::new(inner.clone(), {
-        let phases = phases.clone();
-        move |op_label, path| save_script(case, &phases, op_label, path)
+    // The save and the marking prune race while this flag is set.
+    let racing = Arc::new(AtomicBool::new(false));
+    let save_storage = ScriptedBlobStorage::with_state(inner.clone(), SaveSeen::default(), {
+        let racing = racing.clone();
+        move |seen, op_label, path| {
+            save_script(case, racing.load(Ordering::SeqCst), *seen, op_label, path)
+        }
     });
     let prune_storage = ScriptedBlobStorage::new(inner, {
-        let phases = phases.clone();
-        move |op_label, path| prune_script(case, &phases, op_label, path)
+        let racing = racing.clone();
+        move |op_label, path| prune_script(case, racing.load(Ordering::SeqCst), op_label, path)
     });
     let saving_store = store(save_storage.clone(), bound_policy());
     let pruning_store = store(prune_storage.clone(), bound_policy());
@@ -359,7 +374,7 @@ async fn broken(case: Case) -> Vec<String> {
 
     // The marking prune of the delete of `p-1` marks the packs of `p-1` before or during the save
     // of `p-3`, which reuses the blob of `p-1`.
-    phases.racing.store(true, Ordering::SeqCst);
+    racing.store(true, Ordering::SeqCst);
     let slots = FirstGrant::default();
     let tree = one_file_tree("p-1");
     let saving = async {
@@ -395,7 +410,7 @@ async fn broken(case: Case) -> Vec<String> {
             marking.await
         }
     );
-    phases.racing.store(false, Ordering::SeqCst);
+    racing.store(false, Ordering::SeqCst);
     // A marking prune that its lease stopped keeps its claim for the whole hold, so no second
     // prune of the agent runs in the case.
     let marking_pruned = pruning_store.take_failed_prunes().is_empty();

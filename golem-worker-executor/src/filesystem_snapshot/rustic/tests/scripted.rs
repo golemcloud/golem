@@ -134,6 +134,24 @@ impl ScriptedBlobStorage {
         Self::in_namespaces(inner, move |_, op_label, path| rule(op_label, path))
     }
 
+    /// A storage whose choice of a script depends on what it saw before. `choose` gives the
+    /// script of a call from the state that the earlier calls left and from the call, and the
+    /// state after the call. `choose` only decides; the storage keeps the state and applies the
+    /// change, one call at a time.
+    pub(crate) fn with_state<S: Send + 'static>(
+        inner: Arc<InMemoryBlobStorage>,
+        initial: S,
+        choose: impl Fn(&S, &str, &Path) -> (Script, S) + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        let state = Mutex::new(initial);
+        Self::new(inner, move |op_label, path| {
+            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            let (script, next) = choose(&state, op_label, path);
+            *state = next;
+            script
+        })
+    }
+
     /// A storage whose rule also reads the namespace of each call.
     pub(crate) fn in_namespaces(
         inner: Arc<InMemoryBlobStorage>,

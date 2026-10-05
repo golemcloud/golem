@@ -3953,20 +3953,17 @@ async fn a_shut_down_after_the_claim_still_releases_it() {
 /// A storage that refuses the first call after the first claim write, which is the second read of
 /// the ledger, and each call of the release with the operation label.
 fn refusing_the_release_call(release_label: &'static str) -> Arc<ScriptedBlobStorage> {
-    let claimed = Arc::new(AtomicBool::new(false));
-    let refused = Arc::new(AtomicBool::new(false));
-    ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), move |op_label, _| {
-        if op_label == "write_claim" {
-            claimed.store(true, Ordering::SeqCst);
-            Script::Pass
-        } else if op_label == release_label
-            || (claimed.load(Ordering::SeqCst) && !refused.swap(true, Ordering::SeqCst))
-        {
-            Script::Refuse
-        } else {
-            Script::Pass
-        }
-    })
+    // The state is whether a claim was written, and whether the call after it was refused.
+    ScriptedBlobStorage::with_state(
+        Arc::new(InMemoryBlobStorage::new()),
+        (false, false),
+        move |&(claimed, refused), op_label, _| match op_label {
+            "write_claim" => (Script::Pass, (true, refused)),
+            label if label == release_label => (Script::Refuse, (claimed, refused)),
+            _ if claimed && !refused => (Script::Refuse, (claimed, true)),
+            _ => (Script::Pass, (claimed, refused)),
+        },
+    )
 }
 
 #[test]

@@ -55,11 +55,13 @@ fn files(
     Arc<LateWrites>,
 ) {
     let inner = Arc::new(InMemoryBlobStorage::new());
-    let tries = std::sync::atomic::AtomicUsize::new(0);
-    let storage = ScriptedBlobStorage::new(inner.clone(), move |op_label, _| match op_label {
-        "publish" => script(tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1),
-        _ => Script::Pass,
-    });
+    let storage =
+        ScriptedBlobStorage::with_state(inner.clone(), 0usize, move |tries, op_label, _| {
+            match op_label {
+                "publish" => (script(tries + 1), tries + 1),
+                _ => (Script::Pass, *tries),
+            }
+        });
     let namespace = BlobStorageNamespace::InitialAgentFiles {
         environment_id: EnvironmentId(Uuid::new_v4()),
     };
