@@ -212,23 +212,6 @@ fn configure_preinitialization_store<T>(store: &mut Store<T>) {
     store.set_epoch_deadline(u64::MAX);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use test_r::test;
-
-    #[test]
-    fn preinitialization_store_has_bundle_sized_hostcall_budget() {
-        let engine = Engine::new(&create_wasmtime_config_without_fs_cache()).unwrap();
-        let mut store = Store::new(&engine, ());
-
-        configure_preinitialization_store(&mut store);
-
-        assert_eq!(store.hostcall_fuel(), PREINITIALIZATION_HOSTCALL_FUEL);
-        assert_eq!(store.get_fuel().unwrap(), u64::MAX);
-    }
-}
-
 /// Prefixes for imports that are handled by real implementations
 /// and should not be stubbed with traps. Only list the specific WASI
 /// namespaces that wasmtime-wasi, wasmtime-wasi-http, and the logging
@@ -382,4 +365,21 @@ fn stub_component_item(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn preinitialization_store_has_bundle_sized_hostcall_budget() {
+        let engine = Engine::new(&create_wasmtime_config_without_fs_cache()).unwrap();
+        let mut store = Store::new(&engine, ());
+
+        configure_preinitialization_store(&mut store);
+
+        assert_eq!(store.hostcall_fuel(), PREINITIALIZATION_HOSTCALL_FUEL);
+        assert_eq!(store.get_fuel().unwrap(), u64::MAX);
+    }
 }
