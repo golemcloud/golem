@@ -36,12 +36,18 @@ export type SettledToolResult<Result> =
   | { readonly status: 'fulfilled'; readonly value: Result }
   | { readonly status: 'rejected'; readonly reason: unknown };
 
+export interface CollectedToolInvocation<Result> {
+  readonly result: SettledToolResult<Result>;
+  readonly stdout: SettledToolResult<Uint8Array | undefined>;
+  readonly stderr: SettledToolResult<Uint8Array | undefined>;
+}
+
 export interface StartedToolInvocation<Result> {
   readonly stdout?: ReadableStream<Uint8Array>;
   readonly stderr?: ReadableStream<Uint8Array>;
   readonly result: Promise<Result>;
   cancel(): void;
-  collect(): Promise<{ result: Result; stdout?: Uint8Array; stderr?: Uint8Array }>;
+  collect(): Promise<CollectedToolInvocation<Result>>;
 }
 
 export function settleToolResult<Result>(
@@ -54,7 +60,7 @@ export function settleToolResult<Result>(
 }
 
 export function mapSettledToolResult<Input, Result>(
-  settledResult: PromiseLike<SettledToolResult<Input>>,
+  settledResult: SettledToolResult<Input> | PromiseLike<SettledToolResult<Input>>,
   mapValue: (value: Input) => Result,
   mapReason: (reason: unknown) => unknown = (reason) => reason,
 ): Promise<SettledToolResult<Result>> {
@@ -78,7 +84,7 @@ export function mapSettledToolResult<Input, Result>(
 }
 
 export function resultFromSettledToolResult<Result>(
-  settledResult: PromiseLike<SettledToolResult<Result>>,
+  settledResult: SettledToolResult<Result> | PromiseLike<SettledToolResult<Result>>,
 ): Promise<Result> {
   return Promise.resolve(settledResult).then((outcome) => {
     if (outcome.status === 'rejected') throw outcome.reason;
@@ -115,19 +121,10 @@ export function startedToolInvocation<Result>(
             : collectReadableStream(stderrStream),
         ),
       ]);
-      if (resultOutcome.status === 'rejected') {
-        throw resultOutcome.reason;
-      }
-      if (stdoutOutcome.status === 'rejected') {
-        throw stdoutOutcome.reason;
-      }
-      if (stderrOutcome.status === 'rejected') {
-        throw stderrOutcome.reason;
-      }
       return {
-        result: resultOutcome.value,
-        stdout: stdoutOutcome.value,
-        stderr: stderrOutcome.value,
+        result: resultOutcome,
+        stdout: stdoutOutcome,
+        stderr: stderrOutcome,
       };
     },
   };

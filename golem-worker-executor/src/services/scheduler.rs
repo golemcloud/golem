@@ -590,7 +590,21 @@ impl SchedulerServiceDefault {
             } => {
                 debug!("Running scheduled archive oplog for {account_id}/{owned_agent_id}");
 
-                if self.oplog_service.exists(&owned_agent_id, agent_mode).await {
+                let exists = match self
+                    .oplog_service
+                    .try_exists(&owned_agent_id, agent_mode)
+                    .await
+                {
+                    Ok(exists) => exists,
+                    Err(error) => {
+                        crate::metrics::oplog::record_archive_maintenance_failure(
+                            "scheduled_exists",
+                        );
+                        error!(agent_id = %owned_agent_id, error = %error, "Failed to check oplog before archival");
+                        return false;
+                    }
+                };
+                if exists {
                     let start = Instant::now();
                     let archive_result = self
                         .with_lease_renewal(
@@ -880,6 +894,7 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
+    use crate::services::oplog::tests::ReadCountingIndexedStorage;
     use crate::services::oplog::{ArchiveWait, OplogService, PrimaryOplogService};
     use crate::services::promise::PromiseServiceMock;
     use crate::services::scheduler::{
@@ -1743,6 +1758,27 @@ mod tests {
         )
     }
 
+    async fn create_scheduler_with_oplog(
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+        oplog_service: Arc<dyn OplogService>,
+    ) -> Arc<SchedulerServiceDefault> {
+        SchedulerServiceDefault::new(
+            scheduler_storage,
+            create_shard_service_mock(),
+            create_promise_service_mock(),
+            create_worker_access_mock(),
+            oplog_service,
+            create_worker_service_mock(),
+            Duration::from_secs(1000),
+            100,
+            Duration::from_secs(30),
+            10,
+            RetryConfig::max_attempts_3(),
+            64,
+            CancellationToken::new(),
+        )
+    }
+
     /// Scheduler storage wrapper whose `insert` fails with a transient error the
     /// first `transient_failures` times, then delegates to the inner storage.
     #[derive(Debug)]
@@ -1766,7 +1802,7 @@ mod tests {
             self.inserted_actions.lock().unwrap().push(action.to_vec());
             let remaining =
                 self.transient_failures
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
             if remaining.is_ok() {
                 return Err(SchedulerStorageError::Transient(
                     "simulated pool timeout".to_string(),
@@ -2395,6 +2431,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+
+        let claimed = claim_all(&storage, "2023-07-17T10:16:00Z").await;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].schedule_id, schedule_id);
+    }
+
+    #[test]
+    async fn failed_archive_existence_check_is_not_acknowledged() {
+        let storage = Arc::new(InMemorySchedulerStorage::new());
+        let oplog_storage = Arc::new(ReadCountingIndexedStorage::new());
+        let oplog_service: Arc<dyn OplogService> = Arc::new(
+            PrimaryOplogService::new(
+                oplog_storage.clone(),
+                Arc::new(InMemoryBlobStorage::new()),
+                1,
+                1,
+                1024,
+                RetryConfig {
+                    max_attempts: 1,
+                    min_delay: Duration::ZERO,
+                    max_delay: Duration::ZERO,
+                    multiplier: 1.0,
+                    max_jitter_factor: None,
+                },
+            )
+            .await,
+        );
+        let svc = create_scheduler_with_oplog(storage.clone(), oplog_service).await;
+        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("archive-exists"));
+        oplog_storage.fail_next_exists();
+
+        let schedule_id = svc
+            .schedule(
+                DateTime::from_str("2023-07-17T07:05:00Z").unwrap(),
+                ScheduledAction::ArchiveOplog {
+                    account_id: AccountId::new(),
+                    owned_agent_id,
+                    agent_mode: AgentMode::Durable,
+                    last_oplog_index: OplogIndex::from_u64(42),
+                    next_after: Duration::from_secs(60),
+                },
+            )
+            .await;
+
+        svc.process(DateTime::from_str("2023-07-17T10:15:00Z").unwrap())
+            .await
+            .unwrap();
 
         let claimed = claim_all(&storage, "2023-07-17T10:16:00Z").await;
         assert_eq!(claimed.len(), 1);

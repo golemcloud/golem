@@ -1,0 +1,7098 @@
+{
+ "cases": {
+  "edge unicode names: basename suffix": {
+   "script": "b8e250e9eeb54763",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本\nstatus=0\n"
+   }
+  },
+  "edge unicode names: basename suffix option": {
+   "script": "f1b065aa4b90a65d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本\n😀\nstatus=0\n"
+   }
+  },
+  "edge unicode names: cat missing name": {
+   "script": "dbde8a9123696978",
+   "status": 0,
+   "stderr": {
+    "text": "cat: 无文件.txt: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge unicode names: cd and pwd": {
+   "script": "ab692508124454d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/u/дир\n/tmp/u/дир\nstatus=0\n"
+   }
+  },
+  "edge unicode names: cd missing name": {
+   "script": "325dcb3d26451fa4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: 无文件: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge unicode names: cmp names": {
+   "script": "7641daaaf5bd5209",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本.txt abc.txt differ: char 1, line 1\nstatus=1\n"
+   }
+  },
+  "edge unicode names: cp and ls": {
+   "script": "7b52732bca23bc40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "本.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: diff names": {
+   "script": "69ef4ebbe9758513",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n---\n> b\nstatus=1\n"
+   }
+  },
+  "edge unicode names: dirname": {
+   "script": "a6af240858241c14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/日\nstatus=0\n"
+   }
+  },
+  "edge unicode names: echo glob": {
+   "script": "09ffaf6dffad671a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt abc.txt é.txt héllo.txt Διά.txt שלום.txt 日本.txt 😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: extglob": {
+   "script": "a530d0aa8c3f32ac",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `('\nbash: -c: line 1: `mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; shopt -s extglob; printf '%s\\n' @(日本|abc).txt; echo status=$?'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode names: extglob negation": {
+   "script": "4a892e8ff0230dc8",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `('\nbash: -c: line 1: `mkdir /tmp/u && cd /tmp/u && touch 'héllo.txt' '日本.txt' '😀.txt' 'שלום.txt' 'abc.txt' 'é.txt' 'a b.txt' 'Διά.txt'; shopt -s extglob; printf '%s\\n' !(*[a-z]*).txt; echo status=$?'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode names: file names": {
+   "script": "4c97268dc311e0f5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本.txt: ASCII text\nstatus=0\n"
+   }
+  },
+  "edge unicode names: find -iname": {
+   "script": "879f9305ea54382a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./héllo.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: find -iname greek": {
+   "script": "76c8b83b8429dd85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./Διά.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: find -name": {
+   "script": "14464fae890b9f99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: find -name bracket": {
+   "script": "fb3649fdaff713aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./שלום.txt\n./日本.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: find -print0": {
+   "script": "8b7f493dded9286f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./a b.txt\n./abc.txt\n./é.txt\n./héllo.txt\n./Διά.txt\n./שלום.txt\n./日本.txt\n./😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: find -regex": {
+   "script": "334fbb306a15a328",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: find -type d": {
+   "script": "9c172b016145d08c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./д\n./д/子\nstatus=0\n"
+   }
+  },
+  "edge unicode names: glob alpha class": {
+   "script": "99a9e4935fc6add0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n日本.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: glob bracket": {
+   "script": "2aa85f4ae7924b06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本.txt\n😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: glob one char": {
+   "script": "5c22fdd34ee593e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: glob range": {
+   "script": "4d1b0a3c371414a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Διά.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: glob two chars": {
+   "script": "510dc29d368d13f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é.txt\n日本.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: glob upper class": {
+   "script": "74d501f16af364cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Διά.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: grep -H": {
+   "script": "65c8cc9180fe2439",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום.txt:hit\nstatus=0\n"
+   }
+  },
+  "edge unicode names: grep -l": {
+   "script": "05637a28d806ec8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ln relative": {
+   "script": "f1a07d2adeae336d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls": {
+   "script": "11706b3ace0fc741",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n日本.txt\n😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -1 | wc -l": {
+   "script": "465e5d138fb7ff6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -C": {
+   "script": "b75885593d4d2b33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt  héllo.txt  日本.txt\nabc.txt  Διά.txt    😀.txt\né.txt\t שלום.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -Q": {
+   "script": "ce751d9d64efe8ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a b.txt\"\n\"abc.txt\"\n\"é.txt\"\n\"héllo.txt\"\n\"Διά.txt\"\n\"שלום.txt\"\n\"日本.txt\"\n\"😀.txt\"\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -R": {
+   "script": "4c39a8f2c464a772",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".:\na b.txt\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n子\n日本.txt\n😀.txt\n\n./子:\né\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -b": {
+   "script": "7c6b46076538a386",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\ b.txt\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n日本.txt\n😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -m": {
+   "script": "d466e3b4f497567a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt, abc.txt, é.txt, héllo.txt, Διά.txt, שלום.txt, 日本.txt, 😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -r": {
+   "script": "065057211b888966",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀.txt\n日本.txt\nשלום.txt\nΔιά.txt\nhéllo.txt\né.txt\nabc.txt\na b.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls -x": {
+   "script": "e3fdb1ee3ac2e81d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt  abc.txt   é.txt     héllo.txt\nΔιά.txt  שלום.txt  日本.txt  😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls missing name": {
+   "script": "bfb43e4d7fb14bc2",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '无文件.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "edge unicode names: ls quoting c": {
+   "script": "09651c1ead3186a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a b.txt\"\n\"abc.txt\"\n\"é.txt\"\n\"héllo.txt\"\n\"Διά.txt\"\n\"שלום.txt\"\n\"日本.txt\"\n\"😀.txt\"\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls quoting escape": {
+   "script": "04fa8cc263cad242",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\ b.txt\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n日本.txt\n😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: ls quoting shell-escape": {
+   "script": "59d1cff7fb485f6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'a b.txt'\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n日本.txt\n😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: md5sum -c names": {
+   "script": "4214d61966b5b186",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本.txt: OK\nabc.txt: OK\nstatus=0\n"
+   }
+  },
+  "edge unicode names: mkdir -v": {
+   "script": "5a4421212faf599a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mkdir: created directory 'дир'\nmkdir: created directory 'дир/子'\nmkdir: created directory 'дир/子/🌳'\nstatus=0\n"
+   }
+  },
+  "edge unicode names: mv and ls": {
+   "script": "1b3a28c655dfa647",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n日本.txt\n😁.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: name lengths": {
+   "script": "811fa10315bc5708",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 a b.txt\n7 abc.txt\n6 é.txt\n9 héllo.txt\n7 Διά.txt\n8 שלום.txt\n6 日本.txt\n5 😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: nocaseglob": {
+   "script": "b05824ba29878e21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllo.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: nocaseglob greek": {
+   "script": "f9d21832683b765f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Διά.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: readlink -f": {
+   "script": "4be56b54e5ee05f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/u/😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: realpath": {
+   "script": "98670904d1f710b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/u/日本.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: rm glob": {
+   "script": "6ddef1ed4170af79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed 'héllo.txt'\na b.txt\nabc.txt\né.txt\nΔιά.txt\nשלום.txt\n日本.txt\n😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: rmdir missing name": {
+   "script": "f7b2955fb79be809",
+   "status": 0,
+   "stderr": {
+    "text": "rmdir: failed to remove '无文件': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge unicode names: sha256sum names": {
+   "script": "fa93d04d2e6c3e50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  日本.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: split prefix": {
+   "script": "3507aeb65764fcd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "分aa\n分ab\n分ac\nstatus=0\n"
+   }
+  },
+  "edge unicode names: stat -c %n": {
+   "script": "8a3630ac4f41a0f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt\nabc.txt\né.txt\nhéllo.txt\nΔιά.txt\nשלום.txt\n日本.txt\n😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode names: touch missing parent": {
+   "script": "4a54f4cb8c3101a7",
+   "status": 0,
+   "stderr": {
+    "text": "touch: cannot touch '无/文件': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge unicode names: tsort names": {
+   "script": "5bafc4f913f079ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日\n本\n語\nstatus=0\n"
+   }
+  },
+  "edge unicode names: wc on names": {
+   "script": "04451373084992bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 日本.txt\n0 abc.txt\n1 total\nstatus=0\n"
+   }
+  },
+  "edge unicode names: xargs -I": {
+   "script": "df0dfd2bdfd6c13c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a b.txt>\n<abc.txt>\n<é.txt>\n<héllo.txt>\n<Διά.txt>\n<שלום.txt>\n<日本.txt>\n<😀.txt>\nstatus=0\n"
+   }
+  },
+  "edge unicode names: xargs names": {
+   "script": "b1f132293e4b6d0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b.txt abc.txt\né.txt héllo.txt Διά.txt\nשלום.txt 日本.txt 😀.txt\nstatus=0\n"
+   }
+  },
+  "edge unicode: IFS array join": {
+   "script": "033d0428510a0da9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1→2→3\n"
+   }
+  },
+  "edge unicode: IFS multibyte join": {
+   "script": "18c3b898edd942c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aébéc\n"
+   }
+  },
+  "edge unicode: IFS multibyte read": {
+   "script": "fc5bf0401f6bf207",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1|2|3\n"
+   }
+  },
+  "edge unicode: IFS multibyte split": {
+   "script": "aaf85039c75460da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\nb\n"
+   }
+  },
+  "edge unicode: IFS nbsp": {
+   "script": "bbb8c578e9b868b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: IFS space and multibyte": {
+   "script": "285eba3629e9b68c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge unicode: ansi-c \\U out of range": {
+   "script": "d107f56a1f81d874",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " f4 90 80 80\n"
+   }
+  },
+  "edge unicode: ansi-c \\u": {
+   "script": "fb9efbbc719440ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 €😀\n"
+   }
+  },
+  "edge unicode: ansi-c \\u surrogate": {
+   "script": "826e6dc971c68778",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ed a0 80\n"
+   }
+  },
+  "edge unicode: array unicode keys": {
+   "script": "4c42066960484d83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2 2\n"
+   }
+  },
+  "edge unicode: base32": {
+   "script": "0a9a9e1f6abc0e4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YOUQU===\n"
+   }
+  },
+  "edge unicode: base64 bom": {
+   "script": "fa49c7de39f8cead",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "77u/Ym9tIHRleHQK\n"
+   }
+  },
+  "edge unicode: base64 cjk": {
+   "script": "8403c0586e457280",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5pel5pys6KqeIOODhuOCreOCueODiAo=\n"
+   }
+  },
+  "edge unicode: base64 combining": {
+   "script": "a3a959a2c3d1e33c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ZcyBdGXMgQo=\n"
+   }
+  },
+  "edge unicode: base64 emoji": {
+   "script": "9d3e15ed7f30584d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YfCfmIBi8J+RjfCfj71jCg==\n"
+   }
+  },
+  "edge unicode: base64 greek": {
+   "script": "a4774fb91cefaaaa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zpHOu8+GzrEgzpLOl86kzpEK\n"
+   }
+  },
+  "edge unicode: base64 hebrew": {
+   "script": "eacead991f531735",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "16nXnNeV150g16LXldec150K\n"
+   }
+  },
+  "edge unicode: base64 latin": {
+   "script": "43990c0eb37504b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aMOpbGxvIHfDtnJsZAo=\n"
+   }
+  },
+  "edge unicode: base64 nbsp": {
+   "script": "9ad7ce09e3662cc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "YcKgYiBjCg==\n"
+   }
+  },
+  "edge unicode: base64 zwj": {
+   "script": "f0308a9a469ec97c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8J+RqOKAjfCfkanigI3wn5GnIGZhbQo=\n"
+   }
+  },
+  "edge unicode: basenc base16": {
+   "script": "2ef6014d2425d695",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "C3A9\n"
+   }
+  },
+  "edge unicode: brace unicode": {
+   "script": "3d1169721122a14a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "α1 α2 β1 β2\n"
+   }
+  },
+  "edge unicode: brace unicode range": {
+   "script": "f7b3bd84319f7952",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{α..γ}\n"
+   }
+  },
+  "edge unicode: case alpha class": {
+   "script": "c9221d1cd3eac7ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alpha\n"
+   }
+  },
+  "edge unicode: case digit class": {
+   "script": "a3ffafc60aca970c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "other\n"
+   }
+  },
+  "edge unicode: case range": {
+   "script": "a9081aa542ef9565",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "greek\n"
+   }
+  },
+  "edge unicode: case space class bom": {
+   "script": "81e5809f59d53b03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "space\n"
+   }
+  },
+  "edge unicode: case space class cjk": {
+   "script": "71c09f2b3c1ff419",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "space\n"
+   }
+  },
+  "edge unicode: case space class combining": {
+   "script": "3706a7efeadaabab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "none\n"
+   }
+  },
+  "edge unicode: case space class emoji": {
+   "script": "ca9d925361a5c32c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "none\n"
+   }
+  },
+  "edge unicode: case space class greek": {
+   "script": "875865147333de6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "space\n"
+   }
+  },
+  "edge unicode: case space class hebrew": {
+   "script": "b79d9d1027cd25d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "space\n"
+   }
+  },
+  "edge unicode: case space class latin": {
+   "script": "91d6d6bfc098a9d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "space\n"
+   }
+  },
+  "edge unicode: case space class nbsp": {
+   "script": "bc6d580fd3c914fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "space\n"
+   }
+  },
+  "edge unicode: case space class zwj": {
+   "script": "d8507466531378b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "space\n"
+   }
+  },
+  "edge unicode: case upper class": {
+   "script": "c58b42326803fb29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "upper\n"
+   }
+  },
+  "edge unicode: cat -A bom": {
+   "script": "96884bb8d2f744b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "M-oM-;M-?bom text$\n"
+   }
+  },
+  "edge unicode: cat -A cjk": {
+   "script": "68fbf3cf4d8a4b2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "M-fM-^WM-%M-fM-^\\M-,M-hM-*M-^^ M-cM-^CM-^FM-cM-^BM--M-cM-^BM-9M-cM-^CM-^H$\n"
+   }
+  },
+  "edge unicode: cat -A combining": {
+   "script": "a19051209e0f4f8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "eM-LM-^AteM-LM-^A$\n"
+   }
+  },
+  "edge unicode: cat -A emoji": {
+   "script": "6245879c87ff1346",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aM-pM-^_M-^XM-^@bM-pM-^_M-^QM-^MM-pM-^_M-^OM-=c$\n"
+   }
+  },
+  "edge unicode: cat -A greek": {
+   "script": "6cc49141721238e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "M-NM-^QM-NM-;M-OM-^FM-NM-1 M-NM-^RM-NM-^WM-NM-$M-NM-^Q$\n"
+   }
+  },
+  "edge unicode: cat -A hebrew": {
+   "script": "2f04252c0a728e46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "M-WM-)M-WM-^\\M-WM-^UM-WM-^] M-WM-\"M-WM-^UM-WM-^\\M-WM-^]$\n"
+   }
+  },
+  "edge unicode: cat -A latin": {
+   "script": "2b349ca95138769e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hM-CM-)llo wM-CM-6rld$\n"
+   }
+  },
+  "edge unicode: cat -A nbsp": {
+   "script": "35ded74ccb97605c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aM-BM- b c$\n"
+   }
+  },
+  "edge unicode: cat -A zwj": {
+   "script": "df53dece14a6ec2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "M-pM-^_M-^QM-(M-bM-^@M-^MM-pM-^_M-^QM-)M-bM-^@M-^MM-pM-^_M-^QM-' fam$\n"
+   }
+  },
+  "edge unicode: cat -v": {
+   "script": "aee4f254ef45f99b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "M-CM-)\n"
+   }
+  },
+  "edge unicode: char loop bom": {
+   "script": "71fd50c5539b7f57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: char loop cjk": {
+   "script": "8d454199b9f57a91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge unicode: char loop combining": {
+   "script": "651b4d27b680e62d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: char loop emoji": {
+   "script": "2bf1f7376e0587a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge unicode: char loop greek": {
+   "script": "bf2940ce6a5e3b19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: char loop hebrew": {
+   "script": "76845bcf0f098bf9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: char loop latin": {
+   "script": "53b10c26072c271b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge unicode: char loop nbsp": {
+   "script": "ef42da305e0c340f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: char loop zwj": {
+   "script": "d6e29a30196ce3b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: cmp -b": {
+   "script": "ea96c46cc934ed9d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a /tmp/b differ: byte 2, line 1 is 251 M-) 252 M-*\n"
+   }
+  },
+  "edge unicode: cmp -l": {
+   "script": "4c41802f5d37b191",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 251 252\n"
+   }
+  },
+  "edge unicode: comm": {
+   "script": "558ec8ab62ff9d07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n\t\té\n\t日\n"
+   }
+  },
+  "edge unicode: command not found unicode": {
+   "script": "75d5297190556493",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 日本: command not found\n"
+   },
+   "stdout": {
+    "text": "127\n"
+   }
+  },
+  "edge unicode: cond glob combining": {
+   "script": "054ac90e30b14996",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "edge unicode: cond glob question": {
+   "script": "69632324a06685d7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "edge unicode: cond less than": {
+   "script": "a040048b3019600e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "more\n"
+   }
+  },
+  "edge unicode: cond nocasematch": {
+   "script": "ce5f40bee47dbdc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "same\n"
+   }
+  },
+  "edge unicode: cond nocasematch greek": {
+   "script": "c33d95b68f74ba5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "same\n"
+   }
+  },
+  "edge unicode: cond regex alpha": {
+   "script": "9f4d9bb4c9d9fd5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "edge unicode: cond regex range": {
+   "script": "634f84a1fd1530d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\n"
+   }
+  },
+  "edge unicode: cond regex two chars": {
+   "script": "3d8b1b4ed5b66d14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "edge unicode: cond sort order": {
+   "script": "cc106d3056985403",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "less\n"
+   }
+  },
+  "edge unicode: cut -b bom": {
+   "script": "845252c0bedb17d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ef bb bf 0a\n"
+   }
+  },
+  "edge unicode: cut -b cjk": {
+   "script": "3b52da8fd59a74de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " e6 97 a5 0a\n"
+   }
+  },
+  "edge unicode: cut -b combining": {
+   "script": "6b818cf2f3570cec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 65 cc 81 0a\n"
+   }
+  },
+  "edge unicode: cut -b emoji": {
+   "script": "5fffcfac89057ca1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 f0 9f 0a\n"
+   }
+  },
+  "edge unicode: cut -b greek": {
+   "script": "b74e87a1c9c3d72f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ce 91 ce 0a\n"
+   }
+  },
+  "edge unicode: cut -b hebrew": {
+   "script": "7bb5b001cbdc8043",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " d7 a9 d7 0a\n"
+   }
+  },
+  "edge unicode: cut -b latin": {
+   "script": "4214936c2354628c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 68 c3 a9 0a\n"
+   }
+  },
+  "edge unicode: cut -b nbsp": {
+   "script": "ec83711be4eabadd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 c2 a0 0a\n"
+   }
+  },
+  "edge unicode: cut -b zwj": {
+   "script": "76e02fb11f4976dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " f0 9f 91 0a\n"
+   }
+  },
+  "edge unicode: cut -c bom": {
+   "script": "4a17d9dfc5e466ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bo\n"
+   }
+  },
+  "edge unicode: cut -c cjk": {
+   "script": "5a7cf1fe6426844d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語\n"
+   }
+  },
+  "edge unicode: cut -c combining": {
+   "script": "a6b272671e72350e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ét\n"
+   }
+  },
+  "edge unicode: cut -c emoji": {
+   "script": "f7acc60727dcae0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀b\n"
+   }
+  },
+  "edge unicode: cut -c greek": {
+   "script": "7926d7ec76e006ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφ\n"
+   }
+  },
+  "edge unicode: cut -c hebrew": {
+   "script": "8e5cc2f1960ef918",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלו\n"
+   }
+  },
+  "edge unicode: cut -c latin": {
+   "script": "b7113292565e20a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hél\n"
+   }
+  },
+  "edge unicode: cut -c nbsp": {
+   "script": "a22197f712252bc6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "edge unicode: cut -c zwj": {
+   "script": "d23c50794ba82410",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩\n"
+   }
+  },
+  "edge unicode: cut -d multibyte": {
+   "script": "60778b4208b129df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge unicode: declare -l": {
+   "script": "8c6cc18fafbaa442",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été\n"
+   }
+  },
+  "edge unicode: declare -p bom": {
+   "script": "8304e12736fbc373",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"﻿bom text\"\n"
+   }
+  },
+  "edge unicode: declare -p cjk": {
+   "script": "7ccd3a2fc998a527",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"日本語 テキスト\"\n"
+   }
+  },
+  "edge unicode: declare -p combining": {
+   "script": "7aa1f36a3368373b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"été\"\n"
+   }
+  },
+  "edge unicode: declare -p emoji": {
+   "script": "146b13df0f70e8f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"a😀b👍🏽c\"\n"
+   }
+  },
+  "edge unicode: declare -p greek": {
+   "script": "8de1687bb6a95c5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"Αλφα ΒΗΤΑ\"\n"
+   }
+  },
+  "edge unicode: declare -p hebrew": {
+   "script": "8706cb064f549a47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"שלום עולם\"\n"
+   }
+  },
+  "edge unicode: declare -p latin": {
+   "script": "760ec98c2aaff7d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"héllo wörld\"\n"
+   }
+  },
+  "edge unicode: declare -p nbsp": {
+   "script": "297576ef4eb7c571",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"a b c\"\n"
+   }
+  },
+  "edge unicode: declare -p zwj": {
+   "script": "f464365c3d6c92d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "declare -- x=\"👨‍👩‍👧 fam\"\n"
+   }
+  },
+  "edge unicode: declare -u": {
+   "script": "bc32443e6ccb5af4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉTÉ\n"
+   }
+  },
+  "edge unicode: diff -i": {
+   "script": "9850653c7dbf51cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge unicode: diff -y": {
+   "script": "eb44a7bcbf8fe4c5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本  |\tab\n"
+   }
+  },
+  "edge unicode: diff unified": {
+   "script": "e958ee2fb4466d4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-é\n+日\n"
+   }
+  },
+  "edge unicode: echo -e \\u": {
+   "script": "1e4064853d421c82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€😀\n"
+   }
+  },
+  "edge unicode: echo -e \\x high": {
+   "script": "2e293aaacd89ba6d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n"
+   }
+  },
+  "edge unicode: echo -n bytes": {
+   "script": "bb735b45971e107f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: expand after multibyte": {
+   "script": "c1bf65d012e0cd15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é   b\n"
+   }
+  },
+  "edge unicode: expand after wide": {
+   "script": "bfd593f9bedb6121",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日  b\n"
+   }
+  },
+  "edge unicode: expr compare": {
+   "script": "fa51e6945b01c2fe",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge unicode: expr index": {
+   "script": "a4b9bd18e4ea0ccc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: expr length bom": {
+   "script": "876d522842d5455e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: expr length cjk": {
+   "script": "9b9a4f07ac1f0e77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge unicode: expr length combining": {
+   "script": "b19ee7b65132827e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: expr length emoji": {
+   "script": "a8ca7893b991ec79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge unicode: expr length greek": {
+   "script": "f8da255815cd6587",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: expr length hebrew": {
+   "script": "1954995e86dcf9cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: expr length latin": {
+   "script": "2a52b5de3a92a64e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge unicode: expr length nbsp": {
+   "script": "cc9893e04989741d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: expr length zwj": {
+   "script": "f3fb6f6dd14bf4ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: expr match": {
+   "script": "370e143a13da55f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ét\n"
+   }
+  },
+  "edge unicode: expr substr bom": {
+   "script": "b645c297bdac8c9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bom\n"
+   }
+  },
+  "edge unicode: expr substr cjk": {
+   "script": "71f949dfe71be294",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "本語 \n"
+   }
+  },
+  "edge unicode: expr substr combining": {
+   "script": "2012f6e80b860fa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "́te\n"
+   }
+  },
+  "edge unicode: expr substr emoji": {
+   "script": "97f4a8b40038fe91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀b👍\n"
+   }
+  },
+  "edge unicode: expr substr greek": {
+   "script": "bf1f3aeb1234b75a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "λφα\n"
+   }
+  },
+  "edge unicode: expr substr hebrew": {
+   "script": "1136cb213496c538",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "לום\n"
+   }
+  },
+  "edge unicode: expr substr latin": {
+   "script": "66c5ed4047991e75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "éll\n"
+   }
+  },
+  "edge unicode: expr substr nbsp": {
+   "script": "6d46bd703d0fd071",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " b \n"
+   }
+  },
+  "edge unicode: expr substr zwj": {
+   "script": "3f641d2c815e2dfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "‍👩‍\n"
+   }
+  },
+  "edge unicode: fmt multibyte": {
+   "script": "5b3757dc81850fe3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été à\nla plage\nété\n"
+   }
+  },
+  "edge unicode: fold -b": {
+   "script": "d9ee3c08b76b8e25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " c3 a9 74 0a c3 a9 0a\n"
+   }
+  },
+  "edge unicode: fold -s multibyte": {
+   "script": "46bfd44b656f56fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été à \nla \nplage\n"
+   }
+  },
+  "edge unicode: fold -w bom": {
+   "script": "fec0ff7cdd4cea47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bom\n te\nxt\n"
+   }
+  },
+  "edge unicode: fold -w cjk": {
+   "script": "cf1b9c20cb3ccf39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日\n本\n語 \nテ\nキ\nス\nト\n"
+   }
+  },
+  "edge unicode: fold -w combining": {
+   "script": "4b5fb83a65a5e065",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été\n"
+   }
+  },
+  "edge unicode: fold -w emoji": {
+   "script": "ac09ae9f615dea3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀\nb👍\n🏽c\n"
+   }
+  },
+  "edge unicode: fold -w greek": {
+   "script": "c5eb16dc355f9023",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφ\nα Β\nΗΤΑ\n"
+   }
+  },
+  "edge unicode: fold -w hebrew": {
+   "script": "58e555a700b09bbe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלו\nם ע\nולם\n"
+   }
+  },
+  "edge unicode: fold -w latin": {
+   "script": "11de9f452a3c39c5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hél\nlo \nwör\nld\n"
+   }
+  },
+  "edge unicode: fold -w nbsp": {
+   "script": "661cf9c29fb840cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n c\n"
+   }
+  },
+  "edge unicode: fold -w zwj": {
+   "script": "3c29bfa04bf92b5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍\n👩‍\n👧 \nfam\n"
+   }
+  },
+  "edge unicode: function unicode body": {
+   "script": "d8d3b29df1ff9bd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é日\n"
+   }
+  },
+  "edge unicode: getopts unicode arg": {
+   "script": "0e2c2a318145a444",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a é\n"
+   }
+  },
+  "edge unicode: grep -E interval bom": {
+   "script": "2b8d8f63e6c4aed9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bo\n"
+   }
+  },
+  "edge unicode: grep -E interval cjk": {
+   "script": "1e50edf3cf82e7ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語\n"
+   }
+  },
+  "edge unicode: grep -E interval combining": {
+   "script": "2a470c9af4d9d325",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ét\n"
+   }
+  },
+  "edge unicode: grep -E interval emoji": {
+   "script": "2905c43980d13173",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀b\n"
+   }
+  },
+  "edge unicode: grep -E interval greek": {
+   "script": "42e128202fd3c5be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφ\n"
+   }
+  },
+  "edge unicode: grep -E interval hebrew": {
+   "script": "3a0f777122792324",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלו\n"
+   }
+  },
+  "edge unicode: grep -E interval latin": {
+   "script": "d8e451a18f106851",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hél\n"
+   }
+  },
+  "edge unicode: grep -E interval nbsp": {
+   "script": "eaa28cd2019bae07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "edge unicode: grep -E interval zwj": {
+   "script": "4c3cc43ee45c1336",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩\n"
+   }
+  },
+  "edge unicode: grep -P digit": {
+   "script": "ed0c56156d080652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge unicode: grep -P word": {
+   "script": "035d642dff2a3087",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été\nabc\n"
+   }
+  },
+  "edge unicode: grep -b -o": {
+   "script": "17d19426a1187c93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0:é\n3:日\n7:x\n"
+   }
+  },
+  "edge unicode: grep -c line": {
+   "script": "9a3732b77ac85942",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: grep -i": {
+   "script": "2714321ba1c5cad9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉTÉ\n"
+   }
+  },
+  "edge unicode: grep -i sharp s": {
+   "script": "b19263b73005f246",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "straße\n"
+   }
+  },
+  "edge unicode: grep -o dot bom": {
+   "script": "b980e3f13b63571e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿\nb\no\nm\n \n"
+   }
+  },
+  "edge unicode: grep -o dot cjk": {
+   "script": "c9c2db0166c892d3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日\n本\n語\n \nテ\n"
+   }
+  },
+  "edge unicode: grep -o dot combining": {
+   "script": "666c0ab8d656a17b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\ń\nt\ne\ń\n"
+   }
+  },
+  "edge unicode: grep -o dot emoji": {
+   "script": "c5c6286391fcae44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n😀\nb\n👍\n🏽\n"
+   }
+  },
+  "edge unicode: grep -o dot greek": {
+   "script": "ae6c5e7a66d1cf75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Α\nλ\nφ\nα\n \n"
+   }
+  },
+  "edge unicode: grep -o dot hebrew": {
+   "script": "9b1a3e11364a9a87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ש\nל\nו\nם\n \n"
+   }
+  },
+  "edge unicode: grep -o dot latin": {
+   "script": "e58a834a04848e50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "h\né\nl\nl\no\n"
+   }
+  },
+  "edge unicode: grep -o dot nbsp": {
+   "script": "97a26d2c096fad75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n \nb\n \nc\n"
+   }
+  },
+  "edge unicode: grep -o dot zwj": {
+   "script": "18a354bfe814226e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨\n‍\n👩\n‍\n👧\n"
+   }
+  },
+  "edge unicode: grep -w": {
+   "script": "76c472b226a2a5c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "wörld\n"
+   }
+  },
+  "edge unicode: grep -x": {
+   "script": "095a1b5449cfe7e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀\n"
+   }
+  },
+  "edge unicode: grep alpha class bom": {
+   "script": "cf257d5d096d03dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bom\ntext\n"
+   }
+  },
+  "edge unicode: grep alpha class cjk": {
+   "script": "16561987b7b49447",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語\nテキスト\n"
+   }
+  },
+  "edge unicode: grep alpha class combining": {
+   "script": "9e183232c79675c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\nte\n"
+   }
+  },
+  "edge unicode: grep alpha class emoji": {
+   "script": "16417422c149941c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "edge unicode: grep alpha class greek": {
+   "script": "e693e29aca59060a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφα\nΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: grep alpha class hebrew": {
+   "script": "54411c3609483be7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום\nעולם\n"
+   }
+  },
+  "edge unicode: grep alpha class latin": {
+   "script": "b2d6295f3c04bdcc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllo\nwörld\n"
+   }
+  },
+  "edge unicode: grep alpha class nbsp": {
+   "script": "1f8c4a04475b04e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "edge unicode: grep alpha class zwj": {
+   "script": "668742372ff13c7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fam\n"
+   }
+  },
+  "edge unicode: grep digit class": {
+   "script": "9cb392bef5b8690b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge unicode: grep range": {
+   "script": "e203a684b4339838",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "αβγ\n"
+   }
+  },
+  "edge unicode: grep space class bom": {
+   "script": "de8340d4678ddf5b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: grep space class cjk": {
+   "script": "be060fb243157171",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: grep space class combining": {
+   "script": "3dae57d997dfc974",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge unicode: grep space class emoji": {
+   "script": "97a53cda4d51053d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge unicode: grep space class greek": {
+   "script": "7472709240409b93",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: grep space class hebrew": {
+   "script": "6d57cedf7955d646",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: grep space class latin": {
+   "script": "0ef41f6c7bf06d7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: grep space class nbsp": {
+   "script": "065415e182d1525b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: grep space class zwj": {
+   "script": "7f5855fefb510012",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: head -c bom": {
+   "script": "9ef9e0f087988f3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ef bb bf 62\n"
+   }
+  },
+  "edge unicode: head -c cjk": {
+   "script": "5957b1faef176bde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " e6 97 a5 e6\n"
+   }
+  },
+  "edge unicode: head -c combining": {
+   "script": "365c449dbc94f9ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 65 cc 81 74\n"
+   }
+  },
+  "edge unicode: head -c emoji": {
+   "script": "83d8a715c6c83a3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 f0 9f 98\n"
+   }
+  },
+  "edge unicode: head -c greek": {
+   "script": "f657f7a09380ddd1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ce 91 ce bb\n"
+   }
+  },
+  "edge unicode: head -c hebrew": {
+   "script": "826e598017d218e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " d7 a9 d7 9c\n"
+   }
+  },
+  "edge unicode: head -c latin": {
+   "script": "1c0d540eb3682232",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 68 c3 a9 6c\n"
+   }
+  },
+  "edge unicode: head -c nbsp": {
+   "script": "947eab94c002e103",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 c2 a0 62\n"
+   }
+  },
+  "edge unicode: head -c zwj": {
+   "script": "72a30024cf93ec7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " f0 9f 91 a8\n"
+   }
+  },
+  "edge unicode: heredoc unicode": {
+   "script": "b1f1de25a5c2244b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é 日 😀\n"
+   }
+  },
+  "edge unicode: heredoc unicode expansion": {
+   "script": "686ea67bc0a5141e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本 1\n"
+   }
+  },
+  "edge unicode: herestring unicode": {
+   "script": "fa66a94cea202db8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge unicode: join": {
+   "script": "fb4f21391c2b2323",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é 1 x\n日 2 y\n"
+   }
+  },
+  "edge unicode: join -t multibyte": {
+   "script": "5232b878ead1b5c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aébéb\n"
+   }
+  },
+  "edge unicode: jq -a escapes": {
+   "script": "af509996980e0fc8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u00e9\\ud83d\\ude00\"\n"
+   }
+  },
+  "edge unicode: jq -j": {
+   "script": "4e06fe0f2441341e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é日"
+   }
+  },
+  "edge unicode: jq @base64": {
+   "script": "220a5acf4111086d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "w6k=\n"
+   }
+  },
+  "edge unicode: jq @base64d": {
+   "script": "809f8f819fceb9dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n"
+   }
+  },
+  "edge unicode: jq @html": {
+   "script": "b3b0076a6a81a755",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "&lt;é&gt;\n"
+   }
+  },
+  "edge unicode: jq @json": {
+   "script": "982477fe3d90f6ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"é\\u0001\"\n"
+   }
+  },
+  "edge unicode: jq @sh": {
+   "script": "ad3490ec3b510d0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'é x'\n"
+   }
+  },
+  "edge unicode: jq @uri": {
+   "script": "d889503efaab619b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "%C3%A9%20%E6%97%A5\n"
+   }
+  },
+  "edge unicode: jq ascii output bom": {
+   "script": "b6ea604e4ca2b18f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\ufeffbom text\"\n"
+   }
+  },
+  "edge unicode: jq ascii output cjk": {
+   "script": "4628dda067f09ca6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u65e5\\u672c\\u8a9e \\u30c6\\u30ad\\u30b9\\u30c8\"\n"
+   }
+  },
+  "edge unicode: jq ascii output combining": {
+   "script": "479f06d679d29837",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"e\\u0301te\\u0301\"\n"
+   }
+  },
+  "edge unicode: jq ascii output emoji": {
+   "script": "19940abe3af30edb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\\ud83d\\ude00b\\ud83d\\udc4d\\ud83c\\udffdc\"\n"
+   }
+  },
+  "edge unicode: jq ascii output greek": {
+   "script": "1648a91cdf649703",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u0391\\u03bb\\u03c6\\u03b1 \\u0392\\u0397\\u03a4\\u0391\"\n"
+   }
+  },
+  "edge unicode: jq ascii output hebrew": {
+   "script": "5ee9b387c79e814f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\u05e9\\u05dc\\u05d5\\u05dd \\u05e2\\u05d5\\u05dc\\u05dd\"\n"
+   }
+  },
+  "edge unicode: jq ascii output latin": {
+   "script": "7ca1b1b3a6acea2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"h\\u00e9llo w\\u00f6rld\"\n"
+   }
+  },
+  "edge unicode: jq ascii output nbsp": {
+   "script": "39e780bf77380c60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a\\u00a0b c\"\n"
+   }
+  },
+  "edge unicode: jq ascii output zwj": {
+   "script": "5b6455654de5addf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\ud83d\\udc68\\u200d\\ud83d\\udc69\\u200d\\ud83d\\udc67 fam\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase bom": {
+   "script": "0daa4ca50842b6aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"﻿bom text\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase cjk": {
+   "script": "e31eebc944cf5370",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"日本語 テキスト\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase combining": {
+   "script": "665c765217d24eef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"été\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase emoji": {
+   "script": "4e257c60ba2198ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a😀b👍🏽c\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase greek": {
+   "script": "a0f984064186f8d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"Αλφα ΒΗΤΑ\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase hebrew": {
+   "script": "ca4cda7ac68c3bfd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"שלום עולם\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase latin": {
+   "script": "1571f33a33de9200",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"héllo wörld\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase nbsp": {
+   "script": "24ed2a2f15ecc892",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"a b c\"\n"
+   }
+  },
+  "edge unicode: jq ascii_downcase zwj": {
+   "script": "0ffda28bb52c63a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"👨‍👩‍👧 fam\"\n"
+   }
+  },
+  "edge unicode: jq ascii_upcase": {
+   "script": "8d7cdfd5185b5e19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"éCOLE\"\n"
+   }
+  },
+  "edge unicode: jq explode bom": {
+   "script": "8497e0f80d4ac93c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[65279,98,111,109,32,116,101,120,116]\n"
+   }
+  },
+  "edge unicode: jq explode cjk": {
+   "script": "b7cb1f93b74d1bf4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[26085,26412,35486,32,12486,12461,12473,12488]\n"
+   }
+  },
+  "edge unicode: jq explode combining": {
+   "script": "309215d6562a80b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[101,769,116,101,769]\n"
+   }
+  },
+  "edge unicode: jq explode emoji": {
+   "script": "36985c382f3e91e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[97,128512,98,128077,127997,99]\n"
+   }
+  },
+  "edge unicode: jq explode greek": {
+   "script": "d96b96635f28a79f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[913,955,966,945,32,914,919,932,913]\n"
+   }
+  },
+  "edge unicode: jq explode hebrew": {
+   "script": "767aee5b760fc995",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1513,1500,1493,1501,32,1506,1493,1500,1501]\n"
+   }
+  },
+  "edge unicode: jq explode latin": {
+   "script": "c3630019907c67a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[104,233,108,108,111,32,119,246,114,108,100]\n"
+   }
+  },
+  "edge unicode: jq explode nbsp": {
+   "script": "179f93dc53d7ebd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[97,160,98,32,99]\n"
+   }
+  },
+  "edge unicode: jq explode zwj": {
+   "script": "24fa3621e2256f27",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[128104,8205,128105,8205,128103,32,102,97,109]\n"
+   }
+  },
+  "edge unicode: jq implode": {
+   "script": "29a2300fb7b594a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"é😀\"\n"
+   }
+  },
+  "edge unicode: jq index": {
+   "script": "3e140d037c1380ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: jq indices": {
+   "script": "43e1b45221e6a98a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1,3]\n"
+   }
+  },
+  "edge unicode: jq input unicode escapes": {
+   "script": "0a82d017ed070e19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"é\"\n"
+   }
+  },
+  "edge unicode: jq keys order": {
+   "script": "12f267be53acc6f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"a\",\"b\",\"é\"]\n"
+   }
+  },
+  "edge unicode: jq length bom": {
+   "script": "fca8c37cdf045f35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: jq length cjk": {
+   "script": "283c2e7961e134c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge unicode: jq length combining": {
+   "script": "32403af1cf0316af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: jq length emoji": {
+   "script": "a68089c047ed6cc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge unicode: jq length greek": {
+   "script": "0b7af624c541c804",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: jq length hebrew": {
+   "script": "a083f602c98a0223",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: jq length latin": {
+   "script": "cc197dd76e5a5670",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge unicode: jq length nbsp": {
+   "script": "f7389e504dcf1a79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: jq length zwj": {
+   "script": "096efb3f76e72d13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: jq lone surrogate": {
+   "script": "87ab9281ecce1997",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: Invalid \\uXXXX\\uXXXX surrogate pair escape at line 1, column 8 (while parsing '\"\\ud800\"') at <top-level>, line 1, column 2:\n    \"\\ud800\"\n     ^^^^^^\njq: 1 compile error\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: jq ltrimstr": {
+   "script": "2a860aaabc24726a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"本\"\n"
+   }
+  },
+  "edge unicode: jq raw input slurp": {
+   "script": "89b6f0386a69a0e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge unicode: jq raw unicode output": {
+   "script": "a1bb6b5252d1c168",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é日\n"
+   }
+  },
+  "edge unicode: jq slice bom": {
+   "script": "d6133fbeb895a085",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"bo\"\n"
+   }
+  },
+  "edge unicode: jq slice cjk": {
+   "script": "f714f2baeb04f262",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"本語\"\n"
+   }
+  },
+  "edge unicode: jq slice combining": {
+   "script": "45c046e1bf70158e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"́t\"\n"
+   }
+  },
+  "edge unicode: jq slice emoji": {
+   "script": "727011ce0ef31333",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"😀b\"\n"
+   }
+  },
+  "edge unicode: jq slice greek": {
+   "script": "2b72ad2c7a9cd2ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"λφ\"\n"
+   }
+  },
+  "edge unicode: jq slice hebrew": {
+   "script": "376af661c4e928bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"לו\"\n"
+   }
+  },
+  "edge unicode: jq slice latin": {
+   "script": "59afeb63dfa8827f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"él\"\n"
+   }
+  },
+  "edge unicode: jq slice nbsp": {
+   "script": "1efea9613d72a248",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\" b\"\n"
+   }
+  },
+  "edge unicode: jq slice zwj": {
+   "script": "86cf567f7a139d3f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"‍👩\"\n"
+   }
+  },
+  "edge unicode: jq sort strings": {
+   "script": "a3f1dfc4e285780e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"e\",\"z\",\"É\",\"é\"]\n"
+   }
+  },
+  "edge unicode: jq sort_keys output": {
+   "script": "e4673c42d7e12b0a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{\"a\":2,\"日\":1}\n"
+   }
+  },
+  "edge unicode: jq split": {
+   "script": "b56c5447e798af4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"日\",\"語\"]\n"
+   }
+  },
+  "edge unicode: jq split empty": {
+   "script": "5e0503af4e400850",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[\"é\",\"😀\"]\n"
+   }
+  },
+  "edge unicode: jq string compare": {
+   "script": "03a33c438b54cfd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "false\n"
+   }
+  },
+  "edge unicode: jq string length": {
+   "script": "1f585f9ebc8738e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: jq surrogate pair": {
+   "script": "af31c85cdda73d14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 22 f0 9f 98 80 22 0a\n"
+   }
+  },
+  "edge unicode: jq test ignore case": {
+   "script": "2683ad2413dac195",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\n"
+   }
+  },
+  "edge unicode: jq test regex": {
+   "script": "be33f1fbb73d8a89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "true\n"
+   }
+  },
+  "edge unicode: jq tojson": {
+   "script": "c4d5019e6bd20986",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"\\\" \\\"\"\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength bom": {
+   "script": "74554bc0aec2f031",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength cjk": {
+   "script": "388850d7d354c1b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "22\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength combining": {
+   "script": "0d656e82a924248b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength emoji": {
+   "script": "7edc6454ca0f0185",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength greek": {
+   "script": "8ebda600b30d9617",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "17\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength hebrew": {
+   "script": "4ad473158f9a17a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "17\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength latin": {
+   "script": "4029f8a53f3bc33d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "13\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength nbsp": {
+   "script": "da957322d82383f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge unicode: jq utf8bytelength zwj": {
+   "script": "35d08f3f403c35c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "22\n"
+   }
+  },
+  "edge unicode: length bom": {
+   "script": "d2b6f95451fb4551",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: length cjk": {
+   "script": "c46a83a4c384ea6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge unicode: length combining": {
+   "script": "10b8de12f882693e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: length emoji": {
+   "script": "f0e5694200fde91f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge unicode: length greek": {
+   "script": "e18b55a8a06b7900",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: length hebrew": {
+   "script": "dff93235004836d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: length latin": {
+   "script": "2cc19863e9618790",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge unicode: length nbsp": {
+   "script": "2a78c991ed600679",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: length zwj": {
+   "script": "865856b28cd426bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: let unicode var error": {
+   "script": "baccbb33a7813a39",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: é=1: arithmetic syntax error: operand expected (error token is \"é=1\")\n"
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: lower bom": {
+   "script": "0b60cfd9dd2d10da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bom text\n"
+   }
+  },
+  "edge unicode: lower cjk": {
+   "script": "f861ad7a9a84b943",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 テキスト\n"
+   }
+  },
+  "edge unicode: lower combining": {
+   "script": "d7f9ff75e12fa743",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été\n"
+   }
+  },
+  "edge unicode: lower dotted I": {
+   "script": "97bd385da2cad488",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 69 0a\n"
+   }
+  },
+  "edge unicode: lower emoji": {
+   "script": "834e3974ae85e734",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀b👍🏽c\n"
+   }
+  },
+  "edge unicode: lower final sigma": {
+   "script": "4126209a6e687e41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "οσ\n"
+   }
+  },
+  "edge unicode: lower first bom": {
+   "script": "9005d602c0837f3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bom text\n"
+   }
+  },
+  "edge unicode: lower first cjk": {
+   "script": "0281dad65daf682b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 テキスト\n"
+   }
+  },
+  "edge unicode: lower first combining": {
+   "script": "a9bf23672bc673f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été\n"
+   }
+  },
+  "edge unicode: lower first emoji": {
+   "script": "b919473e52e53bef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀b👍🏽c\n"
+   }
+  },
+  "edge unicode: lower first greek": {
+   "script": "c968dfa5f8d6ee32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "αλφα ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: lower first hebrew": {
+   "script": "693cbf83920f73a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום עולם\n"
+   }
+  },
+  "edge unicode: lower first latin": {
+   "script": "b11227f52a63179d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllo wörld\n"
+   }
+  },
+  "edge unicode: lower first nbsp": {
+   "script": "4bc7d656eda5fbba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\n"
+   }
+  },
+  "edge unicode: lower first zwj": {
+   "script": "c8d9937e0f805aaf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 fam\n"
+   }
+  },
+  "edge unicode: lower greek": {
+   "script": "cc0a54ce180873ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "αλφα βητα\n"
+   }
+  },
+  "edge unicode: lower hebrew": {
+   "script": "34726144b4577ff6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום עולם\n"
+   }
+  },
+  "edge unicode: lower latin": {
+   "script": "2f03e3851829c2da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllo wörld\n"
+   }
+  },
+  "edge unicode: lower nbsp": {
+   "script": "719948393442e6f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c\n"
+   }
+  },
+  "edge unicode: lower zwj": {
+   "script": "27aabe515f9ec03f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 fam\n"
+   }
+  },
+  "edge unicode: mapfile -d multibyte": {
+   "script": "f6366371432496ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "MwpbYV1bqWJdW6ljCl0K"
+   }
+  },
+  "edge unicode: negative substring bom": {
+   "script": "86b111adaba5236a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xt\n"
+   }
+  },
+  "edge unicode: negative substring cjk": {
+   "script": "252950759ad104cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "スト\n"
+   }
+  },
+  "edge unicode: negative substring combining": {
+   "script": "13f4351fd0132763",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n"
+   }
+  },
+  "edge unicode: negative substring emoji": {
+   "script": "20ae5858e40e97ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "🏽c\n"
+   }
+  },
+  "edge unicode: negative substring greek": {
+   "script": "eb72b209371d8217",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ΤΑ\n"
+   }
+  },
+  "edge unicode: negative substring hebrew": {
+   "script": "5d2028e224c2c371",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "לם\n"
+   }
+  },
+  "edge unicode: negative substring latin": {
+   "script": "67b2fc6e0bf7ce15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ld\n"
+   }
+  },
+  "edge unicode: negative substring nbsp": {
+   "script": "981a1b519f92ab5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " c\n"
+   }
+  },
+  "edge unicode: negative substring zwj": {
+   "script": "17b8402a09ba078c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "am\n"
+   }
+  },
+  "edge unicode: nl -s multibyte": {
+   "script": "cba3ff9a0f07e856",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1→ a\n     2→ b\n"
+   }
+  },
+  "edge unicode: od -c bom": {
+   "script": "f1769a54ec628ea2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 357 273 277   b   o   m       t   e   x   t  \\n\n"
+   }
+  },
+  "edge unicode: od -c cjk": {
+   "script": "9bfa9838421fda50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 346 227 245 346 234 254 350 252 236     343 203 206 343 202 255\n 343 202 271 343 203 210  \\n\n"
+   }
+  },
+  "edge unicode: od -c combining": {
+   "script": "62fbe1653db610e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   e 314 201   t   e 314 201  \\n\n"
+   }
+  },
+  "edge unicode: od -c emoji": {
+   "script": "5e001fbe2dc40a8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a 360 237 230 200   b 360 237 221 215 360 237 217 275   c  \\n\n"
+   }
+  },
+  "edge unicode: od -c greek": {
+   "script": "27f6a27970e67aeb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 316 221 316 273 317 206 316 261     316 222 316 227 316 244 316\n 221  \\n\n"
+   }
+  },
+  "edge unicode: od -c hebrew": {
+   "script": "39d4ae56a71de2f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 327 251 327 234 327 225 327 235     327 242 327 225 327 234 327\n 235  \\n\n"
+   }
+  },
+  "edge unicode: od -c latin": {
+   "script": "f5164bb3b813a6a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   h 303 251   l   l   o       w 303 266   r   l   d  \\n\n"
+   }
+  },
+  "edge unicode: od -c nbsp": {
+   "script": "b0bc96c3a2b2cca1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "   a 302 240   b       c  \\n\n"
+   }
+  },
+  "edge unicode: od -c zwj": {
+   "script": "db8051b3c596804e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 360 237 221 250 342 200 215 360 237 221 251 342 200 215 360 237\n 221 247       f   a   m  \\n\n"
+   }
+  },
+  "edge unicode: od -tc wide": {
+   "script": "27d9c36444c768b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 346 227 245\n"
+   }
+  },
+  "edge unicode: paste -d multibyte": {
+   "script": "b409c2692ba35e79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1é1\n2é2\n"
+   }
+  },
+  "edge unicode: paste -s -d multibyte": {
+   "script": "52f5bac0b59cece9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1é2日3\n"
+   }
+  },
+  "edge unicode: printf %-s width emoji": {
+   "script": "60ec6b318b3ad9b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[😀]\n"
+   }
+  },
+  "edge unicode: printf %.2s cjk": {
+   "script": "4ce85a50f6058cd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "W+aXXQo="
+   }
+  },
+  "edge unicode: printf %b \\u": {
+   "script": "3492ca390f08ef46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€\n"
+   }
+  },
+  "edge unicode: printf %c": {
+   "script": "5da6ae37f6e10b8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "w3wK5nwK"
+   }
+  },
+  "edge unicode: printf %s multiple": {
+   "script": "783d1bc59b2ee983",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é-日-😀-\n"
+   }
+  },
+  "edge unicode: printf %s width wide": {
+   "script": "50eecedbc6ca098c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ 日]\n"
+   }
+  },
+  "edge unicode: printf \\U": {
+   "script": "f6f82b45a8a51e74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " f0 9f 98 80 0a\n"
+   }
+  },
+  "edge unicode: printf \\u": {
+   "script": "0b6963353b0ed151",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "€ é\n"
+   }
+  },
+  "edge unicode: printf \\u no digits": {
+   "script": "2aa60e8f92f0b65e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: printf: missing unicode digit for \\u\n"
+   },
+   "stdout": {
+    "text": "\\uXYZ\n"
+   }
+  },
+  "edge unicode: printf \\u short": {
+   "script": "d0d1e46933a45e81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A\n"
+   }
+  },
+  "edge unicode: printf \\u zero": {
+   "script": "33054e4fc058300b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 00 62 0a\n"
+   }
+  },
+  "edge unicode: printf char code": {
+   "script": "c667a86526ecad95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "233 26085 128512\n"
+   }
+  },
+  "edge unicode: printf hex char code": {
+   "script": "70928ae914761d5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20ac\n"
+   }
+  },
+  "edge unicode: printf left width bom": {
+   "script": "f8b7042a67bf18d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[﻿bom text]\n"
+   }
+  },
+  "edge unicode: printf left width cjk": {
+   "script": "377d3afee84ffdb9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[日本語 テキスト]\n"
+   }
+  },
+  "edge unicode: printf left width combining": {
+   "script": "78f4ecfe2b26c7ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[été ]\n"
+   }
+  },
+  "edge unicode: printf left width emoji": {
+   "script": "a47665c0c0e30c9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a😀b👍🏽c]\n"
+   }
+  },
+  "edge unicode: printf left width greek": {
+   "script": "6566c83f919164fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[Αλφα ΒΗΤΑ]\n"
+   }
+  },
+  "edge unicode: printf left width hebrew": {
+   "script": "dcf657e6f0dc560e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[שלום עולם]\n"
+   }
+  },
+  "edge unicode: printf left width latin": {
+   "script": "1e3799bfccf6cc70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[héllo wörld]\n"
+   }
+  },
+  "edge unicode: printf left width nbsp": {
+   "script": "3176660a4bc62048",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b c  ]\n"
+   }
+  },
+  "edge unicode: printf left width zwj": {
+   "script": "65832324a637763e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[👨‍👩‍👧 fam]\n"
+   }
+  },
+  "edge unicode: printf precision bom": {
+   "script": "7323df07c4164952",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[﻿]\n"
+   }
+  },
+  "edge unicode: printf precision cjk": {
+   "script": "fa4280f61c49ad7c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[日]\n"
+   }
+  },
+  "edge unicode: printf precision combining": {
+   "script": "eed4b49d9f31cd2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[é]\n"
+   }
+  },
+  "edge unicode: printf precision emoji": {
+   "script": "469446f9181967b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "W2Hwn10K"
+   }
+  },
+  "edge unicode: printf precision greek": {
+   "script": "bc0e89620e88507a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "W86Rzl0K"
+   }
+  },
+  "edge unicode: printf precision hebrew": {
+   "script": "2bb7a444e1bebb8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "W9ep110K"
+   }
+  },
+  "edge unicode: printf precision latin": {
+   "script": "f5ee3044760d3cce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[hé]\n"
+   }
+  },
+  "edge unicode: printf precision nbsp": {
+   "script": "5765d5e1ab496e53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a ]\n"
+   }
+  },
+  "edge unicode: printf precision zwj": {
+   "script": "e419173f58c60fad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "base64": "W/CfkV0K"
+   }
+  },
+  "edge unicode: printf q bom": {
+   "script": "ba90e97fa4bb6912",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bom\\ text\n"
+   }
+  },
+  "edge unicode: printf q cjk": {
+   "script": "e59f44c014839192",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語\\ テキスト\n"
+   }
+  },
+  "edge unicode: printf q combining": {
+   "script": "f54f4c9bbba919c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "été\n"
+   }
+  },
+  "edge unicode: printf q emoji": {
+   "script": "f7936a98c1ff9a8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀b👍🏽c\n"
+   }
+  },
+  "edge unicode: printf q greek": {
+   "script": "791e915a44d0a9fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφα\\ ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: printf q hebrew": {
+   "script": "c09283b77fc2ab87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום\\ עולם\n"
+   }
+  },
+  "edge unicode: printf q latin": {
+   "script": "b49a080d1ec72990",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllo\\ wörld\n"
+   }
+  },
+  "edge unicode: printf q nbsp": {
+   "script": "c7ddb712c4515df7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\\ c\n"
+   }
+  },
+  "edge unicode: printf q zwj": {
+   "script": "33ad6c7ada024dd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧\\ fam\n"
+   }
+  },
+  "edge unicode: printf width bom": {
+   "script": "53476248767131e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[ ﻿bom text]\n"
+   }
+  },
+  "edge unicode: printf width cjk": {
+   "script": "246332bcca896aaa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[日本語 テキスト]\n"
+   }
+  },
+  "edge unicode: printf width combining": {
+   "script": "298f1a67c021f9c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[     été]\n"
+   }
+  },
+  "edge unicode: printf width emoji": {
+   "script": "31432b66957f8eec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a😀b👍🏽c]\n"
+   }
+  },
+  "edge unicode: printf width greek": {
+   "script": "37e08fd033793528",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[Αλφα ΒΗΤΑ]\n"
+   }
+  },
+  "edge unicode: printf width hebrew": {
+   "script": "9202d976eaad9e4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[שלום עולם]\n"
+   }
+  },
+  "edge unicode: printf width latin": {
+   "script": "4a63be375b27fa00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[héllo wörld]\n"
+   }
+  },
+  "edge unicode: printf width nbsp": {
+   "script": "35edc3a6fa527a9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[      a b c]\n"
+   }
+  },
+  "edge unicode: printf width zwj": {
+   "script": "09f61d0e0fde5b0f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[👨‍👩‍👧 fam]\n"
+   }
+  },
+  "edge unicode: read -N bom": {
+   "script": "039af80ba2192cc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿b\n"
+   }
+  },
+  "edge unicode: read -N cjk": {
+   "script": "fc316069dddf4e31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本\n"
+   }
+  },
+  "edge unicode: read -N combining": {
+   "script": "2f6d010fd2fcca18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n"
+   }
+  },
+  "edge unicode: read -N emoji": {
+   "script": "6de13502a26165ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀\n"
+   }
+  },
+  "edge unicode: read -N greek": {
+   "script": "8f42a8f474d0cb67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλ\n"
+   }
+  },
+  "edge unicode: read -N hebrew": {
+   "script": "30a743c6b49b5419",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "של\n"
+   }
+  },
+  "edge unicode: read -N latin": {
+   "script": "c4fa313417b5e1bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hé\n"
+   }
+  },
+  "edge unicode: read -N nbsp": {
+   "script": "6d55c9280a5d3550",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a \n"
+   }
+  },
+  "edge unicode: read -N zwj": {
+   "script": "07c654a4ab7dd979",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍\n"
+   }
+  },
+  "edge unicode: read -a unicode": {
+   "script": "1dec6188a8b15fa6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 β\n"
+   }
+  },
+  "edge unicode: read -d multibyte": {
+   "script": "c4ba8d3836be7209",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "edge unicode: read -n bom": {
+   "script": "65d8cf2e97676967",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bo\n"
+   }
+  },
+  "edge unicode: read -n cjk": {
+   "script": "ad2c83b45b324092",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語\n"
+   }
+  },
+  "edge unicode: read -n combining": {
+   "script": "2bbc976f5da662cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ét\n"
+   }
+  },
+  "edge unicode: read -n emoji": {
+   "script": "248d872b2af7afac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀b\n"
+   }
+  },
+  "edge unicode: read -n greek": {
+   "script": "763931ad6de16034",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφ\n"
+   }
+  },
+  "edge unicode: read -n hebrew": {
+   "script": "07f5ab124b5029dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלו\n"
+   }
+  },
+  "edge unicode: read -n latin": {
+   "script": "9d753cc47070cb24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hél\n"
+   }
+  },
+  "edge unicode: read -n nbsp": {
+   "script": "843c87304b88ded0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\n"
+   }
+  },
+  "edge unicode: read -n zwj": {
+   "script": "2e94ea154f26685b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩\n"
+   }
+  },
+  "edge unicode: regex groups bom": {
+   "script": "eaec1ad382fd1196",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge unicode: regex groups cjk": {
+   "script": "72c55b88665e8d7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "本\n"
+   }
+  },
+  "edge unicode: regex groups combining": {
+   "script": "3a360281f70b7c6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "́\n"
+   }
+  },
+  "edge unicode: regex groups emoji": {
+   "script": "faa1ce1c513a3ff0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀\n"
+   }
+  },
+  "edge unicode: regex groups greek": {
+   "script": "4296f4cc2189cd87",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "λ\n"
+   }
+  },
+  "edge unicode: regex groups hebrew": {
+   "script": "9be3267d95b2c645",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ל\n"
+   }
+  },
+  "edge unicode: regex groups latin": {
+   "script": "7714d0b8f2ad8304",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\n"
+   }
+  },
+  "edge unicode: regex groups nbsp": {
+   "script": "030566109ee99f44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \n"
+   }
+  },
+  "edge unicode: regex groups zwj": {
+   "script": "f66c96cbef0ec43e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "‍\n"
+   }
+  },
+  "edge unicode: replace anchored": {
+   "script": "8c53fdec85dd69f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Eté étE\n"
+   }
+  },
+  "edge unicode: replace char": {
+   "script": "cc861a611b9f8d89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "αbγ\n"
+   }
+  },
+  "edge unicode: replace range": {
+   "script": "da3afb3156d99ea8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xxxa\n"
+   }
+  },
+  "edge unicode: rev bom": {
+   "script": "edc84cb76348a00d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "txet mob﻿\n"
+   }
+  },
+  "edge unicode: rev cjk": {
+   "script": "088883d664f70b5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "トスキテ 語本日\n"
+   }
+  },
+  "edge unicode: rev combining": {
+   "script": "737f28b0e8192d6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "́et́e\n"
+   }
+  },
+  "edge unicode: rev emoji": {
+   "script": "24c92df44f50345a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c🏽👍b😀a\n"
+   }
+  },
+  "edge unicode: rev greek": {
+   "script": "9b662e7429424827",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ΑΤΗΒ αφλΑ\n"
+   }
+  },
+  "edge unicode: rev hebrew": {
+   "script": "5950b5791078b9ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "םלוע םולש\n"
+   }
+  },
+  "edge unicode: rev latin": {
+   "script": "4c36da710f85fa94",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dlröw olléh\n"
+   }
+  },
+  "edge unicode: rev nbsp": {
+   "script": "9fc282dda4fd6d72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c b a\n"
+   }
+  },
+  "edge unicode: rev zwj": {
+   "script": "dd7aa5c146a62b12",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "maf 👧‍👩‍👨\n"
+   }
+  },
+  "edge unicode: sed -n l bom": {
+   "script": "c8378c5b9825ad7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\357\\273\\277bom text$\n"
+   }
+  },
+  "edge unicode: sed -n l cjk": {
+   "script": "dc481c8b71ef5ce2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\346\\227\\245\\346\\234\\254\\350\\252\\236 \\343\\203\\206\\343\\202\\255\\343\\202\\\n\\271\\343\\203\\210$\n"
+   }
+  },
+  "edge unicode: sed -n l combining": {
+   "script": "0d49c6df7d3cfb2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\\314\\201te\\314\\201$\n"
+   }
+  },
+  "edge unicode: sed -n l emoji": {
+   "script": "5365fa410018a145",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\360\\237\\230\\200b\\360\\237\\221\\215\\360\\237\\217\\275c$\n"
+   }
+  },
+  "edge unicode: sed -n l greek": {
+   "script": "216ae63ad2832dba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\316\\221\\316\\273\\317\\206\\316\\261 \\316\\222\\316\\227\\316\\244\\316\\221$\n"
+   }
+  },
+  "edge unicode: sed -n l hebrew": {
+   "script": "918e4c6bb79aa46b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\327\\251\\327\\234\\327\\225\\327\\235 \\327\\242\\327\\225\\327\\234\\327\\235$\n"
+   }
+  },
+  "edge unicode: sed -n l latin": {
+   "script": "2899beb36dc1e5fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "h\\303\\251llo w\\303\\266rld$\n"
+   }
+  },
+  "edge unicode: sed -n l nbsp": {
+   "script": "4dfebd8ff631ac9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\\302\\240b c$\n"
+   }
+  },
+  "edge unicode: sed -n l zwj": {
+   "script": "c00392cab6039b00",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\\360\\237\\221\\250\\342\\200\\215\\360\\237\\221\\251\\342\\200\\215\\360\\237\\221\\\n\\247 fam$\n"
+   }
+  },
+  "edge unicode: sed I flag": {
+   "script": "d23be69e56c1829f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "edge unicode: sed alpha class bom": {
+   "script": "f28e12884ba7d8db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿AAA AAAA\n"
+   }
+  },
+  "edge unicode: sed alpha class cjk": {
+   "script": "ca9369e52e9e8731",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AAA AAAA\n"
+   }
+  },
+  "edge unicode: sed alpha class combining": {
+   "script": "9a37a063a0aca239",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÁAÁ\n"
+   }
+  },
+  "edge unicode: sed alpha class emoji": {
+   "script": "0656e698fb066f7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A😀A👍🏽A\n"
+   }
+  },
+  "edge unicode: sed alpha class greek": {
+   "script": "d77971d9182d731d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AAAA AAAA\n"
+   }
+  },
+  "edge unicode: sed alpha class hebrew": {
+   "script": "71c260de417dfe71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AAAA AAAA\n"
+   }
+  },
+  "edge unicode: sed alpha class latin": {
+   "script": "116e03311c4ed0de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "AAAAA AAAAA\n"
+   }
+  },
+  "edge unicode: sed alpha class nbsp": {
+   "script": "21b1ab2acc25e92a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A A A\n"
+   }
+  },
+  "edge unicode: sed alpha class zwj": {
+   "script": "f11cb4f8b065d2eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 AAA\n"
+   }
+  },
+  "edge unicode: sed any char bom": {
+   "script": "2784e38384789d9a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<﻿><b><o><m>< ><t><e><x><t>\n"
+   }
+  },
+  "edge unicode: sed any char cjk": {
+   "script": "64c5020173be823f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<日><本><語>< ><テ><キ><ス><ト>\n"
+   }
+  },
+  "edge unicode: sed any char combining": {
+   "script": "734195dd989994e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<e><́><t><e><́>\n"
+   }
+  },
+  "edge unicode: sed any char emoji": {
+   "script": "f1dcbd108cecc744",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a><😀><b><👍><🏽><c>\n"
+   }
+  },
+  "edge unicode: sed any char greek": {
+   "script": "5613fde7eea59e8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<Α><λ><φ><α>< ><Β><Η><Τ><Α>\n"
+   }
+  },
+  "edge unicode: sed any char hebrew": {
+   "script": "8182f5b02025bb84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<ש><ל><ו><ם>< ><ע><ו><ל><ם>\n"
+   }
+  },
+  "edge unicode: sed any char latin": {
+   "script": "2942b82c62988efa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<h><é><l><l><o>< ><w><ö><r><l><d>\n"
+   }
+  },
+  "edge unicode: sed any char nbsp": {
+   "script": "f4d7e8cc4d55c680",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<a>< ><b>< ><c>\n"
+   }
+  },
+  "edge unicode: sed any char zwj": {
+   "script": "d1c87c9e2933c958",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "<👨><‍><👩><‍><👧>< ><f><a><m>\n"
+   }
+  },
+  "edge unicode: sed case conversion": {
+   "script": "415f8f04f2cc289f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉTÉ\n"
+   }
+  },
+  "edge unicode: sed range class": {
+   "script": "48bb35b654434d33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "G x\n"
+   }
+  },
+  "edge unicode: sed swap first two bom": {
+   "script": "0479772f473d7c5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b﻿om text\n"
+   }
+  },
+  "edge unicode: sed swap first two cjk": {
+   "script": "8b9596198168745c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "本日語 テキスト\n"
+   }
+  },
+  "edge unicode: sed swap first two combining": {
+   "script": "97bed8de8cda9576",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "́eté\n"
+   }
+  },
+  "edge unicode: sed swap first two emoji": {
+   "script": "99b7408fd6ed643e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀ab👍🏽c\n"
+   }
+  },
+  "edge unicode: sed swap first two greek": {
+   "script": "863711a489d3c871",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "λΑφα ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: sed swap first two hebrew": {
+   "script": "616ed98ac5660470",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "לשום עולם\n"
+   }
+  },
+  "edge unicode: sed swap first two latin": {
+   "script": "601be5838ec1611b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "éhllo wörld\n"
+   }
+  },
+  "edge unicode: sed swap first two nbsp": {
+   "script": "1ac57913be8fce55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " ab c\n"
+   }
+  },
+  "edge unicode: sed swap first two zwj": {
+   "script": "646c0ed8bfb02e64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "‍👨👩‍👧 fam\n"
+   }
+  },
+  "edge unicode: sed y multibyte": {
+   "script": "e4d825221ec64da1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ab\n"
+   }
+  },
+  "edge unicode: seq -s multibyte": {
+   "script": "3eb5660210c47172",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1→2→3\n"
+   }
+  },
+  "edge unicode: sha256sum bom": {
+   "script": "ddb4340a35762a46",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f9321f10913b126c5c0fb89f8f4d0f4ddb95167a3a21d6b572afdfadeb8ed090  -\n"
+   }
+  },
+  "edge unicode: sha256sum cjk": {
+   "script": "dd8c14e95ba5104e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5fc72a93a201cb25564558c4bc18e7e199449f861f80652886f0e37aa776a6a2  -\n"
+   }
+  },
+  "edge unicode: sha256sum combining": {
+   "script": "9e1636a8ba2b3f4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ed85f8c7916f03a2a65770b00672ab9b00c297bdec56b6d4b69abba10c51e080  -\n"
+   }
+  },
+  "edge unicode: sha256sum emoji": {
+   "script": "1e10e7415c66742f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f51f0653742db4139c03c7ffad38d525c51e1e6d0764b8453e7312115188085f  -\n"
+   }
+  },
+  "edge unicode: sha256sum greek": {
+   "script": "c806d16d8364e82a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "67f88b5f287fd521071f44082c80ea95c10d6b9520b1354711b59b05c19c8927  -\n"
+   }
+  },
+  "edge unicode: sha256sum hebrew": {
+   "script": "f470d505d70f3ae7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f750d8735055b497593d2da2175aaa4e80f9beba43bdd838390c2fe261ab7074  -\n"
+   }
+  },
+  "edge unicode: sha256sum latin": {
+   "script": "0b9d38aa9692fcfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3828eeee974aa7486e7acc258e5c73a0115e168444d6688deb8d5d1306d1f57d  -\n"
+   }
+  },
+  "edge unicode: sha256sum nbsp": {
+   "script": "270d9bf0761225f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f32be1c284cc604c7f3096d9368a03990363d59c58d661b09a99ca1e59ae8d57  -\n"
+   }
+  },
+  "edge unicode: sha256sum zwj": {
+   "script": "89ed9a54d120e30d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "fff87e0c0b3f41891926c3e6175173eafa33cf4694bedd90e6934cb40a5d070f  -\n"
+   }
+  },
+  "edge unicode: sort -d": {
+   "script": "df55396f29175b5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a-c\néb\n!z\n"
+   }
+  },
+  "edge unicode: sort -f": {
+   "script": "ded54887c00fdbcf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "E\ne\nÉ\né\n"
+   }
+  },
+  "edge unicode: sort -k": {
+   "script": "bb3b69e1218db9d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y a\nx é\nz 日\n"
+   }
+  },
+  "edge unicode: sort -r": {
+   "script": "8af893d439e3962d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\nÉ\nz\ne\n"
+   }
+  },
+  "edge unicode: sort -t multibyte": {
+   "script": "76afabad7fd9f086",
+   "status": 2,
+   "stderr": {
+    "text": "sort: multi-character tab ‘é’\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: sort -u": {
+   "script": "a422e055803261bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e\né\n"
+   }
+  },
+  "edge unicode: sort code points": {
+   "script": "79b244c8069ba521",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\ne\nz\nÉ\né\n日\n"
+   }
+  },
+  "edge unicode: substring bom": {
+   "script": "43941158e5c1da01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bom\n"
+   }
+  },
+  "edge unicode: substring cjk": {
+   "script": "c60ba24bf8f655bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "本語 \n"
+   }
+  },
+  "edge unicode: substring combining": {
+   "script": "000f4a3415f98899",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "́te\n"
+   }
+  },
+  "edge unicode: substring emoji": {
+   "script": "36046f6ed991de2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀b👍\n"
+   }
+  },
+  "edge unicode: substring greek": {
+   "script": "d31f4c35a307bd98",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "λφα\n"
+   }
+  },
+  "edge unicode: substring hebrew": {
+   "script": "122a6af8960b0140",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "לום\n"
+   }
+  },
+  "edge unicode: substring latin": {
+   "script": "fbd157893c6d7422",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "éll\n"
+   }
+  },
+  "edge unicode: substring nbsp": {
+   "script": "52c336eeb221d0d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " b \n"
+   }
+  },
+  "edge unicode: substring zwj": {
+   "script": "5cb6b33cb19ac902",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "‍👩‍\n"
+   }
+  },
+  "edge unicode: tail -c bom": {
+   "script": "1e4d7a83e04ab277",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 65 78 74 0a\n"
+   }
+  },
+  "edge unicode: tail -c cjk": {
+   "script": "a156942f7471a0f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " e3 83 88 0a\n"
+   }
+  },
+  "edge unicode: tail -c combining": {
+   "script": "09bb73044be08f79",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 65 cc 81 0a\n"
+   }
+  },
+  "edge unicode: tail -c emoji": {
+   "script": "4222c11a94118de4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 8f bd 63 0a\n"
+   }
+  },
+  "edge unicode: tail -c greek": {
+   "script": "152a16f092ef9deb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " a4 ce 91 0a\n"
+   }
+  },
+  "edge unicode: tail -c hebrew": {
+   "script": "f7e00cc3a5a7d8ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 9c d7 9d 0a\n"
+   }
+  },
+  "edge unicode: tail -c latin": {
+   "script": "a635174c85d6f75e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 72 6c 64 0a\n"
+   }
+  },
+  "edge unicode: tail -c nbsp": {
+   "script": "50938ca16c7ceb6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 62 20 63 0a\n"
+   }
+  },
+  "edge unicode: tail -c zwj": {
+   "script": "30f937f082541dda",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 66 61 6d 0a\n"
+   }
+  },
+  "edge unicode: test -n unicode": {
+   "script": "7739439de3af7412",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "edge unicode: test string compare": {
+   "script": "77eb5bf9cb5a2998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "more\n"
+   }
+  },
+  "edge unicode: toggle case": {
+   "script": "4a4bb9db213de706",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Éé\n"
+   }
+  },
+  "edge unicode: tr -d multibyte": {
+   "script": "23e8117074bc9fcf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hllo\n"
+   }
+  },
+  "edge unicode: tr -s multibyte": {
+   "script": "a910ba40315c2675",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ööö\n"
+   }
+  },
+  "edge unicode: tr complement bom": {
+   "script": "2467b8f520f09ec5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "___bom_text\n"
+   }
+  },
+  "edge unicode: tr complement cjk": {
+   "script": "8780ae2715c14823",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "______________________\n"
+   }
+  },
+  "edge unicode: tr complement combining": {
+   "script": "dff4e73f514b7cef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "e__te__\n"
+   }
+  },
+  "edge unicode: tr complement emoji": {
+   "script": "afb9bb0bf28797af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a____b________c\n"
+   }
+  },
+  "edge unicode: tr complement greek": {
+   "script": "6fc0036868be348c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "_________________\n"
+   }
+  },
+  "edge unicode: tr complement hebrew": {
+   "script": "295a6ea24402f8e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "_________________\n"
+   }
+  },
+  "edge unicode: tr complement latin": {
+   "script": "1bcd21f2dac6ea2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "h__llo_w__rld\n"
+   }
+  },
+  "edge unicode: tr complement nbsp": {
+   "script": "aa8ebbf831090964",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a__b_c\n"
+   }
+  },
+  "edge unicode: tr complement zwj": {
+   "script": "781a6eaca22f7707",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "___________________fam\n"
+   }
+  },
+  "edge unicode: tr delete ascii bom": {
+   "script": "fe02259983145703",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿ \n"
+   }
+  },
+  "edge unicode: tr delete ascii cjk": {
+   "script": "56aa475539b34018",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 テキスト\n"
+   }
+  },
+  "edge unicode: tr delete ascii combining": {
+   "script": "88707058c943fdd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "́́\n"
+   }
+  },
+  "edge unicode: tr delete ascii emoji": {
+   "script": "65f2419e95b9e4c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀👍🏽\n"
+   }
+  },
+  "edge unicode: tr delete ascii greek": {
+   "script": "4e32435cb1549b43",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφα ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: tr delete ascii hebrew": {
+   "script": "03c74333385f6f66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום עולם\n"
+   }
+  },
+  "edge unicode: tr delete ascii latin": {
+   "script": "8a5740bf5c435eb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é ö\n"
+   }
+  },
+  "edge unicode: tr delete ascii nbsp": {
+   "script": "a255dd2b4b48d61f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "  \n"
+   }
+  },
+  "edge unicode: tr delete ascii zwj": {
+   "script": "1f563115b43d01c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 \n"
+   }
+  },
+  "edge unicode: tr multibyte sets": {
+   "script": "58755c3fcc52b446",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "α\n"
+   }
+  },
+  "edge unicode: tr multibyte source": {
+   "script": "d5182569d3cf94c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bbbb\n"
+   }
+  },
+  "edge unicode: tr upper classes bom": {
+   "script": "126ef7ecc4ddc8fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿BOM TEXT\n"
+   }
+  },
+  "edge unicode: tr upper classes cjk": {
+   "script": "ff9071586b796468",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 テキスト\n"
+   }
+  },
+  "edge unicode: tr upper classes combining": {
+   "script": "159b11e8d5c8a86b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉTÉ\n"
+   }
+  },
+  "edge unicode: tr upper classes emoji": {
+   "script": "6fd5fe79c30c6396",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A😀B👍🏽C\n"
+   }
+  },
+  "edge unicode: tr upper classes greek": {
+   "script": "6059e814dc2bd768",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφα ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: tr upper classes hebrew": {
+   "script": "3f3fe98f5cb55f58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום עולם\n"
+   }
+  },
+  "edge unicode: tr upper classes latin": {
+   "script": "38629c39884e67ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HéLLO WöRLD\n"
+   }
+  },
+  "edge unicode: tr upper classes nbsp": {
+   "script": "b84e011c42c2b6e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A B C\n"
+   }
+  },
+  "edge unicode: tr upper classes zwj": {
+   "script": "f368fe015d9e8337",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 FAM\n"
+   }
+  },
+  "edge unicode: transform Q bom": {
+   "script": "d1008509f4a03d1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'﻿bom text'\n"
+   }
+  },
+  "edge unicode: transform Q cjk": {
+   "script": "7acb5eff92b68c58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'日本語 テキスト'\n"
+   }
+  },
+  "edge unicode: transform Q combining": {
+   "script": "7b6d210b5f5bbf9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'été'\n"
+   }
+  },
+  "edge unicode: transform Q emoji": {
+   "script": "55ecfd209347d088",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'a😀b👍🏽c'\n"
+   }
+  },
+  "edge unicode: transform Q greek": {
+   "script": "fa267cd8bf340438",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'Αλφα ΒΗΤΑ'\n"
+   }
+  },
+  "edge unicode: transform Q hebrew": {
+   "script": "51b7e3f4484f8652",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'שלום עולם'\n"
+   }
+  },
+  "edge unicode: transform Q latin": {
+   "script": "f5dfdb8f88898c58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'héllo wörld'\n"
+   }
+  },
+  "edge unicode: transform Q nbsp": {
+   "script": "b0fb78d5aee6b94f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'a b c'\n"
+   }
+  },
+  "edge unicode: transform Q zwj": {
+   "script": "98b7205f45fce5e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'👨‍👩‍👧 fam'\n"
+   }
+  },
+  "edge unicode: trim one char back bom": {
+   "script": "e71546d9bc9455ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bom tex\n"
+   }
+  },
+  "edge unicode: trim one char back cjk": {
+   "script": "200fef70fcea2980",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 テキス\n"
+   }
+  },
+  "edge unicode: trim one char back combining": {
+   "script": "a868744fb314ad11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "éte\n"
+   }
+  },
+  "edge unicode: trim one char back emoji": {
+   "script": "a9f2acd0f4cfa2d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a😀b👍🏽\n"
+   }
+  },
+  "edge unicode: trim one char back greek": {
+   "script": "9430dd144964a77f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφα ΒΗΤ\n"
+   }
+  },
+  "edge unicode: trim one char back hebrew": {
+   "script": "97b5e59d2604c4ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום עול\n"
+   }
+  },
+  "edge unicode: trim one char back latin": {
+   "script": "f3ac06dc9871b378",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllo wörl\n"
+   }
+  },
+  "edge unicode: trim one char back nbsp": {
+   "script": "4e4c284a40f2d107",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b \n"
+   }
+  },
+  "edge unicode: trim one char back zwj": {
+   "script": "f7b39631ff97e40f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 fa\n"
+   }
+  },
+  "edge unicode: trim one char front bom": {
+   "script": "02563a4f243e5d18",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bom text\n"
+   }
+  },
+  "edge unicode: trim one char front cjk": {
+   "script": "5482862f11150095",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "本語 テキスト\n"
+   }
+  },
+  "edge unicode: trim one char front combining": {
+   "script": "c4c226114c01dcb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "́té\n"
+   }
+  },
+  "edge unicode: trim one char front emoji": {
+   "script": "4b023033d6eef5e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "😀b👍🏽c\n"
+   }
+  },
+  "edge unicode: trim one char front greek": {
+   "script": "6fbe6b10bf8ee147",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "λφα ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: trim one char front hebrew": {
+   "script": "1efab078876c27d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "לום עולם\n"
+   }
+  },
+  "edge unicode: trim one char front latin": {
+   "script": "5cab7ad8a204c488",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "éllo wörld\n"
+   }
+  },
+  "edge unicode: trim one char front nbsp": {
+   "script": "fe6c31a59a1039f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " b c\n"
+   }
+  },
+  "edge unicode: trim one char front zwj": {
+   "script": "2a25045bc76530cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "‍👩‍👧 fam\n"
+   }
+  },
+  "edge unicode: trim pattern": {
+   "script": "08b548c629ea5691",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 語.txt\n"
+   }
+  },
+  "edge unicode: unexpand multibyte": {
+   "script": "2aa05e38de57cd8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\tb\n"
+   }
+  },
+  "edge unicode: unicode alias": {
+   "script": "4c0737319a8b6523",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "aliased\n"
+   }
+  },
+  "edge unicode: unicode function name": {
+   "script": "0a5d9856de014354",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "called\n"
+   }
+  },
+  "edge unicode: unicode variable name": {
+   "script": "57a478a9bc3e93ca",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: é=1: command not found\n"
+   },
+   "stdout": {
+    "text": "127\n"
+   }
+  },
+  "edge unicode: uniq -c": {
+   "script": "b262187989c01a86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      2 日\n      1 本\n"
+   }
+  },
+  "edge unicode: uniq -i": {
+   "script": "6821f37e7e6c8a03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é\nÉ\ne\n"
+   }
+  },
+  "edge unicode: upper bom": {
+   "script": "742ae46b6c338a34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿BOM TEXT\n"
+   }
+  },
+  "edge unicode: upper cjk": {
+   "script": "a8f96812b3d93ab0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 テキスト\n"
+   }
+  },
+  "edge unicode: upper combining": {
+   "script": "e3414e2c9a050767",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉTÉ\n"
+   }
+  },
+  "edge unicode: upper digraph": {
+   "script": "a349667d287a4039",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Ǆ Ǆ\n"
+   }
+  },
+  "edge unicode: upper dotless i": {
+   "script": "d6c1883e0bf7eae7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "I\n"
+   }
+  },
+  "edge unicode: upper emoji": {
+   "script": "2806a992033a4ea0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A😀B👍🏽C\n"
+   }
+  },
+  "edge unicode: upper final sigma": {
+   "script": "f7ef7a4d24e8aa0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ΟΣ\n"
+   }
+  },
+  "edge unicode: upper first bom": {
+   "script": "16bba4fa9938b66e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "﻿bom text\n"
+   }
+  },
+  "edge unicode: upper first cjk": {
+   "script": "55c78983084301a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "日本語 テキスト\n"
+   }
+  },
+  "edge unicode: upper first combining": {
+   "script": "7e4058cec450d92c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Été\n"
+   }
+  },
+  "edge unicode: upper first emoji": {
+   "script": "8d895c82550db89e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A😀b👍🏽c\n"
+   }
+  },
+  "edge unicode: upper first greek": {
+   "script": "88a26f2e3423f359",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Αλφα ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: upper first hebrew": {
+   "script": "00429e1ae5281d8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום עולם\n"
+   }
+  },
+  "edge unicode: upper first latin": {
+   "script": "a9ec20fd9dfcb586",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Héllo wörld\n"
+   }
+  },
+  "edge unicode: upper first nbsp": {
+   "script": "7ca089e1e68d4e9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A b c\n"
+   }
+  },
+  "edge unicode: upper first zwj": {
+   "script": "6a4c67668904bcea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 fam\n"
+   }
+  },
+  "edge unicode: upper greek": {
+   "script": "f692c1854aef9659",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ΑΛΦΑ ΒΗΤΑ\n"
+   }
+  },
+  "edge unicode: upper hebrew": {
+   "script": "88bb3f3ba3718338",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "שלום עולם\n"
+   }
+  },
+  "edge unicode: upper latin": {
+   "script": "2545d2479c31f7cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HÉLLO WÖRLD\n"
+   }
+  },
+  "edge unicode: upper ligature": {
+   "script": "800a96d0fa591b06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ﬁ\n"
+   }
+  },
+  "edge unicode: upper nbsp": {
+   "script": "3222e8067b15caf6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A B C\n"
+   }
+  },
+  "edge unicode: upper pattern": {
+   "script": "4689eb2a054f6bca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ÉtÉ\n"
+   }
+  },
+  "edge unicode: upper sharp s": {
+   "script": "f88643ca7de571f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "STRAẞE\n"
+   }
+  },
+  "edge unicode: upper zwj": {
+   "script": "129213c29b1506db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "👨‍👩‍👧 FAM\n"
+   }
+  },
+  "edge unicode: wc -L bom": {
+   "script": "af7516197567c665",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge unicode: wc -L cjk": {
+   "script": "44dab9c448324940",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15\n"
+   }
+  },
+  "edge unicode: wc -L combining": {
+   "script": "ca3572d5a9c9ae3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge unicode: wc -L emoji": {
+   "script": "d4703e6365930158",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: wc -L greek": {
+   "script": "6b4987743a1d2c1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: wc -L hebrew": {
+   "script": "eb96afee7feaf6c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: wc -L latin": {
+   "script": "8473053d6729ca25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\n"
+   }
+  },
+  "edge unicode: wc -L nbsp": {
+   "script": "7c2cb44743b5d8ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "edge unicode: wc -L zwj": {
+   "script": "60ec3eb79fc0a724",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "edge unicode: wc -c bom": {
+   "script": "a0ca6006307cd1d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge unicode: wc -c cjk": {
+   "script": "dbb5c88be466dc51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "23\n"
+   }
+  },
+  "edge unicode: wc -c combining": {
+   "script": "ee6c107ed1907557",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\n"
+   }
+  },
+  "edge unicode: wc -c emoji": {
+   "script": "c7cdf3ebd48c57d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "16\n"
+   }
+  },
+  "edge unicode: wc -c greek": {
+   "script": "0f9e664a5415ca8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18\n"
+   }
+  },
+  "edge unicode: wc -c hebrew": {
+   "script": "0111a9064c11514d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "18\n"
+   }
+  },
+  "edge unicode: wc -c latin": {
+   "script": "33d3cbca2cddd1ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "14\n"
+   }
+  },
+  "edge unicode: wc -c nbsp": {
+   "script": "d58f4e2d97043d69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge unicode: wc -c zwj": {
+   "script": "1e6554429ecd4af6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "23\n"
+   }
+  },
+  "edge unicode: wc -m bom": {
+   "script": "dea9a373a5e1ad51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "edge unicode: wc -m cjk": {
+   "script": "40e785f4ba0d4ab5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "edge unicode: wc -m combining": {
+   "script": "826640a1d71c69c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge unicode: wc -m emoji": {
+   "script": "97fb0bea34b24079",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "edge unicode: wc -m greek": {
+   "script": "abb4496b270510be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "edge unicode: wc -m hebrew": {
+   "script": "ea99c1382620da65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "edge unicode: wc -m latin": {
+   "script": "dcf4873f09fecbb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "edge unicode: wc -m nbsp": {
+   "script": "7fd344a847ea42af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\n"
+   }
+  },
+  "edge unicode: wc -m zwj": {
+   "script": "cbccbe7b27f46a76",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "edge unicode: wc -w bom": {
+   "script": "df8df4bea49f6f1a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: wc -w cjk": {
+   "script": "5aac23b3a9a923d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: wc -w combining": {
+   "script": "5623906a98a070d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: wc -w emoji": {
+   "script": "f3ee617022cf0e5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: wc -w greek": {
+   "script": "baf618743da44c67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: wc -w hebrew": {
+   "script": "bd718da92881ea6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: wc -w latin": {
+   "script": "d0c0de42c9f116ce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: wc -w nbsp": {
+   "script": "e66c2f3823e1ddad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "edge unicode: wc -w zwj": {
+   "script": "b2028e9263992a2d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: word split bom": {
+   "script": "5f41792595be1466",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: word split cjk": {
+   "script": "69461cb0543e0791",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: word split combining": {
+   "script": "f851b896eff0ba9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: word split emoji": {
+   "script": "34f9982a05d58ad8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge unicode: word split greek": {
+   "script": "c7b076148ee242e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: word split hebrew": {
+   "script": "d968439c00ed59aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: word split latin": {
+   "script": "c2a66036f7b8188b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: word split nbsp": {
+   "script": "a545035ab6623470",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: word split zwj": {
+   "script": "5e077564847047da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge unicode: xargs -d multibyte": {
+   "script": "6f74f2ce4aebf43d",
+   "status": 1,
+   "stderr": {
+    "text": "xargs: Invalid input delimiter specification é: the delimiter must be either a single character or an escape sequence starting with \\.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xargs quoted unicode": {
+   "script": "ee556fd026762698",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é 日\nx\n"
+   }
+  },
+  "edge unicode: xtrace bom": {
+   "script": "3d962792a52b2500",
+   "status": 0,
+   "stderr": {
+    "text": "+ : '﻿bom text'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace cjk": {
+   "script": "07104528399089cf",
+   "status": 0,
+   "stderr": {
+    "text": "+ : '日本語 テキスト'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace combining": {
+   "script": "cd7ceec7a235db21",
+   "status": 0,
+   "stderr": {
+    "text": "+ : été\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace emoji": {
+   "script": "fc70aa64d16282b9",
+   "status": 0,
+   "stderr": {
+    "text": "+ : a😀b👍🏽c\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace greek": {
+   "script": "66ae34bc61fae517",
+   "status": 0,
+   "stderr": {
+    "text": "+ : 'Αλφα ΒΗΤΑ'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace hebrew": {
+   "script": "fe35fed5ba94b574",
+   "status": 0,
+   "stderr": {
+    "text": "+ : 'שלום עולם'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace latin": {
+   "script": "fdd66cca37549893",
+   "status": 0,
+   "stderr": {
+    "text": "+ : 'héllo wörld'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace nbsp": {
+   "script": "0f153ab7e0971f10",
+   "status": 0,
+   "stderr": {
+    "text": "+ : 'a b c'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge unicode: xtrace zwj": {
+   "script": "25a5a78f35a11994",
+   "status": 0,
+   "stderr": {
+    "text": "+ : '👨‍👩‍👧 fam'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

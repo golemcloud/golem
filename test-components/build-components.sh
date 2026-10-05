@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming" "tool-runtime-bypass" "trapped-leaf-observer" "external-durable-streams")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
 effect_test_apps=("tool-streaming-effect")
 scala_test_apps=("tool-streaming-scala")
 moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")

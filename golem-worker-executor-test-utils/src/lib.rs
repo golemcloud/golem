@@ -53,11 +53,11 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, HostResponse, HostResponseEntityInvocation,
+    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponse, HostResponseEntityInvocation,
     HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload, PayloadId, RawOplogPayload,
-    TimestampedUpdateDescription, host_functions::HostFunctionName, types::ObjectMetadata,
-    types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
-    types::SerializableToolOperationTerminal,
+    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription, host_functions::HostFunctionName,
+    types::ObjectMetadata, types::SerializableEntityBodyExecution,
+    types::SerializableP3HttpBodyChunk, types::SerializableToolOperationTerminal,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -112,7 +112,7 @@ use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoo
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
-    BlobStoreError, BlobStoreService, DefaultBlobStoreService,
+    BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
 };
 use golem_worker_executor::services::card::{CardService, CardState, NoopCardService};
 use golem_worker_executor::services::card_interest::CardInterestIndex;
@@ -124,12 +124,15 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
-    EnvironmentStateServiceConfig, FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
-    GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig,
-    ResourceLimitsConfig, ResourceLimitsDisabledConfig, ResourceUsageMeteringConfig,
-    SchedulerStorageConfig, SnapshotPolicy,
+    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig,
+    KeyValueStorageConfig, KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig,
+    MemoryConfig, OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+    ResourceUsageMeteringConfig, SchedulerStorageConfig, SnapshotPolicy,
+};
+#[cfg(target_os = "linux")]
+use golem_worker_executor::services::golem_config::{
+    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
@@ -772,13 +775,14 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> anyhow::Result<golem_common::model::ExportForkAdmissions> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = Worker::find_durable_stream_worker(
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
             self.services
                 .as_ref()
                 .expect("test service graph is captured"),
             &owned_agent_id,
         )
-        .await?
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok(worker
             .get_attached_last_known_status()
@@ -901,13 +905,14 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> anyhow::Result<AgentStatusRecord> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = Worker::find_durable_stream_worker(
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
             self.services
                 .as_ref()
                 .expect("test service graph is captured"),
             &owned_agent_id,
         )
-        .await?
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok((*worker.get_attached_last_known_status().await).clone())
     }
@@ -2451,7 +2456,15 @@ impl NativeTestTool for NativeTestToolImpl {
         mut stderr: Option<golem_native_tool::NativeToolOutput>,
         _principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()> {
-        if mode != "read-counter" && ctx.is_live() {
+        let wait_for_count = mode
+            .strip_prefix("wait-counter:")
+            .map(str::parse::<usize>)
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
+        let reads_counter = mode == "read-counter" || wait_for_count.is_some();
+        let is_live = ctx.is_live();
+
+        if !reads_counter && is_live {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
 
@@ -2495,6 +2508,16 @@ impl NativeTestTool for NativeTestToolImpl {
             return Ok(());
         }
 
+        if is_live && let Some(expected) = wait_for_count {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while self.0.load(Ordering::SeqCst) < expected {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow!("native effect counter did not reach {expected}"))?;
+        }
+
         if mode == "wait-cancel" {
             if let Some(stdout) = &mut stdout {
                 stdout
@@ -2521,9 +2544,10 @@ impl NativeTestTool for NativeTestToolImpl {
         }
 
         if let Some(mut stdout) = stdout {
-            if mode == "read-counter" {
+            if reads_counter {
+                let count = wait_for_count.unwrap_or_else(|| self.0.load(Ordering::SeqCst));
                 stdout
-                    .write(self.0.load(Ordering::SeqCst).to_string().into_bytes())
+                    .write(count.to_string().into_bytes())
                     .await
                     .map_err(anyhow::Error::msg)?;
             } else {
@@ -2841,9 +2865,16 @@ impl UpdateManagement for TestWorkerCtx {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
+        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+        update_attempt_index: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_failed(target_revision, details)
+            .on_worker_update_failed(
+                target_revision,
+                details,
+                snapshot_assisted_details,
+                update_attempt_index,
+            )
             .await
     }
 
@@ -2852,9 +2883,15 @@ impl UpdateManagement for TestWorkerCtx {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+                snapshot_assisted_details,
+            )
             .await
     }
 }
@@ -7046,7 +7083,7 @@ impl KeyValueService for FailingKeyValueService {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         if self
             .remaining_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(anyhow!("transient test failure"))
@@ -7081,7 +7118,7 @@ impl KeyValueService for FailingKeyValueService {
     ) -> anyhow::Result<()> {
         if self
             .remaining_set_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(anyhow!("transient test failure"))
@@ -7173,10 +7210,13 @@ impl FailingBlobStoreService {
 impl BlobStoreService for FailingBlobStoreService {
     async fn clear(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
-        self.inner.clear(environment_id, container_name).await
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
+        self.inner
+            .clear(resource_limits, environment_id, container_name)
+            .await
     }
 
     async fn container_exists(
@@ -7191,14 +7231,16 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn copy_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .copy_object(
+                resource_limits,
                 environment_id,
                 source_container_name,
                 source_object_name,
@@ -7212,7 +7254,7 @@ impl BlobStoreService for FailingBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .create_container(environment_id, container_name)
             .await
@@ -7220,31 +7262,34 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn delete_container(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
-            .delete_container(environment_id, container_name)
+            .delete_container(resource_limits, environment_id, container_name)
             .await
     }
 
     async fn delete_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
-            .delete_object(environment_id, container_name, object_name)
+            .delete_object(resource_limits, environment_id, container_name, object_name)
             .await
     }
 
     async fn delete_objects(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_names: &[String],
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         if let Some(recorder) = &self.mutation_recorder {
             recorder.record(BlobStoreMutationCall::DeleteObjects {
                 environment_id,
@@ -7254,7 +7299,7 @@ impl BlobStoreService for FailingBlobStoreService {
         }
         if self
             .remaining_delete_objects_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(BlobStoreError::TransientBackend(
@@ -7262,7 +7307,12 @@ impl BlobStoreService for FailingBlobStoreService {
             ))
         } else {
             self.inner
-                .delete_objects(environment_id, container_name, object_names)
+                .delete_objects(
+                    resource_limits,
+                    environment_id,
+                    container_name,
+                    object_names,
+                )
                 .await
         }
     }
@@ -7287,7 +7337,7 @@ impl BlobStoreService for FailingBlobStoreService {
     ) -> Result<Vec<u8>, BlobStoreError> {
         if self
             .remaining_get_data_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(BlobStoreError::TransientBackend(
@@ -7323,14 +7373,16 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn move_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .move_object(
+                resource_limits,
                 environment_id,
                 source_container_name,
                 source_object_name,
@@ -7353,11 +7405,12 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn write_data(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_name: &str,
         data: &[u8],
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         if let Some(recorder) = &self.mutation_recorder {
             recorder.record(BlobStoreMutationCall::WriteData {
                 environment_id,
@@ -7368,7 +7421,7 @@ impl BlobStoreService for FailingBlobStoreService {
         }
         if self
             .remaining_write_data_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(BlobStoreError::TransientBackend(
@@ -7376,7 +7429,13 @@ impl BlobStoreService for FailingBlobStoreService {
             ))
         } else {
             self.inner
-                .write_data(environment_id, container_name, object_name, data)
+                .write_data(
+                    resource_limits,
+                    environment_id,
+                    container_name,
+                    object_name,
+                    data,
+                )
                 .await
         }
     }
@@ -7555,7 +7614,7 @@ impl Rpc for FailingRpc {
     ) -> Result<SchemaValue, ServiceRpcError> {
         if self
             .remaining_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             Err(ServiceRpcError::RemoteInternalError {

@@ -13,6 +13,8 @@ license-file = "../LICENSE"
 harness = false
 
 [dependencies]
+golem-schema = { workspace = true, features = ["protobuf"] }
+
 blake3 = { workspace = true }
 desert_rust = { workspace = true }
 prost = { workspace = true }
@@ -25,6 +27,7 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
+heck = { workspace = true }
 miette = { workspace = true }
 protox = { workspace = true }
 tonic-prost-build = { workspace = true }

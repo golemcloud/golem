@@ -409,21 +409,33 @@ describe('tool runtime client', () => {
       })
         ['structured-stdout']({})
         .collect(),
-    ).resolves.toEqual({ result: 'value', stdout: new Uint8Array([4, 5, 6]) });
+    ).resolves.toEqual({
+      result: { status: 'fulfilled', value: 'value' },
+      stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+      stderr: { status: 'fulfilled', value: undefined },
+    });
     await expect(
       client(unitStdout, {
         transport: new FakeTransport(() => ({ stdout: streamItems(bytes(4, 5, 6)) })),
       })
         ['unit-stdout']({})
         .collect(),
-    ).resolves.toEqual({ result: undefined, stdout: new Uint8Array([4, 5, 6]) });
+    ).resolves.toEqual({
+      result: { status: 'fulfilled', value: undefined },
+      stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+      stderr: { status: 'fulfilled', value: undefined },
+    });
     await expect(
       client(optionalStdout, {
         transport: new FakeTransport(() => ({ result: wireValue(z.string(), 'value') })),
       })
         ['optional-stdout']({})
         .collect(),
-    ).resolves.toEqual({ result: 'value', stdout: new Uint8Array() });
+    ).resolves.toEqual({
+      result: { status: 'fulfilled', value: 'value' },
+      stdout: { status: 'fulfilled', value: new Uint8Array() },
+      stderr: { status: 'fulfilled', value: undefined },
+    });
   });
 
   it('returns a started invocation synchronously for a stderr-only command', async () => {
@@ -443,8 +455,9 @@ describe('tool runtime client', () => {
       collect: expect.any(Function),
     });
     await expect(invocation.collect()).resolves.toEqual({
-      result: 'value',
-      stderr: new Uint8Array([7, 8, 9]),
+      result: { status: 'fulfilled', value: 'value' },
+      stdout: { status: 'fulfilled', value: undefined },
+      stderr: { status: 'fulfilled', value: new Uint8Array([7, 8, 9]) },
     });
   });
 
@@ -496,8 +509,9 @@ describe('tool runtime client', () => {
 
     await expect(client(definition, { transport }).transform({ stdin }).collect()).resolves.toEqual(
       {
-        result: 'transformed',
-        stdout: new Uint8Array([4, 5, 6]),
+        result: { status: 'fulfilled', value: 'transformed' },
+        stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+        stderr: { status: 'fulfilled', value: undefined },
       },
     );
     expect(transport.invocations[0].stdin).toBe(stdin);
@@ -1185,8 +1199,9 @@ describe('tool runtime client', () => {
     );
 
     await expect(client(definition)['streams-host']({ stdin }).collect()).resolves.toEqual({
-      result: undefined,
-      stdout: new Uint8Array([4, 5, 6]),
+      result: { status: 'fulfilled', value: undefined },
+      stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+      stderr: { status: 'fulfilled', value: undefined },
     });
 
     expect(ToolRpc).toHaveBeenCalledWith('streams-host');

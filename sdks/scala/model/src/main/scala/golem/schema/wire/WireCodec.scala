@@ -106,6 +106,7 @@ final class GraphEncoder(defs: ListMap[String, SchemaTypeDef]) {
       case BinaryType(r)                  => W.BinaryType(r)
       case PathType(s)                    => W.PathType(s)
       case UrlType(r)                     => W.UrlType(r)
+      case UuidType                       => W.UuidType
       case DatetimeType                   => W.DatetimeType
       case DurationType                   => W.DurationType
       case QuantityType(s)                => W.QuantityType(s)
@@ -217,6 +218,7 @@ object SchemaWire {
         case WitSchemaTypeBody.BinaryType(r)       => S.BinaryType(r)
         case WitSchemaTypeBody.PathType(sp)        => S.PathType(sp)
         case WitSchemaTypeBody.UrlType(r)          => S.UrlType(r)
+        case WitSchemaTypeBody.UuidType            => S.UuidType
         case WitSchemaTypeBody.DatetimeType        => S.DatetimeType
         case WitSchemaTypeBody.DurationType        => S.DurationType
         case WitSchemaTypeBody.QuantityType(sp)    => S.QuantityType(sp)
@@ -374,6 +376,7 @@ object SchemaWire {
         case BinaryValue(bytes, mimeType) => W.BinaryValue(WitBinaryValuePayload(bytes, mimeType))
         case PathValue(x)                 => W.PathValue(x)
         case UrlValue(x)                  => W.UrlValue(x)
+        case UuidValue(x)                 => W.UuidValue(x)
         case DatetimeValue(x)             => W.DatetimeValue(x)
         case DurationValue(nanoseconds)   => W.DurationValue(WitDurationValuePayload(nanoseconds))
         case QuantityValueNode(x)         => W.QuantityValueNode(x)
@@ -514,6 +517,7 @@ object SchemaWire {
         case WitSchemaValueNode.BinaryValue(p)          => S.BinaryValue(p.bytes, p.mimeType)
         case WitSchemaValueNode.PathValue(x)            => S.PathValue(x)
         case WitSchemaValueNode.UrlValue(x)             => S.UrlValue(x)
+        case WitSchemaValueNode.UuidValue(x)            => S.UuidValue(x)
         case WitSchemaValueNode.DatetimeValue(x)        => S.DatetimeValue(x)
         case WitSchemaValueNode.DurationValue(p)        => S.DurationValue(p.nanoseconds)
         case WitSchemaValueNode.QuantityValueNode(x)    => S.QuantityValueNode(x)

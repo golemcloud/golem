@@ -1,0 +1,136 @@
+name: Built-in Bash
+
+on:
+  push:
+    branches:
+      - main
+      - "[0-9]+.[0-9]+.x"
+    paths:
+      - ".github/workflows/builtin-bash.yaml"
+      - "builtin-tools/bash/**"
+      - "builtin-tools/bash.wasm"
+      - "golem-schema/**"
+      - "golem-schema-derive/**"
+      - "golem-tool-metadata/**"
+      - "golem-rust-macro/**"
+      - "sdks/rust/golem-rust/**"
+      - "wit/**"
+      - "Cargo.toml"
+      - "Makefile.toml"
+  pull_request:
+    paths:
+      - ".github/workflows/builtin-bash.yaml"
+      - "builtin-tools/bash/**"
+      - "builtin-tools/bash.wasm"
+      - "golem-schema/**"
+      - "golem-schema-derive/**"
+      - "golem-tool-metadata/**"
+      - "golem-rust-macro/**"
+      - "sdks/rust/golem-rust/**"
+      - "wit/**"
+      - "Cargo.toml"
+      - "Makefile.toml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    name: Workspace checks
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: "wasm32-wasip2"
+          cache-prefix-key: "v1-builtin-bash"
+          cache-shared-key: "workspace"
+          install-cargo-make: "false"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path builtin-tools/bash/Cargo.toml --all -- --check
+
+      - name: Run native library tests
+        run: cargo test --manifest-path builtin-tools/bash/Cargo.toml --workspace --lib --all-features --locked
+
+      - name: Run native shell integration tests
+        run: cargo test --manifest-path builtin-tools/bash/Cargo.toml -p bash-shell --test execution --all-features --locked
+
+      - name: Check WASM workspace
+        run: cargo check --manifest-path builtin-tools/bash/Cargo.toml --workspace --all-targets --all-features --locked --target wasm32-wasip2
+
+      - name: Lint WASM workspace
+        run: cargo clippy --manifest-path builtin-tools/bash/Cargo.toml --workspace --all-targets --all-features --locked --target wasm32-wasip2 -- -D warnings
+
+      # deny.toml allowlists the pinned engine forks (Brush, coreutils, sed, jaq) by source; this
+      # is what actually checks a dependency change against it. Nothing did before.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Check dependency sources (cargo-deny)
+        run: cargo deny --manifest-path builtin-tools/bash/Cargo.toml check sources
+
+  cooperative-pipelines:
+    name: Cooperative pipeline matrix
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: "wasm32-wasip2"
+          cache-prefix-key: "v1-builtin-bash"
+          cache-shared-key: "pipelines"
+
+      - name: Install Wasmtime 46.0.1
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: "46.0.1"
+
+      # The workspace job only type-checks the WASM target; this runs the unit tests there, so
+      # WASM-only code paths are tested directly. The component itself needs Golem's host and
+      # the HTTP clients need threads for their test servers, so those stay native.
+      - name: Run unit tests as WASM
+        env:
+          CARGO_TARGET_WASM32_WASIP2_RUNNER: "wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y --dir /tmp::/tmp"
+        run: cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
+
+      - name: Run the conformance matrix against its goldens
+        run: cargo make --profile ci test-builtin-bash-pipelines
+
+  conformance-sweep:
+    name: Conformance sweep (Brush compat suite, oracle goldens)
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          rust-targets: "wasm32-wasip2"
+          cache-prefix-key: "v1-builtin-bash"
+          cache-shared-key: "sweep"
+      - name: Install Wasmtime 46.0.1
+        uses: bytecodealliance/actions/wasmtime/setup@v1
+        with:
+          version: "46.0.1"
+
+      # Brush's suite runs in a Linux image with bash 5 and the GNU tools, and fails on a case
+      # outside conformance/compat/baseline.txt or one in it that now passes; then every matrix
+      # case, sweep tier included, is checked against its golden under the host's Wasmtime, and
+      # fails on a case outside conformance/sweep-known-failures.json or one in it that now passes.
+      - name: Run the conformance sweep
+        run: cargo make --profile ci test-builtin-bash-sweep

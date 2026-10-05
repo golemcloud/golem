@@ -1,0 +1,198 @@
+{
+ "cases": {
+  "diagnostics: alternating utilities keep their own names": {
+   "script": "5ea97b627308030b",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '/nope': No such file or directory\ndirname: missing operand\nTry 'dirname --help' for more information.\nls: cannot access '/nope2': No such file or directory\nbasename: missing operand\nTry 'basename --help' for more information.\ncut: you must specify a list of bytes, characters, or fields\nTry 'cut --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: basename missing operand": {
+   "script": "cfc03e1eb2ca7c60",
+   "status": 0,
+   "stderr": {
+    "text": "basename: missing operand\nTry 'basename --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: cat missing file": {
+   "script": "a43cd67a703ec78e",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: cp missing source": {
+   "script": "42675de1864a006c",
+   "status": 0,
+   "stderr": {
+    "text": "cp: cannot stat '/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: cut missing file": {
+   "script": "07c8c59a808fad9a",
+   "status": 0,
+   "stderr": {
+    "text": "cut: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: cut without a list": {
+   "script": "7168a655b63611a9",
+   "status": 0,
+   "stderr": {
+    "text": "cut: you must specify a list of bytes, characters, or fields\nTry 'cut --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: dirname missing operand": {
+   "script": "dd8b2f17b6eedf12",
+   "status": 0,
+   "stderr": {
+    "text": "dirname: missing operand\nTry 'dirname --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: head missing file": {
+   "script": "8280f54ab9e7c0c0",
+   "status": 0,
+   "stderr": {
+    "text": "head: cannot open '/nope' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: ls missing file": {
+   "script": "f33d076358e13405",
+   "status": 0,
+   "stderr": {
+    "text": "ls: cannot access '/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diagnostics: od missing file": {
+   "script": "3cef252e7fc8050c",
+   "status": 0,
+   "stderr": {
+    "text": "od: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: pipeline stages keep their own names": {
+   "script": "4d12b086f90808b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ls: c\nCUT: YOU MUST SPECIFY A LIST OF BYTES, CHARACTERS, OR FIELDS\nTRY 'CUT --HELP' FOR MORE INFORMATION.\nstatus=0\n"
+   }
+  },
+  "diagnostics: rm missing file": {
+   "script": "4f29cd0fb092e4d5",
+   "status": 0,
+   "stderr": {
+    "text": "rm: cannot remove '/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: sort missing file": {
+   "script": "def0c2d638d4eee9",
+   "status": 0,
+   "stderr": {
+    "text": "sort: cannot read: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "diagnostics: tail missing file": {
+   "script": "48c8bc31d93d306e",
+   "status": 0,
+   "stderr": {
+    "text": "tail: cannot open '/nope' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: tee into a missing directory": {
+   "script": "7e4e5508418dda68",
+   "status": 0,
+   "stderr": {
+    "text": "tee: /nope/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "x\nstatus=1\n"
+   }
+  },
+  "diagnostics: touch in a missing directory": {
+   "script": "c03751e185a353c7",
+   "status": 0,
+   "stderr": {
+    "text": "touch: cannot touch '/nope/x': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: tr missing operand": {
+   "script": "6693cf3774c56e7e",
+   "status": 0,
+   "stderr": {
+    "text": "tr: missing operand\nTry 'tr --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: uniq missing file": {
+   "script": "653c279250f05eef",
+   "status": 0,
+   "stderr": {
+    "text": "uniq: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "diagnostics: wc missing file": {
+   "script": "8b07f06713a95f27",
+   "status": 0,
+   "stderr": {
+    "text": "wc: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

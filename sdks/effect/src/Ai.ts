@@ -1,6 +1,6 @@
 /** Optional Effect AI integration for explicitly selected Golem tools. @since 1.6.0 */
 import { Cause, Effect, Exit, Schema, SchemaAST, Stream } from "effect"
-import { Tool as EffectAiTool, Toolkit as EffectAiToolkit } from "effect/unstable/ai"
+import { Tool as EffectAiTool, Toolkit as EffectAiToolkit } from "effect/ai"
 import {
   Reflection as GolemReflection,
   Tool as GolemTool,
@@ -674,36 +674,40 @@ const invokeReflected = (
       if (command.stdin && typeof input === "object" && input !== null && !Array.isArray(input))
         delete (input as Record<string, JsonValue>)._stdin
       const started = yield* command.startJson(input, stdin)
-      let capturedStdout: CapturedOutput | undefined = command.stdout
-        ? {
-            data: "",
-            encoding: textualMime(command.stdout.mime) ? "utf8" : "base64",
-            truncated: false,
-            totalBytes: 0,
-          }
-        : undefined
-      const stdout = command.stdout
-        ? captureOutput(started.stdout, maxStdoutBytes!, command.stdout.mime).pipe(
-            Effect.tap((value) => Effect.sync(() => (capturedStdout = value))),
-            Effect.tapError(() => Effect.sync(() => (capturedStdout = undefined))),
-            Effect.asVoid,
-          )
-        : Effect.void
-      let capturedStderr: CapturedOutput | undefined = command.stderr
-        ? {
-            data: "",
-            encoding: textualMime(command.stderr.mime) ? "utf8" : "base64",
-            truncated: false,
-            totalBytes: 0,
-          }
-        : undefined
-      const stderr = command.stderr
-        ? captureOutput(started.stderr, maxStderrBytes!, command.stderr.mime).pipe(
-            Effect.tap((value) => Effect.sync(() => (capturedStderr = value))),
-            Effect.tapError(() => Effect.sync(() => (capturedStderr = undefined))),
-            Effect.asVoid,
-          )
-        : Effect.void
+      let capturedStdout: CapturedOutput | undefined =
+        command.stdout && started.stdout
+          ? {
+              data: "",
+              encoding: textualMime(command.stdout.mime) ? "utf8" : "base64",
+              truncated: false,
+              totalBytes: 0,
+            }
+          : undefined
+      const stdout =
+        command.stdout && started.stdout
+          ? captureOutput(started.stdout, maxStdoutBytes!, command.stdout.mime).pipe(
+              Effect.tap((value) => Effect.sync(() => (capturedStdout = value))),
+              Effect.tapError(() => Effect.sync(() => (capturedStdout = undefined))),
+              Effect.asVoid,
+            )
+          : Effect.void
+      let capturedStderr: CapturedOutput | undefined =
+        command.stderr && started.stderr
+          ? {
+              data: "",
+              encoding: textualMime(command.stderr.mime) ? "utf8" : "base64",
+              truncated: false,
+              totalBytes: 0,
+            }
+          : undefined
+      const stderr =
+        command.stderr && started.stderr
+          ? captureOutput(started.stderr, maxStderrBytes!, command.stderr.mime).pipe(
+              Effect.tap((value) => Effect.sync(() => (capturedStderr = value))),
+              Effect.tapError(() => Effect.sync(() => (capturedStderr = undefined))),
+              Effect.asVoid,
+            )
+          : Effect.void
       const [resultExit, stdoutExit, stderrExit] = yield* Effect.all(
         [Effect.exit(started.result), Effect.exit(stdout), Effect.exit(stderr)] as const,
         { concurrency: "unbounded" },

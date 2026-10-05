@@ -1,7 +1,7 @@
 /** Runtime support for exact graph-backed generated tool bridges. @since 1.6.0 */
 import type * as Host from "golem:tool/host@0.1.0"
 import type * as Common from "golem:tool/common@0.1.0"
-import { Effect, Option, Stream } from "effect"
+import { Effect, Option, Result, Stream } from "effect"
 import * as Bridge from "./Bridge.js"
 import { ToolClient } from "./host/ToolClient.js"
 import { liveToolStart, ToolClientError, ToolTransport } from "./Tool.js"
@@ -30,12 +30,20 @@ export type ToolRuntimeError<E> =
 /** Host and lifetime requirements of a generated invocation. @since 1.6.0 @category models */
 export type ToolRequirements = ToolClient
 
+/** Independently settled result and output channels from a collected invocation. @since 1.6.0 @category models */
+export interface CollectedToolInvocation<A, ResultError, OutputError = ResultError> {
+  readonly result: Result.Result<A, ResultError>
+  readonly stdout: Result.Result<Uint8Array | undefined, OutputError>
+  readonly stderr: Result.Result<Uint8Array | undefined, OutputError>
+}
+
 /** Started streaming invocation exposed by generated clients. @since 1.6.0 @category streams */
 export interface StartedToolInvocation<A, E, R = never> {
   readonly stdout?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
   readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<E>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E>, R>
   readonly cancel: Effect.Effect<void>
+  readonly collect: Effect.Effect<CollectedToolInvocation<A, ToolRuntimeError<E>>, never, R>
 }
 
 /** Runtime seam consumed by generated clients. @since 1.6.0 @category models */
@@ -135,13 +143,62 @@ export const createToolClientRuntime = (tool: string, reflected = false): ToolCl
 export const client = <C>(root: { create(runtime: ToolClientRuntime): C }, tool: string): C =>
   root.create(createToolClientRuntime(tool))
 
+/** Collect a structured result and both optional outputs without imposing failure precedence. @since 1.6.0 @category streams */
+export const collectToolInvocation = <
+  A,
+  ResultError,
+  OutputError,
+  ResultRequirements,
+  StdoutRequirements,
+  StderrRequirements,
+>(
+  result: Effect.Effect<A, ResultError, ResultRequirements>,
+  stdout: Stream.Stream<Uint8Array, OutputError, StdoutRequirements> | undefined,
+  stderr: Stream.Stream<Uint8Array, OutputError, StderrRequirements> | undefined,
+): Effect.Effect<
+  CollectedToolInvocation<A, ResultError, OutputError>,
+  never,
+  ResultRequirements | StdoutRequirements | StderrRequirements
+> => {
+  const collectOutput = <R>(stream: Stream.Stream<Uint8Array, OutputError, R> | undefined) =>
+    stream === undefined
+      ? Effect.succeed(undefined)
+      : Stream.runCollect(stream).pipe(Effect.map(concatBytes))
+  return Effect.scoped(
+    Effect.all(
+      [
+        Effect.result(result),
+        Effect.result(collectOutput(stdout)),
+        Effect.result(collectOutput(stderr)),
+      ],
+      { concurrency: "unbounded" },
+    ),
+  ).pipe(Effect.map(([result, stdout, stderr]) => ({ result, stdout, stderr })))
+}
+
 /** Construct a streaming generated invocation. @since 1.6.0 @category constructors */
 export const startedToolInvocation = <A, E, R>(
   stdout: Stream.Stream<Uint8Array, ToolRuntimeError<E>> | undefined,
   stderr: Stream.Stream<Uint8Array, ToolRuntimeError<E>> | undefined,
   result: Effect.Effect<A, ToolRuntimeError<E>, R>,
   cancel: Effect.Effect<void>,
-): StartedToolInvocation<A, E, R> => ({ stdout, stderr, result, cancel })
+): StartedToolInvocation<A, E, R> => ({
+  stdout,
+  stderr,
+  result,
+  cancel,
+  collect: collectToolInvocation(result, stdout, stderr),
+})
+
+const concatBytes = (chunks: ReadonlyArray<Uint8Array>): Uint8Array => {
+  const result = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0))
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.length
+  }
+  return result
+}
 
 /** Check the exact graph shape before generated decoding. @since 1.6.0 @category codecs */
 export const typedSchemaValueConforms = (expected: Bridge.SchemaGraph, actual: TypedSchemaValue) =>

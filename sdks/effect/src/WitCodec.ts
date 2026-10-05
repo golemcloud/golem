@@ -542,10 +542,10 @@ const isPrincipalAST = (a: SchemaAST.AST): boolean =>
 // `Principal` shape exactly (case order oidc/agent/golem-user/anonymous), and
 // the value pair round-trips a host `Principal` <-> `SchemaValue`.
 
-type HostUuid = { highBits: bigint; lowBits: bigint }
+type HostUuid = CoreTypes.Uuid
 
 // --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType => t.record([field("highBits", t.u64()), field("lowBits", t.u64())])
+const uuidType = (): SchemaType => t.uuid()
 const componentIdType = (): SchemaType => t.record([field("uuid", uuidType())])
 const agentIdType = (): SchemaType =>
   t.record([field("componentId", componentIdType()), field("agentId", t.string())])
@@ -569,18 +569,15 @@ const golemUserType = (): SchemaType => t.record([field("accountId", accountIdTy
 // --- SchemaValue field accessors (positional record reads) ---
 const recFields = (sv: SchemaValue): ReadonlyArray<SchemaValue> =>
   (sv as { tag: "record"; fields: ReadonlyArray<SchemaValue> }).fields
-const u64Of = (f: SchemaValue): bigint => (f as { tag: "u64"; value: bigint }).value
 const strOf = (f: SchemaValue): string => (f as { tag: "string"; value: string }).value
 const boolOf = (f: SchemaValue): boolean => (f as { tag: "bool"; value: boolean }).value
 const optOf = (f: SchemaValue): SchemaValue | undefined =>
   (f as { tag: "option"; value?: SchemaValue }).value
 
 // --- codec helpers (round-trip via the host shape) ---
-const uuidToValue = (u: HostUuid): SchemaValue => v.record([v.u64(u.highBits), v.u64(u.lowBits)])
-const uuidFromValue = (sv: SchemaValue): HostUuid => {
-  const f = recFields(sv)
-  return { highBits: u64Of(f[0]!), lowBits: u64Of(f[1]!) }
-}
+const uuidToValue = (u: HostUuid): SchemaValue => v.uuid(u)
+const uuidFromValue = (sv: SchemaValue): HostUuid =>
+  (sv as Extract<SchemaValue, { tag: "uuid" }>).value
 
 const agentIdToValue = (a: AgentCommon.AgentId): SchemaValue =>
   v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)])
@@ -916,6 +913,8 @@ const walk = (
               return { type: t.path(native.spec), pair: primPair(v.path) }
             case "url":
               return { type: t.url(native.restrictions), pair: primPair(v.url) }
+            case "uuid":
+              return { type: t.uuid(), pair: primPair(v.uuid) }
             case "datetime":
               return { type: t.datetime(), pair: primPair(v.datetime) }
             case "duration":

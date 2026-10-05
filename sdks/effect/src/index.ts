@@ -304,7 +304,7 @@ export * as Webhook from "./Webhook.js"
 
 /**
  * Effect-typed bridge from the host `golem:websocket/client@1.5.0` resource
- * to the canonical `effect/unstable/socket` `Socket` abstraction.
+ * to the canonical `effect/socket` `Socket` abstraction.
  *
  * @since 1.5.0
  * @category modules

@@ -482,9 +482,6 @@ mod tests {
     use super::*;
     use crate::invocation_session_token::SessionInvocationTarget;
     use futures::stream;
-    use golem_api_grpc::proto::golem::schema::{
-        SchemaValue as ProtoSchemaValue, TypedSchemaValue as ProtoTypedSchemaValue, schema_value,
-    };
     use golem_api_grpc::proto::golem::worker::{
         ExternalToolInvocation, InvocationStart, invocation_request,
     };
@@ -493,6 +490,9 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentName;
     use golem_common::schema::SchemaGraph;
+    use golem_schema::proto::golem::schema::{
+        SchemaValue as ProtoSchemaValue, TypedSchemaValue as ProtoTypedSchemaValue, schema_value,
+    };
     use test_r::{test, timeout};
 
     fn empty_session() -> StartedPublicAgentSession {
@@ -612,7 +612,7 @@ mod tests {
         tool.stdin = stdin;
         tool.stdout = stdout;
         tool.stderr = stderr;
-        let uuid = |n| golem_api_grpc::proto::golem::common::Uuid {
+        let uuid = |n| golem_schema::proto::golem::common::Uuid {
             high_bits: 0,
             low_bits: n,
         };
@@ -693,7 +693,7 @@ mod tests {
             golem_api_grpc::proto::golem::worker::OutputStreamItem {
                 transport_stream_id,
                 producer_sequence: sequence,
-                durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+                durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                     high_bits: 0,
                     low_bits: transport_stream_id,
                 }),
@@ -711,7 +711,7 @@ mod tests {
             golem_api_grpc::proto::golem::worker::OutputStreamEnd {
                 transport_stream_id,
                 producer_sequence: sequence,
-                durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+                durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                     high_bits: 0,
                     low_bits: transport_stream_id,
                 }),
@@ -811,7 +811,7 @@ mod tests {
             send(invocation_response::Response::OutputEnd(OutputStreamEnd {
                 transport_stream_id: 71,
                 producer_sequence: 5,
-                durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+                durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                     high_bits: 0,
                     low_bits: 71,
                 }),

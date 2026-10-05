@@ -57,7 +57,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
     OplogServiceOps,
 };
-use crate::services::rpc::{DurableStreamReadError, Rpc};
+use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use async_trait::async_trait;
@@ -438,7 +438,9 @@ impl From<OplogError> for StreamStoreError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ OplogError::Payload(_) => Self::Oplog(error.to_string()),
+            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+                Self::Oplog(error.to_string())
+            }
         }
     }
 }
@@ -517,7 +519,9 @@ impl From<OplogError> for SessionError {
     fn from(error: OplogError) -> Self {
         match error {
             OplogError::Fenced(fence) => Self::Fenced(fence),
-            error @ OplogError::Payload(_) => Self::Failed(error.to_string()),
+            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+                Self::Failed(error.to_string())
+            }
         }
     }
 }

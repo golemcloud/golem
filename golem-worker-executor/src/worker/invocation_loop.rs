@@ -1245,7 +1245,20 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 worker
                     .quiesce_for_owner_retirement(None, forwarding.as_deref())
                     .await?;
-                while EphemeralOplog::try_archive_blocking(&worker.oplog).await == Some(true) {}
+                loop {
+                    match EphemeralOplog::try_archive_blocking(&worker.oplog).await {
+                        Ok(Some(true)) => {}
+                        Ok(_) => break,
+                        Err(error) => {
+                            tracing::warn!(
+                                agent_id = %worker.agent_id(),
+                                error = %error,
+                                "Failed to archive ephemeral oplog during retirement; the source remains available for a later sweep"
+                            );
+                            break;
+                        }
+                    }
+                }
                 worker.remove_from_active_agents().await;
                 *cleanup = super::OwnerCleanupState::Retired;
                 Ok(())
@@ -2099,7 +2112,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 store: store.deref_mut(),
                 uses_streams: false,
             };
-            invocation.external_invocation(timestamped_invocation).await
+            invocation
+                .external_invocation(timestamped_invocation, pending_invocation.oplog_index)
+                .await
         }
         .instrument(pickup_span)
         .await;
@@ -2513,7 +2528,7 @@ fn resource_usage_close_deadline() -> Instant {
 
 fn mark_idle(idle_since_millis: &AtomicU64) {
     let now = Timestamp::now_utc().to_millis();
-    let _ = idle_since_millis.fetch_update(Ordering::Release, Ordering::Acquire, |previous| {
+    let _ = idle_since_millis.try_update(Ordering::Release, Ordering::Acquire, |previous| {
         Some(now.max(previous.saturating_add(1)))
     });
 }
@@ -2583,7 +2598,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// Process an external queued worker invocation - this is either an exported function invocation
     /// or a manual update request (which involves invoking the exported save-snapshot functions, so
     /// it is a special case of the exported function invocation).
-    async fn external_invocation(&mut self, inner: TimestampedAgentInvocation) -> CommandOutcome {
+    async fn external_invocation(
+        &mut self,
+        inner: TimestampedAgentInvocation,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
         // the store both leave room for the owner to start retiring in between.
         if self.parent.owner_retirement_requested.is_cancelled() {
@@ -2591,7 +2610,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         }
         match inner.invocation {
             AgentInvocation::ManualUpdate { target_revision } => {
-                self.manual_update(target_revision).await
+                self.manual_update(target_revision, update_attempt_index)
+                    .await
             }
             invocation => {
                 if let Some(idempotency_key) = invocation.idempotency_key() {
@@ -3067,7 +3087,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
-    async fn manual_update(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+    async fn manual_update(
+        &mut self,
+        target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         let span = span!(
             Level::INFO,
             "manual_update",
@@ -3080,13 +3104,17 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .unwrap_or_else(|| "-".to_string()),
         );
 
-        self.manual_update_inner(target_revision)
+        self.manual_update_inner(target_revision, update_attempt_index)
             .instrument(span)
             .await
     }
 
     /// The inner implementation of the manual update command
-    async fn manual_update_inner(&mut self, target_revision: ComponentRevision) -> CommandOutcome {
+    async fn manual_update_inner(
+        &mut self,
+        target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
+    ) -> CommandOutcome {
         // The saved snapshot becomes the replay cut point of the snapshot-based update: after the
         // update, replay starts from the snapshot and skips everything before it. No durable call
         // or scope may span that cut, so refuse the update while any is still open.
@@ -3094,6 +3122,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return self
                 .fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("cannot take a snapshot for the update: {blocker}"),
                 )
                 .await;
@@ -3120,6 +3149,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 return self
                     .fail_update(
                         target_revision,
+                        update_attempt_index,
                         format!("failed to lower save-snapshot invocation: {err}"),
                     )
                     .await;
@@ -3138,6 +3168,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return self
                 .fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to install invocation context for save-snapshot: {err}"),
                 )
                 .await;
@@ -3169,6 +3200,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     return self
                         .fail_update(
                             target_revision,
+                            update_attempt_index,
                             "failed to get a snapshot for manual update: invalid snapshot result"
                                 .to_string(),
                         )
@@ -3193,7 +3225,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         match self
                             .parent
                             .owner_retirement_requested
-                            .run_until_cancelled(self.parent.enqueue_update(update_description))
+                            .run_until_cancelled(self.parent.enqueue_update_for_attempt(
+                                update_description,
+                                Some(update_attempt_index),
+                            ))
                             .await
                         {
                             None => CommandOutcome::BreakInnerLoop(RetryDecision::None),
@@ -3206,6 +3241,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Err(error) => {
                         self.fail_update(
                             target_revision,
+                            update_attempt_index,
                             format!("failed to store the snapshot for manual update: {error}"),
                         )
                         .await
@@ -3222,6 +3258,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let error = error.to_string(&stderr);
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to get a snapshot for manual update: {error}"),
                 )
                 .await
@@ -3229,6 +3266,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(InvokeResult::Exited { .. }) => {
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     "failed to get a snapshot for manual update: it called exit".to_string(),
                 )
                 .await
@@ -3246,6 +3284,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
                 )
                 .await
@@ -3253,6 +3292,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(error) => {
                 self.fail_update(
                     target_revision,
+                    update_attempt_index,
                     format!("failed to get a snapshot for manual update: {error:?}"),
                 )
                 .await
@@ -3328,6 +3368,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     async fn fail_update(
         &self,
         target_revision: ComponentRevision,
+        update_attempt_index: OplogIndex,
         error: String,
     ) -> CommandOutcome {
         // Refused, the shard is lost: it stops rather than carrying on at a revision
@@ -3335,7 +3376,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         match self
             .store
             .data()
-            .on_worker_update_failed(target_revision, Some(error))
+            .on_worker_update_failed(
+                target_revision,
+                Some(error),
+                None,
+                Some(update_attempt_index),
+            )
             .await
         {
             Ok(()) => CommandOutcome::Continue,
@@ -3733,6 +3779,7 @@ mod tests {
                 status.pending_updates.push_back(PendingUpdateRef {
                     timestamp: Timestamp::now_utc(),
                     oplog_index: OplogIndex::from_u64(5),
+                    admission_index: OplogIndex::from_u64(5),
                     target_revision: ComponentRevision::INITIAL,
                     kind: PendingUpdateKind::Automatic,
                 });

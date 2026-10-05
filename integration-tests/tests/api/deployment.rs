@@ -1840,7 +1840,7 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
                     release: ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
                         account: builtin_account.clone(),
                         name: ToolName::try_from(name).unwrap(),
-                        version: "0.3.0".to_string(),
+                        version: "0.4.0".to_string(),
                     }),
                     automatic: false,
                 },

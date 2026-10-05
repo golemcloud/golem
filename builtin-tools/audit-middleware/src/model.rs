@@ -216,6 +216,7 @@ fn kind(value: &SchemaValue) -> &'static str {
         SchemaValue::Binary(_) => "binary",
         SchemaValue::Path { .. } => "path",
         SchemaValue::Url { .. } => "url",
+        SchemaValue::Uuid(_) => "uuid",
         SchemaValue::Datetime { .. } => "datetime",
         SchemaValue::Duration(_) => "duration",
         SchemaValue::Quantity(_) => "quantity",
@@ -278,6 +279,15 @@ mod tests {
         assert!(!encoded.contains("sensitive"));
         assert!(encoded.contains("resource-exhausted"));
         assert!(encoded.contains("denied"));
+    }
+
+    #[test]
+    fn uuid_values_are_summarized_without_recording_the_value() {
+        let raw = "123e4567-e89b-12d3-a456-426614174000";
+        let value = raw.parse().unwrap();
+        let encoded = serde_json::to_string(&summarize_value(&SchemaValue::Uuid(value))).unwrap();
+        assert!(encoded.contains("\"rootKind\":\"uuid\""));
+        assert!(!encoded.contains(raw));
     }
 
     #[test]

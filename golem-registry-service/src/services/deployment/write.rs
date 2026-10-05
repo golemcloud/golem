@@ -213,16 +213,30 @@ impl DeploymentWriteService {
         data: DeploymentCreation,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
+        let (http_routing_epoch, environment) =
+            crate::services::capture_http_routing_epoch_before_snapshot(
+                async {
+                    self.deployment_repo
+                        .get_http_routing_epoch_if_exists(environment_id.0)
+                        .await
+                        .map_err(DeploymentWriteError::from)
+                },
+                || async {
+                    self.environment_service
+                        .get(environment_id, false, auth)
+                        .await
+                        .map_err(|err| match err {
+                            EnvironmentError::EnvironmentNotFound(environment_id) => {
+                                DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
+                            }
+                            other => other.into(),
+                        })
+                },
+            )
+            .await?;
+        let http_routing_epoch = http_routing_epoch.ok_or(
+            DeploymentWriteError::ParentEnvironmentNotFound(environment_id),
+        )?;
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
@@ -430,12 +444,14 @@ impl DeploymentWriteService {
             .map(|s| {
                 let details = golem_service_base::custom_api::SecuritySchemeDetails {
                     id: s.id,
+                    revision: s.revision,
                     name: s.name.clone(),
                     provider_type: s.provider_type,
                     client_id: s.client_id,
                     client_secret: s.client_secret,
                     redirect_url: s.redirect_url,
                     scopes: s.scopes,
+                    login: s.login,
                 };
                 (s.name, details)
             })
@@ -798,7 +814,11 @@ impl DeploymentWriteService {
 
         let ext_revision = self
             .deployment_repo
-            .deploy(record, deployment_context.environment.version_check)
+            .deploy(
+                record,
+                deployment_context.environment.version_check,
+                http_routing_epoch,
+            )
             .await
             .map_err(|err| match err {
                 DeployRepoError::AgentSecretConflict { path } => {
@@ -862,16 +882,30 @@ impl DeploymentWriteService {
         payload: DeploymentRollback,
         auth: &AuthCtx,
     ) -> Result<CurrentDeployment, DeploymentWriteError> {
-        let environment = self
-            .environment_service
-            .get(environment_id, false, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(environment_id) => {
-                    DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
-                }
-                other => other.into(),
-            })?;
+        let (http_routing_epoch, environment) =
+            crate::services::capture_http_routing_epoch_before_snapshot(
+                async {
+                    self.deployment_repo
+                        .get_http_routing_epoch_if_exists(environment_id.0)
+                        .await
+                        .map_err(DeploymentWriteError::from)
+                },
+                || async {
+                    self.environment_service
+                        .get(environment_id, false, auth)
+                        .await
+                        .map_err(|err| match err {
+                            EnvironmentError::EnvironmentNotFound(environment_id) => {
+                                DeploymentWriteError::ParentEnvironmentNotFound(environment_id)
+                            }
+                            other => other.into(),
+                        })
+                },
+            )
+            .await?;
+        let http_routing_epoch = http_routing_epoch.ok_or(
+            DeploymentWriteError::ParentEnvironmentNotFound(environment_id),
+        )?;
 
         authorize_environment_permission(auth, &environment, EnvironmentVerb::Deploy)?;
 
@@ -897,12 +931,16 @@ impl DeploymentWriteService {
             ))?
             .try_into()?;
 
+        self.validate_deployment_http_routes(environment_id, payload.deployment_revision)
+            .await?;
+
         let revision_record = self
             .deployment_repo
             .set_current_deployment(
                 auth.actor_account_id().0,
                 environment_id.0,
                 payload.deployment_revision.into(),
+                http_routing_epoch,
             )
             .await
             .map_err(|e| match e {
@@ -917,6 +955,76 @@ impl DeploymentWriteService {
             .into_model(target_deployment.version, target_deployment.deployment_hash)?;
 
         Ok(current_deployment)
+    }
+
+    async fn validate_deployment_http_routes(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_revision: DeploymentRevision,
+    ) -> Result<(), DeploymentWriteError> {
+        use super::validate_final_http_api_router_for_origin;
+        use crate::model::api_definition::BoundCompiledRoute;
+        use golem_common::model::domain_registration::Domain;
+        use golem_service_base::custom_api::RouteBehaviour;
+
+        let mut errors = Vec::new();
+        for domain in self
+            .deployment_repo
+            .list_domains_for_deployment(environment_id.0, deployment_revision.into())
+            .await?
+        {
+            let bound_routes = self
+                .deployment_repo
+                .list_compiled_routes_for_domain_and_deployment(
+                    environment_id.0,
+                    deployment_revision.into(),
+                    &domain,
+                )
+                .await?
+                .into_iter()
+                .map(BoundCompiledRoute::try_from)
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut schemes = HashMap::new();
+            let routes = bound_routes
+                .into_iter()
+                .map(|bound| {
+                    if bound.security_scheme_missing {
+                        errors.push(DeployValidationError::HttpApiDeploymentInvalidRoute {
+                            domain: Domain(domain.clone()),
+                            path: bound.route.path.clone(),
+                            error: "route references a missing security scheme".into(),
+                        });
+                    }
+                    if let Some(details) = bound.security_scheme {
+                        schemes.insert(details.name.clone(), details);
+                    }
+                    bound.route
+                })
+                .collect::<Vec<_>>();
+            let Some(public_origin) = routes.iter().find_map(|route| match &route.behaviour {
+                RouteBehaviour::OpenApiSpec(behavior) => {
+                    Some(behavior.scheme.origin(&Domain(domain.clone())))
+                }
+                _ => None,
+            }) else {
+                return Err(anyhow::anyhow!(
+                    "Deployment HTTP routes for {domain} have no OpenAPI route"
+                )
+                .into());
+            };
+            validate_final_http_api_router_for_origin(
+                &Domain(domain),
+                &public_origin,
+                &routes,
+                &schemes,
+                &mut errors,
+            );
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(DeploymentWriteError::DeploymentValidationFailed(errors))
+        }
     }
 
     async fn get_latest_deployment_for_environment(

@@ -53,7 +53,9 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
     };
     let root = &config.initial_accounts["root"];
     let mut tasks = JoinSet::new();
-    let services = Services::new(&config, &mut tasks).await.unwrap();
+    let services = Services::new_without_component_builtins(&config, &mut tasks)
+        .await
+        .unwrap();
     let auth = AuthCtx::system();
     let app = services
         .application_service
@@ -92,6 +94,7 @@ async fn operator_and_runtime_routes_authenticate_and_target_exact_import() {
                 client_secret: "test-secret".into(),
                 redirect_url: "http://127.0.0.1:8765/callback".into(),
                 scopes: vec!["tools".into()],
+                login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
             },
             &auth,
         )

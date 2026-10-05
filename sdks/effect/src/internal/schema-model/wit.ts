@@ -261,6 +261,8 @@ export class GraphEncoder {
         return { tag: "path-type", val: body.spec }
       case "url":
         return { tag: "url-type", val: body.restrictions }
+      case "uuid":
+        return { tag: "uuid-type" }
       case "datetime":
         return { tag: "datetime-type" }
       case "duration":
@@ -445,6 +447,8 @@ export function schemaGraphRootsFromWit(
         return { tag: "path", spec: body.val }
       case "url-type":
         return { tag: "url", restrictions: body.val }
+      case "uuid-type":
+        return { tag: "uuid" }
       case "datetime-type":
         return { tag: "datetime" }
       case "duration-type":
@@ -602,6 +606,18 @@ export function assertSchemaValueRepresentable(
           throw new SchemaEncodeError(
             `${v.tag} value must be a string: ${String((v as { value: unknown }).value)}`,
           )
+        }
+        return
+      case "uuid":
+        if (
+          typeof v.value.highBits !== "bigint" ||
+          typeof v.value.lowBits !== "bigint" ||
+          v.value.highBits < 0n ||
+          v.value.highBits > (1n << 64n) - 1n ||
+          v.value.lowBits < 0n ||
+          v.value.lowBits > (1n << 64n) - 1n
+        ) {
+          throw new SchemaEncodeError("uuid value must contain two unsigned 64-bit integers")
         }
         return
       case "datetime": {
@@ -877,6 +893,8 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: "path-value", val: v.value }
       case "url":
         return { tag: "url-value", val: v.value }
+      case "uuid":
+        return { tag: "uuid-value", val: v.value }
       case "datetime":
         return { tag: "datetime-value", val: v.value }
       case "duration":
@@ -1223,6 +1241,10 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
       case "url-value":
         string(n.val, `${n.tag}.val`)
         return
+      case "uuid-value":
+        rangedBigint(n.val.highBits, "uuid-value.val.highBits", 0n, (1n << 64n) - 1n)
+        rangedBigint(n.val.lowBits, "uuid-value.val.lowBits", 0n, (1n << 64n) - 1n)
+        return
       case "enum-value":
         integer(n.val, "enum-value.val", 0, 0xffff_ffff)
         return
@@ -1538,6 +1560,8 @@ export function schemaValueFromWit(
         return { tag: "path", value: n.val }
       case "url-value":
         return { tag: "url", value: n.val }
+      case "uuid-value":
+        return { tag: "uuid", value: n.val }
       case "datetime-value":
         if (
           typeof n.val.seconds !== "bigint" ||

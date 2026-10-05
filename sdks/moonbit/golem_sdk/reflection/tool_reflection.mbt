@@ -965,9 +965,15 @@ pub async fn ToolCommand::invoke_value(
   }
   defer started.drop()
   if body.stdout is Some(_) || body.stderr is Some(_) {
-    match started.collect() {
-      Ok(collected) => Ok(collected.result)
+    let collected = started.collect()
+    match collected.result {
       Err(error) => Err(error)
+      Ok(result) =>
+        match (collected.stdout, collected.stderr) {
+          (Err(error), _) => raise error
+          (_, Err(error)) => raise error
+          (Ok(_), Ok(_)) => Ok(result)
+        }
     }
   } else {
     started.get()
@@ -1095,18 +1101,17 @@ pub async fn ReflectedToolInvocation::get(
 ///|
 pub async fn ReflectedToolInvocation::collect(
   self : ReflectedToolInvocation,
-) -> Result[
-  @tool.CollectedToolInvocation[@model.SchemaValue?],
-  @tool.ToolError[ReflectedToolCustomError],
+) -> @tool.CollectedToolInvocation[
+  @model.SchemaValue?,
+  ReflectedToolCustomError,
 ] {
-  match self.invocation.collect() {
-    Ok(collected) =>
-      match self.command.decode_result(collected.result) {
-        Ok(result) =>
-          Ok({ result, stdout: collected.stdout, stderr: collected.stderr, })
-        Err(error) => Err(error)
-      }
-    Err(error) => Err(error)
+  let collected = self.invocation.collect()
+  {
+    result: collected.result.bind(fn(value) {
+      self.command.decode_result(value)
+    }),
+    stdout: collected.stdout,
+    stderr: collected.stderr,
   }
 }
 

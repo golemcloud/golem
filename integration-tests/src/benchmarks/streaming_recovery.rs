@@ -16,12 +16,12 @@
 
 use crate::benchmarks::public_invocation::{
     DetachedSession, PublicInvocationSession, SessionCheckpoint, SessionEvents, StreamId,
+    public_record, public_u32, public_value,
 };
 use crate::benchmarks::{cleanup_account, cleanup_user_state, delete_workers};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
 use futures::future::try_join_all;
-use golem_client::invocation_session::encode_generated_streamless_value;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::StreamSessionRecord;
@@ -91,21 +91,6 @@ pub struct RecoveryIteration {
 
 fn error(phase: &str, error: impl std::fmt::Display) -> BenchmarkError {
     BenchmarkError::new(phase, error)
-}
-
-fn public_value<T: golem_common::schema::IntoSchema + ?Sized>(
-    value: &T,
-) -> anyhow::Result<serde_json::Value> {
-    let typed = golem_common::schema::try_into_typed_schema_value(value)?;
-    encode_generated_streamless_value(typed.graph(), typed.value()).map_err(Into::into)
-}
-
-fn public_record(fields: impl IntoIterator<Item = serde_json::Value>) -> serde_json::Value {
-    serde_json::json!({"kind": "record", "value": {"fields": fields.into_iter().collect::<Vec<_>>()}})
-}
-
-fn public_u32(value: u32) -> serde_json::Value {
-    serde_json::json!({"kind": "u32", "value": value})
 }
 
 async fn phase<T>(

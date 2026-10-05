@@ -14,6 +14,7 @@
 
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::auth::AuthService;
+use crate::services::builtin_artifact::BuiltinArtifactResolver;
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
@@ -49,12 +50,13 @@ use uuid::Uuid;
 const SYSTEM_APP_NAME: &str = "golem-system";
 const SYSTEM_ENV_NAME: &str = "builtin-tools";
 
+#[derive(Clone, Copy)]
 pub struct BuiltinExportDescriptor {
     pub component_name: &'static str,
+    pub artifact_id: &'static str,
     pub export_name: &'static str,
     pub release_version: &'static str,
     pub kind: BuiltinExportKind,
-    pub wasm_bytes: &'static [u8],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -76,37 +78,101 @@ struct ComponentExports {
 
 static BUILTIN_EXPORTS: &[BuiltinExportDescriptor] = &[
     BuiltinExportDescriptor {
+        component_name: "bash",
+        artifact_id: "bash",
+        export_name: "bash",
+        release_version: "0.2.0",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
         component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools",
         export_name: "read-file",
-        release_version: "0.3.0",
+        release_version: "0.4.0",
         kind: BuiltinExportKind::Tool,
-        wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
     BuiltinExportDescriptor {
         component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools",
         export_name: "write-file",
-        release_version: "0.3.0",
+        release_version: "0.4.0",
         kind: BuiltinExportKind::Tool,
-        wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
     BuiltinExportDescriptor {
         component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools",
+        export_name: "ls",
+        release_version: "0.1.0",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools",
+        export_name: "grep",
+        release_version: "0.1.0",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools",
         export_name: "edit-file",
-        release_version: "0.3.0",
+        release_version: "0.4.0",
         kind: BuiltinExportKind::Tool,
-        wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
     },
     BuiltinExportDescriptor {
         component_name: "filesystem-tools",
+        artifact_id: "filesystem_tools",
         export_name: "path-policy",
         release_version: "0.1.0",
         kind: BuiltinExportKind::Middleware,
-        wasm_bytes: include_bytes!("../../../builtin-tools/filesystem-tools.wasm"),
+    },
+    BuiltinExportDescriptor {
+        component_name: "javascript-tools",
+        artifact_id: "javascript_tools",
+        export_name: "node",
+        release_version: "0.1.0",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "javascript-tools",
+        artifact_id: "javascript_tools",
+        export_name: "npm",
+        release_version: "10.9.9",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "javascript-tools",
+        artifact_id: "javascript_tools",
+        export_name: "npx",
+        release_version: "10.9.9",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "typescript-tools",
+        artifact_id: "typescript_tools",
+        export_name: "tsc",
+        release_version: "5.9.2",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "web-fetch",
+        artifact_id: "web_fetch",
+        export_name: "web-fetch",
+        release_version: "0.1.0",
+        kind: BuiltinExportKind::Tool,
+    },
+    BuiltinExportDescriptor {
+        component_name: "git-tool",
+        artifact_id: "git_tool",
+        export_name: "git",
+        release_version: "0.1.7",
+        kind: BuiltinExportKind::Tool,
     },
 ];
 
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_builtin_tools(
+    artifact_resolver: &BuiltinArtifactResolver,
     builtin_tool_owner_account_id: AccountId,
     auth_service: &Arc<AuthService>,
     application_service: &Arc<ApplicationService>,
@@ -118,8 +184,16 @@ pub async fn provision_builtin_tools(
     tool_release_service: &Arc<ToolReleaseService>,
     tool_middleware_release_service: &Arc<ToolMiddlewareReleaseService>,
 ) -> anyhow::Result<()> {
+    let artifacts = artifact_resolver
+        .resolve_many(
+            BUILTIN_EXPORTS
+                .iter()
+                .map(|descriptor| descriptor.artifact_id),
+        )
+        .await?;
     provision_descriptors(
         BUILTIN_EXPORTS,
+        &artifacts,
         builtin_tool_owner_account_id,
         auth_service,
         application_service,
@@ -137,6 +211,7 @@ pub async fn provision_builtin_tools(
 #[allow(clippy::too_many_arguments)]
 pub async fn provision_descriptors(
     descriptors: &[BuiltinExportDescriptor],
+    artifacts: &BTreeMap<&str, Arc<Vec<u8>>>,
     owner: AccountId,
     auth_service: &Arc<AuthService>,
     applications: &Arc<ApplicationService>,
@@ -155,6 +230,12 @@ pub async fn provision_descriptors(
     let mut coordinates = std::collections::BTreeSet::new();
     let mut component_hashes = BTreeMap::new();
     for descriptor in descriptors {
+        let wasm_bytes = artifacts.get(descriptor.artifact_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "built-in export artifact '{}' was not resolved",
+                descriptor.artifact_id
+            )
+        })?;
         if !coordinates.insert((
             descriptor.kind,
             descriptor.export_name,
@@ -166,16 +247,16 @@ pub async fn provision_descriptors(
                 descriptor.release_version
             );
         }
-        let wasm_hash = blake3::hash(descriptor.wasm_bytes);
+        let wasm_hash = blake3::hash(wasm_bytes);
         if let Some(existing_hash) = component_hashes.insert(descriptor.component_name, wasm_hash)
             && existing_hash != wasm_hash
         {
             anyhow::bail!(
-                "built-in tool component '{}' has conflicting embedded artifacts",
+                "built-in tool component '{}' has conflicting artifacts",
                 descriptor.component_name
             );
         }
-        let metadata = extract_component_metadata_from_bytes(descriptor.wasm_bytes, true, true)
+        let metadata = extract_component_metadata_from_bytes(wasm_bytes, true, true)
             .await
             .map_err(|error| {
                 anyhow::anyhow!(
@@ -292,11 +373,15 @@ pub async fn provision_descriptors(
             .iter()
             .find(|descriptor| descriptor.component_name == component_name)
             .expect("component group came from descriptors");
+        let wasm_bytes = artifacts
+            .get(descriptor.artifact_id)
+            .expect("all descriptor artifacts were resolved");
         let component = upload_component(
             component_writes,
             components,
             environment.id,
             descriptor,
+            wasm_bytes,
             exports.tools,
             exports.middlewares,
             &auth,
@@ -456,6 +541,7 @@ async fn upload_component(
     reads: &Arc<ComponentService>,
     env: EnvironmentId,
     descriptor: &BuiltinExportDescriptor,
+    wasm_bytes: &[u8],
     tools: Vec<Tool>,
     middlewares: Vec<ToolMiddleware>,
     auth: &AuthCtx,
@@ -515,7 +601,7 @@ async fn upload_component(
                 tool_middlewares: middlewares.clone(),
                 tool_middleware_provision_configs,
             },
-            descriptor.wasm_bytes.to_vec(),
+            wasm_bytes.to_vec(),
             None,
             auth,
         )
@@ -524,8 +610,7 @@ async fn upload_component(
         Ok(value) => Ok(value),
         Err(ComponentError::ComponentWithNameAlreadyExists(_)) => loop {
             let existing = reads.get_staged_component_by_name(env, &name, auth).await?;
-            let expected =
-                golem_common::model::diff::Hash::new(blake3::hash(descriptor.wasm_bytes));
+            let expected = golem_common::model::diff::Hash::new(blake3::hash(wasm_bytes));
             if existing.wasm_hash == expected
                 && component_has_intended_exports(&existing, &tools, &middlewares)
             {
@@ -592,7 +677,7 @@ async fn upload_component(
                         ),
                         allow_incompatible_config: false,
                     },
-                    Some(descriptor.wasm_bytes.to_vec()),
+                    Some(wasm_bytes.to_vec()),
                     None,
                     auth,
                 )
@@ -669,46 +754,13 @@ mod tests {
     use test_r::test;
 
     #[test]
-    async fn embedded_filesystem_component_exports_expected_tools_and_middleware() {
+    fn components_use_one_artifact_each() {
+        let mut artifacts_by_component = BTreeMap::new();
         for descriptor in BUILTIN_EXPORTS {
-            let metadata = extract_component_metadata_from_bytes(descriptor.wasm_bytes, true, true)
-                .await
-                .unwrap();
-            match descriptor.kind {
-                BuiltinExportKind::Tool => {
-                    let tool = metadata
-                        .tools
-                        .iter()
-                        .find(|tool| tool.name() == Some(descriptor.export_name))
-                        .unwrap();
-
-                    assert!(tool.requires_filesystem, "{}", descriptor.export_name);
-                    assert_eq!(tool.version, descriptor.release_version);
-                    assert!(
-                        tool.commands
-                            .nodes
-                            .iter()
-                            .filter_map(|node| node.body.as_ref())
-                            .all(|body| body
-                                .annotations
-                                .as_ref()
-                                .is_some_and(|annotations| !annotations.open_world)),
-                        "{}",
-                        descriptor.export_name
-                    );
-                }
-                BuiltinExportKind::Middleware => {
-                    let middleware = metadata
-                        .tool_middlewares
-                        .iter()
-                        .find(|middleware| middleware.name == descriptor.export_name)
-                        .unwrap();
-                    assert_eq!(middleware.version, descriptor.release_version);
-                    assert!(matches!(
-                        middleware.scope,
-                        golem_common::schema::tool::ToolMiddlewareScope::Universal
-                    ));
-                }
+            if let Some(previous) =
+                artifacts_by_component.insert(descriptor.component_name, descriptor.artifact_id)
+            {
+                assert_eq!(previous, descriptor.artifact_id);
             }
         }
     }

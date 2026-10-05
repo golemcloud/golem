@@ -467,6 +467,7 @@ object JsSchemaTypeBody {
   def binaryType(r: JsBinaryRestrictions): JsSchemaTypeBody = JsShape.tagged[JsSchemaTypeBody]("binary-type", r)
   def pathType(spec: JsPathSpec): JsSchemaTypeBody          = JsShape.tagged[JsSchemaTypeBody]("path-type", spec)
   def urlType(r: JsUrlRestrictions): JsSchemaTypeBody       = JsShape.tagged[JsSchemaTypeBody]("url-type", r)
+  def uuidType: JsSchemaTypeBody                            = JsShape.tagOnly[JsSchemaTypeBody]("uuid-type")
   def datetimeType: JsSchemaTypeBody                        = JsShape.tagOnly[JsSchemaTypeBody]("datetime-type")
   def durationType: JsSchemaTypeBody                        = JsShape.tagOnly[JsSchemaTypeBody]("duration-type")
   def quantityType(spec: JsQuantitySpec): JsSchemaTypeBody  = JsShape.tagged[JsSchemaTypeBody]("quantity-type", spec)
@@ -634,6 +635,7 @@ object JsSchemaValueNode {
   def binaryValue(p: JsBinaryValuePayload): JsSchemaValueNode     = JsShape.tagged[JsSchemaValueNode]("binary-value", p)
   def pathValue(v: String): JsSchemaValueNode                     = JsShape.tagged[JsSchemaValueNode]("path-value", v)
   def urlValue(v: String): JsSchemaValueNode                      = JsShape.tagged[JsSchemaValueNode]("url-value", v)
+  def uuidValue(v: JsUuid): JsSchemaValueNode                     = JsShape.tagged[JsSchemaValueNode]("uuid-value", v)
   def datetimeValue(v: JsDatetime): JsSchemaValueNode             = JsShape.tagged[JsSchemaValueNode]("datetime-value", v)
   def durationValue(p: JsDurationValuePayload): JsSchemaValueNode =
     JsShape.tagged[JsSchemaValueNode]("duration-value", p)

@@ -1175,7 +1175,7 @@ impl From<OwnerRuntime> for golem_api_grpc::proto::golem::worker::OwnerRuntime {
         use golem_api_grpc::proto::golem::worker::owner_runtime::Value;
 
         let value = match value {
-            OwnerRuntime::Agent => Value::Agent(golem_api_grpc::proto::golem::common::Empty {}),
+            OwnerRuntime::Agent => Value::Agent(golem_schema::proto::golem::common::Empty {}),
             OwnerRuntime::Entity(entity) => Value::Entity(entity.into()),
         };
         Self { value: Some(value) }

@@ -592,7 +592,6 @@ impl ToolReleaseService {
             || recorded_name != *component_name
             || component.component_name != *component_name
             || component.account_id != self.builtin_tool_owner_account_id
-            || component.wasm_hash != wasm_hash
             || !deployed
                 .iter()
                 .any(|value| value.revision == component_revision)
@@ -604,6 +603,14 @@ impl ToolReleaseService {
                 != Some(definition)
         {
             return Err(ToolReleaseError::ImmutableReleaseConflict);
+        }
+        if component.wasm_hash != wasm_hash {
+            tracing::warn!(
+                tool_name = %name,
+                tool_version = version,
+                component_name = %component_name,
+                "Built-in tool coordinate remains bound to its original component; bump the tool version to publish changed implementation bytes"
+            );
         }
         Ok(true)
     }

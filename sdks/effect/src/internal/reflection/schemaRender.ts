@@ -21,6 +21,7 @@ import type {
   SchemaValue,
 } from "../schema-model/model.js"
 import { floatFromBits } from "../schema-model/validation.js"
+import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
 
 export type JsonValue =
   | null
@@ -140,6 +141,12 @@ export function fromCanonicalJson(
       return { tag: "path", value: expectNonEmptyString(json, path) }
     case "url":
       return { tag: "url", value: expectNonEmptyString(json, path) }
+    case "uuid":
+      try {
+        return { tag: "uuid", value: parseUuid(expectString(json, path)) }
+      } catch {
+        return fail(path, "invalid UUID")
+      }
     case "datetime":
       return { tag: "datetime", value: datetimeFromISOString(expectString(json, path)) }
     case "duration":
@@ -310,6 +317,8 @@ export function toCanonicalJson(
     case "path":
     case "url":
       return value.value
+    case "uuid":
+      return uuidToString(value.value)
     case "text":
       return {
         text: value.text,
@@ -701,6 +710,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       }
       break
     }
+    case "uuid":
+      rendered = { type: "string", format: "uuid", title: "UUID" }
+      break
     case "datetime":
       rendered = { type: "string", format: "date-time" }
       break

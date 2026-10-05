@@ -45,7 +45,7 @@ pub(crate) fn protected_path_argument(
     command_path: &[String],
 ) -> Result<Option<ProtectedPathArgument>, Vec<String>> {
     let operation = match tool_name {
-        "read-file" | "ls" => PathPolicyOperation::Read,
+        "read-file" | "ls" | "grep" => PathPolicyOperation::Read,
         "write-file" | "edit-file" => PathPolicyOperation::Write,
         "delete-file" => PathPolicyOperation::Delete,
         _ => return Ok(None),
@@ -333,4 +333,30 @@ async fn path_policy(
     underlying
         .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grep_is_restricted_to_read_enabled_roots() {
+        let protected = protected_path_argument("grep", &[])
+            .unwrap()
+            .expect("grep must be protected");
+        assert_eq!(protected.operation, PathPolicyOperation::Read);
+
+        let parameters = PathPolicyParameters {
+            base: "/tmp".to_string(),
+            allowed_roots: vec![PathPolicyRoot {
+                path: "project".to_string(),
+                operations: vec![PathPolicyOperation::Read],
+            }],
+        };
+        assert_eq!(
+            authorize_path(&parameters, protected.operation, "project/src").unwrap(),
+            Path::new("/tmp/project/src")
+        );
+        assert!(authorize_path(&parameters, protected.operation, "other/src").is_err());
+    }
 }

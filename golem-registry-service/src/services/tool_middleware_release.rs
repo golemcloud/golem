@@ -632,7 +632,6 @@ impl ToolMiddlewareReleaseService {
             || recorded_name != *component_name
             || component.component_name != *component_name
             || component.account_id != self.builtin_tool_owner_account_id
-            || component.wasm_hash != wasm_hash
             || !deployed
                 .iter()
                 .any(|value| value.revision == component_revision)
@@ -644,6 +643,14 @@ impl ToolMiddlewareReleaseService {
                 != Some(definition)
         {
             return Err(ToolMiddlewareReleaseError::ImmutableReleaseConflict);
+        }
+        if component.wasm_hash != wasm_hash {
+            tracing::warn!(
+                middleware_name = %name,
+                middleware_version = version,
+                component_name = %component_name,
+                "Built-in middleware coordinate remains bound to its original component; bump the middleware version to publish changed implementation bytes"
+            );
         }
         Ok(true)
     }

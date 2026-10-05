@@ -25,7 +25,7 @@ if (!appRootDir) {
 
 const embeddedPackages = new Set([
   "effect",
-  "effect/unstable/http",
+  "effect/http",
   "agent-guest",
 ]);
 

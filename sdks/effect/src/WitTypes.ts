@@ -338,6 +338,7 @@ export type WitSchemaNode =
   | { readonly tag: "binary"; readonly restrictions: BinaryRestrictions }
   | { readonly tag: "path"; readonly spec: PathSpec }
   | { readonly tag: "url"; readonly restrictions: UrlRestrictions }
+  | { readonly tag: "uuid" }
   | { readonly tag: "datetime" }
   | { readonly tag: "duration" }
   | { readonly tag: "quantity"; readonly spec: QuantitySpec }

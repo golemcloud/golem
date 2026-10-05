@@ -470,6 +470,7 @@ struct BridgeSdkTargetKey {
     target_language: GuestLanguage,
     bridge_mode: BridgeMode,
     output_dir: PathBuf,
+    rust_config: String,
 }
 
 impl BridgeSdkTargetKey {
@@ -486,6 +487,8 @@ impl BridgeSdkTargetKey {
                     .bridge_sdks_source()
                     .join(&target.output_dir)
             }),
+            rust_config: serde_json::to_string(&target.rust_config)
+                .expect("validated Rust config is serializable"),
         }
     }
 }
@@ -650,7 +653,7 @@ fn bridge_output_dir_claims(
         for (language, mode, sdk_targets) in ctx.application().bridge_sdks().for_all_used_modes() {
             if manifest_bridge_request_may_match_selected_components(
                 ctx,
-                sdk_targets.agents,
+                &sdk_targets.agents,
                 selected_component_names,
             ) {
                 add_manifest_bridge_output_dir_claims(
@@ -658,14 +661,14 @@ fn bridge_output_dir_claims(
                     &mut claims,
                     language,
                     mode,
-                    sdk_targets.agents,
-                    sdk_targets.output_dir.map(|output_dir| output_dir.as_str()),
+                    &sdk_targets.agents,
+                    sdk_targets.output_dir.as_deref(),
                     selected_component_names,
                 );
             }
 
             if mode == BridgeMode::Guest
-                && let Some(tools) = sdk_targets.tools
+                && let Some(tools) = sdk_targets.tools.as_ref()
                 && manifest_tool_bridge_request_may_match_selected_components(
                     ctx,
                     tools,
@@ -678,7 +681,7 @@ fn bridge_output_dir_claims(
                     language,
                     mode,
                     tools,
-                    sdk_targets.output_dir.map(|output_dir| output_dir.as_str()),
+                    sdk_targets.output_dir.as_deref(),
                     selected_component_names,
                 );
             }
@@ -711,7 +714,7 @@ fn add_manifest_bridge_output_dir_claims(
     language: GuestLanguage,
     mode: BridgeMode,
     agents: &crate::model::app_raw::LenientTokenList,
-    output_dir: Option<&str>,
+    output_dir: Option<&Path>,
     selected_component_names: &[ComponentName],
 ) {
     let request_id = match mode {
@@ -778,7 +781,7 @@ fn add_manifest_tool_bridge_output_dir_claims(
     language: GuestLanguage,
     mode: BridgeMode,
     tools: &crate::model::app_raw::LenientTokenList,
-    output_dir: Option<&str>,
+    output_dir: Option<&Path>,
     selected_component_names: &[ComponentName],
 ) {
     let request_id = match mode {
@@ -958,10 +961,10 @@ fn manifest_bridge_claim_base(
     ctx: &BuildContext<'_>,
     language: GuestLanguage,
     mode: BridgeMode,
-    output_dir: Option<&str>,
+    output_dir: Option<&Path>,
 ) -> PathBuf {
     match output_dir {
-        Some(output_dir) => ctx.application().bridge_sdks_source().join(output_dir),
+        Some(output_dir) => output_dir.to_path_buf(),
         None => match mode {
             BridgeMode::External => ctx
                 .application()
@@ -1173,6 +1176,7 @@ fn validate_manifest_matchers_resolved(
 
         let mut tool_matchers = sdk_targets
             .tools
+            .as_ref()
             .map(|tools| tools.clone().into_set())
             .unwrap_or_default();
         if tool_matchers.remove("*") {
@@ -1315,7 +1319,7 @@ fn bridge_requests(
                 mode == BridgeMode::External
                     && manifest_bridge_request_may_match_selected_components(
                         ctx,
-                        sdk_targets.agents,
+                        &sdk_targets.agents,
                         selected_component_names,
                     )
             })
@@ -1343,9 +1347,9 @@ fn has_explicit_manifest_guest_bridge_request(
             mode == BridgeMode::Guest
                 && (manifest_bridge_request_may_match_selected_components(
                     ctx,
-                    sdk_targets.agents,
+                    &sdk_targets.agents,
                     selected_component_names,
-                ) || sdk_targets.tools.is_some_and(|tools| {
+                ) || sdk_targets.tools.as_ref().is_some_and(|tools| {
                     manifest_tool_bridge_request_may_match_selected_components(
                         ctx,
                         tools,
@@ -1446,6 +1450,7 @@ bridge:
             target_language: GuestLanguage::Rust,
             bridge_mode: BridgeMode::Guest,
             output_dir: base_dir.join("golem-temp/bridge-sdk/rust/internal/bar-agent-guest-client"),
+            rust_config: Default::default(),
         };
         let custom_claim = OutputDirClaim {
             request_id: BridgeRequestId::Custom,

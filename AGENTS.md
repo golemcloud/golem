@@ -164,8 +164,10 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `db-migration-scripts` | Writing PostgreSQL and SQLite migration scripts under a `db/migration/` root |
 | `logging` | Adding or reviewing `tracing` statements and following the structured logging conventions |
-| `modifying-builtin-plugins` | Changing built-in plugin source, committed WASM, descriptors, versions, or provisioning |
-| `creating-new-builtin-plugins` | Adding a new built-in WASM plugin embedded in and provisioned by the registry service |
+| `modifying-builtin-plugins` | Changing built-in plugin source, release artifacts, descriptors, versions, or provisioning |
+| `creating-new-builtin-plugins` | Adding a new externally released built-in WASM plugin provisioned by the registry service |
+| `developing-builtin-tools` | Creating or modifying externally released component-backed built-in tools |
+| `publishing-builtin-artifacts` | Publishing immutable built-in tool/plugin WASMs and updating their pinned URLs and checksums |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `migrate-ts-decorator-sdk` | Porting a TypeScript agent from the removed decorator/`BaseAgent` API to `defineAgent` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |

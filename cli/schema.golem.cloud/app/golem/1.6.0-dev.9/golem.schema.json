@@ -1886,7 +1886,7 @@
         },
         "rust": {
           "description": "Rust SDK configuration",
-          "$ref": "#/definitions/bridgeSdkLanguageTargets"
+          "$ref": "#/definitions/rustBridgeSdkLanguageTargets"
         },
         "scala": {
           "description": "Scala SDK configuration",
@@ -1912,6 +1912,73 @@
           "$ref": "#/definitions/bridgeSdkInternalTargets"
         }
       }
+    },
+    "rustBridgeSdkLanguageTargets": {
+      "description": "Rust bridge SDK language targets",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "external": { "$ref": "#/definitions/rustBridgeSdkExternalTargets" },
+        "internal": { "$ref": "#/definitions/rustBridgeSdkInternalTargets" }
+      }
+    },
+    "rustBridgeSdkExternalTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": { "$ref": "#/definitions/lenientTokenList" },
+        "outputDir": { "type": "string" },
+        "additionalDerives": { "type": "array", "items": { "type": "string" } },
+        "additionalDependencies": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/rustBridgeDependency" }
+        }
+      }
+    },
+    "rustBridgeSdkInternalTargets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agents": { "$ref": "#/definitions/lenientTokenList" },
+        "tools": { "$ref": "#/definitions/lenientTokenList" },
+        "outputDir": { "type": "string" },
+        "additionalDerives": { "type": "array", "items": { "type": "string" } },
+        "additionalDependencies": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/rustBridgeDependency" }
+        }
+      }
+    },
+    "rustBridgeDependency": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": { "type": "string" },
+            "path": { "type": "string" },
+            "git": { "type": "string" },
+            "package": { "type": "string" },
+            "features": { "type": "array", "items": { "type": "string" } },
+            "defaultFeatures": { "type": "boolean" },
+            "branch": { "type": "string" },
+            "tag": { "type": "string" },
+            "rev": { "type": "string" }
+          },
+          "oneOf": [
+            { "required": ["version"] },
+            { "required": ["path"] },
+            { "required": ["git"] }
+          ],
+          "allOf": [
+            { "if": { "anyOf": [{ "required": ["branch"] }, { "required": ["tag"] }, { "required": ["rev"] }] }, "then": { "required": ["git"] } },
+            { "not": { "required": ["branch", "tag"] } },
+            { "not": { "required": ["branch", "rev"] } },
+            { "not": { "required": ["tag", "rev"] } }
+          ]
+        }
+      ]
     },
     "bridgeSdkExternalTargets": {
       "description": "External bridge SDK mode targets",

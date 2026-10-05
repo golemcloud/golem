@@ -20,6 +20,7 @@
 //! Worth having because tonic keeps an unreachable endpoint in the balancer's rotation, so with
 //! several endpoints a share of reads fail fast until it is back; a slow answer counts too.
 
+use crate::config::EtcdConfig;
 use crate::sharding::error::ShardManagerError;
 use golem_common::retriable_error::IsRetriableError;
 use std::future::Future;
@@ -28,10 +29,6 @@ use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 use tonic::Code;
 use tracing::warn;
-
-/// Backoff bounds for a retriable etcd failure, shared by the leadership campaign and the reads.
-pub const RETRY_MIN: Duration = Duration::from_millis(100);
-pub const RETRY_MAX: Duration = Duration::from_secs(5);
 
 /// Whether a failed read is worth repeating.
 pub fn is_retriable_read(err: &ShardManagerError) -> bool {
@@ -44,6 +41,33 @@ fn is_request_timeout(err: &ShardManagerError) -> bool {
         ShardManagerError::EtcdError(etcd_client::Error::GRpcStatus(status))
             if status.code() == Code::Cancelled
     )
+}
+
+/// How long a read may keep retrying, and how it backs off between attempts, as configured.
+#[derive(Clone, Copy, Debug)]
+pub struct ReadRetry {
+    pub timeout: Duration,
+    pub min_delay: Duration,
+    pub max_delay: Duration,
+}
+
+impl ReadRetry {
+    pub fn from_config(config: &EtcdConfig) -> Self {
+        Self {
+            timeout: config.read_retry_timeout,
+            min_delay: config.retry_min_delay,
+            max_delay: config.retry_max_delay,
+        }
+    }
+
+    /// The instant a read starting now gives up.
+    pub fn deadline(&self) -> Result<Instant, ShardManagerError> {
+        Instant::now().checked_add(self.timeout).ok_or_else(|| {
+            ShardManagerError::Internal(
+                "Configured etcd read retry timeout exceeds the clock range".to_string(),
+            )
+        })
+    }
 }
 
 /// What ends a retry loop that has nothing else to stop it.
@@ -60,12 +84,21 @@ pub async fn retry_retriable<T, F, Fut>(
     what: &str,
     op: F,
     shutdown: &CancellationToken,
+    min_delay: Duration,
+    max_delay: Duration,
 ) -> Result<T, ShardManagerError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, ShardManagerError>>,
 {
-    retry_while_retriable(what, op, GiveUp::WhenCancelled(shutdown)).await
+    retry_while_retriable(
+        what,
+        op,
+        GiveUp::WhenCancelled(shutdown),
+        min_delay,
+        max_delay,
+    )
+    .await
 }
 
 /// Retries `op` while it fails retriably, until `deadline`, and then reports the last failure.
@@ -73,24 +106,28 @@ pub async fn retry_retriable_until<T, F, Fut>(
     what: &str,
     op: F,
     deadline: Instant,
+    min_delay: Duration,
+    max_delay: Duration,
 ) -> Result<T, ShardManagerError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, ShardManagerError>>,
 {
-    retry_while_retriable(what, op, GiveUp::At(deadline)).await
+    retry_while_retriable(what, op, GiveUp::At(deadline), min_delay, max_delay).await
 }
 
 async fn retry_while_retriable<T, F, Fut>(
     what: &str,
     mut op: F,
     give_up: GiveUp<'_>,
+    min_delay: Duration,
+    max_delay: Duration,
 ) -> Result<T, ShardManagerError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, ShardManagerError>>,
 {
-    let mut backoff = RETRY_MIN;
+    let mut backoff = min_delay;
 
     loop {
         let failure = match op().await {
@@ -123,7 +160,7 @@ where
             GiveUp::At(_) => sleep(backoff).await,
         }
 
-        backoff = std::cmp::min(backoff * 2, RETRY_MAX);
+        backoff = std::cmp::min(backoff.saturating_mul(2), max_delay);
     }
 }
 
@@ -136,6 +173,8 @@ mod tests {
     use tokio::time::timeout;
 
     const TEST_BUDGET: Duration = Duration::from_millis(500);
+    const TEST_RETRY_MIN: Duration = Duration::from_millis(10);
+    const TEST_RETRY_MAX: Duration = Duration::from_millis(20);
 
     #[test]
     async fn a_failure_that_is_not_retriable_is_reported_at_once() {
@@ -148,6 +187,8 @@ mod tests {
                 async { Err(ShardManagerError::ConcurrentModification) }
             },
             Instant::now() + TEST_BUDGET,
+            TEST_RETRY_MIN,
+            TEST_RETRY_MAX,
         )
         .await;
 
@@ -183,6 +224,8 @@ mod tests {
                     }
                 },
                 Instant::now() + TEST_BUDGET,
+                TEST_RETRY_MIN,
+                TEST_RETRY_MAX,
             ),
         )
         .await
@@ -211,6 +254,8 @@ mod tests {
                     async { Err(ShardManagerError::Timeout) }
                 },
                 Instant::now() + TEST_BUDGET,
+                TEST_RETRY_MIN,
+                TEST_RETRY_MAX,
             ),
         )
         .await
@@ -245,6 +290,8 @@ mod tests {
                     async { Err(ShardManagerError::Timeout) }
                 },
                 &shutdown,
+                TEST_RETRY_MIN,
+                TEST_RETRY_MAX,
             ),
         )
         .await

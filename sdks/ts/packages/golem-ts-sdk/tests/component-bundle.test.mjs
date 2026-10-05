@@ -566,14 +566,12 @@ describe('static component exports', () => {
         val: { accountId: { uuid: { highBits: 17n, lowBits: 31n } } },
       }),
     ).toEqual({
-      root: 5,
+      root: 3,
       valueNodes: [
-        { tag: 'u64-value', val: 17n },
-        { tag: 'u64-value', val: 31n },
-        { tag: 'record-value', val: [0, 1] },
-        { tag: 'record-value', val: [2] },
-        { tag: 'record-value', val: [3] },
-        { tag: 'variant-value', val: { case_: 2, payload: 4 } },
+        { tag: 'uuid-value', val: { highBits: 17n, lowBits: 31n } },
+        { tag: 'record-value', val: [0] },
+        { tag: 'record-value', val: [1] },
+        { tag: 'variant-value', val: { case_: 2, payload: 2 } },
       ],
     });
     expect(configReads).toBe(0);

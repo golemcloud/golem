@@ -8,7 +8,6 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity, UpdateMode,
     invocation_request, invocation_response,
@@ -33,10 +32,12 @@ use golem_common::model::{
     OwnedAgentId, PromiseId,
 };
 use golem_common::schema::{FromSchema, SchemaValue};
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor::services::rpc::{
-    DurableRpcInvocationResult, DurableStreamReadError, RemoteInvocationRpc, Rpc, RpcDemand,
+    DurableRpcInvocationResult, DurableStreamRemoteError, RemoteInvocationRpc, Rpc, RpcDemand,
     RpcError,
 };
 use golem_worker_executor::services::shard::ShardService;
@@ -60,7 +61,15 @@ pub(crate) async fn start_with_local_resume(
     context: &TestContext,
     lose_resume_response: bool,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_with_resume_checkpoint(deps, context, lose_resume_response, None).await
+    start_with_resume_checkpoint(deps, context, lose_resume_response, None, None).await
+}
+
+pub(crate) async fn start_with_local_resume_and_snapshot_policy(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    snapshot_policy: SnapshotPolicy,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_resume_checkpoint(deps, context, false, None, Some(snapshot_policy)).await
 }
 
 #[derive(Default)]
@@ -132,16 +141,25 @@ async fn start_with_resume_checkpoint(
     context: &TestContext,
     lose_resume_response: bool,
     checkpoint: Option<Arc<tokio::sync::Notify>>,
+    snapshot_policy: Option<SnapshotPolicy>,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let client = Arc::new(Mutex::new(None));
     let target = client.clone();
     let lose_response = Arc::new(AtomicBool::new(lose_resume_response));
     let checkpoint = Arc::new(Mutex::new(checkpoint));
     let environment_id = context.default_environment_id;
+    let configure = snapshot_policy.map(|snapshot_policy| {
+        Arc::new(
+            move |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
+                config.oplog.default_snapshotting = snapshot_policy.clone();
+            },
+        ) as Arc<_>
+    });
     let executor = start_with_overrides(
         deps,
         context,
         TestExecutorOverrides {
+            configure,
             wrap_worker_proxy: Some(Arc::new(move |inner| {
                 Arc::new(LocalResumeProxy {
                     inner,
@@ -252,7 +270,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         request: StreamAttachmentControlRequest,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         self.inner
             .control_durable_stream_attachment(request, auth)
             .await
@@ -262,7 +280,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         request: DurableStreamReadRequest,
         auth: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         self.inner.read_durable_stream_segment(request, auth).await
     }
 
@@ -495,7 +513,7 @@ impl WorkerProxy for LocalResumeProxy {
         &self,
         request: golem_common::model::durable_stream::StreamAttachmentControlRequest,
         auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
+    ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
         self.inner
             .control_durable_stream_attachment(request, auth)
             .await
@@ -507,7 +525,7 @@ impl WorkerProxy for LocalResumeProxy {
         auth: &AuthCtx,
     ) -> Result<
         Vec<u8>,
-        golem_worker_executor::services::rpc::DurableStreamReadError<WorkerProxyError>,
+        golem_worker_executor::services::rpc::DurableStreamRemoteError<WorkerProxyError>,
     > {
         self.inner.read_durable_stream_segment(request, auth).await
     }
@@ -802,9 +820,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String(value.into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        value.into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],
@@ -1012,7 +1030,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                     panic!("expected typed item")
                 };
                 SchemaValue::try_from(
-                    golem_api_grpc::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
+                    golem_schema::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
                         .unwrap(),
                 )
                 .unwrap()
@@ -1752,9 +1770,9 @@ async fn sliding_expiry_refreshes_are_coalesced(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String("refresh".into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        "refresh".into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],
@@ -1822,7 +1840,7 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
     let context = TestContext::new(last_unique_id);
     let checkpoint = Arc::new(tokio::sync::Notify::new());
     let executor =
-        start_with_resume_checkpoint(deps, &context, false, Some(checkpoint.clone())).await?;
+        start_with_resume_checkpoint(deps, &context, false, Some(checkpoint.clone()), None).await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()

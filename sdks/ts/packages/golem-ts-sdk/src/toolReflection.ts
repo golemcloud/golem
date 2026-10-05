@@ -44,6 +44,7 @@ import {
   createToolClientTransport,
   isRpcError,
   mapSettledToolResult,
+  resultFromSettledToolResult,
   startedToolInvocation,
   type StartedToolInvocation,
   type ToolClientRuntime,
@@ -328,7 +329,7 @@ export class ToolCommand {
       collect: async () => {
         const collected = await started.collect();
         return {
-          result: unpackResult(collected.result),
+          result: await mapSettledToolResult(collected.result, unpackResult),
           stdout: collected.stdout,
           stderr: collected.stderr,
         };
@@ -343,7 +344,12 @@ export class ToolCommand {
         new TypeError('Command requires caller-readable output; use startValue'),
       );
     const started = this.startValue(input, stdin);
-    return started.collect().then((collected) => collected.result);
+    return started.collect().then(async (collected) => {
+      const result = await resultFromSettledToolResult(collected.result);
+      await resultFromSettledToolResult(collected.stdout);
+      await resultFromSettledToolResult(collected.stderr);
+      return result;
+    });
   }
 
   /** Await a structured canonical JSON result. */

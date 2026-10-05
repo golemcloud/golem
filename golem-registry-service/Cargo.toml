@@ -24,7 +24,7 @@ golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
@@ -39,8 +39,10 @@ conditional-trait-gen = { workspace = true }
 console-subscriber = { workspace = true }
 desert_rust.workspace = true
 figment = { workspace = true }
+fd-lock = { workspace = true }
 futures = { workspace = true }
 heck = { workspace = true }
+hex = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
@@ -72,10 +74,12 @@ regex = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 rustls = { workspace = true, features = [ "ring" ] }
 sanitize-filename = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 serde_with = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "tls-rustls",

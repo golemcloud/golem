@@ -875,9 +875,9 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
             async fn run(&mut self) -> Vec<String> {
                 for query in ["simple", "mixed", "empty", "binary", "resource"] {
                     let (limit, extras) = if query == "simple" { (None, vec![]) } else { (Some(3), vec![("region".into(), "west".into())]) };
-                    let collected = BearerLookupClient::new().bearer_lookup(limit, query.into(), extras).await.unwrap().collect().await.unwrap();
-                    let result = collected.result;
-                    let stdout = collected.stdout.unwrap_or_default();
+                    let collected = BearerLookupClient::new().bearer_lookup(limit, query.into(), extras).await.unwrap().collect().await;
+                    let result = collected.result.unwrap();
+                    let stdout = collected.stdout.unwrap().unwrap_or_default();
                     if query == "resource" {
                         let BearerContent::Blocks(blocks) = &result.content else { panic!("expected resource blocks") };
                         let [BearerBlocks::EmbeddedResource(resource)] = blocks.as_slice() else { panic!("expected one embedded resource") };
@@ -901,9 +901,9 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                     if query == "binary" { assert_eq!((&content, stdout.as_slice()), (&"image/test".to_string(), [0, 1, 2, 255].as_slice())); }
                     self.results.push(format!("bearer:{}:{}:{stdout:?}:{content}", result.structured.answer, result.structured.score));
                     let (limit, extras) = if query == "simple" { (None, vec![]) } else { (Some(3), vec![("region".into(), "west".into())]) };
-                    let collected = BasicLookupClient::new().basic_lookup(limit, query.into(), extras).await.unwrap().collect().await.unwrap();
-                    let result = collected.result;
-                    let stdout = collected.stdout.unwrap_or_default();
+                    let collected = BasicLookupClient::new().basic_lookup(limit, query.into(), extras).await.unwrap().collect().await;
+                    let result = collected.result.unwrap();
+                    let stdout = collected.stdout.unwrap().unwrap_or_default();
                     if query == "resource" {
                         let BasicContent::Blocks(blocks) = &result.content else { panic!("expected resource blocks") };
                         let [BasicBlocks::EmbeddedResource(resource)] = blocks.as_slice() else { panic!("expected one embedded resource") };

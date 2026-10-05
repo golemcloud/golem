@@ -1535,6 +1535,7 @@ pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
 
     pub security_scheme_id: Option<Uuid>,
     pub security_scheme_name: Option<String>,
+    pub security_scheme_revision_id: Option<i64>,
     pub security_scheme_provider_type: Option<String>,
     pub security_scheme_client_id: Option<String>,
     pub security_scheme_client_secret: Option<String>,
@@ -1542,6 +1543,7 @@ pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
     pub security_scheme_scopes: Option<String>,
     pub security_scheme_custom_provider_name: Option<String>,
     pub security_scheme_custom_issuer_url: Option<String>,
+    pub security_scheme_login_config: Option<String>,
 
     pub compiled_route: Blob<UnboundCompiledRoute>,
 }
@@ -1557,20 +1559,24 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
         let security_scheme = match (
             value.security_scheme_id,
             value.security_scheme_name,
+            value.security_scheme_revision_id,
             value.security_scheme_provider_type,
             value.security_scheme_client_id,
             value.security_scheme_client_secret,
             value.security_scheme_redirect_url,
             value.security_scheme_scopes,
+            value.security_scheme_login_config,
         ) {
             (
                 Some(security_scheme_id),
                 Some(security_scheme_name),
+                Some(revision_id),
                 Some(provider_type),
                 Some(client_id),
                 Some(client_secret),
                 Some(redirect_url),
                 Some(scopes),
+                Some(login_config),
             ) => {
                 let id = SecuritySchemeId(security_scheme_id);
                 let name = SecuritySchemeName(security_scheme_name);
@@ -1592,15 +1598,19 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
                 };
                 let client_id = ClientId::new(client_id);
                 let client_secret = ClientSecret::new(client_secret);
+                let login = serde_json::from_str(&login_config)
+                    .map_err(|e| anyhow::Error::from(e).context("Failed parsing login config"))?;
 
                 Some(SecuritySchemeDetails {
                     id,
+                    revision: revision_id.try_into()?,
                     name,
                     scopes,
                     redirect_url,
                     provider_type,
                     client_id,
                     client_secret,
+                    login,
                 })
             }
             _ => None,

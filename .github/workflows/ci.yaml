@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.4"
+  WASM_RQUICKJS_VERSION: "0.4.6"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -142,6 +142,8 @@ jobs:
         run: cargo make --profile ci check-reflection-conformance
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
+      - name: Check built-in artifact pins
+        run: cargo make --profile ci check-builtin-artifacts
       - name: Check WIT deps are synced
         run: cargo make --profile ci check-wit
       - name: Unit tests
@@ -152,12 +154,52 @@ jobs:
           artifact-name: unit-tests-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  builtin-artifacts:
+    runs-on: blacksmith
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.value }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Compute built-in artifact cache key
+        id: cache-key
+        env:
+          LOCK_HASH: ${{ hashFiles('builtin-artifacts.lock.json') }}
+        run: echo "value=golem-builtin-artifacts-${LOCK_HASH}" >> "$GITHUB_OUTPUT"
+      - name: Restore or prepare built-in artifact cache
+        id: cache
+        uses: actions/cache@v5
+        with:
+          path: tmp/builtin-artifacts
+          key: ${{ steps.cache-key.outputs.value }}
+      - name: Install cargo-make
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
+      - name: Fetch released built-in artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo make --profile ci fetch-builtin-artifacts
+      - name: Collect built-in artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p tmp/builtin-artifacts
+          cp builtin-tools/bash.wasm tmp/builtin-artifacts/
+          cp builtin-tools/filesystem-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/git-tool.wasm tmp/builtin-artifacts/
+          cp builtin-tools/javascript-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
+          cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
+
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
       - build-and-store
+      - builtin-artifacts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -188,6 +230,9 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -203,6 +248,7 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     needs:
       - build-and-store
+      - builtin-artifacts
       - merge-test-components
     timeout-minutes: 45
     steps:
@@ -220,6 +266,9 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
       - name: Set up Lima
         id: lima
         env:
@@ -291,6 +340,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
+      - builtin-artifacts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -351,6 +401,9 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -375,6 +428,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
+      - builtin-artifacts
       - merge-test-components
     timeout-minutes: 30
     strategy:
@@ -397,6 +451,9 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
+      - name: Install browser WASM target
+        if: matrix.group.shard == 'bridge_gen_rust'
+        run: rustup target add wasm32-unknown-unknown
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.49.0
         with:
@@ -437,6 +494,14 @@ jobs:
       - name: Install MoonBit SDK tools dependencies
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
+
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
 
       - name: Sync WIT dependencies
         run: cargo make wit
@@ -505,6 +570,9 @@ jobs:
         uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -571,6 +639,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
+      - builtin-artifacts
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -611,6 +680,9 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8
@@ -781,6 +853,12 @@ jobs:
       - name: Update MoonBit workspace dependencies
         run: moon update
         working-directory: sdks/moonbit
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Generate and verify MoonBit WIT bindings
+        run: ./scripts/check-generated-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
       - name: Check SDK
         run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
@@ -1065,6 +1143,16 @@ jobs:
         if: matrix.chunk.needs-moonbit
         run: moon update
         working-directory: sdks/moonbit
+
+      - name: Install Golem MoonBit wit-bindgen
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
 
       - name: Install wasm-tools
         if: matrix.chunk.needs-moonbit

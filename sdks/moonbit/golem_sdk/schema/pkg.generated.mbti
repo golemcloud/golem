@@ -241,6 +241,7 @@ pub impl[T : FromSchema] FromSchema for T?
 pub impl[T : FromSchema, E : FromSchema] FromSchema for Result[T, E]
 pub impl FromSchema for Bytes
 pub impl FromSchema for @types.Datetime
+pub impl FromSchema for @types.Uuid
 pub impl[T : FromSchema] FromSchema for Array[T]
 pub impl[K : FromSchema + Hash + Eq, V : FromSchema] FromSchema for Map[K, V]
 pub impl[T0 : FromSchema, T1 : FromSchema] FromSchema for (T0, T1)
@@ -306,6 +307,7 @@ pub impl[T : IntoSchema] IntoSchema for T?
 pub impl[T : IntoSchema, E : IntoSchema] IntoSchema for Result[T, E]
 pub impl IntoSchema for Bytes
 pub impl IntoSchema for @types.Datetime
+pub impl IntoSchema for @types.Uuid
 pub impl[T : IntoSchema] IntoSchema for Array[T]
 pub impl[K : IntoSchema, V : IntoSchema] IntoSchema for Map[K, V]
 pub impl[T0 : IntoSchema, T1 : IntoSchema] IntoSchema for (T0, T1)

@@ -295,8 +295,12 @@ describe('native tool reflection', () => {
     await expect(command.startJson({ value: 'hello' }).result).rejects.toBeInstanceOf(
       ToolRemoteOutputError,
     );
-    await expect(command.startJson({ value: 'hello' }).collect()).rejects.toBeInstanceOf(
-      ToolRemoteOutputError,
-    );
+    const collected = await command.startJson({ value: 'hello' }).collect();
+    expect(collected.result.status).toBe('rejected');
+    if (collected.result.status === 'rejected') {
+      expect(collected.result.reason).toBeInstanceOf(ToolRemoteOutputError);
+    }
+    expect(collected.stdout).toEqual({ status: 'fulfilled', value: undefined });
+    expect(collected.stderr).toEqual({ status: 'fulfilled', value: undefined });
   });
 });

@@ -8,7 +8,7 @@
   ],
   "dependencies": {
     "@golemcloud/effect-golem": "file:../../sdks/effect",
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^28.0.6",

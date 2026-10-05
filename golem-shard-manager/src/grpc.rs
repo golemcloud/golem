@@ -196,7 +196,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .await
         {
             Ok(()) => golem::shardmanager::v1::deregister_response::Result::Success(
-                golem::common::Empty {},
+                golem_schema::proto::golem::common::Empty {},
             ),
             Err(error) => {
                 golem::shardmanager::v1::deregister_response::Result::Failure(error.into())

@@ -1,0 +1,1268 @@
+{
+ "cases": {
+  "edge calls: BASH_REMATCH does not carry": {
+   "script": "272d292c1cdb79da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] 0\n"
+   }
+  },
+  "edge calls: CDPATH does not carry": {
+   "script": "9ae271a71d81642d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: sub: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "1\n/\n"
+   }
+  },
+  "edge calls: CDPATH lookup carries": {
+   "script": "e564919c8219e0ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/c/sub\n/tmp/c/sub\n"
+   }
+  },
+  "edge calls: IFS does not carry": {
+   "script": "caf539a4f177453b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge calls: LINENO restarts": {
+   "script": "e0b56744a065dd9c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n1\n"
+   }
+  },
+  "edge calls: OLDPWD assignment then cd dash": {
+   "script": "ea1485788725a2bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: OLDPWD does not carry": {
+   "script": "3559eb3025b791fc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: OLDPWD not set\n"
+   },
+   "stdout": {
+    "text": "1\n/tmp\n"
+   }
+  },
+  "edge calls: PATH does not carry": {
+   "script": "78484f3ed60b1757",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\nfound\n"
+   }
+  },
+  "edge calls: PIPESTATUS does not carry": {
+   "script": "d750207195f56393",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "edge calls: PWD is the new directory": {
+   "script": "0d83f1a6355856b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: SHLVL each call": {
+   "script": "43383fb25cabe447",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n1\n"
+   }
+  },
+  "edge calls: alias -p restores aliases": {
+   "script": "bd298633606e14fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "long\n"
+   }
+  },
+  "edge calls: append across calls": {
+   "script": "da1ca0277f64bf05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\ntwo\nthree\n"
+   }
+  },
+  "edge calls: assigning PWD after cd": {
+   "script": "07a94c7659ff0fdb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: assigning PWD does not move": {
+   "script": "fa2b6b54a2d4428b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n/\n"
+   }
+  },
+  "edge calls: bash -c cd does not carry": {
+   "script": "f584d92b66117768",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: binary file across calls": {
+   "script": "30a474c928446eec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 61 ff 00 62\n"
+   }
+  },
+  "edge calls: builtin cd carries": {
+   "script": "7e99aa6d0e8299e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd -P symlink dot-dot": {
+   "script": "2e07460cbef82b1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a\n/tmp/a\n"
+   }
+  },
+  "edge calls: cd -P through a symlink": {
+   "script": "259c0538c8b79d03",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/real\n"
+   }
+  },
+  "edge calls: cd dash": {
+   "script": "e93f801bc0f49b5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n/tmp/w\n"
+   }
+  },
+  "edge calls: cd deep": {
+   "script": "cc3ff3c2aeb0162b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "65\n"
+   }
+  },
+  "edge calls: cd directory with glob characters": {
+   "script": "a09bbff6c637973f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/[x]*\n../[x]*\n"
+   }
+  },
+  "edge calls: cd directory with spaces": {
+   "script": "1ac6c407f876dd83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a b/c d\n/tmp/a b/c d\n"
+   }
+  },
+  "edge calls: cd dot components": {
+   "script": "2d808a5183c6a739",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd dot-dot": {
+   "script": "c2e2488b7fb7b9cd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd dot-dot at root": {
+   "script": "204ff672bb631419",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n/\n"
+   }
+  },
+  "edge calls: cd double slash": {
+   "script": "8309e648e256eadd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "//\n/tmp\n/tmp\n"
+   }
+  },
+  "edge calls: cd empty argument": {
+   "script": "2b8476f75d6e4d54",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: null directory\n"
+   },
+   "stdout": {
+    "text": "1\n/tmp/w\n"
+   }
+  },
+  "edge calls: cd in a background job does not carry": {
+   "script": "60372cce094016b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: cd in a brace group carries": {
+   "script": "792c335b82619807",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd in a case arm": {
+   "script": "fa834ee36dc8eeb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd in a for loop": {
+   "script": "00137d15b264ce3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/a/b/c\n"
+   }
+  },
+  "edge calls: cd in a function carries": {
+   "script": "7b9f743e6472c9ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd in a pipeline stage does not carry": {
+   "script": "82af53695dd6d893",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: cd in a sourced file carries": {
+   "script": "296d33ab73a43ba0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd in a subshell does not carry": {
+   "script": "d2a3e07c325f7932",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: cd in a while pipeline does not carry": {
+   "script": "2238acd846bfa92d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: cd in an if condition": {
+   "script": "7bc8c4d151e1c951",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd in and-list after failure": {
+   "script": "5d08e7f04e878ced",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: cd in command substitution does not carry": {
+   "script": "fa667b74439fe312",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n/\n"
+   }
+  },
+  "edge calls: cd in lastpipe carries": {
+   "script": "505a47059857dcb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd in or-list after failure": {
+   "script": "b520b2cf8f4e4e3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd in process substitution does not carry": {
+   "script": "51826f83176c3b74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n/\n"
+   }
+  },
+  "edge calls: cd in the ERR trap": {
+   "script": "2129534b15361d2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n/tmp/w\n"
+   }
+  },
+  "edge calls: cd in the EXIT trap": {
+   "script": "a5628ae369897fa5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n/tmp/w\n"
+   }
+  },
+  "edge calls: cd relative from root": {
+   "script": "6fb4317ca2b6407e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd symlink dot-dot logical": {
+   "script": "85f13614b8f84449",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n/tmp\n"
+   }
+  },
+  "edge calls: cd then command not found": {
+   "script": "1e9a0f78722a7132",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nosuchcommand: command not found\n"
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd then errexit": {
+   "script": "8cae9a53cdc44752",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd then exec": {
+   "script": "a51fee59693525db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd then exit in a function": {
+   "script": "8756a4dd0aece054",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n/tmp/w\n"
+   }
+  },
+  "edge calls: cd then nounset failure": {
+   "script": "28d330b5480db30e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: nope: unbound variable\n"
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd then parameter error": {
+   "script": "27a527b10b2d7394",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: v: unset\n"
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd through a symlink then pwd -P": {
+   "script": "ce241e5c7e350cdf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/link\n/tmp/real\n"
+   }
+  },
+  "edge calls: cd through eval carries": {
+   "script": "9486cd74ed0e30dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd to a file stays": {
+   "script": "4cc1ed53e0d4030b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: /tmp/f: Not a directory\n"
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: cd trailing slash": {
+   "script": "d5d43af88d68877d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd unicode directory": {
+   "script": "82a3a3b40b89c14a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/日本/é\né\n"
+   }
+  },
+  "edge calls: cd with a failing redirection": {
+   "script": "f6e7a54d4fdf8dc4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /nosuch/f: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: cd with no HOME stays": {
+   "script": "7431d94638168ea8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: HOME not set\n"
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: cd with redirection": {
+   "script": "0fba3da8612cd316",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: command cd carries": {
+   "script": "e07ed36d86297e6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: comment-only call": {
+   "script": "2b44237f257f7c30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n"
+   }
+  },
+  "edge calls: counter file across calls": {
+   "script": "b290c2215d742272",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "edge calls: declare -f restores functions": {
+   "script": "f6527e4c38639fe9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f:arg\n"
+   }
+  },
+  "edge calls: declare -p restores arrays": {
+   "script": "71cdcc017295f9d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 two words v\n"
+   }
+  },
+  "edge calls: directory stack does not carry": {
+   "script": "a4ccc1c05ca51ebf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n1\n"
+   }
+  },
+  "edge calls: empty call in the middle": {
+   "script": "8f4a14ce70f48b28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n3\n"
+   }
+  },
+  "edge calls: environment export does not carry": {
+   "script": "e2ddee6f8073a575",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "edge calls: errexit failure then next call": {
+   "script": "f231668ac8323e81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\n"
+   }
+  },
+  "edge calls: exec replaces only its call": {
+   "script": "1b40d83742f855c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "replaced\nnext\n"
+   }
+  },
+  "edge calls: exec stdout redirect does not carry": {
+   "script": "393497bb5b99c4d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shown\nhidden\n"
+   }
+  },
+  "edge calls: exit in a subshell keeps cd": {
+   "script": "044968f44cca1f2f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n/tmp/w\n"
+   }
+  },
+  "edge calls: export -p restores exports": {
+   "script": "606043cb2d407f1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge calls: exported function does not carry": {
+   "script": "63d4a98532f36775",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: type: f: not found\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge calls: extglob off in a new call": {
+   "script": "3d617c9ed1a1444a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "extglob             \toff\n"
+   }
+  },
+  "edge calls: failed cd stays": {
+   "script": "7fd9abe7d4d13f03",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: /nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: failglob does not carry": {
+   "script": "6b19c819dd3ddd05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/nomatch*\nstatus=0\n"
+   }
+  },
+  "edge calls: find -exec cd does not carry": {
+   "script": "8bbcdb683a3a309d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: find in the carried directory": {
+   "script": "62a321b43c2569b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./a\n./b\n./x\n"
+   }
+  },
+  "edge calls: first call has a syntax error": {
+   "script": "dab6b2b194147780",
+   "status": 0,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `fi'\nbash: -c: line 1: `echo first; fi'\n"
+   },
+   "stdout": {
+    "text": "second\n"
+   }
+  },
+  "edge calls: getopts state does not carry": {
+   "script": "c02e0d7533edeeb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a 2\n[1]\n"
+   }
+  },
+  "edge calls: glob in the carried directory": {
+   "script": "d27955d0179e4728",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b x\n"
+   }
+  },
+  "edge calls: hash table does not carry": {
+   "script": "af5238f9cc241dfd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hash: hash table empty\nstatus=0\n"
+   }
+  },
+  "edge calls: integer attribute does not carry": {
+   "script": "2d539ffdcb2ad246",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1+1\n"
+   }
+  },
+  "edge calls: jobs do not carry": {
+   "script": "3e418fb68e7ce359",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[]\nbg\n"
+   }
+  },
+  "edge calls: last call exit wraps": {
+   "script": "223a9984e1b307f3",
+   "status": 44,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge calls: last call exits negative": {
+   "script": "403b654d9003cc60",
+   "status": 255,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge calls: last call exits nonzero": {
+   "script": "e436ac6d1f839733",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge calls: last call has a syntax error": {
+   "script": "a70cbdf62bd6728f",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `fi'\nbash: -c: line 1: `echo second; fi'\n"
+   },
+   "stdout": {
+    "text": "first\n"
+   }
+  },
+  "edge calls: local-only variable does not carry": {
+   "script": "782061201d8304d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset] [unset]\n"
+   }
+  },
+  "edge calls: many calls": {
+   "script": "d648c61ee44e5aa8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\n3\n4\n5\n6\n"
+   }
+  },
+  "edge calls: move in a later call": {
+   "script": "abb5535d7c0f8650",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "edge calls: nameref does not carry": {
+   "script": "4d1ea0bdb95eada7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "edge calls: no-newline file across calls": {
+   "script": "5c709748f800633e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n1\n"
+   }
+  },
+  "edge calls: nocasematch does not carry": {
+   "script": "2be60f5cd04fea85",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "edge calls: noclobber across calls": {
+   "script": "ee661bb2268050c4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/f: cannot overwrite existing file\n"
+   },
+   "stdout": {
+    "text": "status=1\na\n"
+   }
+  },
+  "edge calls: noclobber does not carry": {
+   "script": "5c6def23628b86cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\n"
+   }
+  },
+  "edge calls: noglob does not carry": {
+   "script": "75efafc52423291a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/g1\n"
+   }
+  },
+  "edge calls: nullglob does not carry": {
+   "script": "1501e6f9abc93bfc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/nomatch*\n"
+   }
+  },
+  "edge calls: open descriptors do not carry": {
+   "script": "f22ded3ac567cb50",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 3: Bad file descriptor\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge calls: output accumulates": {
+   "script": "74703bbacadcb0c2",
+   "status": 0,
+   "stderr": {
+    "text": "err1\nerr2\n"
+   },
+   "stdout": {
+    "text": "out1\nout2\n"
+   }
+  },
+  "edge calls: pipefail does not carry": {
+   "script": "f773268e55e4aefe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge calls: pushd carries": {
+   "script": "8b7e38c81cc5aa3a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n/tmp/w\n"
+   }
+  },
+  "edge calls: pushd then popd": {
+   "script": "73eb57c7a2741cd0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "edge calls: readonly PWD": {
+   "script": "9d077989dd7ee1fc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: PWD: readonly variable\n"
+   },
+   "stdout": {
+    "text": "1\n/tmp/w\n"
+   }
+  },
+  "edge calls: realpath in the carried directory": {
+   "script": "9845135c0bfcf702",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n/tmp\n/tmp/w/x\n"
+   }
+  },
+  "edge calls: relative files follow the directory": {
+   "script": "b1ec42c9f84c91e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\ndata\n"
+   }
+  },
+  "edge calls: remove in a later call": {
+   "script": "fc81eb7bcb68389f",
+   "status": 0,
+   "stderr": {
+    "text": "cat: /tmp/f: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "edge calls: remove the carried directory's parent contents": {
+   "script": "d2495eb6bc8d387e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "edge calls: return at top level": {
+   "script": "c561e39b0a62e2b3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "after\n0\n/tmp/w\n"
+   }
+  },
+  "edge calls: saved cwd restored": {
+   "script": "5e7a37e581403d09",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "edge calls: set +o restores options": {
+   "script": "b212a14670245cfa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "noclobber      \ton\npipefail       \ton\n"
+   }
+  },
+  "edge calls: set -v does not carry": {
+   "script": "876cf51edb60b82c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "verbose?\n"
+   }
+  },
+  "edge calls: set -x does not carry": {
+   "script": "967d61924b4b10dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "traced?\n"
+   }
+  },
+  "edge calls: sh -c cd does not carry": {
+   "script": "74ce9e16ff8bd7b4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n/\n"
+   }
+  },
+  "edge calls: shift does not carry": {
+   "script": "97a3d1e531eaad7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "edge calls: shopt -p restores shopts": {
+   "script": "edbd4ea4ffc3da1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nullglob            \ton\nextglob             \ton\n"
+   }
+  },
+  "edge calls: status is the last call's": {
+   "script": "7f0495680ced813a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "edge calls: stdin is empty in every call": {
+   "script": "078e2da46b0a7cb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first\nstatus=1 []\n"
+   }
+  },
+  "edge calls: symlink across calls": {
+   "script": "893a7e1908a7492e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t\nt\n"
+   }
+  },
+  "edge calls: trap -p restores traps": {
+   "script": "014d05d5382197c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bye\nbody\nbye\n"
+   }
+  },
+  "edge calls: unicode file across calls": {
+   "script": "9d847b12345c7184",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "é日\nx\n"
+   }
+  },
+  "edge calls: unset PWD after cd": {
+   "script": "f6119131f4637f82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "edge calls: xargs cd does not carry": {
+   "script": "596a0fb0239e2816",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

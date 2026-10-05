@@ -76,6 +76,24 @@ pool permits; swapping the replacement stream and body into the existing table s
 preserves ordinary body lifetime and replay semantics. Sending the replacement before retiring
 the old permit owner can self-wait until timeout when the per-host pool capacity is one.
 
+Direct P2 resend header waits race only the native response readiness against a fresh
+`create_interrupt_signal()`. This applies both to status-code retries in
+`future_incoming_response::get` and to the shared resend used by response-body resumption and
+awaiting-response recovery. Readiness wins when both are ready in the same poll; otherwise the
+exact `InterruptKind` propagates without being classified as an HTTP failure or consuming another
+semantic retry. The local `HostFutureIncomingResponse` remains the owner: returning on lifecycle
+drops its pending request task, which releases transport permits asynchronously. Do not cancel the
+whole retry operation, detach that owner, synthesize an HTTP cancellation result, or manually
+release permits. Already committed retry decisions remain in the oplog, while the enclosing
+durable call stays incomplete for ordinary reconstruction.
+
+The response resume offset counts successful read pairs only outside replay's deleted regions,
+including reads appended after the replay target. An incomplete request can retain its original
+scope `Start` while a `Jump` hides its abandoned children; those old reads must not contribute
+alongside their replacements. The counter snapshots the existing `ReplayState` skipped regions
+and filters entries before pairing or fetching payloads. The request scope and retry budget do
+not change.
+
 Spawned store tasks use the same decision but `FallBackToTrap` there means "stop inline retries
 and let the invocation loop's trap path take over" (`durability.rs`, spawned-task section).
 
@@ -102,7 +120,9 @@ and let the invocation loop's trap path take over" (`durability.rs`, spawned-tas
   `tests/in_function_retry/p3.rs`).
 - `tests/in_function_retry/{http_servers.rs,http_streams.rs}` — streaming bodies and server
   failure modes, including response-body payload outages that physically retire multiple runtime
-  generations while preserving the same invocation and semantic retry state.
+  generations while preserving the same invocation and semantic retry state; the withheld-header
+  tests cover prompt lifecycle interruption, native response-owner cleanup, pool release, and
+  reconstruction for status retries and body resumption.
 - `tests/retry_lifecycle.rs::{interrupt_worker_during_delayed_recovery_retry,
   delete_worker_during_delayed_recovery_retry}` — trap-based `Delayed` retries interact with
   interruption and deletion.

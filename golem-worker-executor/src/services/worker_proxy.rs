@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::golem_config::WorkerServiceGrpcConfig;
-use super::rpc::DurableStreamReadError;
+use super::rpc::DurableStreamRemoteError;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
@@ -151,19 +151,20 @@ pub trait WorkerProxy: Send + Sync {
         &self,
         _request: StreamAttachmentControlRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        Err(WorkerProxyError::InternalError(
-            WorkerExecutorError::invalid_request(
+    ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
+        Err(
+            WorkerProxyError::InternalError(WorkerExecutorError::invalid_request(
                 "durable stream attachment control is not supported by this worker proxy",
-            ),
-        ))
+            ))
+            .into(),
+        )
     }
 
     async fn read_durable_stream_segment(
         &self,
         _request: DurableStreamReadRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<WorkerProxyError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerProxyError>> {
         Err(
             WorkerProxyError::InternalError(WorkerExecutorError::invalid_request(
                 "durable stream segment reads are not supported by this worker proxy",
@@ -499,7 +500,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             nanos: dt.timestamp_subsec_nanos() as i32,
         });
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             method_parameters.try_into().map_err(|error| {
                 WorkerProxyError::BadRequest(vec![format!(
                     "method parameters cannot cross the remote worker boundary: {error}"
@@ -646,7 +647,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
+    ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
         let key = request.operation.key();
         let (target_agent_id, target_environment_id) = if request.operation.targets_consumer() {
             (key.consumer.clone(), key.consumer_environment_id)
@@ -674,20 +675,28 @@ impl WorkerProxy for RemoteWorkerProxy {
                     },
                 ))
             })
-            .await?
+            .await
+            .map_err(|status| {
+                if status.code() == tonic::Code::Unavailable {
+                    DurableStreamRemoteError::Unavailable
+                } else {
+                    DurableStreamRemoteError::Other(WorkerProxyError::from(status))
+                }
+            })?
             .into_inner();
         match response.result {
             Some(durable_stream_attachment_control_response::Result::Replayed(replayed)) => {
                 Ok(replayed)
             }
             Some(durable_stream_attachment_control_response::Result::Error(error)) => {
-                Err(error.into())
+                Err(WorkerProxyError::from(error).into())
             }
-            None => Err(WorkerProxyError::InternalError(
-                WorkerExecutorError::unknown(
+            None => Err(
+                WorkerProxyError::InternalError(WorkerExecutorError::unknown(
                     "Empty durable stream attachment control response".to_string(),
-                ),
-            )),
+                ))
+                .into(),
+            ),
         }
     }
 
@@ -695,7 +704,7 @@ impl WorkerProxy for RemoteWorkerProxy {
         &self,
         request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<WorkerProxyError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerProxyError>> {
         let (producer_agent_id, producer_environment_id, consumer) = match &request {
             DurableStreamReadRequest::AttachedConsumer(request) => {
                 let key = &request.attachment;
@@ -744,9 +753,9 @@ impl WorkerProxy for RemoteWorkerProxy {
             .await
             .map_err(|status| {
                 if status.code() == tonic::Code::Unavailable {
-                    DurableStreamReadError::Unavailable
+                    DurableStreamRemoteError::Unavailable
                 } else {
-                    DurableStreamReadError::Other(WorkerProxyError::from(status))
+                    DurableStreamRemoteError::Other(WorkerProxyError::from(status))
                 }
             })?
             .into_inner();
@@ -1092,9 +1101,6 @@ mod tests {
     use crate::services::rpc::{RemoteInvocationRpc, Rpc};
     use crate::services::shard::ShardServiceDefault;
     use futures::StreamExt;
-    use golem_api_grpc::proto::golem::schema::{
-        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
-    };
     use golem_api_grpc::proto::golem::worker::v1::worker_service_server::{
         WorkerService, WorkerServiceServer,
     };
@@ -1106,6 +1112,9 @@ mod tests {
         invocation_session_result,
     };
     use golem_common::model::component::ComponentId;
+    use golem_schema::proto::golem::schema::{
+        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
+    };
     use prost::Message;
     use std::sync::{Arc, Mutex};
     use test_r::test;
@@ -1125,6 +1134,12 @@ mod tests {
         segment_requests: Arc<Mutex<Vec<DurableStreamSegmentReadRequest>>>,
         segment_responses: Arc<
             Mutex<std::collections::VecDeque<Result<DurableStreamSegmentReadResponse, Status>>>,
+        >,
+        control_requests: Arc<Mutex<Vec<DurableStreamAttachmentControlRequest>>>,
+        control_responses: Arc<
+            Mutex<
+                std::collections::VecDeque<Result<DurableStreamAttachmentControlResponse, Status>>,
+            >,
         >,
         prepared_workers: Arc<Mutex<Vec<LaunchNewWorkerRequest>>>,
         prepared_fingerprint: AgentFingerprint,
@@ -1193,11 +1208,21 @@ mod tests {
             CancelInvocationRequest,
             CancelInvocationResponse
         );
-        unimplemented_rpc!(
-            control_durable_stream_attachment,
-            DurableStreamAttachmentControlRequest,
-            DurableStreamAttachmentControlResponse
-        );
+        async fn control_durable_stream_attachment(
+            &self,
+            request: Request<DurableStreamAttachmentControlRequest>,
+        ) -> Result<Response<DurableStreamAttachmentControlResponse>, Status> {
+            self.control_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            self.control_responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(Status::unimplemented("no scripted control response")))
+                .map(Response::new)
+        }
         async fn read_durable_stream_segment(
             &self,
             request: Request<DurableStreamSegmentReadRequest>,
@@ -1463,7 +1488,7 @@ mod tests {
                 proxy
                     .read_durable_stream_segment(request.clone(), &AuthCtx::System)
                     .await,
-                Err(DurableStreamReadError::Unavailable)
+                Err(DurableStreamRemoteError::Unavailable)
             ));
             responses.lock().unwrap().clear();
             responses
@@ -1473,7 +1498,7 @@ mod tests {
             assert!(matches!(
                 rpc.read_durable_stream_segment(request.clone(), &AuthCtx::System)
                     .await,
-                Err(DurableStreamReadError::Unavailable)
+                Err(DurableStreamRemoteError::Unavailable)
             ));
             responses.lock().unwrap().clear();
 
@@ -1495,7 +1520,7 @@ mod tests {
             assert!(matches!(
                 rpc.read_durable_stream_segment(request.clone(), &AuthCtx::System)
                     .await,
-                Err(DurableStreamReadError::Other(_))
+                Err(DurableStreamRemoteError::Other(_))
             ));
 
             responses.lock().unwrap().extend([
@@ -1530,6 +1555,217 @@ mod tests {
             }
             assert!(responses.lock().unwrap().is_empty());
         }
+        shutdown.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("20s")]
+    async fn remote_attachment_controls_retry_unavailable_producers_and_finish_on_missing_ones() {
+        use crate::durable_host::durable_stream::tests::{attachment_key, identity};
+        use crate::durable_host::durable_stream::{
+            RoutedStreamAttachmentControl, StreamStoreError,
+        };
+        use golem_api_grpc::proto::golem::common::ErrorBody;
+        use golem_common::base_model::durable_stream::*;
+
+        let service = FlakyWorkerService::default();
+        let requests = service.control_requests.clone();
+        let responses = service.control_responses.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(
+                    WorkerServiceServer::new(service)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                        .send_compressed(CompressionEncoding::Gzip),
+                )
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+        let mut config = WorkerServiceGrpcConfig {
+            host: "127.0.0.1".to_string(),
+            port,
+            ..Default::default()
+        };
+        config.client_config.retries_on_unavailable.max_attempts = 2;
+        config.client_config.retries_on_unavailable.min_delay = std::time::Duration::from_millis(1);
+        config.client_config.retries_on_unavailable.max_delay = std::time::Duration::from_millis(1);
+        let proxy = Arc::new(RemoteWorkerProxy::new(&config));
+        let rpc = Arc::new(RemoteInvocationRpc::new(
+            proxy.clone(),
+            Arc::new(ShardServiceDefault::new()),
+        ));
+        let identity = identity();
+        let stream_id = StreamId(uuid::Uuid::new_v4());
+        let key = attachment_key(&identity, stream_id);
+        let mapping = StreamSessionMappingRecord {
+            transport_stream_id: 17,
+            handle: DurableStreamHandle {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                stream_id,
+                producer_environment_id: identity.environment_id,
+                producer: identity.agent_id.clone(),
+                expected_producer_fingerprint: identity.fingerprint,
+                producer_generation: OplogIndex::NONE,
+                source_invocation: identity.invocation.clone(),
+                component_revision: ComponentRevision::INITIAL,
+                element_schema_fingerprint: golem_schema::schema::SchemaFingerprintV1([7; 32]),
+            },
+            role: SessionStreamRole::Output,
+        };
+        let finalize = StreamAttachmentControlRequest {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            mapping: Some(mapping.clone()),
+            operation: StreamAttachmentControlOperation::Finalize {
+                key: key.clone(),
+                reason: StreamAttachmentFinalizationReason::ConsumerDeleted,
+                now_millis: 1_000,
+            },
+        };
+        let unavailable = || Err(Status::unavailable("producer is being deleted"));
+        let replayed = |value| {
+            Ok(DurableStreamAttachmentControlResponse {
+                result: Some(durable_stream_attachment_control_response::Result::Replayed(value)),
+            })
+        };
+        let not_found = || {
+            Ok(DurableStreamAttachmentControlResponse {
+                result: Some(durable_stream_attachment_control_response::Result::Error(
+                    AgentError {
+                        error: Some(agent_error::Error::NotFound(ErrorBody {
+                            error: "producer not found".to_string(),
+                            code: String::new(),
+                        })),
+                    },
+                )),
+            })
+        };
+        let invalid = || {
+            Ok(DurableStreamAttachmentControlResponse {
+                result: Some(durable_stream_attachment_control_response::Result::Error(
+                    AgentError {
+                        error: Some(agent_error::Error::InternalError(
+                            WorkerExecutorError::invalid_request("attachment target mismatch")
+                                .into(),
+                        )),
+                    },
+                )),
+            })
+        };
+
+        // Transport-level unavailability is preserved through the proxy and the remote RPC so the
+        // caller can decide to wait for the producer instead of failing.
+        responses
+            .lock()
+            .unwrap()
+            .extend((0..10).map(|_| unavailable()));
+        assert!(matches!(
+            proxy
+                .control_durable_stream_attachment(finalize.clone(), &AuthCtx::System)
+                .await,
+            Err(DurableStreamRemoteError::Unavailable)
+        ));
+        responses.lock().unwrap().clear();
+        responses
+            .lock()
+            .unwrap()
+            .extend((0..10).map(|_| unavailable()));
+        assert!(matches!(
+            rpc.control_durable_stream_attachment(finalize.clone(), &AuthCtx::System)
+                .await,
+            Err(DurableStreamRemoteError::Unavailable)
+        ));
+        responses.lock().unwrap().clear();
+        requests.lock().unwrap().clear();
+
+        let control = RoutedStreamAttachmentControl::new(
+            rpc.clone() as Arc<dyn Rpc>,
+            mapping.clone(),
+            AuthCtx::System,
+        );
+
+        // A deleting producer answers unavailable until its deletion completes; once it is gone
+        // there is nothing left to finalize on the producer side.
+        responses.lock().unwrap().extend([
+            unavailable(),
+            unavailable(),
+            unavailable(),
+            not_found(),
+        ]);
+        control
+            .finalize_deleted_consumer(key.clone(), 1_000)
+            .await
+            .unwrap();
+        let recorded = std::mem::take(&mut *requests.lock().unwrap());
+        assert_eq!(recorded.len(), 4);
+        for actual in &recorded {
+            assert_eq!(
+                actual.producer_agent_id,
+                Some(identity.agent_id.clone().into())
+            );
+            assert_eq!(actual.consumer_agent_id, Some(key.consumer.clone().into()));
+            assert_eq!(actual.payload, recorded[0].payload);
+        }
+        assert!(responses.lock().unwrap().is_empty());
+
+        // A producer that comes back healthy replays the finalization like any other control.
+        responses
+            .lock()
+            .unwrap()
+            .extend([unavailable(), replayed(true)]);
+        control
+            .finalize_deleted_consumer(key.clone(), 1_000)
+            .await
+            .unwrap();
+        assert!(responses.lock().unwrap().is_empty());
+
+        // Any other failure stays terminal for the finalization.
+        responses.lock().unwrap().push_back(invalid());
+        assert!(matches!(
+            control.finalize_deleted_consumer(key.clone(), 1_000).await,
+            Err(StreamStoreError::Oplog(_))
+        ));
+
+        // Controls other than consumer-deletion finalization keep treating a missing producer as
+        // a failure: their caller has a live attachment that cannot be settled by absence.
+        responses
+            .lock()
+            .unwrap()
+            .extend([unavailable(), not_found()]);
+        assert!(matches!(
+            control
+                .cancel_stream(
+                    key.clone(),
+                    StreamCancelRole::OutputConsumer,
+                    StreamCancelReason::Cancelled,
+                    None,
+                )
+                .await,
+            Err(StreamStoreError::Oplog(_))
+        ));
+        responses
+            .lock()
+            .unwrap()
+            .extend([unavailable(), replayed(true)]);
+        assert!(
+            control
+                .cancel_stream(
+                    key.clone(),
+                    StreamCancelRole::OutputConsumer,
+                    StreamCancelReason::Cancelled,
+                    None,
+                )
+                .await
+                .unwrap()
+        );
+        assert!(responses.lock().unwrap().is_empty());
+
         shutdown.send(()).unwrap();
         server.await.unwrap();
     }

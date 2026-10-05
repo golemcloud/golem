@@ -177,6 +177,13 @@ fn interpret(
             ToolLiteral::Str(s) => Ok(SchemaValue::Url { url: s.clone() }),
             _ => Err(mismatch(resolved, lit)),
         },
+        SchemaType::Uuid { .. } => match lit {
+            ToolLiteral::Str(s) => s
+                .parse()
+                .map(SchemaValue::Uuid)
+                .map_err(|_| mismatch(resolved, lit)),
+            _ => Err(mismatch(resolved, lit)),
+        },
         SchemaType::Enum { cases, .. } => match lit {
             ToolLiteral::Str(s) => {
                 let case = cases.iter().position(|c| c == s).ok_or_else(|| {
@@ -274,6 +281,23 @@ mod tests {
             literal_to_schema_value(&graph(SchemaType::string()), &ToolLiteral::Str("hi".into()))
                 .unwrap();
         assert_eq!(v, SchemaValue::String("hi".into()));
+    }
+
+    #[test]
+    fn uuid_literal() {
+        let text = "dd00721b-3329-4621-a01d-c71f02cd78c6";
+        let value =
+            literal_to_schema_value(&graph(SchemaType::uuid()), &ToolLiteral::Str(text.into()))
+                .unwrap();
+
+        assert_eq!(value, SchemaValue::Uuid(text.parse().unwrap()));
+        assert!(
+            literal_to_schema_value(
+                &graph(SchemaType::uuid()),
+                &ToolLiteral::Str("not-a-uuid".into()),
+            )
+            .is_err()
+        );
     }
 
     #[test]

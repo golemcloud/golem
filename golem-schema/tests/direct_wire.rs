@@ -73,17 +73,11 @@ fn shared_readers_keep_resource_reachability_and_discard_checks() {
 fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
     let uuid = uuid::Uuid::from_u64_pair(0x1234, 0x9876);
     let tree = encode(&uuid).unwrap();
-    let wire::SchemaValueNode::RecordValue(fields) = &tree.value_nodes[tree.root as usize] else {
-        panic!("UUID record")
+    let wire::SchemaValueNode::UuidValue(value) = &tree.value_nodes[tree.root as usize] else {
+        panic!("UUID value")
     };
-    assert!(matches!(
-        tree.value_nodes[fields[0] as usize],
-        wire::SchemaValueNode::U64Value(0x1234)
-    ));
-    assert!(matches!(
-        tree.value_nodes[fields[1] as usize],
-        wire::SchemaValueNode::U64Value(0x9876)
-    ));
+    assert_eq!(value.high_bits, 0x1234);
+    assert_eq!(value.low_bits, 0x9876);
     assert_eq!(decode::<uuid::Uuid>(tree).unwrap(), uuid);
     let promise = golem_schema::PromiseId::new(
         golem_schema::AgentId::new(golem_schema::ComponentId::new(uuid), "Counter(abc)".into()),
@@ -261,6 +255,7 @@ fn wire_schema_derive_builds_recursive_flat_arena() {
 #[schema(named = "example.Shared")]
 struct SharedFirst {
     value: u32,
+    uuid: uuid::Uuid,
 }
 
 #[allow(dead_code)]
@@ -268,6 +263,7 @@ struct SharedFirst {
 #[schema(named = "example.Shared")]
 struct SharedIdentical {
     value: u32,
+    uuid: uuid::Uuid,
 }
 
 #[allow(dead_code)]

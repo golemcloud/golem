@@ -387,7 +387,7 @@ fn native_wire_round_trip_is_lossless() {
 #[test]
 fn protobuf_round_trip_is_lossless() {
     let tool = kitchen_sink_tool();
-    let protobuf: golem_api_grpc::proto::golem::tool::Tool = tool.clone().into();
+    let protobuf: golem_schema::proto::golem::tool::Tool = tool.clone().into();
     let back = Tool::try_from(protobuf).expect("protobuf -> native should succeed");
     assert_eq!(tool, back);
 }
@@ -395,7 +395,7 @@ fn protobuf_round_trip_is_lossless() {
 #[test]
 fn protobuf_rejects_formatter_without_required_doc() {
     let tool = kitchen_sink_tool();
-    let mut protobuf: golem_api_grpc::proto::golem::tool::Tool = tool.into();
+    let mut protobuf: golem_schema::proto::golem::tool::Tool = tool.into();
     protobuf.commands.as_mut().unwrap().nodes[0]
         .body
         .as_mut()

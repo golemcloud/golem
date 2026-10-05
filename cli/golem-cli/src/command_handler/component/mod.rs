@@ -1331,7 +1331,7 @@ impl ComponentCommandHandler {
             }
         }
         for (_, _, targets) in app.bridge_sdks().for_all_used_modes() {
-            let Some(tool_targets) = targets.tools else {
+            let Some(tool_targets) = targets.tools.as_ref() else {
                 continue;
             };
             let matchers = tool_targets.clone().into_set();

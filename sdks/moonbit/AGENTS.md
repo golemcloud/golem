@@ -148,16 +148,16 @@ sdks/moonbit/
 ### WIT Bindgen
 
 All code under `async-core/`, `interface/`, `world/`, and `gen/` (except the
-`gen/interface/*/stub.mbt` files) is **auto-generated** by `wit-bindgen moonbit`. Do NOT edit these
-files. Regenerate with the script, which requires this exact revision of the
-[Golem wit-bindgen fork](https://github.com/golemcloud/wit-bindgen):
+hand-maintained `moon.pkg`, `stub.mbt`, test, and `stream_transfer.mbt` files) is generated on demand
+by `wit-bindgen moonbit` and is not tracked by Git. Do NOT edit generated files. Install the
+generator from the Golem fork's `wit-bindgen-golem-1.6` branch:
 
 ```sh
-cargo install --locked --git https://github.com/golemcloud/wit-bindgen \
-  --rev d1d16370eff379655f68df661891b7a2116c7557 wit-bindgen-cli
+cd golem_sdk
+./scripts/install-wit-bindgen.sh
 ```
 
-The pin incorporates Bytecode Alliance's draft
+The branch incorporates Bytecode Alliance's draft
 [MoonBit component-model async PR #1659](https://github.com/bytecodealliance/wit-bindgen/pull/1659)
 and Golem's additional outline-lift, named-memory-lowering, export-disambiguation, and deterministic
 emission changes, 64 KiB component byte-stream batching, and shared export ABI lifting and lowering
@@ -171,13 +171,19 @@ cd golem_sdk
 ```
 
 The script (`scripts/regen-bindings.sh`):
-1. Refuses to run unless `wit-bindgen --version` identifies the pinned fork revision.
+1. Refuses to run unless the generator version matches the Golem fork build recorded by
+   `scripts/install-wit-bindgen.sh` from the `wit-bindgen-golem-1.6` branch.
 2. Runs `wit-bindgen moonbit ./wit --derive-debug --derive-eq --derive-error --project-name golemcloud/golem_sdk --ignore-stub` directly against the P3 WIT. Async exports remain async.
 3. Fixes an `s8`/`s16` double sign-extension bug (the generated code does a signed
    load *and* subtracts `0x100`/`0x10000`; the spurious subtraction is stripped).
 4. Removes an emitted `moon.pkg.json` only where a sibling hand-maintained `moon.pkg` owns the
    package metadata.
 5. Asserts the s8/s16 fix took effect.
+
+CI and release workflows run `scripts/check-generated-bindings.sh`, which regenerates twice and
+requires byte-identical output before compiling, testing, or publishing. Published mooncakes include
+the generated source even though it is ignored by Git: `golem_sdk/.moonignore` deliberately replaces
+`.gitignore` for `moon package` and `moon publish`.
 
 The regeneration script preserves hand-maintained `stub.mbt` files under `gen/interface/`.
 These implement the full world's exports with empty/error defaults. Generated `golem_exports.mbt`
@@ -463,7 +469,8 @@ moon check --target wasm          # Type-check
 moon build --target wasm          # Build
 ./scripts/run-sdk-tests.sh         # Run tests with Golem host-import support
 moon info && moon fmt             # Regenerate .mbti and format
-./scripts/regen-bindings.sh        # Regenerate with the exact pinned Golem wit-bindgen fork
+./scripts/regen-bindings.sh        # Regenerate with the Golem wit-bindgen fork branch
+./scripts/check-generated-bindings.sh # Regenerate twice and verify deterministic output
 
 # In golem_sdk_tools/ (the codegen CLI, native target):
 moon check
@@ -534,14 +541,14 @@ published to mooncakes.io for the release template to work.
 
 ## Dependencies & Tools
 
-- **wit-bindgen** — Golem's fork pinned at
-  `d1d16370eff379655f68df661891b7a2116c7557`. It combines draft upstream PR #1659's MoonBit
+- **wit-bindgen** — Golem's fork on the `wit-bindgen-golem-1.6` branch. It combines draft upstream PR #1659's MoonBit
   component-model async support with Golem's outline-lift, named-memory-lowering, and export
   disambiguation changes, 64 KiB component byte-stream batching, shared cross-interface export ABI
   lifting and lowering, and
   deterministic bindings. Bindings are regenerated via
-  `scripts/regen-bindings.sh`, which rejects any other generator revision and applies the s8/s16
-  sign-extension fix in post-processing.
+  `scripts/regen-bindings.sh`, which checks the expected release line and applies the s8/s16
+  sign-extension fix in post-processing. Use `scripts/install-wit-bindgen.sh` to install it from the
+  branch used by Golem's Cargo dependencies.
 - **wasm-tools** — `component embed` (adds WIT type info) and `component new` (creates the Component
   Model WASM).
 - **moon** — MoonBit build tool.

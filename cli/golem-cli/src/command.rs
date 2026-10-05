@@ -722,6 +722,12 @@ pub enum GolemCliSubcommand {
         /// for manual inspection or for vendoring into another project.
         #[clap(long)]
         output_dir: Option<PathBuf>,
+        /// Adds derives to matching final Rust type names (`<regex>=Trait,Trait`).
+        #[clap(long)]
+        derive_rule: Vec<String>,
+        /// Adds a Cargo TOML dependency assignment to generated Rust crates.
+        #[clap(long)]
+        rust_dependency: Vec<String>,
     },
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
@@ -2135,6 +2141,13 @@ pub mod api {
             Custom,
         }
 
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+        #[clap(rename_all = "kebab-case")]
+        pub enum LoginModeArg {
+            Cookie,
+            AuthorizationCodePkce,
+        }
+
         impl From<ProviderKindArg> for ProviderKind {
             fn from(value: ProviderKindArg) -> Self {
                 match value {
@@ -2183,6 +2196,15 @@ pub mod api {
                 /// given values instead of failing
                 #[arg(long)]
                 update_existing: bool,
+                /// Login mode used by protected HTTP APIs
+                #[arg(long, value_enum, default_value = "cookie")]
+                login_mode: LoginModeArg,
+                /// Exact allowed frontend redirect URI (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Get HTTP API Security Scheme
@@ -2222,6 +2244,15 @@ pub mod api {
                 /// Security Scheme redirect URL
                 #[arg(long)]
                 redirect_url: Option<String>,
+                /// Replace the complete login-mode configuration
+                #[arg(long, value_enum)]
+                login_mode: Option<LoginModeArg>,
+                /// Exact allowed frontend redirect URI (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Delete HTTP API Security Scheme
@@ -3142,6 +3173,35 @@ mod test {
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
     use test_r::test;
+
+    #[test]
+    fn generate_bridge_parses_repeated_rust_configuration_options() {
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "generate-bridge",
+            "--language",
+            "rust",
+            "--derive-rule",
+            "^Order=serde::Serialize",
+            "--derive-rule",
+            "Result$=Eq,Hash",
+            "--rust-dependency",
+            "serde_with = { version = \"3\", features = [\"macros\"] }",
+            "--rust-dependency",
+            "local = { path = \"../local\", package = \"actual\" }",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::GenerateBridge {
+            derive_rule,
+            rust_dependency,
+            ..
+        } = command.subcommand
+        else {
+            panic!("expected generate-bridge command");
+        };
+        assert_eq!(derive_rule.len(), 2);
+        assert_eq!(rust_dependency.len(), 2);
+    }
 
     #[test]
     fn agent_stream_ping_interval_rejects_zero_duration() {

@@ -111,6 +111,45 @@ redis.call('DEL', KEYS[1], KEYS[2])
 return redis.status_reply('OK')
 "#;
 
+    /// `KEYS`: the stream, then its epoch record. `ARGV`: the lowest id to keep, the epoch the
+    /// trim asserts, compared the way [`Self::FENCED_APPEND_SCRIPT`] does, and `1` to delete the
+    /// stream when the trim empties it (never the record). A refused trim removes nothing.
+    const FENCED_DROP_PREFIX_SCRIPT: &'static str = r#"
+local stored = redis.call('HGET', KEYS[2], 'epoch')
+if stored == false then
+  return redis.error_reply('FENCED -')
+end
+if stored ~= ARGV[2] then
+  return redis.error_reply('FENCED ' .. stored)
+end
+redis.call('XTRIM', KEYS[1], 'MINID', ARGV[1])
+if ARGV[3] == '1' and redis.call('XLEN', KEYS[1]) == 0 then
+  redis.call('DEL', KEYS[1])
+end
+return redis.status_reply('OK')
+"#;
+
+    /// `KEYS`: the stream, then its epoch record. `ARGV`: the epoch the delete asserts, compared
+    /// the way [`Self::FENCED_APPEND_SCRIPT`] does, or nothing for an unconditional delete. Deletes
+    /// only an empty stream and never the record; answers 1 when the stream was empty (and is now
+    /// gone), 0 when it still holds entries.
+    const DELETE_EMPTY_WITH_EPOCH_SCRIPT: &'static str = r#"
+if #ARGV > 0 then
+  local stored = redis.call('HGET', KEYS[2], 'epoch')
+  if stored == false then
+    return redis.error_reply('FENCED -')
+  end
+  if stored ~= ARGV[1] then
+    return redis.error_reply('FENCED ' .. stored)
+  end
+end
+if redis.call('EXISTS', KEYS[1]) == 1 and redis.call('XLEN', KEYS[1]) > 0 then
+  return 0
+end
+redis.call('DEL', KEYS[1])
+return 1
+"#;
+
     /// Where a key's epoch lives. Not under the key's own name: `scan` matches `...oplog:*`, and
     /// an `...oplog:<key>:epoch` sibling would come back from it as a key of its own.
     fn epoch_key(namespace: IndexedStorageNamespace, key: &str) -> String {
@@ -743,17 +782,74 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let _: u64 = self
-            .redis
+        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let Some(expected) = expected_epoch else {
+            let composite_key = Self::composite_key(namespace, key);
+            if delete_if_empty {
+                let _: u64 = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .xtrim_and_delete_if_empty(composite_key, last_dropped_id + 1)
+                    .await
+                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            } else {
+                let _: u64 = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .xtrim(composite_key, (XCapKind::MinID, last_dropped_id + 1))
+                    .await
+                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            }
+            return Ok(());
+        };
+        self.redis
             .with(svc_name, api_name)
-            .xtrim(
-                Self::composite_key(namespace, key),
-                (XCapKind::MinID, last_dropped_id + 1),
+            .eval(
+                Self::FENCED_DROP_PREFIX_SCRIPT,
+                &[
+                    Self::composite_key(namespace.clone(), key),
+                    Self::epoch_key(namespace, key),
+                ],
+                vec![
+                    Value::from((last_dropped_id + 1).to_string()),
+                    Value::from(expected.0.to_string()),
+                    Value::from(if delete_if_empty { "1" } else { "0" }),
+                ],
+                None,
             )
             .await
-            .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
-        Ok(())
+            .map(|_| ())
+            .map_err(|error| Self::classify_epoch_error(error, key, Some(expected)))
+    }
+
+    async fn delete_empty_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        let args = match expected_epoch {
+            Some(expected) => vec![Value::from(expected.0.to_string())],
+            None => vec![],
+        };
+        self.redis
+            .with(svc_name, api_name)
+            .eval(
+                Self::DELETE_EMPTY_WITH_EPOCH_SCRIPT,
+                &[
+                    Self::composite_key(namespace.clone(), key),
+                    Self::epoch_key(namespace, key),
+                ],
+                args,
+                None,
+            )
+            .await
+            .map(|deleted| matches!(deleted, Value::Integer(1)))
+            .map_err(|error| Self::classify_epoch_error(error, key, expected_epoch))
     }
 }
 

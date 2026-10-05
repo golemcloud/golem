@@ -1,11 +1,8 @@
 use super::*;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use golem_api_grpc::proto::golem::common::{Empty, EnvironmentId, Uuid};
+use golem_api_grpc::proto::golem::common::EnvironmentId;
 use golem_api_grpc::proto::golem::component::ComponentId;
-use golem_api_grpc::proto::golem::schema::{
-    ListValue, SchemaValue, SchemaValueStreamReference, schema_value,
-};
 use golem_api_grpc::proto::golem::worker::{
     AgentId as ProtoAgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey,
     InputStreamAck, InputStreamHighWater, InvocationAccepted, InvocationFailure,
@@ -16,6 +13,10 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::worker::{
     invocation_session_completion, invocation_session_result,
+};
+use golem_schema::proto::golem::common::{Empty, Uuid};
+use golem_schema::proto::golem::schema::{
+    ListValue, SchemaValue, SchemaValueStreamReference, schema_value,
 };
 use serde_json::Value;
 use std::collections::VecDeque;

@@ -97,6 +97,11 @@ test "direct rich wire codecs preserve units and reject invalid quantity units" 
 
 ///|
 test "rich type round-trips" {
+  let uuid : @types.Uuid = {
+    high_bits: 0x0123456789ABCDEFUL,
+    low_bits: 0xFEDCBA9876543210UL,
+  }
+  assert_eq(rich_roundtrip(uuid), uuid)
   assert_eq(
     rich_roundtrip(Path::new("/tmp/data.txt")),
     Path::new("/tmp/data.txt"),
@@ -121,6 +126,15 @@ test "rich type round-trips" {
     rich_roundtrip((Quantity::new(1500L, 1, "kb") : Quantity[TestBytesUnit])),
     (Quantity::new(1500L, 1, "kb") : Quantity[TestBytesUnit]),
   )
+}
+
+///|
+test "uuid has a first-class schema and value" {
+  let tag : TypeTag[@types.Uuid] = type_tag()
+  assert_eq(into_schema_graph(tag).root, @model.schema_type(@model.Uuid))
+  let uuid : @types.Uuid = { high_bits: 1UL, low_bits: 2UL, }
+  assert_eq(to_value_as(uuid), @model.SchemaValue::Uuid(uuid))
+  assert_eq(from_value_as(@model.SchemaValue::Uuid(uuid)), uuid)
 }
 
 ///|

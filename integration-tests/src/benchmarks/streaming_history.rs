@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::public_invocation::{PublicInvocationSession, SessionCheckpoint};
+use crate::benchmarks::public_invocation::{
+    PublicInvocationSession, SessionCheckpoint, public_record, public_u32,
+};
 use crate::benchmarks::{cleanup_user_state, delete_workers};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
@@ -242,7 +244,7 @@ async fn seed_direct_session(
         environment,
         target,
         "benchmark_output",
-        serde_json::json!({ "length": 1, "domain": domain }),
+        public_record([public_u32(1), public_u32(domain)]),
         PHASE_DEADLINE,
     )
     .await?
@@ -270,7 +272,7 @@ fn validate_direct_output(
         .map(|(_, value)| value)
         .collect::<Vec<_>>();
     let expected = (0..length)
-        .map(|index| serde_json::json!(domain + index * 3))
+        .map(|index| public_u32(domain + index * 3))
         .collect::<Vec<_>>();
     ensure!(
         values == expected.iter().collect::<Vec<_>>(),
@@ -791,10 +793,7 @@ impl StreamingRpcCold {
             &iteration.environment,
             &iteration.target,
             "benchmark_output",
-            serde_json::json!({
-                "length": iteration.length,
-                "domain": MEASURED_DOMAIN,
-            }),
+            public_record([public_u32(iteration.length), public_u32(MEASURED_DOMAIN)]),
             PHASE_DEADLINE,
         )
         .await

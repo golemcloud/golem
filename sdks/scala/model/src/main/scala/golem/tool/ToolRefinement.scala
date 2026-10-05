@@ -173,6 +173,7 @@ object ToolRefinement {
       case _: OptionType         => "option"
       case _: ResultType         => "result"
       case _: BinaryType         => "binary"
+      case UuidType              => "uuid"
       case DatetimeType          => "datetime"
       case DurationType          => "duration"
       case _: QuantityType       => "quantity"

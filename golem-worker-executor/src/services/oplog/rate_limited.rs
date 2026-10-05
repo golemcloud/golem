@@ -220,6 +220,10 @@ impl Oplog for RateLimitedOplog {
         self.inner.drop_prefix(last_dropped_id).await
     }
 
+    async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
+        self.inner.try_drop_prefix(last_dropped_id).await
+    }
+
     async fn commit(
         &self,
         level: CommitLevel,
@@ -229,6 +233,10 @@ impl Oplog for RateLimitedOplog {
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.inner.current_oplog_index().await
+    }
+
+    async fn try_current_oplog_index(&self) -> Result<OplogIndex, String> {
+        self.inner.try_current_oplog_index().await
     }
 
     async fn raw_durable_stream_session_status(
@@ -268,8 +276,20 @@ impl Oplog for RateLimitedOplog {
         self.inner.read_source(oplog_index, n).await
     }
 
+    async fn try_read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+        self.inner.try_read_source(oplog_index, n).await
+    }
+
     async fn length(&self) -> u64 {
         self.inner.length().await
+    }
+
+    async fn try_length(&self) -> Result<u64, String> {
+        self.inner.try_length().await
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
@@ -574,6 +594,16 @@ impl OplogService for RateLimitedOplogService {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
+    async fn try_get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, String> {
+        self.inner
+            .try_get_last_index(owned_agent_id, agent_mode)
+            .await
+    }
+
     async fn assert_owning_epoch(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -623,6 +653,14 @@ impl OplogService for RateLimitedOplogService {
 
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool {
         self.inner.exists(owned_agent_id, agent_mode).await
+    }
+
+    async fn try_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, String> {
+        self.inner.try_exists(owned_agent_id, agent_mode).await
     }
 
     async fn scan_for_component(

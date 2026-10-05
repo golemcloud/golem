@@ -70,15 +70,15 @@ pub async fn MoonBitToolStreamingCaller::marker_before_eof(
     abort("unexpected MoonBit live marker")
   }
   ignore(release_input.complete(()))
-  match invocation.collect() {
-    Ok(collected) => {
-      let output = match collected.stdout {
-        Some(output) => output
-        None => abort("MoonBit collected stdout is missing")
-      }
-      guard output == payload else { abort("MoonBit echoed payload differs") }
-      collected.result
-    }
+  let collected = invocation.collect()
+  let output = match collected.stdout {
+    Ok(Some(output)) => output
+    Ok(None) => abort("MoonBit collected stdout is missing")
+    Err(_) => abort("MoonBit stdout collection failed")
+  }
+  guard output == payload else { abort("MoonBit echoed payload differs") }
+  match collected.result {
+    Ok(result) => result
     Err(_) => abort("MoonBit streaming tool failed")
   }
 }

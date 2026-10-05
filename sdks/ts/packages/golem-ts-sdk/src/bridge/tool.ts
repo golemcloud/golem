@@ -27,6 +27,8 @@ import {
   type ToolInputStream,
 } from '../internal/tool/startedToolInvocation';
 
+export type { CollectedToolInvocation } from '../internal/tool/startedToolInvocation';
+
 export {
   mapSettledToolResult,
   resultFromSettledToolResult,

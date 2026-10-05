@@ -25,7 +25,7 @@ describe("Effect authoring to TypeScript canonical schema oracle", () => {
       const Choice = GolemSchema.DiscriminatedUnion([
         {
           tag: "name",
-          schema: Schema.String.pipe(Schema.check(Schema.isStartsWith("name:"))),
+          schema: Schema.String.pipe(Schema.check(Schema.isStartingWith("name:"))),
           discriminator: { tag: "prefix", val: "name:" },
         },
         {
