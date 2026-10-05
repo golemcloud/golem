@@ -47,8 +47,10 @@ function metadataLoader(runtime) {
                   },
           },
         )
-      if (id === "@golemcloud/http-contract")
-        return load(path.join(runtime, "internal/http-contract/index.mjs"))
+      if (id === "@golemcloud/http-contract") {
+        const bundled = path.join(runtime, "internal/http-contract/index.mjs")
+        return load(fs.existsSync(bundled) ? bundled : createRequire(file).resolve(id))
+      }
       if (id.startsWith(".")) return load(path.resolve(path.dirname(file), id))
       return createRequire(file)(id)
     }
