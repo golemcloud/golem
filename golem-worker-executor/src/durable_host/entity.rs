@@ -1078,11 +1078,7 @@ impl EntityInvocationDurability {
             };
             let supervisor_body_resources = body_resources.clone();
             let monitor_reconstruction = historical_reconstruction.clone();
-            let supervisor_tasks = executor_tasks.clone();
             let completed_supervisor = executor_tasks.spawn_entity(async move {
-                supervisor_tasks
-                    .completed_reconstruction_supervisor_pending()
-                    .await;
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(

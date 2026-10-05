@@ -921,12 +921,6 @@ impl WorkerCtx for Context {
 
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
 
-    fn worker_deletion_hook(
-        extra_deps: &Self::ExtraDeps,
-    ) -> Option<Arc<dyn crate::worker::WorkerDeletionHook>> {
-        extra_deps.worker_deletion_hook()
-    }
-
     async fn create(
         _account_id: AccountId,
         owned_agent_id: OwnedAgentId,

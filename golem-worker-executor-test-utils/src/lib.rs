@@ -108,9 +108,7 @@ use golem_worker_executor::preview2::golem::agent::host::{
 };
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_agents::memory_probe::FixedProbe;
-use golem_worker_executor::services::active_agents::{
-    ActiveAgents, CompletedReconstructionTaskHook, InvocationLoops,
-};
+use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoops};
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
@@ -584,72 +582,6 @@ mod hosted_descriptor_tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CompletedReconstructionExecutorPhase {
-    Supervisor,
-    MonitorFailureCallback,
-}
-
-pub struct CompletedReconstructionExecutorPhaseGate {
-    entered: tokio::sync::oneshot::Receiver<()>,
-    dropped: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl CompletedReconstructionExecutorPhaseGate {
-    pub async fn entered(&mut self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
-        (&mut self.entered).await
-    }
-
-    pub fn was_dropped(&self) -> bool {
-        self.dropped.load(std::sync::atomic::Ordering::Acquire)
-    }
-}
-
-struct TestCompletedReconstructionTaskHook {
-    phase: CompletedReconstructionExecutorPhase,
-    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    dropped: Arc<std::sync::atomic::AtomicBool>,
-}
-
-struct CompletedReconstructionHookDrop(Arc<std::sync::atomic::AtomicBool>);
-
-impl Drop for CompletedReconstructionHookDrop {
-    fn drop(&mut self) {
-        self.0.store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-
-#[async_trait]
-impl CompletedReconstructionTaskHook for TestCompletedReconstructionTaskHook {
-    async fn supervisor_pending(&self) {
-        if self.phase == CompletedReconstructionExecutorPhase::Supervisor {
-            let _drop = CompletedReconstructionHookDrop(self.dropped.clone());
-            self.entered
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap()
-                .send(())
-                .unwrap();
-            std::future::pending::<()>().await;
-        }
-    }
-
-    async fn monitor_failure_pending(&self) {
-        if self.phase == CompletedReconstructionExecutorPhase::MonitorFailureCallback {
-            let _drop = CompletedReconstructionHookDrop(self.dropped.clone());
-            self.entered
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap()
-                .send(())
-                .unwrap();
-            std::future::pending::<()>().await;
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
@@ -665,7 +597,6 @@ pub struct TestWorkerExecutor {
     /// wasmtime instance while keeping the `Worker` shell (and its read-only
     /// cache) alive, and to read per-agent instance load counts.
     additional_test_deps: AdditionalTestDeps,
-    production_additional_deps: Option<NoAdditionalDeps>,
     services: Option<golem_worker_executor::services::All<TestWorkerCtx>>,
     production_active_agents:
         Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
@@ -991,11 +922,7 @@ impl TestWorkerExecutor {
     }
 
     pub fn set_worker_deletion_hook(&self, hook: Arc<dyn WorkerDeletionHook>) {
-        self.additional_test_deps
-            .set_worker_deletion_hook(hook.clone());
-        if let Some(additional_deps) = &self.production_additional_deps {
-            additional_deps.set_worker_deletion_hook(hook);
-        }
+        self.additional_test_deps.set_worker_deletion_hook(hook);
     }
 
     /// Rejects one linear-memory growth after the next RPC creation completes.
@@ -1277,31 +1204,6 @@ impl TestWorkerExecutor {
             .await
     }
 
-    pub async fn active_entity_fence_generation(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-    ) -> Option<u64> {
-        Some(
-            self.additional_test_deps
-                .active_agents
-                .get()?
-                .try_get_active_agent(owned_agent_id)
-                .await?
-                .entity_fence_generation_for_test(),
-        )
-    }
-
-    pub async fn advance_entity_fence_generation_for_test(&self, owned_agent_id: &OwnedAgentId) {
-        self.additional_test_deps
-            .active_agents
-            .get()
-            .expect("active agents are initialized")
-            .try_get_active_agent(owned_agent_id)
-            .await
-            .expect("active agent is present")
-            .advance_entity_fence_generation_for_test();
-    }
-
     pub async fn store_component_with_id(
         &self,
         name: &str,
@@ -1515,25 +1417,6 @@ impl TestWorkerExecutor {
     ) -> EntityReconstructionBodyGateHandle {
         self.additional_test_deps
             .gate_next_completed_entity_reconstruction(agent_id.clone())
-    }
-
-    pub fn gate_completed_reconstruction_executor_phase(
-        &self,
-        phase: CompletedReconstructionExecutorPhase,
-    ) -> CompletedReconstructionExecutorPhaseGate {
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self._run_details
-            .invocation_loops
-            .set_completed_reconstruction_hook(Arc::new(TestCompletedReconstructionTaskHook {
-                phase,
-                entered: std::sync::Mutex::new(Some(entered_tx)),
-                dropped: dropped.clone(),
-            }));
-        CompletedReconstructionExecutorPhaseGate {
-            entered: entered_rx,
-            dropped,
-        }
     }
 
     /// Reports destruction of this agent's entity Store contexts, keyed by durable Start.
@@ -2375,7 +2258,6 @@ async fn start_executor_with_config(
                 client,
                 context: context.clone(),
                 additional_test_deps,
-                production_additional_deps: None,
                 services: services.lock().unwrap().take(),
                 production_active_agents: None,
                 concurrent_resource_entry: None,
@@ -3694,6 +3576,7 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
+    wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
     active_agents: Arc<
         std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
@@ -3753,12 +3636,17 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
-        Arc::new(ComponentServiceLocalFileSystem::new(
+        let service = Arc::new(ComponentServiceLocalFileSystem::new(
             &self.component_service_directory,
             10000,
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
-        ))
+        ));
+        if let Some(wrap) = &self.wrap_component_service {
+            wrap(service)
+        } else {
+            service
+        }
     }
 
     fn create_card_service(
@@ -3958,6 +3846,7 @@ async fn run_production_context_bootstrap(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
+            wrap_component_service: overrides.wrap_component_service,
             wrap_rpc: overrides.wrap_rpc,
             active_agents: active_agents.clone(),
             additional_deps: additional_deps.clone(),
@@ -4001,7 +3890,6 @@ async fn run_production_context_bootstrap(
                 // use `production_active_agents`; the remaining test-context-only
                 // helpers see empty additional dependencies.
                 additional_test_deps: AdditionalTestDeps::new(),
-                production_additional_deps: Some(additional_deps),
                 services: None,
                 production_active_agents: Some(
                     active_agents

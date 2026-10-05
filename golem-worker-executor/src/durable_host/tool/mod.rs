@@ -4161,7 +4161,6 @@ where
             return Err(error.into());
         }
     };
-    let completed_failure_tasks = body.executor_tasks();
     let outcome = durability
         .drive_access(
             accessor,
@@ -4182,9 +4181,6 @@ where
                 }
             },
             move |error| async move {
-                completed_failure_tasks
-                    .completed_reconstruction_monitor_failure_pending()
-                    .await;
                 let terminal = terminal_for_completed_failure.lock().unwrap().take();
                 if let Some(terminal) = terminal {
                     operation_for_completed_failure

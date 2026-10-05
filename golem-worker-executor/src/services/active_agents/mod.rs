@@ -339,18 +339,6 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         self.entity_fence_generation.load(Ordering::Acquire)
     }
 
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub fn entity_fence_generation_for_test(&self) -> u64 {
-        self.entity_fence_generation()
-    }
-
-    #[cfg(feature = "test-utils")]
-    #[doc(hidden)]
-    pub fn advance_entity_fence_generation_for_test(&self) {
-        self.entity_fence_generation.fetch_add(1, Ordering::AcqRel);
-    }
-
     pub(crate) fn reopen_entity_admission_if_generation(&self, generation: u64) -> bool {
         let entities = self.entities.lock().unwrap();
         if self.entity_fence_generation.load(Ordering::Acquire) != generation {
@@ -626,18 +614,7 @@ pub struct InvocationLoops {
     tracker: TaskTracker,
     owner_oplogs: Arc<Mutex<Vec<RegisteredOwnerOplog>>>,
     construction_admission: Arc<Mutex<bool>>,
-    #[cfg(any(test, feature = "test-utils"))]
-    completed_reconstruction_hook: Arc<Mutex<Option<Arc<dyn CompletedReconstructionTaskHook>>>>,
     _watcher_lifetime: Arc<InvocationLoopWatcherLifetime>,
-}
-
-#[doc(hidden)]
-#[cfg(any(test, feature = "test-utils"))]
-#[async_trait]
-pub trait CompletedReconstructionTaskHook: Send + Sync {
-    async fn supervisor_pending(&self) {}
-
-    async fn monitor_failure_pending(&self) {}
 }
 
 struct InvocationLoopWatcherLifetime(CancellationToken);
@@ -691,8 +668,6 @@ impl InvocationLoops {
             tracker: TaskTracker::new(),
             owner_oplogs,
             construction_admission,
-            #[cfg(any(test, feature = "test-utils"))]
-            completed_reconstruction_hook: Arc::new(Mutex::new(None)),
             _watcher_lifetime: watcher_lifetime,
         }
     }
@@ -777,37 +752,6 @@ impl InvocationLoops {
             }
         })
     }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    #[doc(hidden)]
-    pub fn set_completed_reconstruction_hook(
-        &self,
-        hook: Arc<dyn CompletedReconstructionTaskHook>,
-    ) {
-        *self.completed_reconstruction_hook.lock().unwrap() = Some(hook);
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) async fn completed_reconstruction_supervisor_pending(&self) {
-        let hook = self.completed_reconstruction_hook.lock().unwrap().clone();
-        if let Some(hook) = hook {
-            hook.supervisor_pending().await;
-        }
-    }
-
-    #[cfg(not(any(test, feature = "test-utils")))]
-    pub(crate) async fn completed_reconstruction_supervisor_pending(&self) {}
-
-    #[cfg(any(test, feature = "test-utils"))]
-    pub(crate) async fn completed_reconstruction_monitor_failure_pending(&self) {
-        let hook = self.completed_reconstruction_hook.lock().unwrap().clone();
-        if let Some(hook) = hook {
-            hook.monitor_failure_pending().await;
-        }
-    }
-
-    #[cfg(not(any(test, feature = "test-utils")))]
-    pub(crate) async fn completed_reconstruction_monitor_failure_pending(&self) {}
 
     /// Whether the owning executor has been shut down. Once true, no new loop makes progress and
     /// [`Self::wait_for_exit`] resolves as soon as the already running ones have exited.

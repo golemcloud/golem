@@ -89,13 +89,13 @@ async fn executor_shutdown_joins_detached_entity_without_running_finalization() 
         }
     });
     running.await.unwrap();
-    drop(task);
 
     shutdown.cancel();
     tasks.wait_for_exit().await.unwrap();
 
     assert!(dropped.load(Ordering::Acquire));
     assert!(!finalized.load(Ordering::Acquire));
+    assert_eq!(task.await.unwrap(), None);
 }
 
 #[test]
@@ -399,75 +399,6 @@ async fn construction_submitted_after_shutdown_barrier_is_rejected_without_polli
         }
     }));
     assert!(!polled.load(std::sync::atomic::Ordering::Acquire));
-}
-
-struct ReconstructionPhaseGate {
-    supervisor: bool,
-    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-}
-
-#[async_trait::async_trait]
-impl super::CompletedReconstructionTaskHook for ReconstructionPhaseGate {
-    async fn supervisor_pending(&self) {
-        if self.supervisor {
-            self.entered
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap()
-                .send(())
-                .unwrap();
-            std::future::pending::<()>().await;
-        }
-    }
-
-    async fn monitor_failure_pending(&self) {
-        if !self.supervisor {
-            self.entered
-                .lock()
-                .unwrap()
-                .take()
-                .unwrap()
-                .send(())
-                .unwrap();
-            std::future::pending::<()>().await;
-        }
-    }
-}
-
-#[test]
-#[timeout("10s")]
-async fn executor_shutdown_abandons_completed_reconstruction_phases_before_continuation() {
-    for supervisor in [true, false] {
-        let shutdown = tokio_util::sync::CancellationToken::new();
-        let tasks = super::InvocationLoops::new(shutdown.clone());
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        tasks.set_completed_reconstruction_hook(Arc::new(ReconstructionPhaseGate {
-            supervisor,
-            entered: std::sync::Mutex::new(Some(entered_tx)),
-        }));
-        let continued = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let task = tasks.spawn_entity({
-            let tasks = tasks.clone();
-            let continued = continued.clone();
-            async move {
-                if supervisor {
-                    tasks.completed_reconstruction_supervisor_pending().await;
-                } else {
-                    tasks
-                        .completed_reconstruction_monitor_failure_pending()
-                        .await;
-                }
-                continued.store(true, std::sync::atomic::Ordering::Release);
-            }
-        });
-        entered_rx.await.unwrap();
-
-        shutdown.cancel();
-        tasks.wait_for_exit().await.unwrap();
-        assert_eq!(task.await.unwrap(), None);
-        assert!(!continued.load(std::sync::atomic::Ordering::Acquire));
-    }
 }
 
 #[test]

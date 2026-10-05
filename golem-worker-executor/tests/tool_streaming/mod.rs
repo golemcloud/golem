@@ -70,19 +70,16 @@ use golem_worker_executor::services::environment_state::{
     EnvironmentStateService, ToolDiscoveryError,
 };
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
-use golem_worker_executor::worker::{
-    WorkerDeletionHook, WorkerDeletionStage, WorkerLifecycleEstablishmentStage,
-};
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::{
-    CompletedReconstructionExecutorPhase, LastUniqueId, PrecompiledComponent, ReplayAdmissionStage,
-    TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
-    native_streaming_tool_metadata, native_test_tool_metadata, start_with_overrides,
+    LastUniqueId, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
+    native_test_tool_metadata, start_with_overrides,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use test_r::{inherit_test_dep, test, timeout};
 use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
@@ -100,37 +97,6 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
-struct ToolLifecycleStageGate {
-    target: OwnedAgentId,
-    entered: tokio::sync::Semaphore,
-    release: tokio::sync::Semaphore,
-    gated: AtomicBool,
-}
-
-#[async_trait::async_trait]
-impl WorkerDeletionHook for ToolLifecycleStageGate {
-    async fn before_lifecycle_establishment_stage(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        stage: WorkerLifecycleEstablishmentStage,
-    ) {
-        if owned_agent_id == &self.target
-            && stage == WorkerLifecycleEstablishmentStage::FencedBeforeDrain
-            && !self.gated.swap(true, Ordering::AcqRel)
-        {
-            self.entered.add_permits(1);
-            self.release.acquire().await.unwrap().forget();
-        }
-    }
-
-    async fn before_stage(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _stage: WorkerDeletionStage,
-    ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
-        Ok(())
-    }
-}
 inherit_test_dep!(
     #[tagged_as("tool_streaming_rust_provider")]
     PrecompiledComponent
@@ -7755,13 +7721,6 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
         .and_then(|metadata| metadata.tool_operations.operations.into_iter().next())
         .ok_or_else(|| anyhow::anyhow!("live tool operation was not registered"))?;
     assert_eq!(held_operation.admission, ToolBodyAdmissionMetadata::Running);
-    let stage_gate = Arc::new(ToolLifecycleStageGate {
-        target: owned_drain_agent.clone(),
-        entered: tokio::sync::Semaphore::new(0),
-        release: tokio::sync::Semaphore::new(0),
-        gated: AtomicBool::new(false),
-    });
-    executor.set_worker_deletion_hook(stage_gate.clone());
     let drain_worker = executor.active_agent(&owned_drain_agent).await.unwrap();
     let restart = tokio::spawn(async move {
         drain_worker
@@ -7769,41 +7728,12 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
             .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
             .await
     });
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        stage_gate.entered.acquire(),
-    )
-    .await
-    .map_err(|_| anyhow::anyhow!("restart did not reach the pre-drain boundary"))??
-    .forget();
-    let fenced_metadata = executor
-        .active_entity_metadata(&owned_drain_agent)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("fenced owner entity metadata disappeared"))?;
-    assert!(fenced_metadata.tool_operations.owner_failure_selected);
-    assert_eq!(
-        fenced_metadata.tool_operations.owner_failure,
-        Some(ToolOwnerFailureMetadata::Lifecycle)
-    );
-    assert!(
-        fenced_metadata
-            .tool_operations
-            .operations
-            .iter()
-            .any(|operation| operation.admission == ToolBodyAdmissionMetadata::Running)
-    );
-    assert!(!restart.is_finished());
-    assert!(!drain_invocation.is_finished());
-    assert!(
-        drain_checkpoints.try_recv().is_err(),
-        "replacement replay reached the guest while old-body cleanup was outstanding"
-    );
-    stage_gate.release.add_permits(1);
     tokio::time::timeout(std::time::Duration::from_secs(30), restart)
         .await
-        .map_err(|_| anyhow::anyhow!("restart did not settle the fenced live entity body"))???;
-    let _ = drain_checkpoint.release.send(());
+        .map_err(|_| anyhow::anyhow!("restart did not cancel the blocked live entity body"))???;
+    assert!(!drain_invocation.is_finished());
     let replay_checkpoint = next_crash_checkpoint(&mut drain_checkpoints, "capable-body").await?;
+    drop(drain_checkpoint.release);
     replay_checkpoint
         .release
         .send(())
@@ -7879,8 +7809,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
 enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
-    SupervisorExecutorShutdown,
-    MonitorExecutorShutdown,
+    ExecutorShutdownDuringBodyValidation,
 }
 
 async fn run_completed_reconstruction_exclusive_p2_case(
@@ -7934,11 +7863,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     let case_name = match case {
         CompletedReconstructionExclusiveCase::Success => "exclusive-p2-success",
         CompletedReconstructionExclusiveCase::Divergence => "exclusive-p2-divergence",
-        CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown => {
-            "exclusive-p2-supervisor-shutdown"
-        }
-        CompletedReconstructionExclusiveCase::MonitorExecutorShutdown => {
-            "exclusive-p2-monitor-shutdown"
+        CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
+            "exclusive-p2-body-validation-shutdown"
         }
     };
     let agent_id = agent_id!("ToolStreamingCaller", case_name);
@@ -7982,11 +7908,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         let reconstruction_start =
             wait_for_completed_entity_terminal(&executor, &worker_id).await?;
-        if matches!(
-            case,
-            CompletedReconstructionExclusiveCase::Divergence
-                | CompletedReconstructionExclusiveCase::MonitorExecutorShutdown
-        ) {
+        if case == CompletedReconstructionExclusiveCase::Divergence {
             let updated_component = executor
                 .update_component(&caller_component.id, caller.wasm_name.as_str())
                 .await?;
@@ -8001,49 +7923,17 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .await?;
         }
 
-        let mut reconstruction_body = (case
-            != CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown)
-            .then(|| executor.gate_next_completed_entity_reconstruction(&worker_id));
-        if matches!(
-            case,
-            CompletedReconstructionExclusiveCase::Divergence
-                | CompletedReconstructionExclusiveCase::MonitorExecutorShutdown
-        ) {
+        let mut reconstruction_body =
+            executor.gate_next_completed_entity_reconstruction(&worker_id);
+        if case == CompletedReconstructionExclusiveCase::Divergence {
             executor.diverge_next_completed_entity_reconstruction(&worker_id);
         }
-        let mut executor_phase = match case {
-            CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown => {
-                Some(executor.gate_completed_reconstruction_executor_phase(
-                    CompletedReconstructionExecutorPhase::Supervisor,
-                ))
-            }
-            CompletedReconstructionExclusiveCase::MonitorExecutorShutdown => {
-                Some(executor.gate_completed_reconstruction_executor_phase(
-                    CompletedReconstructionExecutorPhase::MonitorFailureCallback,
-                ))
-            }
-            _ => None,
-        };
-        let mut replayed_claim = (case
-            != CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown)
-            .then(|| executor.gate_next_entity_reconstruction_claim(&worker_id));
+        let mut replayed_claim = executor.gate_next_entity_reconstruction_claim(&worker_id);
         let (crash, ()) = tokio::join!(executor.simulated_crash(&worker_id), async {
             original_success.abort_as_restart();
         });
         crash?;
         drop(original_success);
-        if case == CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown {
-            let phase = executor_phase.as_mut().unwrap();
-            tokio::time::timeout(std::time::Duration::from_secs(30), phase.entered())
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!("completed reconstruction supervisor did not start")
-                })??;
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            assert!(phase.was_dropped());
-            return Ok::<_, anyhow::Error>(());
-        }
-        let replayed_claim = replayed_claim.as_mut().unwrap();
         let claimed_start =
             tokio::time::timeout(std::time::Duration::from_secs(30), replayed_claim.entered())
                 .await
@@ -8054,7 +7944,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         tokio::time::timeout(std::time::Duration::from_secs(30), replayed_clock.entered())
             .await
             .map_err(|_| anyhow::anyhow!("replayed clock gate was not reached"))?;
-        let mut replayed_success = (case != CompletedReconstructionExclusiveCase::Divergence)
+        let mut replayed_success = (case == CompletedReconstructionExclusiveCase::Success)
             .then(|| executor.gate_next_agent_invocation_success(&worker_id));
 
         match case {
@@ -8062,7 +7952,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 let replayed_success = replayed_success.as_mut().unwrap();
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    reconstruction_body.as_mut().unwrap().entered(),
+                    reconstruction_body.entered(),
                 )
                 .await
                 .map_err(|_| {
@@ -8080,7 +7970,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     .is_err(),
                     "exclusive P2 clock call finished before completed reconstruction validation"
                 );
-                reconstruction_body.as_mut().unwrap().release();
+                reconstruction_body.release();
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
                     replayed_success.entered(),
@@ -8092,7 +7982,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
             CompletedReconstructionExclusiveCase::Divergence => {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    reconstruction_body.as_mut().unwrap().entered(),
+                    reconstruction_body.entered(),
                 )
                 .await
                 .map_err(|_| {
@@ -8114,7 +8004,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     futures::poll!(owner_failure.as_mut()),
                     std::task::Poll::Pending
                 ));
-                reconstruction_body.as_mut().unwrap().release();
+                reconstruction_body.release();
                 let owner_failure =
                     tokio::time::timeout(std::time::Duration::from_secs(30), owner_failure)
                         .await
@@ -8134,27 +8024,18 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     "divergent reconstruction permitted ReplayFinished update finalization"
                 );
             }
-            CompletedReconstructionExclusiveCase::MonitorExecutorShutdown => {
+            CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    reconstruction_body.as_mut().unwrap().entered(),
+                    reconstruction_body.entered(),
                 )
                 .await
                 .map_err(|_| {
-                    anyhow::anyhow!("divergent reconstruction did not reach body validation gate")
+                    anyhow::anyhow!("completed reconstruction did not reach body validation gate")
                 })?;
                 replayed_clock.release();
-                reconstruction_body.as_mut().unwrap().release();
-                let phase = executor_phase.as_mut().unwrap();
-                tokio::time::timeout(std::time::Duration::from_secs(30), phase.entered())
-                    .await
-                    .map_err(|_| {
-                        anyhow::anyhow!("completed reconstruction failure callback did not start")
-                    })??;
                 executor.shutdown_and_wait_for_invocation_loops().await?;
-                assert!(phase.was_dropped());
             }
-            CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown => unreachable!(),
         }
         Ok::<_, anyhow::Error>(())
     };
@@ -8166,12 +8047,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     validation_result?;
     let invocation_result = invocation_result
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
-    if matches!(
-        case,
-        CompletedReconstructionExclusiveCase::Divergence
-            | CompletedReconstructionExclusiveCase::MonitorExecutorShutdown
-            | CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown
-    ) {
+    if case != CompletedReconstructionExclusiveCase::Success {
         assert!(
             invocation_result.is_err(),
             "divergent reconstruction must fail the owner invocation"
@@ -8225,7 +8101,7 @@ async fn completed_reconstruction_divergence_fails_exclusive_p2_wait(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn executor_shutdown_joins_pending_completed_reconstruction_supervisor(
+async fn executor_shutdown_cancels_completed_reconstruction_during_body_validation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
@@ -8237,27 +8113,7 @@ async fn executor_shutdown_joins_pending_completed_reconstruction_supervisor(
         deps,
         provider,
         caller,
-        CompletedReconstructionExclusiveCase::SupervisorExecutorShutdown,
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("5m")]
-async fn executor_shutdown_abandons_entered_completed_reconstruction_failure_callback(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
-    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    run_completed_reconstruction_exclusive_p2_case(
-        last_unique_id,
-        deps,
-        provider,
-        caller,
-        CompletedReconstructionExclusiveCase::MonitorExecutorShutdown,
+        CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation,
     )
     .await
 }

@@ -20,188 +20,18 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::OwnedAgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::{HasActiveAgents, HasOplog};
-use golem_worker_executor::worker::{
-    EvictionClass, WorkerDeletionHook, WorkerDeletionStage, WorkerLifecycleEstablishmentStage,
-};
+use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit, start_with_overrides,
+    WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit_and_overrides,
+    start_with_overrides,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
-
-struct OwnerRetirementGate {
-    target: OwnedAgentId,
-    entered: tokio::sync::Semaphore,
-    release: tokio::sync::Semaphore,
-    gated: AtomicBool,
-}
-
-struct LifecycleStageGate {
-    target: OwnedAgentId,
-    stage: WorkerLifecycleEstablishmentStage,
-    entered: tokio::sync::Semaphore,
-    release: tokio::sync::Semaphore,
-    gated: AtomicBool,
-}
-
-struct DirectTerminalFailureGate {
-    target: OwnedAgentId,
-    selection_entered: tokio::sync::Semaphore,
-    selection_release: tokio::sync::Semaphore,
-    failure_entered: tokio::sync::Semaphore,
-    failure_release: tokio::sync::Semaphore,
-    selected: AtomicBool,
-    panicked: AtomicBool,
-}
-
-impl DirectTerminalFailureGate {
-    fn new(target: OwnedAgentId) -> Self {
-        Self {
-            target,
-            selection_entered: tokio::sync::Semaphore::new(0),
-            selection_release: tokio::sync::Semaphore::new(0),
-            failure_entered: tokio::sync::Semaphore::new(0),
-            failure_release: tokio::sync::Semaphore::new(0),
-            selected: AtomicBool::new(false),
-            panicked: AtomicBool::new(false),
-        }
-    }
-
-    async fn selection_entered(&self) {
-        self.selection_entered.acquire().await.unwrap().forget();
-    }
-
-    fn release_selection(&self) {
-        self.selection_release.add_permits(1);
-    }
-
-    async fn failure_entered(&self) {
-        self.failure_entered.acquire().await.unwrap().forget();
-    }
-
-    fn release_failure(&self) {
-        self.failure_release.add_permits(1);
-    }
-}
-
-impl LifecycleStageGate {
-    fn new(target: OwnedAgentId, stage: WorkerLifecycleEstablishmentStage) -> Self {
-        Self {
-            target,
-            stage,
-            entered: tokio::sync::Semaphore::new(0),
-            release: tokio::sync::Semaphore::new(0),
-            gated: AtomicBool::new(false),
-        }
-    }
-
-    async fn entered(&self) {
-        self.entered.acquire().await.unwrap().forget();
-    }
-
-    fn release(&self) {
-        self.release.add_permits(1);
-    }
-}
-
-#[async_trait::async_trait]
-impl WorkerDeletionHook for LifecycleStageGate {
-    async fn before_lifecycle_establishment_stage(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        stage: WorkerLifecycleEstablishmentStage,
-    ) {
-        if owned_agent_id == &self.target
-            && stage == self.stage
-            && !self.gated.swap(true, Ordering::AcqRel)
-        {
-            self.entered.add_permits(1);
-            self.release.acquire().await.unwrap().forget();
-        }
-    }
-
-    async fn before_stage(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _stage: WorkerDeletionStage,
-    ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl WorkerDeletionHook for DirectTerminalFailureGate {
-    async fn before_invocation_terminal_selection(&self, owned_agent_id: &OwnedAgentId) {
-        if owned_agent_id == &self.target && !self.selected.swap(true, Ordering::AcqRel) {
-            self.selection_entered.add_permits(1);
-            self.selection_release.acquire().await.unwrap().forget();
-        }
-    }
-
-    async fn before_lifecycle_establishment_stage(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        stage: WorkerLifecycleEstablishmentStage,
-    ) {
-        if owned_agent_id == &self.target
-            && stage == WorkerLifecycleEstablishmentStage::FencedBeforeDrain
-            && !self.panicked.swap(true, Ordering::AcqRel)
-        {
-            self.failure_entered.add_permits(1);
-            self.failure_release.acquire().await.unwrap().forget();
-            panic!("injected direct-terminal lifecycle establishment failure");
-        }
-    }
-
-    async fn before_stage(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _stage: WorkerDeletionStage,
-    ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
-        Ok(())
-    }
-}
-
-impl OwnerRetirementGate {
-    fn new(target: OwnedAgentId) -> Self {
-        Self {
-            target,
-            entered: tokio::sync::Semaphore::new(0),
-            release: tokio::sync::Semaphore::new(0),
-            gated: AtomicBool::new(false),
-        }
-    }
-
-    async fn entered(&self) {
-        self.entered.acquire().await.unwrap().forget();
-    }
-
-    fn release(&self) {
-        self.release.add_permits(1);
-    }
-}
-
-#[async_trait::async_trait]
-impl WorkerDeletionHook for OwnerRetirementGate {
-    async fn before_owner_retirement_complete(&self, owned_agent_id: &OwnedAgentId) {
-        if owned_agent_id == &self.target && !self.gated.swap(true, Ordering::AcqRel) {
-            self.entered.add_permits(1);
-            self.release.acquire().await.unwrap().forget();
-        }
-    }
-
-    async fn before_stage(
-        &self,
-        _owned_agent_id: &OwnedAgentId,
-        _stage: WorkerDeletionStage,
-    ) -> Result<(), golem_service_base::error::worker_executor::WorkerExecutorError> {
-        Ok(())
-    }
-}
 
 /// The shard manager process every shard push in these tests names.
 const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
@@ -216,138 +46,162 @@ inherit_test_dep!(
 
 const TEST_TTL: Duration = Duration::from_millis(50);
 
+struct ComponentLoadGate {
+    armed: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl ComponentLoadGate {
+    fn new() -> Self {
+        Self {
+            armed: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+
+    async fn entered(&self) {
+        self.entered.acquire().await.unwrap().forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
+
+struct GatedComponentService {
+    inner: Arc<dyn ComponentService>,
+    gate: Arc<ComponentLoadGate>,
+}
+
+#[async_trait::async_trait]
+impl ComponentService for GatedComponentService {
+    async fn get(
+        &self,
+        engine: &wasmtime::Engine,
+        component_id: golem_common::model::component::ComponentId,
+        component_revision: golem_common::model::component::ComponentRevision,
+    ) -> Result<
+        (
+            wasmtime::component::Component,
+            golem_service_base::model::component::Component,
+        ),
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        if self.gate.armed.swap(false, Ordering::AcqRel) {
+            self.gate.entered.add_permits(1);
+            self.gate.release.acquire().await.unwrap().forget();
+        }
+        self.inner
+            .get(engine, component_id, component_revision)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        component_id: golem_common::model::component::ComponentId,
+        forced_revision: Option<golem_common::model::component::ComponentRevision>,
+    ) -> Result<
+        golem_service_base::model::component::Component,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner.get_metadata(component_id, forced_revision).await
+    }
+
+    async fn resolve_component(
+        &self,
+        component_reference: String,
+        resolving_environment: golem_common::model::environment::EnvironmentId,
+        resolving_application: golem_common::model::application::ApplicationId,
+        resolving_account: golem_common::model::account::AccountId,
+    ) -> Result<
+        Option<golem_common::model::component::ComponentId>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .resolve_component(
+                component_reference,
+                resolving_environment,
+                resolving_application,
+                resolving_account,
+            )
+            .await
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::component::Component> {
+        self.inner.all_cached_metadata().await
+    }
+
+    async fn invalidate_current_deployed_metadata(&self) {
+        self.inner.invalidate_current_deployed_metadata().await;
+    }
+
+    async fn invalidate_current_deployed_metadata_for_environment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) {
+        self.inner
+            .invalidate_current_deployed_metadata_for_environment(environment_id)
+            .await;
+    }
+
+    async fn invalidate_all_metadata_for_environment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) {
+        self.inner
+            .invalidate_all_metadata_for_environment(environment_id)
+            .await;
+    }
+
+    async fn invalidate_all(&self) {
+        self.inner.invalidate_all().await;
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum PostInterruptAction {
     ExplicitResume,
     SecondInvocation,
 }
 
-async fn suspend_and_wait_until_unloaded(
-    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
-    owned_agent_id: &OwnedAgentId,
-) -> anyhow::Result<()> {
-    let worker = executor.active_agent(owned_agent_id).await.unwrap();
-    worker
-        .primary()
-        .set_interrupting(
-            golem_service_base::error::worker_executor::InterruptKind::Suspend(
-                golem_common::model::Timestamp::now_utc(),
-            ),
-        )
-        .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while executor.worker_is_loaded(owned_agent_id).await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("worker did not unload after suspension"))?;
-    assert!(executor.worker_is_cached(owned_agent_id).await);
-    Ok(())
-}
-
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn restart_establishment_blocks_unloaded_reconstruction_and_survives_cancellation(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    for stage in [
-        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
-        WorkerLifecycleEstablishmentStage::FencedBeforeDrain,
-    ] {
-        let context = TestContext::new(last_unique_id);
-        let executor =
-            start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-        let component = executor
-            .component_dep(&context.default_environment_id, host_api_tests)
-            .store()
-            .await?;
-        let parsed_agent_id = agent_id!("Clock", format!("restart-stage-{stage:?}"));
-        let worker_id = executor
-            .start_agent(&component.id, parsed_agent_id.clone())
-            .await?;
-        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-        executor
-            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-            .await?;
-        suspend_and_wait_until_unloaded(&executor, &owned_agent_id).await?;
-        let worker = executor.active_agent(&owned_agent_id).await.unwrap();
-        let gate = Arc::new(LifecycleStageGate::new(owned_agent_id.clone(), stage));
-        executor.set_worker_deletion_hook(gate.clone());
-        let restart = tokio::spawn({
-            let worker = worker.primary();
-            async move {
-                worker
-                    .set_interrupting(
-                        golem_service_base::error::worker_executor::InterruptKind::Restart,
-                    )
-                    .await
-            }
-        });
-        gate.entered().await;
-        restart.abort();
-        assert!(restart.await.unwrap_err().is_cancelled());
-        let mut wakeup = tokio::spawn({
-            let executor = executor.clone();
-            let component = component.clone();
-            let parsed_agent_id = parsed_agent_id.clone();
-            async move {
-                executor
-                    .invoke_and_await_agent(
-                        &component,
-                        &parsed_agent_id,
-                        "healthcheck",
-                        data_value!(),
-                    )
-                    .await
-            }
-        });
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), &mut wakeup)
-                .await
-                .is_err(),
-            "replacement ran before {stage:?} establishment completed"
-        );
-        gate.release();
-        let healthy: bool = wakeup.await??.into_typed()?;
-        assert!(healthy);
-        let oplog = executor
-            .get_oplog(&worker_id, golem_common::model::OplogIndex::INITIAL)
-            .await?;
-        assert!(oplog.iter().all(|entry| !matches!(
-            entry.entry,
-            golem_common::model::oplog::PublicOplogEntry::Error(_)
-                | golem_common::model::oplog::PublicOplogEntry::Interrupted(_)
-        )));
-        let follow_up: bool = executor
-            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-            .await?
-            .into_typed()?;
-        assert!(follow_up);
-    }
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-#[tracing::instrument]
-async fn terminal_interrupt_wins_at_replacement_reopen_boundary(
+async fn lifecycle_interrupt_is_handled_after_permit_before_reconstruction_finishes(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+    let gate = Arc::new(ComponentLoadGate::new());
+    let wrapper_gate = gate.clone();
+    let executor = start_with_concurrent_agent_limit_and_overrides(
+        deps,
+        &context,
+        1,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(GatedComponentService {
+                    inner,
+                    gate: wrapper_gate.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "terminal-wins-before-reopen");
+    let parsed_agent_id = agent_id!("Clock", "interrupt-after-permit-before-reconstruction");
     let worker_id = executor
         .start_agent(&component.id, parsed_agent_id.clone())
         .await?;
@@ -355,14 +209,27 @@ async fn terminal_interrupt_wins_at_replacement_reopen_boundary(
     executor
         .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
         .await?;
-    suspend_and_wait_until_unloaded(&executor, &owned_agent_id).await?;
+    let old = executor
+        .production_active_agent(&owned_agent_id)
+        .await
+        .unwrap();
+    old.primary()
+        .set_interrupting(
+            golem_service_base::error::worker_executor::InterruptKind::Suspend(
+                golem_common::model::Timestamp::now_utc(),
+            ),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while old.primary().is_loaded().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("suspended worker did not unload"))?;
 
-    let reopen_gate = Arc::new(LifecycleStageGate::new(
-        owned_agent_id.clone(),
-        WorkerLifecycleEstablishmentStage::ReplacementBeforeReopen,
-    ));
-    executor.set_worker_deletion_hook(reopen_gate.clone());
-    let mut wakeup = tokio::spawn({
+    gate.arm();
+    let invocation = tokio::spawn({
         let executor = executor.clone();
         let component = component.clone();
         let parsed_agent_id = parsed_agent_id.clone();
@@ -372,131 +239,22 @@ async fn terminal_interrupt_wins_at_replacement_reopen_boundary(
                 .await
         }
     });
-    reopen_gate.entered().await;
-
-    let queued_gate = Arc::new(LifecycleStageGate::new(
-        owned_agent_id.clone(),
-        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
-    ));
-    executor.set_worker_deletion_hook(queued_gate.clone());
-    let mut interrupt = tokio::spawn({
-        let executor = executor.clone();
-        let worker_id = worker_id.clone();
-        async move { executor.interrupt(&worker_id).await }
-    });
-    queued_gate.entered().await;
-    reopen_gate.release();
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut wakeup)
-            .await
-            .is_err(),
-        "replacement entered execution while the newer terminal event was unresolved"
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut interrupt)
-            .await
-            .is_err(),
-        "terminal interrupt completed before its establishment"
-    );
-    queued_gate.release();
-    interrupt.await??;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut wakeup)
-            .await
-            .is_err(),
-        "terminal interrupt converted the durable invocation into a semantic failure"
-    );
-    wakeup.abort();
-    assert!(wakeup.await.unwrap_err().is_cancelled());
-
-    let healthy: bool = executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?
-        .into_typed()?;
-    assert!(healthy);
-    let replacement = executor.active_agent(&owned_agent_id).await.unwrap();
-    assert!(replacement.entity_metadata().accepting_entities);
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-#[tracing::instrument]
-async fn refused_reopen_retries_as_lifecycle_control_without_semantic_failure(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
+    gate.entered().await;
+    old.primary()
+        .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
         .await?;
-    let parsed_agent_id = agent_id!("Clock", "refused-reopen-lifecycle-control");
-    let worker_id = executor
-        .start_agent(&component.id, parsed_agent_id.clone())
-        .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?;
-    suspend_and_wait_until_unloaded(&executor, &owned_agent_id).await?;
-
-    let reopen_gate = Arc::new(LifecycleStageGate::new(
-        owned_agent_id.clone(),
-        WorkerLifecycleEstablishmentStage::ReplacementBeforeReopen,
-    ));
-    executor.set_worker_deletion_hook(reopen_gate.clone());
-    let invocation_key = golem_common::model::IdempotencyKey::fresh();
-    let invocation = tokio::spawn({
-        let executor = executor.clone();
-        let component = component.clone();
-        let parsed_agent_id = parsed_agent_id.clone();
-        let invocation_key = invocation_key.clone();
-        async move {
-            executor
-                .invoke_and_await_agent_with_key(
-                    &component,
-                    &parsed_agent_id,
-                    &invocation_key,
-                    "healthcheck",
-                    data_value!(),
-                )
-                .await
-        }
-    });
-    reopen_gate.entered().await;
-    executor
-        .advance_entity_fence_generation_for_test(&owned_agent_id)
-        .await;
-    reopen_gate.release();
+    gate.release();
 
     let healthy: bool = invocation.await??.into_typed()?;
     assert!(healthy);
-    let replayed: bool = executor
-        .invoke_and_await_agent_with_key(
-            &component,
-            &parsed_agent_id,
-            &invocation_key,
-            "healthcheck",
-            data_value!(),
-        )
-        .await?
-        .into_typed()?;
-    assert!(replayed);
     let oplog = executor
         .get_oplog(&worker_id, golem_common::model::OplogIndex::INITIAL)
         .await?;
-    assert!(
-        oplog.iter().all(|entry| !matches!(
-            entry.entry,
-            golem_common::model::oplog::PublicOplogEntry::Error(_)
-                | golem_common::model::oplog::PublicOplogEntry::Interrupted(_)
-        )),
-        "reopening refusal became an invocation or lifecycle failure"
-    );
+    assert!(oplog.iter().all(|entry| !matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+            | golem_common::model::oplog::PublicOplogEntry::Interrupted(_)
+    )));
     assert_eq!(
         executor.get_worker_metadata(&worker_id).await?.retry_count,
         0
@@ -506,519 +264,6 @@ async fn refused_reopen_retries_as_lifecycle_control_without_semantic_failure(
         .await?
         .into_typed()?;
     assert!(follow_up);
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-#[tracing::instrument]
-async fn superseding_restart_waits_for_predecessor_establishment(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let parsed_agent_id = agent_id!("Clock", "superseding-restarts");
-    let worker_id = executor
-        .start_agent(&component.id, parsed_agent_id.clone())
-        .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?;
-    suspend_and_wait_until_unloaded(&executor, &owned_agent_id).await?;
-    let worker = executor.active_agent(&owned_agent_id).await.unwrap();
-    let gate = Arc::new(LifecycleStageGate::new(
-        owned_agent_id.clone(),
-        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
-    ));
-    executor.set_worker_deletion_hook(gate.clone());
-    let first = tokio::spawn({
-        let worker = worker.primary();
-        async move {
-            worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Restart,
-                )
-                .await
-        }
-    });
-    gate.entered().await;
-    let mut second = tokio::spawn({
-        let worker = worker.primary();
-        async move {
-            worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Restart,
-                )
-                .await
-        }
-    });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut second)
-            .await
-            .is_err(),
-        "superseding restart overtook its predecessor"
-    );
-    assert!(!first.is_finished());
-    gate.release();
-    first.await??;
-    second.await??;
-
-    let healthy: bool = executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?
-        .into_typed()?;
-    assert!(healthy);
-    assert!(
-        executor
-            .active_agent(&owned_agent_id)
-            .await
-            .unwrap()
-            .entity_metadata()
-            .accepting_entities
-    );
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-#[tracing::instrument]
-async fn accepted_restart_survives_concurrent_external_idle_stop(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let parsed_agent_id = agent_id!("Clock", "restart-and-external-stop");
-    let worker_id = executor
-        .start_agent(&component.id, parsed_agent_id.clone())
-        .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?;
-    let worker = executor.active_agent(&owned_agent_id).await.unwrap();
-    let gate = Arc::new(LifecycleStageGate::new(
-        owned_agent_id.clone(),
-        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
-    ));
-    executor.set_worker_deletion_hook(gate.clone());
-    let restart = tokio::spawn({
-        let worker = worker.primary();
-        async move {
-            worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Restart,
-                )
-                .await
-        }
-    });
-    gate.entered().await;
-    assert!(
-        !executor.stop_worker_if_idle(&owned_agent_id).await?,
-        "external idle stop bypassed an accepted lifecycle transition"
-    );
-    gate.release();
-    restart.await??;
-
-    let healthy: bool = executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?
-        .into_typed()?;
-    assert!(healthy);
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-#[tracing::instrument]
-async fn accepted_restart_does_not_cycle_with_external_stopping(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let parsed_agent_id = agent_id!("Clock", "restart-and-external-stopping");
-    let worker_id = executor
-        .start_agent(&component.id, parsed_agent_id.clone())
-        .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?;
-    let worker = executor.active_agent(&owned_agent_id).await.unwrap();
-
-    let mut invocation_gate = executor.gate_next_agent_invocation_success(&worker_id);
-    let invocation = tokio::spawn({
-        let executor = executor.clone();
-        let component = component.clone();
-        let parsed_agent_id = parsed_agent_id.clone();
-        async move {
-            executor
-                .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-                .await
-        }
-    });
-    invocation_gate.entered().await;
-
-    let establishment_gate = Arc::new(LifecycleStageGate::new(
-        owned_agent_id.clone(),
-        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
-    ));
-    executor.set_worker_deletion_hook(establishment_gate.clone());
-    let restart = tokio::spawn({
-        let worker = worker.primary();
-        async move {
-            worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Restart,
-                )
-                .await
-        }
-    });
-    establishment_gate.entered().await;
-    let mut stop = tokio::spawn({
-        let worker = worker.primary();
-        async move { worker.test_stop().await }
-    });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.primary().is_loaded().await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("external stop did not enter Stopping"))?;
-    assert!(
-        !stop.is_finished(),
-        "external stop bypassed primary teardown"
-    );
-    establishment_gate.release();
-    restart.await??;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut stop)
-            .await
-            .is_err(),
-        "external stop completed before the invocation loop could exit"
-    );
-    invocation_gate.release();
-    stop.await?;
-    let healthy: bool = tokio::time::timeout(Duration::from_secs(10), invocation)
-        .await
-        .map_err(|_| anyhow::anyhow!("result-boundary invocation did not settle"))???
-        .into_typed()?;
-    assert!(healthy);
-    assert!(!worker.primary().is_loaded().await);
-    let oplog = executor
-        .get_oplog(&worker_id, golem_common::model::OplogIndex::INITIAL)
-        .await?;
-    assert!(oplog.iter().all(|entry| !matches!(
-        entry.entry,
-        golem_common::model::oplog::PublicOplogEntry::Error(_)
-            | golem_common::model::oplog::PublicOplogEntry::Interrupted(_)
-    )));
-    assert_eq!(
-        executor.get_worker_metadata(&worker_id).await?.retry_count,
-        0
-    );
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-#[tracing::instrument]
-async fn lifecycle_establishment_precedes_reconstruction_while_waiting_for_permit(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_concurrent_agent_limit(deps, &context, 1).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-
-    let waiting_id = agent_id!("Clock", "permit-waiting-restart");
-    let waiting_worker_id = executor
-        .start_agent(&component.id, waiting_id.clone())
-        .await?;
-    let owned_waiting = OwnedAgentId::new(context.default_environment_id, &waiting_worker_id);
-    executor
-        .invoke_and_await_agent(&component, &waiting_id, "healthcheck", data_value!())
-        .await?;
-    let waiting_worker = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Some(worker) = executor.production_active_agent(&owned_waiting).await {
-                break worker;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("created worker did not enter the active cache"))?;
-    waiting_worker
-        .primary()
-        .set_interrupting(
-            golem_service_base::error::worker_executor::InterruptKind::Suspend(
-                golem_common::model::Timestamp::now_utc(),
-            ),
-        )
-        .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while waiting_worker.primary().is_loaded().await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("worker did not unload before the permit race"))?;
-    let held_permit = executor
-        .acquire_account_concurrent_agent_permit(golem_common::model::AgentId {
-            component_id: component.id,
-            agent_id: agent_id!("Clock", "permit-holder").to_string(),
-        })
-        .await;
-    let restart_gate = Arc::new(LifecycleStageGate::new(
-        owned_waiting.clone(),
-        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
-    ));
-    executor.set_worker_deletion_hook(restart_gate.clone());
-    let mut restart = tokio::spawn({
-        let waiting_worker = waiting_worker.primary();
-        async move {
-            waiting_worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Restart,
-                )
-                .await
-        }
-    });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::select! {
-            _ = restart_gate.entered() => {}
-            result = &mut restart => panic!("restart completed before its production lifecycle gate: {result:?}"),
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("restart did not reach its lifecycle gate"))?;
-    let mut waiting = tokio::spawn({
-        let executor = executor.clone();
-        let component = component.clone();
-        let waiting_id = waiting_id.clone();
-        async move {
-            executor
-                .invoke_and_await_agent(&component, &waiting_id, "healthcheck", data_value!())
-                .await
-        }
-    });
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !executor.worker_has_pending_startup(&owned_waiting).await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("invocation did not reach the held permit"))?;
-    assert!(!waiting_worker.primary().is_loaded().await);
-    assert!(!waiting.is_finished());
-    let terminal_gate = Arc::new(LifecycleStageGate::new(
-        owned_waiting.clone(),
-        WorkerLifecycleEstablishmentStage::QueuedBeforeFence,
-    ));
-    executor.set_worker_deletion_hook(terminal_gate.clone());
-    let terminal = tokio::spawn({
-        let waiting_worker = waiting_worker.primary();
-        async move {
-            waiting_worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Interrupt(
-                        golem_common::model::Timestamp::now_utc(),
-                    ),
-                )
-                .await
-        }
-    });
-    drop(held_permit);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut waiting)
-            .await
-            .is_err(),
-        "permit-waiting worker reconstructed while its older establishment was unresolved"
-    );
-    restart_gate.release();
-    tokio::time::timeout(Duration::from_secs(10), restart)
-        .await
-        .map_err(|_| anyhow::anyhow!("older restart did not finish establishment"))???;
-    tokio::time::timeout(Duration::from_secs(10), terminal_gate.entered())
-        .await
-        .map_err(|_| anyhow::anyhow!("terminal event did not begin establishment"))?;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut waiting)
-            .await
-            .is_err(),
-        "permit-waiting worker reconstructed while its terminal event was unresolved"
-    );
-    terminal_gate.release();
-    tokio::time::timeout(Duration::from_secs(10), terminal)
-        .await
-        .map_err(|_| anyhow::anyhow!("terminal event did not finish establishment"))???;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while waiting_worker.primary().is_loaded().await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("terminal event did not stop permit-waiting reconstruction"))?;
-    assert!(!waiting_worker.entity_metadata().accepting_entities);
-    assert!(
-        !waiting.is_finished(),
-        "terminal event was turned into a semantic result"
-    );
-    waiting.abort();
-    assert!(waiting.await.unwrap_err().is_cancelled());
-    Ok(())
-}
-
-#[test]
-#[timeout("120s")]
-#[tracing::instrument]
-async fn lifecycle_establishment_failure_claims_terminal_cleanup(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let parsed_agent_id = agent_id!("Clock", "failed-lifecycle-establishment");
-    let worker_id = executor
-        .start_agent(&component.id, parsed_agent_id.clone())
-        .await?;
-    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
-    executor
-        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-        .await?;
-    let worker = executor.active_agent(&owned_agent_id).await.unwrap();
-    let failure = Arc::new(DirectTerminalFailureGate::new(owned_agent_id.clone()));
-    executor.set_worker_deletion_hook(failure.clone());
-    let invocation = tokio::spawn({
-        let executor = executor.clone();
-        let component = component.clone();
-        let parsed_agent_id = parsed_agent_id.clone();
-        async move {
-            executor
-                .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
-                .await
-        }
-    });
-    failure.selection_entered().await;
-    let failed_establishment = tokio::spawn({
-        let worker = worker.primary();
-        async move {
-            worker
-                .set_interrupting(
-                    golem_service_base::error::worker_executor::InterruptKind::Interrupt(
-                        golem_common::model::Timestamp::now_utc(),
-                    ),
-                )
-                .await
-        }
-    });
-    failure.failure_entered().await;
-    failure.release_selection();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while !worker.primary().terminal_interrupt_claimed_for_test().await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("invocation loop did not directly claim the terminal event"))?;
-    failure.release_failure();
-    assert!(
-        failed_establishment.await?.is_err(),
-        "injected establishment failure was reported as success"
-    );
-    let invocation_result = tokio::time::timeout(Duration::from_secs(10), invocation)
-        .await
-        .map_err(|_| anyhow::anyhow!("direct-terminal invocation did not settle"))??;
-    assert!(
-        invocation_result.is_err(),
-        "failed direct-terminal establishment persisted the guest success"
-    );
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.primary().is_loaded().await {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("failed establishment did not complete primary stopping"))?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match executor.active_agent(&owned_agent_id).await {
-                Some(active_agent) if active_agent.entity_metadata().accepting_entities => {
-                    tokio::task::yield_now().await;
-                }
-                _ => break,
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("failed establishment did not fence entity admission"))?;
-    if let Some(active_agent) = executor.active_agent(&owned_agent_id).await {
-        assert!(
-            !active_agent.entity_metadata().accepting_entities,
-            "failed establishment left entity admission open"
-        );
-    }
-    let oplog = executor
-        .get_oplog(&worker_id, golem_common::model::OplogIndex::INITIAL)
-        .await?;
-    assert!(oplog.iter().all(|entry| !matches!(
-        entry.entry,
-        golem_common::model::oplog::PublicOplogEntry::Error(_)
-            | golem_common::model::oplog::PublicOplogEntry::Interrupted(_)
-    )));
-    assert_eq!(
-        executor.get_worker_metadata(&worker_id).await?.retry_count,
-        0
-    );
-    assert!(
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            executor.invoke_and_await_agent(
-                &component,
-                &parsed_agent_id,
-                "healthcheck",
-                data_value!(),
-            ),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("cleanup-failed worker did not reject follow-up work"))?
-        .is_err(),
-        "failed establishment allowed ordinary reconstruction"
-    );
     Ok(())
 }
 
@@ -1048,8 +293,6 @@ async fn ordinary_interrupt_completes_only_after_owner_retirement(
             .await?;
         let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
         let old = executor.active_agent(&owned_agent_id).await.unwrap();
-        let retirement_gate = Arc::new(OwnerRetirementGate::new(owned_agent_id.clone()));
-        executor.set_worker_deletion_hook(retirement_gate.clone());
 
         let mut invocation_gate = executor.gate_next_agent_invocation_success(&worker_id);
         let invocation = tokio::spawn({
@@ -1080,17 +323,10 @@ async fn ordinary_interrupt_completes_only_after_owner_retirement(
             "interrupt completed while old execution was still held"
         );
         invocation_gate.release();
-        retirement_gate.entered().await;
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), &mut interrupt)
-                .await
-                .is_err(),
-            "interrupt completed before owner retirement crossed its completion boundary"
-        );
-        let retirement_boundary = old.primary().oplog().current_oplog_index().await;
-        retirement_gate.release();
         interrupt.await??;
 
+        assert!(!old.primary().is_loaded().await);
+        assert!(!executor.worker_is_cached(&owned_agent_id).await);
         if matches!(action, PostInterruptAction::ExplicitResume) {
             executor.resume(&worker_id, false).await?;
         }
@@ -1103,18 +339,6 @@ async fn ordinary_interrupt_completes_only_after_owner_retirement(
         let replacement = executor.active_agent(&owned_agent_id).await.unwrap();
         assert!(!Arc::ptr_eq(&old, &replacement));
         assert!(replacement.entity_metadata().accepting_entities);
-        assert!(!old.primary().is_loaded().await);
-        let oplog = executor
-            .get_oplog(&worker_id, retirement_boundary.next())
-            .await?;
-        assert!(
-            oplog.iter().all(|entry| !matches!(
-                entry.entry,
-                golem_common::model::oplog::PublicOplogEntry::Interrupted(_)
-                    | golem_common::model::oplog::PublicOplogEntry::Error(_)
-            )),
-            "retired owner wrote lifecycle state after its completion boundary: {oplog:?}"
-        );
     }
     Ok(())
 }
@@ -1393,31 +617,34 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
         assert!(!interests.is_empty());
         let old_worker = old.primary();
         assert!(replacement.entity_metadata().accepting_entities);
-        let replacement_fence_generation = executor
-            .active_entity_fence_generation(&owned_agent_id)
-            .await
-            .unwrap();
         assert!(!old_worker.stop_if_idle().await);
-        assert_eq!(
-            executor
-                .active_entity_fence_generation(&owned_agent_id)
-                .await,
-            Some(replacement_fence_generation),
-            "stale owner idle teardown fenced its replacement"
-        );
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &executor.active_agent(&owned_agent_id).await.unwrap()
+        ));
+        assert!(replacement.entity_metadata().accepting_entities);
+        assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
         assert!(
             !old_worker
                 .stop_if_evictable(EvictionClass::LoadedIdle)
                 .await
         );
-        assert_eq!(
-            executor
-                .active_entity_fence_generation(&owned_agent_id)
-                .await,
-            Some(replacement_fence_generation),
-            "stale owner eviction fenced its replacement"
-        );
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &executor.active_agent(&owned_agent_id).await.unwrap()
+        ));
         assert!(replacement.entity_metadata().accepting_entities);
+        assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
         old_worker
             .set_interrupting(
                 golem_service_base::error::worker_executor::InterruptKind::Interrupt(
@@ -1425,7 +652,17 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                 ),
             )
             .await?;
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &executor.active_agent(&owned_agent_id).await.unwrap()
+        ));
         assert!(replacement.entity_metadata().accepting_entities);
+        assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
         old_worker
             .active_agents()
             .remove_worker(&old_worker, false)
@@ -1434,7 +671,13 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
             &replacement,
             &executor.active_agent(&owned_agent_id).await.unwrap()
         ));
+        assert!(replacement.entity_metadata().accepting_entities);
         assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
     }
     Ok(())
 }
