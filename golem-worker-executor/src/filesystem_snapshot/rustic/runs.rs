@@ -264,6 +264,37 @@ pub(super) enum Ran<T> {
     AnsweredAfter(T, LateWrite),
     /// The run ended without an answer.
     Ended(Ended),
+    /// The run gave its slot back, and ends with the settle: the shell waits for `wait` with no
+    /// slot, and then `finish` gives what the run gave.
+    Settling(Settle<T>),
+}
+
+/// The end of a run that the shell runs after it gave the slot of the run back.
+pub(super) struct Settle<T> {
+    /// Ends when every blob call of the run has ended.
+    pub(super) wait: futures::future::BoxFuture<'static, ()>,
+    /// Gives what the run gave, from what the wait or a shutdown gave.
+    pub(super) finish: Box<dyn FnOnce(Settled) -> Ran<T> + Send>,
+    /// Whether the run can have a write that can still land.
+    pub(super) may_land: bool,
+}
+
+/// How the settle of a run ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Settled {
+    /// Every blob call of the run has ended.
+    Waited,
+    /// The store shut down first.
+    ShutDown,
+}
+
+/// Gives the run that answered `answer`, after the writes of the run that can still land, which
+/// have landed or can no longer land at `until`.
+pub(super) fn answered_after<T>(answer: T, until: Option<Instant>) -> Ran<T> {
+    match until {
+        Some(until) => Ran::AnsweredAfter(answer, LateWrite { until, own: None }),
+        None => Ran::Answered(answer),
+    }
 }
 
 /// A run that ended without an answer.
@@ -475,6 +506,24 @@ impl Shell<'_> {
         };
         let ran = run(start).await;
         drop(slot);
+        let ran = match ran {
+            Ran::Settling(Settle {
+                wait,
+                finish,
+                may_land,
+            }) => {
+                if may_land {
+                    self.slots.waiting_for_late_writes();
+                }
+                let settled = tokio::select! {
+                    biased;
+                    () = self.root.cancelled() => Settled::ShutDown,
+                    () = wait => Settled::Waited,
+                };
+                finish(settled)
+            }
+            ran => ran,
+        };
         match ran {
             Ran::Answered(answer) => {
                 calling.end = RunEnd::Answered;
@@ -499,6 +548,13 @@ impl Shell<'_> {
                     checked: None,
                 });
                 calling.own = ended.late.and_then(|late| late.own);
+            }
+            // A settle gives what the run gave, never a second settle.
+            Ran::Settling(_) => {
+                calling.end = RunEnd::Permanent;
+                calling.last_failure = Some(anyhow::anyhow!(
+                    "the settle of a filesystem snapshot run gave another settle"
+                ));
             }
         }
         calling

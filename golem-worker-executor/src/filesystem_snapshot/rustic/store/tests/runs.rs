@@ -17,6 +17,8 @@
 //! and the copy that runs again.
 
 use super::super::super::clear::ClearHook;
+use super::super::super::files::LateWrites;
+use super::super::super::runs::{Ran, RunEnd, Settle, Settled};
 use super::*;
 use crate::filesystem_snapshot::{CallError, RunSlots, Slot, SnapshotInfo, Withdrawal};
 use futures::future::BoxFuture;
@@ -164,7 +166,7 @@ async fn a_run_that_fails_frees_its_slot_its_pool_and_its_index_and_a_new_run_gi
     let storage = refusing(1, |op_label, path| {
         op_label == "write" && path.starts_with("data")
     });
-    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
+    let store = store(storage.clone(), runs_policy(SHORT_WRITE_DEADLINE, 1));
     let scope = new_scope();
     let tree = fixture_tree();
     let slots = SharedSlots::new(1);
@@ -239,7 +241,7 @@ async fn the_live_runs_never_pass_the_slots() {
             }
         }
     });
-    let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
+    let store = store(storage.clone(), runs_policy(SHORT_WRITE_DEADLINE, 1));
     let slots = SharedSlots::new(2);
     let trees = (0..6).map(|_| one_file_tree("tree")).collect::<Vec<_>>();
     let scopes = (0..6).map(|_| new_scope()).collect::<Vec<_>>();
@@ -390,7 +392,8 @@ async fn a_save_reports_its_wait_for_a_late_publish_and_a_clean_save_reports_not
 
     assert!(late_saved.is_ok(), "{late_saved:?}");
     assert!(clean_saved.is_ok(), "{clean_saved:?}");
-    assert_eq!((late_slots.late_waits(), clean_slots.late_waits()), (1, 0));
+    // The settle of the run whose publish try was lost, then the wait before the check.
+    assert_eq!((late_slots.late_waits(), clean_slots.late_waits()), (2, 0));
 }
 
 #[test]
@@ -1426,8 +1429,10 @@ async fn a_save_whose_backup_passes_its_end_answers_failed_and_publishes_nothing
         ),
         "{saved:?}"
     );
+    // The cancel at the end of the backup can cut a pack write in flight. Such a write can still
+    // land, so the call then answers up to one deadline after the cut.
     assert!(
-        answered >= Duration::from_millis(525) && answered < Duration::from_millis(1500),
+        answered >= Duration::from_millis(525) && answered < Duration::from_millis(2500),
         "{answered:?}"
     );
     assert_eq!(
@@ -2322,7 +2327,7 @@ async fn a_delete_all_drains_before_it_takes_a_slot() {
                 multiplier: 1.0,
                 ..three_runs()
             },
-            ..runs_policy(LONG_DEADLINE, 1)
+            ..runs_policy(SHORT_WRITE_DEADLINE, 1)
         },
     );
     let scope = new_scope();
@@ -2430,4 +2435,451 @@ async fn a_delete_all_during_a_later_run_of_a_restore_starts_only_after_the_rest
         ),
         (true, true, Some(listing(tree.path())), Vec::<String>::new())
     );
+}
+
+/// A tree of one file of `size` bytes that do not compress, followed in the order of the archive
+/// by a file that the process cannot read. Gives `None` when the process can read that file, as
+/// root can.
+fn large_tree_with_an_unreadable_file(size: usize) -> Option<Scratch> {
+    let tree = Scratch::new();
+    let mut content = vec![0u8; size];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut content);
+    write_tree(
+        tree.path(),
+        &[
+            (
+                "a.bin",
+                Spec::File {
+                    content: content.into_boxed_slice(),
+                    mode: 0o644,
+                },
+            ),
+            (
+                "z.txt",
+                Spec::File {
+                    content: Box::from(&b"unreadable"[..]),
+                    mode: 0o000,
+                },
+            ),
+        ],
+    );
+    std::fs::read(tree.path().join("z.txt"))
+        .is_err()
+        .then_some(tree)
+}
+
+/// A storage over `inner` whose first write of a pack follows `first`, and whose other calls
+/// follow `other`.
+fn scripted_first_pack(
+    inner: Arc<InMemoryBlobStorage>,
+    first: Script,
+    other: impl Fn(&str, &Path) -> Script + Send + Sync + 'static,
+) -> Arc<ScriptedBlobStorage> {
+    let packs = AtomicUsize::new(0);
+    ScriptedBlobStorage::new(inner, move |op_label, path| {
+        if op_label == "write"
+            && path.starts_with("data")
+            && packs.fetch_add(1, Ordering::SeqCst) == 0
+        {
+            first
+        } else {
+            other(op_label, path)
+        }
+    })
+}
+
+/// Whether the storage saw a write of a pack.
+fn wrote_a_pack(storage: &ScriptedBlobStorage) -> bool {
+    storage
+        .calls()
+        .iter()
+        .any(|(op_label, path)| *op_label == "write" && path.starts_with("data"))
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_save_whose_backup_fails_with_a_pack_write_in_flight_answers_after_the_write_and_a_delete_all_leaves_nothing()
+ {
+    // The only pack of the backup is written in its finalize, and the write never answers: its try
+    // ends at the deadline of 2 s, and the write lands 3.4 s after it was sent. A new run saves
+    // the tree.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = scripted_first_pack(
+        inner.clone(),
+        Script::HangThenLand(Duration::from_millis(3400)),
+        |_, _| Script::Pass,
+    );
+    let store = store(storage.clone(), runs_policy(Duration::from_secs(2), 3));
+    let scope = new_scope();
+    let tree = fixture_tree();
+
+    let _ = store
+        .save(
+            &scope,
+            &name("p-hung"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
+    let sent_before_the_answer = wrote_a_pack(&storage);
+    store
+        .delete_all(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    assert!(sent_before_the_answer);
+    assert_eq!(blobs(&*inner, &scope.0, "").await, Vec::<String>::new());
+}
+
+/// Saves a tree of 63 MiB, then an unreadable file, on a storage whose first write of a pack
+/// follows `first` and lands 15 s after it was sent, with a deadline of 20 s. Then deletes all
+/// snapshots of the agent, and waits past the landing. Gives what the save gave and the blobs that
+/// the agent holds then, or `None` when the archiver ended before the file writer sent the first
+/// pack, so the attempt tested nothing. Gives `None` also when the process can read the
+/// unreadable file.
+async fn a_save_whose_first_pack_lands_after_the_backup_failed(
+    first: Script,
+) -> Option<(Result<SnapshotInfo, SaveError>, Vec<String>)> {
+    let tree = large_tree_with_an_unreadable_file(63 << 20)?;
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = scripted_first_pack(inner.clone(), first, |_, _| Script::Pass);
+    let store = store(storage.clone(), runs_policy(Duration::from_secs(20), 3));
+    let scope = new_scope();
+    let started = std::time::Instant::now();
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-source"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
+    if !wrote_a_pack(&storage) {
+        return None;
+    }
+    store
+        .delete_all(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
+    tokio::time::sleep(
+        (started + Duration::from_secs(17)).saturating_duration_since(std::time::Instant::now())
+            + Duration::from_secs(1),
+    )
+    .await;
+    Some((saved, blobs(&*inner, &scope.0, "").await))
+}
+
+/// Runs [`a_save_whose_first_pack_lands_after_the_backup_failed`] until an attempt sends the first
+/// pack before the answer, at most three times. The race of the file writer and the archiver is
+/// lost in about one attempt of twenty.
+async fn first_attempt_that_raced(
+    first: Script,
+) -> Option<Option<(Result<SnapshotInfo, SaveError>, Vec<String>)>> {
+    // A process that can read the unreadable file, as root can, cannot run the test.
+    large_tree_with_an_unreadable_file(1)?;
+    let attempts = futures::stream::iter(0..3)
+        .then(|_| a_save_whose_first_pack_lands_after_the_backup_failed(first))
+        .filter_map(std::future::ready);
+    Some(std::pin::pin!(attempts).next().await)
+}
+
+#[test]
+#[timeout("300s")]
+async fn a_save_that_meets_an_unreadable_file_after_a_lost_pack_try_answers_only_after_the_try() {
+    // The first pack goes out while the archiver still chunks the rest of the file. Its try loses
+    // its answer and lands 15 s later, and its next try writes it. The archiver then meets the
+    // unreadable file, and the save answers `Source`.
+    let Some(raced) = first_attempt_that_raced(Script::LandAfter(Duration::from_secs(15))).await
+    else {
+        return;
+    };
+    let (saved, left) = raced.expect("the archiver ended before the first pack in each attempt");
+
+    assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
+    assert_eq!(left, Vec::<String>::new());
+}
+
+#[test]
+#[timeout("300s")]
+async fn a_save_whose_detached_pack_write_is_in_flight_when_the_backup_fails_answers_after_it() {
+    // The first pack goes to the file writer, whose write never answers and lands 15 s after it
+    // was sent. The archiver chunks the rest of the file meanwhile, meets the unreadable file and
+    // returns while the write is in flight.
+    let Some(raced) = first_attempt_that_raced(Script::HangThenLand(Duration::from_secs(15))).await
+    else {
+        return;
+    };
+    let (saved, left) = raced.expect("the archiver ended before the first pack in each attempt");
+
+    assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
+    assert_eq!(left, Vec::<String>::new());
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_save_whose_backup_meets_an_unreadable_file_answers_source_at_once() {
+    // Every call passes. The last pack of the backup goes out after the run cancelled its token,
+    // and that refused try sends nothing, so it holds the answer for no deadline.
+    let Some(tree) = large_tree_with_an_unreadable_file(16 << 20) else {
+        return;
+    };
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let store = store(storage, runs_policy(Duration::from_secs(30), 3));
+    let started = std::time::Instant::now();
+
+    let saved = store
+        .save(
+            &new_scope(),
+            &name("p-refused"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
+    let took = started.elapsed();
+
+    assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
+    assert!(took < Duration::from_secs(15), "the save took {took:?}");
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_whose_lost_publish_try_lands_after_a_later_try_answers_only_after_it_and_a_delete_all_keeps_the_agent_empty()
+ {
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = scripted_publish(inner.clone(), |tried| match tried {
+        1 => Script::LandAfter(Duration::from_secs(1)),
+        _ => Script::Pass,
+    });
+    let store = store(storage.clone(), runs_policy(Duration::from_secs(2), 3));
+    let scope = new_scope();
+    let tree = fixture_tree();
+
+    let saved = store
+        .save(
+            &scope,
+            &name("p-publish"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
+    let sent_before_the_answer = calls_of(&storage, "publish");
+    store
+        .delete_all(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    assert!(saved.is_ok(), "{saved:?}");
+    assert_eq!(sent_before_the_answer, 2);
+    assert_eq!(blobs(&*inner, &scope.0, "").await, Vec::<String>::new());
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_failed_run_whose_pack_try_was_lost_waits_for_it_and_runs_again_without_a_check_of_its_name()
+ {
+    // The first pack try loses its answer and its next try writes the pack. Each try of the first
+    // index write is refused, so the backup fails before the publish. The listing of the check
+    // of the own name would fail.
+    let deadline = Duration::from_secs(4);
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let index_writes = AtomicUsize::new(0);
+    let storage = scripted_first_pack(
+        inner.clone(),
+        Script::LandAfter(Duration::from_secs(1)),
+        move |op_label, path| match op_label {
+            "write"
+                if path.starts_with("index") && index_writes.fetch_add(1, Ordering::SeqCst) < 3 =>
+            {
+                Script::Refuse
+            }
+            "check_name" => Script::Refuse,
+            _ => Script::Pass,
+        },
+    );
+    let store = store(storage.clone(), runs_policy(deadline, 3));
+    let started = std::time::Instant::now();
+
+    let saved = store
+        .save(
+            &new_scope(),
+            &name("p-own-name"),
+            fixture_tree().path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
+    let took = started.elapsed();
+
+    assert!(saved.is_ok(), "{saved:?}");
+    assert!(took >= deadline, "the second run started after {took:?}");
+    assert_eq!(calls_of(&storage, "check_name"), 0);
+}
+
+#[test]
+#[timeout("120s")]
+async fn no_blob_call_of_a_save_starts_after_it_answered() {
+    // Each pack write never answers and lands later. The backup fails on the unreadable file.
+    let Some(tree) = large_tree_with_an_unreadable_file(16 << 20) else {
+        return;
+    };
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "write" && path.starts_with("data") {
+                Script::HangThenLand(Duration::from_millis(500))
+            } else {
+                Script::Pass
+            }
+        });
+    let store = store(storage.clone(), runs_policy(Duration::from_secs(2), 1));
+
+    let _ = store
+        .save(
+            &new_scope(),
+            &name("p-quiet"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
+    let at_the_answer = storage.calls().len();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    assert_eq!(storage.calls().len(), at_the_answer);
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_reports_its_waits_for_a_lost_pack_try_in_the_settle_and_before_the_next_step() {
+    let saved_after_a_lost_pack = {
+        let storage = scripted_first_pack(
+            Arc::new(InMemoryBlobStorage::new()),
+            Script::LandAfter(Duration::from_millis(200)),
+            |_, _| Script::Pass,
+        );
+        let store = store(storage, runs_policy(Duration::from_millis(500), 3));
+        let slots = SharedSlots::new(1);
+        let saved = store
+            .save(
+                &new_scope(),
+                &name("p-reported"),
+                fixture_tree().path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &slots,
+            )
+            .await;
+        (saved.is_ok(), slots.late_waits(), slots.counts().3)
+    };
+    let failed_after_a_lost_pack = {
+        let index_writes = AtomicUsize::new(0);
+        let storage = scripted_first_pack(
+            Arc::new(InMemoryBlobStorage::new()),
+            Script::LandAfter(Duration::from_millis(200)),
+            move |op_label, path| {
+                if op_label == "write"
+                    && path.starts_with("index")
+                    && index_writes.fetch_add(1, Ordering::SeqCst) < 3
+                {
+                    Script::Refuse
+                } else {
+                    Script::Pass
+                }
+            },
+        );
+        let store = store(storage, runs_policy(Duration::from_millis(500), 3));
+        let slots = SharedSlots::new(1);
+        let saved = store
+            .save(
+                &new_scope(),
+                &name("p-reported-failure"),
+                fixture_tree().path(),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &slots,
+            )
+            .await;
+        (saved.is_ok(), slots.late_waits(), slots.counts().3)
+    };
+
+    // The settle and the wait of row 0 after a success; the settle and the wait of row 3 after a
+    // failed run, then the wait after the failure before the next run.
+    assert_eq!(
+        (saved_after_a_lost_pack, failed_after_a_lost_pack),
+        ((true, 2, 0), (true, 2, 1))
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_settle_of_a_save_reads_its_late_writes_only_after_every_holder_of_its_blobs_dropped() {
+    // A holder of the blobs of the run records a late try 200 ms after the settle began, and then
+    // drops its token.
+    let deadline = Duration::from_secs(2);
+    let run_calls = tokio_util::task::TaskTracker::new();
+    let backend_late = Arc::new(LateWrites::default());
+    let holder = {
+        let (token, late) = (run_calls.token(), backend_late.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let ended = super::super::super::runs::now();
+            late.record(ended);
+            drop(token);
+            ended
+        })
+    };
+    let Settle { wait, finish, .. } = super::super::save_settle(
+        super::super::SaveExit::Ended {
+            end: RunEnd::CallFailed,
+            failure: anyhow::anyhow!("the backup failed"),
+            staged: None,
+        },
+        true,
+        run_calls,
+        backend_late,
+        Arc::new(LateWrites::default()),
+        deadline,
+    );
+
+    wait.await;
+    // The run is built before the test waits for the holder, as the shell builds it after the wait.
+    let until = match finish(Settled::Waited) {
+        Ran::Ended(ended) => ended.late.map(|late| late.until),
+        _ => None,
+    };
+    let recorded = holder.await.unwrap();
+
+    assert_eq!(until, Some(recorded + deadline));
+}
+
+#[test]
+#[timeout("60s")]
+async fn the_settle_of_a_save_waits_for_a_holder_of_its_blobs_past_one_deadline() {
+    let run_calls = tokio_util::task::TaskTracker::new();
+    let _held = run_calls.token();
+    let Settle { wait, .. } = super::super::save_settle(
+        super::super::SaveExit::Answered(Err(SaveError::NameInUse)),
+        true,
+        run_calls,
+        Arc::new(LateWrites::default()),
+        Arc::new(LateWrites::default()),
+        Duration::from_millis(100),
+    );
+
+    let waited = tokio::time::timeout(Duration::from_millis(500), wait).await;
+
+    assert!(waited.is_err());
 }

@@ -19,10 +19,9 @@ use super::super::super::fault::{
     BlobCallFailed, FileMissing, OperationCancelled, Phase, RestoreError, missing_blob,
     restore_error,
 };
-use super::super::super::runs::{Ran, RunEnd};
-use super::super::save_failure;
+use super::super::super::runs::RunEnd;
+use super::super::{SaveExit, save_failure};
 use super::*;
-use crate::filesystem_snapshot::SnapshotInfo;
 use golem_service_base::storage::blob::{BlobNameError, BlobRangeError};
 use pretty_assertions::assert_eq;
 use rustic_core::{DataId, ErrorKind, Id, RusticError, TreeId};
@@ -189,12 +188,12 @@ fn a_restore_error_is_read_from_the_storage_first_and_then_from_its_phase() {
     );
 }
 
-/// Gives the end of a run of a save, or the kind of the error of the answer.
-fn save_shape(ran: Ran<Result<SnapshotInfo, SaveError>>) -> String {
-    match ran {
-        Ran::Ended(ended) => format!("ended {:?}", ended.end),
-        Ran::Answered(Err(SaveError::Source(error))) => format!("source {:?}", error.kind()),
-        Ran::Answered(answer) | Ran::AnsweredAfter(answer, _) => format!("answered {answer:?}"),
+/// Gives the end of the exit of a save run, or the kind of the error of its answer.
+fn save_shape(exit: SaveExit) -> String {
+    match exit {
+        SaveExit::Ended { end, .. } => format!("ended {end:?}"),
+        SaveExit::Answered(Err(SaveError::Source(error))) => format!("source {:?}", error.kind()),
+        SaveExit::Answered(answer) => format!("answered {answer:?}"),
     }
 }
 

@@ -31,6 +31,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::debug;
 
 /// The target label of each blob storage call of the rustic store.
@@ -96,7 +97,7 @@ pub(super) struct LateWrites(Mutex<Option<Instant>>);
 
 impl LateWrites {
     /// Records a try of a write that ended at `ended` without an answer.
-    fn record(&self, ended: Instant) {
+    pub(super) fn record(&self, ended: Instant) {
         let mut latest = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         *latest = Some(later(*latest, ended));
     }
@@ -244,6 +245,9 @@ pub(super) struct SnapshotFiles {
     /// The share of the operation in the work of its incarnation, which each clone of the blobs
     /// holds, so a drain of the incarnation waits for each holder of the blobs.
     _work: Option<OperationWork>,
+    /// A token of the tracker of one run, which each clone of the blobs holds, so the run can wait
+    /// until no holder of its blobs is left, and so until no blob call of it runs or can start.
+    _run: Option<TaskTrackerToken>,
 }
 
 impl SnapshotFiles {
@@ -267,6 +271,7 @@ impl SnapshotFiles {
             tracker,
             late: None,
             _work: None,
+            _run: None,
         }
     }
 
@@ -275,6 +280,14 @@ impl SnapshotFiles {
     pub(super) fn of_work(&self, work: &OperationWork) -> Self {
         Self {
             _work: Some(work.clone()),
+            ..self.clone()
+        }
+    }
+
+    /// Gives the same blobs, which hold `run`, a token of the tracker of their run.
+    pub(super) fn held_by(&self, run: TaskTrackerToken) -> Self {
+        Self {
+            _run: Some(run),
             ..self.clone()
         }
     }

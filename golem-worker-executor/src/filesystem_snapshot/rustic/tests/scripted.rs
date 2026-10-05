@@ -65,12 +65,18 @@ pub(crate) enum Script {
     /// Gives an error at once to a write or a delete, as a call that got no answer, and makes the
     /// change in a task after the time, as a change that lands late. Each other call passes.
     LandAfter(std::time::Duration),
+    /// Never answers a write or a delete, and makes the change in a task after the time, as a
+    /// request that was sent, whose answer never comes, and that lands late. Each other call passes.
+    HangThenLand(std::time::Duration),
 }
 
 impl Script {
     /// Whether a write or a delete with this script gives an error and lands later.
     fn is_late(self) -> bool {
-        matches!(self, Script::Step { late: true, .. } | Script::LandAfter(_))
+        matches!(
+            self,
+            Script::Step { late: true, .. } | Script::LandAfter(_) | Script::HangThenLand(_)
+        )
     }
 }
 
@@ -300,6 +306,13 @@ impl ScriptedBlobStorage {
                 "the call got no answer within its deadline"
             ));
         }
+        if let Script::HangThenLand(after) = script {
+            tokio::spawn(async move {
+                tokio::time::sleep(after).await;
+                record_landing(landing.await);
+            });
+            return std::future::pending().await;
+        }
         let stepped = self.wait_for_step(op_label, path).await;
         let landings = self.landings.clone();
         tokio::spawn(async move {
@@ -366,9 +379,11 @@ impl ScriptedBlobStorage {
                 self.gate.cancelled().await;
                 call.await
             }
-            Script::Vanish | Script::AnswerAlreadyExists | Script::Torn | Script::LandAfter(_) => {
-                call.await
-            }
+            Script::Vanish
+            | Script::AnswerAlreadyExists
+            | Script::Torn
+            | Script::LandAfter(_)
+            | Script::HangThenLand(_) => call.await,
             Script::Delay(time) => {
                 tokio::time::sleep(time).await;
                 call.await

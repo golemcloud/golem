@@ -23,6 +23,7 @@ use super::super::prune::{
     next_claim, parse_claim_entry, parse_freed, read_ledger,
 };
 use super::super::publish::PublishBound;
+use super::super::runs::{OwnFile, Ran, RunEnd};
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{
     backend_of, copy_flat_tree, entries, files_of, one_run, polled_until, publish_bound_for,
@@ -30,8 +31,9 @@ use super::super::tests::{
 };
 use super::super::{PruneReport, PruneSettings, RepositoryKey, open_existing};
 use super::{
-    RusticSnapshotStore, StorePolicy, leaves_marked_packs, scope_snapshots, store_backup_options,
-    store_restore_options, whole_millis_from,
+    RunLate, RusticSnapshotStore, SaveExit, StorePolicy, leaves_marked_packs, ran_at_shutdown,
+    save_ran, scope_snapshots, settle_may_land, store_backup_options, store_restore_options,
+    whole_millis_from,
 };
 use crate::filesystem_snapshot::clock::SystemClock;
 use crate::filesystem_snapshot::contract_tests::clock::TestClock;
@@ -74,6 +76,10 @@ const ALWAYS: Percent = Percent(0);
 
 /// A deadline that no call of these tests reaches, so a held call ends only by a cancel.
 const LONG_DEADLINE: Duration = Duration::from_secs(60);
+
+/// The deadline of a test whose refused write the save waits for: a refused write can still land,
+/// so the call waits one deadline after it.
+const SHORT_WRITE_DEADLINE: Duration = Duration::from_secs(2);
 
 const KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\
                    202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";
@@ -470,7 +476,7 @@ async fn a_save_whose_index_write_fails_publishes_nothing_and_leaves_the_name_fr
             }
         }
     });
-    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let store = store(storage, policy(SHORT_WRITE_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = fixture_tree();
 
@@ -6231,7 +6237,7 @@ async fn a_config_write_that_fails_gives_a_storage_error_with_that_failure() {
                 Script::Pass
             }
         });
-    let store = store(storage, policy(LONG_DEADLINE, NEVER, Duration::ZERO));
+    let store = store(storage, policy(SHORT_WRITE_DEADLINE, NEVER, Duration::ZERO));
     let scope = new_scope();
     let tree = one_file_tree("never saved");
 
@@ -7154,5 +7160,143 @@ async fn a_delete_dropped_in_its_prune_while_a_save_of_the_same_agent_runs_keeps
             Some(listing(kept_tree.path())),
             Some(listing(new_tree.path())),
         )
+    );
+}
+
+/// What a run of a save gave, with its instants as their distance after `base`.
+fn ran_shape(
+    ran: Ran<Result<crate::filesystem_snapshot::SnapshotInfo, SaveError>>,
+    base: std::time::Instant,
+) -> String {
+    let after = |until: std::time::Instant| until.saturating_duration_since(base);
+    match ran {
+        Ran::Answered(answer) => format!("answered {}", answer.is_ok()),
+        Ran::AnsweredAfter(answer, late) => {
+            format!("answered {} after {:?}", answer.is_ok(), after(late.until))
+        }
+        Ran::Ended(ended) => match ended.late {
+            Some(late) => format!(
+                "ended {:?} after {:?} own {}",
+                ended.end,
+                after(late.until),
+                late.own.is_some()
+            ),
+            None => format!("ended {:?}", ended.end),
+        },
+        Ran::Settling(_) => "settling".to_string(),
+    }
+}
+
+fn own_file() -> OwnFile {
+    OwnFile {
+        path: std::sync::Arc::from(std::path::Path::new("snapshots/0101")),
+        info: crate::filesystem_snapshot::SnapshotInfo {
+            created_at: golem_common::model::Timestamp::from(7),
+            files: 1,
+            bytes: 2,
+        },
+    }
+}
+
+fn exits() -> [SaveExit; 3] {
+    [
+        SaveExit::Answered(Ok(own_file().info)),
+        SaveExit::Ended {
+            end: RunEnd::CallFailed,
+            failure: anyhow::anyhow!("failed"),
+            staged: None,
+        },
+        SaveExit::Ended {
+            end: RunEnd::CallFailed,
+            failure: anyhow::anyhow!("failed"),
+            staged: Some(own_file()),
+        },
+    ]
+}
+
+#[test]
+fn a_save_run_waits_for_its_latest_late_try_and_checks_its_name_only_after_a_lost_publish_try() {
+    let base = std::time::Instant::now();
+    let second = Duration::from_secs(1);
+    let deadline = Duration::from_secs(10);
+    let lates = [
+        RunLate::default(),
+        RunLate {
+            backend: Some(base + second),
+            publish: None,
+        },
+        RunLate {
+            backend: None,
+            publish: Some(base + second),
+        },
+        RunLate {
+            backend: Some(base + 2 * second),
+            publish: Some(base + second),
+        },
+    ];
+
+    let shapes = lates
+        .iter()
+        .flat_map(|late| {
+            exits()
+                .into_iter()
+                .map(move |exit| ran_shape(save_ran(exit, *late, deadline), base))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        shapes,
+        [
+            "answered true",
+            "ended CallFailed",
+            "ended CallFailed",
+            "answered true after 11s",
+            "ended CallFailed after 11s own false",
+            "ended CallFailed after 11s own false",
+            "answered true after 11s",
+            "ended CallFailed after 11s own false",
+            "ended CallFailed after 11s own true",
+            "answered true after 12s",
+            "ended CallFailed after 12s own false",
+            "ended CallFailed after 12s own true",
+        ]
+    );
+}
+
+#[test]
+fn a_save_run_can_have_a_late_write_only_before_a_finished_backup_or_after_a_recorded_try() {
+    let now = std::time::Instant::now();
+    let recorded = |backend: bool, publish: bool| RunLate {
+        backend: backend.then_some(now),
+        publish: publish.then_some(now),
+    };
+
+    assert_eq!(
+        [
+            settle_may_land(true, recorded(false, false)),
+            settle_may_land(true, recorded(true, false)),
+            settle_may_land(true, recorded(false, true)),
+            settle_may_land(false, recorded(false, false)),
+        ],
+        [false, true, true, true]
+    );
+}
+
+#[test]
+fn a_shutdown_in_the_settle_keeps_an_answer_and_cancels_every_other_run() {
+    let base = std::time::Instant::now();
+
+    assert_eq!(
+        [
+            SaveExit::Answered(Ok(own_file().info)),
+            SaveExit::Answered(Err(SaveError::NameInUse)),
+            SaveExit::Ended {
+                end: RunEnd::CallFailed,
+                failure: anyhow::anyhow!("failed"),
+                staged: Some(own_file()),
+            },
+        ]
+        .map(|exit| ran_shape(ran_at_shutdown(exit), base)),
+        ["answered true", "answered false", "ended Cancelled"]
     );
 }

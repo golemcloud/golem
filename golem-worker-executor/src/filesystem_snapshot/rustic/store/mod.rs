@@ -31,7 +31,7 @@ use super::fault::{
     is_storage_failure, missing_blob, missing_file_path, restore_error, rustic_storage_end,
     save_fault, storage_end,
 };
-use super::files::{LateWrites, SnapshotFiles, lands_by};
+use super::files::{LateWrites, SnapshotFiles, lands_by, later};
 use super::priority::LowPriority;
 use super::prune::{
     Percent, PrunePolicy, belongs_to_ledger, due_prune, read_ledger, record_freed, refresh_period,
@@ -42,7 +42,8 @@ use super::publish::{
 };
 use super::reload::{self, Found, Observed, Outcome, Reread, Step};
 use super::runs::{
-    Answers, Checked, Ended, Kind, LateWrite, OwnFile, Ran, RunEnd, Shell, copy_end,
+    Answers, Checked, Ended, Kind, LateWrite, OwnFile, Ran, RunEnd, Settle, Settled, Shell,
+    answered_after, copy_end,
 };
 use super::scope::{copy_scope, delete_scope};
 use super::spawner::Spawner;
@@ -711,7 +712,10 @@ impl RusticSnapshotStore {
     }
 
     /// One run of a save: the backup, then the publish of its snapshot file. A backup that has not
-    /// returned at `backup_end` is cancelled, and the run publishes nothing.
+    /// returned at `backup_end` is cancelled, and the run publishes nothing. The run then cancels
+    /// its token and gives the settle to the shell: the shell gives the slot back and waits until
+    /// every blob call of the run has ended, and then the run answers after its writes that can
+    /// still land.
     #[allow(clippy::too_many_arguments)]
     async fn save_run(
         &self,
@@ -725,8 +729,15 @@ impl RusticSnapshotStore {
     ) -> Ran<Result<SnapshotInfo, SaveError>> {
         let (token, _guard) = self.run_token();
         self.link_cancel(work, cancel, &token);
+        let run_calls = TaskTracker::new();
+        let backend_late = Arc::new(LateWrites::default());
+        let publish_late = Arc::new(LateWrites::default());
         let stage = Arc::new(SnapshotStage::default());
-        let backend = match self.scope_backend(work, scope, &token) {
+        let backend_files = self
+            .files(work, scope, &token)
+            .recording(backend_late.clone())
+            .held_by(run_calls.token());
+        let backend = match self.backend(backend_files) {
             Ok(backend) => Arc::new(backend.staging_in(stage.clone())),
             Err(error) => return Ran::Ended(Ended::new(RunEnd::Permanent, error)),
         };
@@ -753,57 +764,77 @@ impl RusticSnapshotStore {
             }
             None => Some((&mut backup).await),
         };
-        let staged = match staged {
-            Some(staged) => staged,
+        let (exit, backup_finished) = match staged {
             None => {
                 // The backup did not end in time: the run stops it, and waits until the store reads
                 // the tree no more.
                 token.cancel();
                 let _ = backup.await;
-                return Ran::Ended(Ended::new(
-                    RunEnd::BoundPassed,
-                    anyhow::anyhow!(
-                        "the backup of the save would take longer than the filesystem snapshot store allows"
-                    ),
-                ));
+                (
+                    SaveExit::Ended {
+                        end: RunEnd::BoundPassed,
+                        failure: anyhow::anyhow!(
+                            "the backup of the save would take longer than the filesystem snapshot store allows"
+                        ),
+                        staged: None,
+                    },
+                    false,
+                )
+            }
+            Some(staged) => {
+                let staged = staged.and_then(|staged| staged);
+                let backup_finished = matches!(staged, Ok(Some(_)));
+                // The backup has returned, so the store reads the tree no more. A cancel before this
+                // point publishes nothing, whatever the backup gave.
+                let exit = if cancel.is_cancelled() {
+                    SaveExit::Ended {
+                        end: RunEnd::Cancelled,
+                        failure: anyhow::anyhow!(
+                            "the save of the filesystem snapshot was cancelled before its publish"
+                        ),
+                        staged: None,
+                    }
+                } else {
+                    match staged {
+                        Ok(Some((staged, info))) => {
+                            let bound = self.policy.index_read_bound(t0);
+                            let files = self
+                                .files(work, scope, &self.root)
+                                .recording(publish_late.clone())
+                                .held_by(run_calls.token());
+                            match publish(&files, &staged, bound, cancel).await {
+                                Published::Written => SaveExit::Answered(Ok(info)),
+                                Published::NotWritten { end, failure } => SaveExit::Ended {
+                                    end,
+                                    failure,
+                                    staged: Some(OwnFile {
+                                        path: staged.path.clone(),
+                                        info,
+                                    }),
+                                },
+                            }
+                        }
+                        Ok(None) => SaveExit::Answered(Err(SaveError::NameInUse)),
+                        Err(error) => save_failure(error),
+                    }
+                };
+                (exit, backup_finished)
             }
         };
-        // The backup has returned, so the store reads the tree no more. A cancel before this
-        // point publishes nothing, whatever the backup gave.
-        if cancel.is_cancelled() {
-            return Ran::Ended(Ended::new(
-                RunEnd::Cancelled,
-                anyhow::anyhow!(
-                    "the save of the filesystem snapshot was cancelled before its publish"
-                ),
-            ));
-        }
-        let (staged, info) = match staged.and_then(|staged| staged) {
-            Ok(Some(staged)) => staged,
-            Ok(None) => return Ran::Answered(Err(SaveError::NameInUse)),
-            Err(error) => return save_failure(error),
+        // No try of the run starts from here, and a try that runs ends at once.
+        token.cancel();
+        let recorded = RunLate {
+            backend: backend_late.latest(),
+            publish: publish_late.latest(),
         };
-        let bound = self.policy.index_read_bound(t0);
-        let publish_late = Arc::new(LateWrites::default());
-        let files = self
-            .files(work, scope, &self.root)
-            .recording(publish_late.clone());
-        match publish(&files, &staged, bound, cancel).await {
-            Published::Written => Ran::Answered(Ok(info)),
-            Published::NotWritten { end, failure } => Ran::Ended(Ended {
-                end,
-                failure,
-                late: lands_by(publish_late.latest(), self.policy.deadline).map(|until| {
-                    LateWrite {
-                        until,
-                        own: Some(OwnFile {
-                            path: staged.path.clone(),
-                            info,
-                        }),
-                    }
-                }),
-            }),
-        }
+        Ran::Settling(save_settle(
+            exit,
+            settle_may_land(backup_finished, recorded),
+            run_calls,
+            backend_late,
+            publish_late,
+            self.policy.deadline,
+        ))
     }
 
     /// Checks the own name of a save after a publish that ended without an answer: the file that
@@ -1057,10 +1088,7 @@ impl RusticSnapshotStore {
         )
         .await;
         match copied {
-            Ok(()) => match lands_by(late.latest(), self.policy.deadline) {
-                Some(until) => Ran::AnsweredAfter(Ok(()), LateWrite { until, own: None }),
-                None => Ran::Answered(Ok(())),
-            },
+            Ok(()) => answered_after(Ok(()), lands_by(late.latest(), self.policy.deadline)),
             Err(error) => Ran::Ended(Ended {
                 end: copy_end(&error),
                 failure: error.into_failure(),
@@ -1071,12 +1099,130 @@ impl RusticSnapshotStore {
     }
 }
 
-/// Gives the run of a save whose backup failed with `error`: a failed storage call ends the run, a
-/// local I/O error answers `Source`, and each other error cannot change.
-fn save_failure(error: anyhow::Error) -> Ran<Result<SnapshotInfo, SaveError>> {
+/// How a save run ended, before its late writes are known.
+#[derive(Debug)]
+enum SaveExit {
+    /// The run gives this answer: `Ok(info)` after a publish, `NameInUse`, or `Source`.
+    Answered(Result<SnapshotInfo, SaveError>),
+    /// The run ended without an answer. `staged` is the file that the run staged, when it got that
+    /// far.
+    Ended {
+        end: RunEnd,
+        failure: anyhow::Error,
+        staged: Option<OwnFile>,
+    },
+}
+
+/// The ends of the latest tries of a save run that can still land: of the writes of its backend,
+/// and of its publish.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RunLate {
+    backend: Option<Instant>,
+    publish: Option<Instant>,
+}
+
+/// Tells whether a run of a save can have a write that can still land after its exit: its backup
+/// did not finish, so the threads of rustic can still hold a try; or a recorder holds a try. After
+/// a finished backup, `finalize` joined the threads and the publish has returned, so the recorders
+/// are final at the exit.
+fn settle_may_land(backup_finished: bool, recorded: RunLate) -> bool {
+    !backup_finished || recorded.backend.is_some() || recorded.publish.is_some()
+}
+
+/// Gives the run of a save from how it ended and its late tries, read after every try of the run
+/// ended. Every answer waits until each write of the run has landed or can no longer land. The own
+/// name is checked only when a publish try can still land.
+fn save_ran(
+    exit: SaveExit,
+    late: RunLate,
+    deadline: Duration,
+) -> Ran<Result<SnapshotInfo, SaveError>> {
+    let latest = match (late.backend, late.publish) {
+        (Some(backend), publish) => Some(later(publish, backend)),
+        (None, publish) => publish,
+    };
+    let until = lands_by(latest, deadline);
+    match exit {
+        SaveExit::Answered(answer) => answered_after(answer, until),
+        SaveExit::Ended {
+            end,
+            failure,
+            staged,
+        } => Ran::Ended(Ended {
+            end,
+            failure,
+            late: until.map(|until| LateWrite {
+                until,
+                own: late.publish.and(staged),
+            }),
+        }),
+    }
+}
+
+/// Gives the run of a save whose settle a shutdown ended: an answered run keeps its answer, as row
+/// 1 keeps it after a shutdown in the wait of row 0; any other run ends `Cancelled`.
+fn ran_at_shutdown(exit: SaveExit) -> Ran<Result<SnapshotInfo, SaveError>> {
+    match exit {
+        SaveExit::Answered(answer) => Ran::Answered(answer),
+        SaveExit::Ended { .. } => Ran::Ended(Ended::new(
+            RunEnd::Cancelled,
+            anyhow::anyhow!("the filesystem snapshot store shut down while a save settled"),
+        )),
+    }
+}
+
+/// Gives the settle of a save run that ended with `exit`: it waits until `run_calls`, which each
+/// holder of the blobs of the run counts, has no holder left, and then reads the two recorders.
+/// The wait has no time bound, so every try of the run has ended when the recorders are read; a
+/// warning names a wait that takes longer than one `deadline`.
+fn save_settle(
+    exit: SaveExit,
+    may_land: bool,
+    run_calls: TaskTracker,
+    backend_late: Arc<LateWrites>,
+    publish_late: Arc<LateWrites>,
+    deadline: Duration,
+) -> Settle<Result<SnapshotInfo, SaveError>> {
+    Settle {
+        wait: Box::pin(async move {
+            run_calls.close();
+            let slow = async {
+                tokio::time::sleep(deadline).await;
+                warn!(
+                    "A save of a filesystem snapshot waits for the threads of its backup after one storage call deadline"
+                );
+                std::future::pending::<()>().await
+            };
+            tokio::select! {
+                () = run_calls.wait() => {}
+                () = slow => {}
+            }
+        }),
+        finish: Box::new(move |settled| match settled {
+            Settled::Waited => save_ran(
+                exit,
+                RunLate {
+                    backend: backend_late.latest(),
+                    publish: publish_late.latest(),
+                },
+                deadline,
+            ),
+            Settled::ShutDown => ran_at_shutdown(exit),
+        }),
+        may_land,
+    }
+}
+
+/// Gives the exit of a save run whose backup failed with `error`: a failed storage call ends the
+/// run, a local I/O error answers `Source`, and each other error cannot change.
+fn save_failure(error: anyhow::Error) -> SaveExit {
     match save_fault(&error) {
-        SaveFault::Ended(end) => Ran::Ended(Ended::new(end, error)),
-        SaveFault::Source(kind) => Ran::Answered(Err(SaveError::Source(std::io::Error::new(
+        SaveFault::Ended(end) => SaveExit::Ended {
+            end,
+            failure: error,
+            staged: None,
+        },
+        SaveFault::Source(kind) => SaveExit::Answered(Err(SaveError::Source(std::io::Error::new(
             kind,
             format!("{error:#}"),
         )))),

@@ -15,7 +15,7 @@
 use super::super::scope::CopyError;
 use super::{
     Answers, Checked, Ended, Kind, Late, LateWrite, MOST_RACE_RUNS, NextRun, OwnFile, Ran, RunEnd,
-    RunOutcome, RunSeen, Shell, copy_end, jitter, next_run, run_delay,
+    RunOutcome, RunSeen, Settle, Settled, Shell, copy_end, jitter, next_run, run_delay,
 };
 use crate::filesystem_snapshot::{Failed, RunSlots, Slot, SnapshotInfo, Withdrawal};
 use futures::future::BoxFuture;
@@ -698,6 +698,118 @@ fn a_withdrawal_during_the_wait_after_a_failed_run_ends_the_call_and_a_shutdown_
                 started.elapsed() < Duration::from_secs(60)
             ),
             (Err("stopped"), Err("stopped"), 0, true)
+        );
+    })
+}
+
+/// A limiter that grants each take with a slot whose drop it records, and that records each wait
+/// for late writes.
+#[derive(Default)]
+struct SlotWatch {
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+    late_waits: std::sync::atomic::AtomicUsize,
+}
+
+/// A slot that records its drop.
+struct WatchedSlot(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for WatchedSlot {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl RunSlots for SlotWatch {
+    fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
+        let slot = Slot::new(WatchedSlot(Arc::clone(&self.dropped)));
+        Box::pin(std::future::ready(Ok(slot)))
+    }
+
+    fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
+        Box::pin(std::future::pending())
+    }
+
+    fn waiting_for_late_writes(&self) {
+        self.late_waits
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Runs one call whose run settles with `may_land` and a wait that ends when `gate` is
+/// cancelled, while `root` is the root of the store. Gives the answer, and what the test saw
+/// while the gate was closed: whether the slot was dropped, how many waits for late writes the
+/// limiter heard of, and whether the finish ran.
+async fn settled_call(
+    may_land: bool,
+    root: CancellationToken,
+    shut_down: bool,
+) -> (
+    Result<SnapshotInfo, &'static str>,
+    (bool, usize, bool),
+    Option<Settled>,
+) {
+    let slots = SlotWatch::default();
+    let retry = retry();
+    let shell = Shell {
+        kind: Kind::Save,
+        slots: &slots,
+        root: &root,
+        cancel: None,
+        retry: &retry,
+    };
+    let gate = CancellationToken::new();
+    let finished = Arc::new(Mutex::new(None::<Settled>));
+    let call = shell.call(
+        answers(),
+        |_| None,
+        |_| {
+            let (gate, finished) = (gate.clone(), Arc::clone(&finished));
+            async move {
+                Ran::Settling(Settle {
+                    wait: Box::pin(async move { gate.cancelled().await }),
+                    finish: Box::new(move |settled| {
+                        *finished.lock().unwrap() = Some(settled);
+                        Ran::Answered(Ok(info()))
+                    }),
+                    may_land,
+                })
+            }
+        },
+        |_| async { Checked::Absent },
+    );
+    let watching = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let seen = (
+            slots.dropped.load(std::sync::atomic::Ordering::SeqCst),
+            slots.late_waits.load(std::sync::atomic::Ordering::SeqCst),
+            finished.lock().unwrap().is_some(),
+        );
+        if shut_down {
+            root.cancel();
+        } else {
+            gate.cancel();
+        }
+        seen
+    };
+    let (answer, seen) = futures::join!(call, watching);
+    let settled = *finished.lock().unwrap();
+    (answer, seen, settled)
+}
+
+#[test]
+fn the_shell_gives_the_slot_back_before_the_settle_and_finishes_the_run_only_after_it() {
+    paused(async {
+        assert_eq!(
+            [
+                settled_call(true, CancellationToken::new(), false).await,
+                settled_call(false, CancellationToken::new(), false).await,
+                settled_call(true, CancellationToken::new(), true).await,
+            ],
+            [
+                (Ok(info()), (true, 1, false), Some(Settled::Waited)),
+                (Ok(info()), (true, 0, false), Some(Settled::Waited)),
+                (Ok(info()), (true, 1, false), Some(Settled::ShutDown)),
+            ]
         );
     })
 }

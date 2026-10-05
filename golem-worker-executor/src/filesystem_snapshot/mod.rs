@@ -481,7 +481,9 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// when the store shut down after a publish of the call began. Then the name can resolve to
     /// the whole tree later, and never to a part of it: `stat` and `list` show it, and a new save
     /// of the name gives `NameInUse`. A save that finds another snapshot with its name, which
-    /// another writer made, gives `NameInUse`. A save can leave data that no snapshot uses.
+    /// another writer made, gives `NameInUse`. A save can leave data that no snapshot uses. When
+    /// the call gives the info, no write of the call can still land, unless the store shut down
+    /// while the call waited for such a write.
     ///
     /// The tree must not change while the call runs. The store reads it while the call runs.
     /// Symlinks are read and not followed. A tree that the store cannot read gives `Source`, and
@@ -572,8 +574,8 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// Deletes the snapshots with the names `names`, as one batch.
     ///
     /// Each name stops resolving when the call gives success, so no later restore of it can
-    /// succeed, unless a save of that name that runs at the same time, or that gave an error,
-    /// publishes it later, as the doc of `save` says. The call is idempotent for each name. Every
+    /// succeed, unless a save of that name that runs at the same time, that gave an error, or that
+    /// gave the info after the store shut down, publishes it later, as the doc of `save` says. The call is idempotent for each name. Every
     /// other snapshot of the agent continues to work, also when it shares data with a deleted
     /// one, and a save or a restore that runs at the same time gives one of the answers that its
     /// own doc names. The causes of `Failed` are: the storage failed in each run, or the storage
