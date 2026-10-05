@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The line shown while a command runs: the elapsed time and how to stop waiting, as a block
-//! line with colours and behind a spinner without.
+//! The line shown while a command runs: the elapsed time and how to stop waiting, behind the
+//! rune loader with colours and behind a spinner without.
 
-use super::look;
+use super::look::{self, Loader, Palette};
 
 use std::io::Write;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -32,7 +32,7 @@ const TICK: Duration = Duration::from_millis(110);
 
 /// The columns the line needs. A narrower terminal would wrap it, and a wrapped line cannot be
 /// erased, so there the indicator is not shown.
-const WIDTH: usize = 48;
+const WIDTH: usize = 52;
 
 /// Whether a terminal `columns` wide can show the indicator on one line.
 pub fn fits(columns: u16) -> bool {
@@ -43,9 +43,9 @@ pub fn fits(columns: u16) -> bool {
 pub const ERASE: &str = "\r\x1b[2K";
 
 /// One redraw of the line. It returns to the start of the line and clears what was there.
-pub fn frame(tick: usize, elapsed: Duration, colorize: bool) -> String {
-    if colorize {
-        return format!("\r{}\x1b[K", look::running(elapsed));
+pub fn frame(tick: usize, elapsed: Duration, look: Option<(Palette, Loader)>) -> String {
+    if let Some((palette, loader)) = look {
+        return format!("\r{}\x1b[K", look::running(tick, elapsed, loader, palette));
     }
     let spinner = FRAMES[tick % FRAMES.len()];
     format!(
@@ -61,12 +61,12 @@ pub struct Ticker {
 }
 
 impl Ticker {
-    /// Starts drawing on stderr.
-    pub fn start(colorize: bool) -> Self {
-        Self::start_on(std::io::stderr(), colorize)
+    /// Starts drawing on stderr, as the loader when there are colours to draw it in.
+    pub fn start(look: Option<(Palette, Loader)>) -> Self {
+        Self::start_on(std::io::stderr(), look)
     }
 
-    fn start_on(mut output: impl Write + Send + 'static, colorize: bool) -> Self {
+    fn start_on(mut output: impl Write + Send + 'static, look: Option<(Palette, Loader)>) -> Self {
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = std::thread::spawn(move || {
             let started = Instant::now();
@@ -77,7 +77,7 @@ impl Ticker {
                 if elapsed < DELAY {
                     continue;
                 }
-                let _ = output.write_all(frame(tick, elapsed, colorize).as_bytes());
+                let _ = output.write_all(frame(tick, elapsed, look).as_bytes());
                 let _ = output.flush();
                 tick += 1;
             }
@@ -105,6 +105,7 @@ impl Drop for Ticker {
 #[cfg(test)]
 mod tests {
     use super::{ERASE, Ticker, fits, frame};
+    use crate::command_handler::ssh::look::{self, Loader, Palette};
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -133,41 +134,45 @@ mod tests {
     #[test]
     fn a_frame_shows_the_spinner_the_seconds_and_the_way_out() {
         assert_eq!(
-            frame(0, Duration::from_millis(12_900), false),
+            frame(0, Duration::from_millis(12_900), None),
             "\r\u{28fe} running\u{2026} 12s \u{b7} Ctrl+C to stop waiting\x1b[K"
         );
-        // With colours it is the block look's line.
+        // With colours it is the loader's line, redrawn in place like the spinner.
+        let look = Some((Palette::Rich, Loader::Runes));
         assert_eq!(
-            frame(9, Duration::from_secs(1), true),
-            "\r\x1b[1;43;30m RUNNING \x1b[0m\x1b[1;100;97m 1.0s \x1b[0m \x1b[2mctrl+c stops waiting\x1b[0m\x1b[K"
+            frame(9, Duration::from_secs(1), look),
+            format!(
+                "\r{}\x1b[K",
+                look::running(9, Duration::from_secs(1), Loader::Runes, Palette::Rich)
+            )
         );
     }
 
     #[test]
     fn the_line_fits_the_width_it_asks_for() {
-        assert!(fits(80) && fits(48));
-        assert!(!fits(47));
+        assert!(fits(80) && fits(52));
+        assert!(!fits(51));
         // The longest line: an hour, the most a command may run.
-        let longest = frame(0, Duration::from_secs(3600), false);
+        let longest = frame(0, Duration::from_secs(3600), None);
         let visible = longest
             .trim_start_matches('\r')
             .trim_end_matches("\x1b[K")
             .chars()
             .count();
-        assert!(visible <= 48, "{visible}");
+        assert!(visible <= 52, "{visible}");
     }
 
     #[test]
     fn a_quick_command_never_shows_the_line() {
         let screen = Screen::default();
-        drop(Ticker::start_on(screen.clone(), false));
+        drop(Ticker::start_on(screen.clone(), None));
         assert_eq!(screen.text(), "");
     }
 
     #[test]
     fn a_slow_command_shows_the_line_and_erases_it_at_the_end() {
         let screen = Screen::default();
-        let ticker = Ticker::start_on(screen.clone(), false);
+        let ticker = Ticker::start_on(screen.clone(), None);
         std::thread::sleep(Duration::from_millis(700));
         drop(ticker);
         let text = screen.text();

@@ -18,6 +18,7 @@
 use super::completion::Completions;
 use super::highlight::{Paint, paints};
 use super::history::SessionHistory;
+use super::look::Palette;
 use super::syntax::is_complete;
 use reedline::{
     Color, ColumnarMenu, Completer, CompletionResult, DefaultHinter, Emacs, Highlighter, IdeMenu,
@@ -31,9 +32,15 @@ use unicode_width::UnicodeWidthStr;
 const COMPLETION_MENU: &str = "completion_menu";
 
 /// Builds the editor. It paints on stderr. Enter continues unfinished input on a new line and
-/// Tab completes from the agent. With `colorize` the session has the block look: typed text is
-/// coloured and the completions are a bordered list that says what each one is.
-pub fn build(colorize: bool, history: SessionHistory, completions: Completions) -> Reedline {
+/// Tab completes from the agent. With a palette the session has the slab look: typed text is
+/// coloured and the completions are a bordered list, purple where it is selected, that says
+/// what each one is.
+pub fn build(
+    palette: Option<Palette>,
+    history: SessionHistory,
+    completions: Completions,
+) -> Reedline {
+    let colorize = palette.is_some();
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
         KeyModifiers::NONE,
@@ -58,7 +65,7 @@ pub fn build(colorize: bool, history: SessionHistory, completions: Completions) 
             completions: completions.clone(),
             kinds: colorize,
         }))
-        .with_menu(completion_menu(colorize))
+        .with_menu(completion_menu(palette))
         .with_quick_completions(true)
         .with_partial_completions(true)
         .with_edit_mode(Box::new(Emacs::new(keybindings)))
@@ -71,9 +78,18 @@ pub fn build(colorize: bool, history: SessionHistory, completions: Completions) 
 }
 
 /// The list Tab opens. Neither has a marker: the prompt stays as it is while the list is open.
-fn completion_menu(blocks: bool) -> ReedlineMenu {
-    if blocks {
-        let selected = Color::Black.on(Color::Green);
+/// The text and the background of the row the list has selected.
+fn selected_colours(palette: Palette) -> (Color, Color) {
+    match palette {
+        Palette::Rich => (Color::Fixed(16), Color::Fixed(141)),
+        Palette::Basic => (Color::Black, Color::LightPurple),
+    }
+}
+
+fn completion_menu(palette: Option<Palette>) -> ReedlineMenu {
+    if let Some(palette) = palette {
+        let (text, background) = selected_colours(palette);
+        let selected = text.on(background);
         ReedlineMenu::EngineCompleter(Box::new(
             IdeMenu::default()
                 .with_name(COMPLETION_MENU)
@@ -81,7 +97,8 @@ fn completion_menu(blocks: bool) -> ReedlineMenu {
                 .with_default_border()
                 .with_padding(1)
                 .with_text_style(Color::Default.normal())
-                .with_match_text_style(Color::Default.bold())
+                // What has been typed so far stands out in the same purple.
+                .with_match_text_style(background.bold())
                 .with_selected_text_style(selected)
                 .with_selected_match_text_style(selected.bold()),
         ))
@@ -241,8 +258,10 @@ impl Prompt for SshPrompt {
 
 #[cfg(test)]
 mod tests {
-    use super::{Coloured, Finished, FromAgent, SshPrompt};
+    use super::{Coloured, Finished, FromAgent, SshPrompt, selected_colours};
     use crate::command_handler::ssh::completion::{COMMANDS_SCRIPT, Completions, Fetch};
+    use crate::command_handler::ssh::look::Palette;
+    use reedline::Color;
     use reedline::{Completer, Highlighter, Prompt, Suggestion, ValidationResult, Validator};
     use std::sync::Arc;
     use test_r::test;
@@ -320,6 +339,18 @@ mod tests {
         let mut plain = completer(false);
         let result = plain.complete("l", 1);
         assert_eq!(result.suggestions()[0].display_override, None);
+    }
+
+    #[test]
+    fn the_selected_row_of_the_list_is_purple() {
+        assert_eq!(
+            selected_colours(Palette::Rich),
+            (Color::Fixed(16), Color::Fixed(141))
+        );
+        assert_eq!(
+            selected_colours(Palette::Basic),
+            (Color::Black, Color::LightPurple)
+        );
     }
 
     #[test]

@@ -3783,6 +3783,7 @@ dependencies = [
  "reqwest 0.13.4",
  "reqwest-middleware",
  "reqwest-retry",
+ "rustix 1.1.4",
  "rustls 0.23.43",
  "semver",
  "serde",

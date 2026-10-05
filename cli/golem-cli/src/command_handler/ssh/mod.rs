@@ -19,6 +19,7 @@
 //! no other shell state crosses calls. Reading the next line happens locally and holds no
 //! invocation open on the agent.
 
+mod backdrop;
 mod completion;
 mod contract;
 mod editor;
@@ -38,7 +39,7 @@ use self::contract::{
 };
 use self::editor::SshPrompt;
 use self::history::{SessionHistory, history_file};
-use self::look::{Edges, Readiness};
+use self::look::{Loader, Palette, Readiness};
 use self::progress::Ticker;
 use crate::command_handler::Handlers;
 use crate::command_handler::tool::ToolOwner;
@@ -98,10 +99,6 @@ const HELPER_WAIT: Duration = Duration::from_secs(3);
 
 /// How long Ctrl+C waits for the answer to its cancel request.
 const CANCEL_WAIT: Duration = Duration::from_secs(5);
-
-/// Set to `1` or `0`, it chooses pointed or straight edges for the prompt's blocks in every
-/// session, without `--powerline` or `--no-powerline`.
-const POWERLINE_VARIABLE: &str = "GOLEM_SSH_POWERLINE";
 
 /// How long a prompt waits to learn what the agent is doing before it is drawn without that.
 const STATUS_WAIT: Duration = Duration::from_secs(1);
@@ -212,7 +209,6 @@ impl SshCommandHandler {
         tool: ToolName,
         cwd: Option<String>,
         timeout: Option<u32>,
-        powerline: Option<bool>,
     ) -> anyhow::Result<()> {
         // Only the script's output may reach stdout. Without a terminal to talk to (with `-c` or
         // piped input), the CLI's own messages are held back until something fails.
@@ -239,19 +235,7 @@ impl SshCommandHandler {
 
         let status = match command {
             Some(script) => self.run_once(&session, &script).await,
-            None => {
-                // The command line first, then the standing choice in the environment.
-                let asked = powerline.or_else(|| {
-                    std::env::var(POWERLINE_VARIABLE)
-                        .ok()
-                        .and_then(|value| look::powerline_setting(&value))
-                });
-                let edges = Edges::choose(
-                    asked,
-                    look::draws_powerline(|name| std::env::var(name).ok()),
-                );
-                self.run_interactive(&mut session, edges).await?
-            }
+            None => self.run_interactive(&mut session).await?,
         };
         match status {
             0 => Ok(()),
@@ -346,13 +330,13 @@ impl SshCommandHandler {
                 exit_code(Outcome::NotRun)
             }
             Submission::Interrupted(outcome) => {
-                self.report_interrupted(session, &key, &outcome, false);
+                self.report_interrupted(session, &key, &outcome, None);
                 exit_code(Outcome::Interrupted)
             }
         }
     }
 
-    async fn run_interactive(&self, session: &mut Session, edges: Edges) -> anyhow::Result<u8> {
+    async fn run_interactive(&self, session: &mut Session) -> anyhow::Result<u8> {
         let mode = input_mode(
             std::io::stdin().is_terminal(),
             std::io::stdout().is_terminal(),
@@ -360,9 +344,16 @@ impl SshCommandHandler {
         let terminal = mode != InputMode::Lines;
         // With colours the session has the block look.
         let colorize = terminal && self.ctx.should_colorize();
-        let styled = colorize && std::io::stderr().is_terminal();
-        if styled {
-            log_preformatted(look::banner(&session.agent, &session.tool));
+        let palette = Palette::detect(|name| std::env::var(name).ok());
+        let loader = Loader::detect(|name| std::env::var(name).ok());
+        // What is written on stderr is styled only when stderr is a terminal too.
+        let styled = (colorize && std::io::stderr().is_terminal()).then_some(palette);
+        // The band behind every prompt, a shade off the terminal's own background.
+        let band = (styled.is_some() && mode == InputMode::Editor && palette == Palette::Rich)
+            .then(|| backdrop::band(|name| std::env::var(name).ok()))
+            .flatten();
+        if let Some(palette) = styled {
+            log_preformatted(look::banner(&session.agent, &session.tool, palette));
         } else if terminal {
             logln(banner(&session.agent, &session.tool));
         }
@@ -389,7 +380,7 @@ impl SshCommandHandler {
                     });
                 }
                 Input::Editor(Some(Box::new(editor::build(
-                    colorize,
+                    colorize.then_some(palette),
                     self.history(session),
                     completions.clone(),
                 ))))
@@ -440,12 +431,13 @@ impl SshCommandHandler {
                             &session.agent,
                             &session.cwd,
                             branch.as_deref(),
-                            edges,
+                            palette,
+                            band.as_deref(),
                             columns,
                         ),
                         look::marker(last_status == 0)
                     ),
-                    right: look::result(last_status, last_elapsed, queue, edges),
+                    right: look::result(last_status, last_elapsed, queue, palette, band.as_deref()),
                     continuation: look::CONTINUATION,
                 }
             } else {
@@ -479,7 +471,8 @@ impl SshCommandHandler {
             }
 
             let key = IdempotencyKey::fresh();
-            let ticker = show_progress.then(|| Ticker::start(colorize));
+            let ticker =
+                show_progress.then(|| Ticker::start(colorize.then_some((palette, loader))));
             let started = Instant::now();
             let submission = self.submit(session, &line, &key).await;
             // Erased before anything else is written.
@@ -488,7 +481,7 @@ impl SshCommandHandler {
             branch_stale = true;
             match submission {
                 Submission::Completed(result) => {
-                    write_output(&result, styled);
+                    write_output(&result, styled.is_some());
                     if terminal {
                         end_line(&result, colorize);
                     }
@@ -667,16 +660,21 @@ impl SshCommandHandler {
         session: &Session,
         key: &IdempotencyKey,
         outcome: &CancelOutcome,
-        styled: bool,
+        styled: Option<Palette>,
     ) {
         set_log_output(Output::Stderr);
-        match outcome {
-            CancelOutcome::Cancelled if styled => log_preformatted(look::cancelled()),
-            CancelOutcome::Running { error } if styled => log_preformatted(look::detached(
-                &session.agent,
-                &time_limit(session.timeout),
-                error.as_deref(),
-            )),
+        match (outcome, styled) {
+            (CancelOutcome::Cancelled, Some(palette)) => {
+                log_preformatted(look::cancelled(palette));
+            }
+            (CancelOutcome::Running { error }, Some(palette)) => {
+                log_preformatted(look::detached(
+                    &session.agent,
+                    &time_limit(session.timeout),
+                    error.as_deref(),
+                    palette,
+                ));
+            }
             _ => logln(interrupted_message(
                 outcome,
                 &session.agent,

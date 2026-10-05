@@ -811,16 +811,6 @@ pub enum GolemCliSubcommand {
         /// Seconds each command may run before the tool stops it; defaults to the tool's limit
         #[arg(long, value_name = "SECONDS")]
         timeout: Option<u32>,
-        /// Join the prompt's coloured blocks with points and show the git branch behind a branch
-        /// glyph. This needs a font with Powerline glyphs, such as a Nerd Font, so it is the
-        /// default only in terminals that draw those glyphs themselves (kitty, WezTerm, Ghostty).
-        /// `GOLEM_SSH_POWERLINE=1` in the environment does the same for every session
-        #[arg(long, conflicts_with = "no_powerline")]
-        powerline: bool,
-        /// Draw the blocks with straight edges and the word `git`, which every font shows.
-        /// `GOLEM_SSH_POWERLINE=0` does the same for every session
-        #[arg(long)]
-        no_powerline: bool,
     },
     /// Deploy application
     #[command(after_help = crate::command_examples::DEPLOY)]

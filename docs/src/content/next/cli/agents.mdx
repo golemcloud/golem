@@ -255,7 +255,7 @@ When the built-in bash tool is bound to an agent, `golem ssh` opens a command pr
 golem ssh 'MyAgent("m1")'
 ```
 
-The prompt's first line is a row of coloured blocks: `ssh` with a dot for what the agent is doing, the agent's type and name (its constructor arguments), the directory the last command ended in and, inside a git repository when the git tool is bound to the agent, the branch. The dot is green when the agent is idle, yellow when something is running or waiting on it, so your command will queue, and red when the agent has failed or exited; a hollow dot means the status could not be read. The dot is read when the prompt is drawn and does not change while you type. At the right edge the prompt shows the last exit status, when it was not zero, the number of commands waiting on the agent, when there are any, and how long the last command took. You type on the line below, after `❯`. Each command in the scrollback keeps these blocks, so you can see the directory it ran in. When colours are off, for example with `NO_COLOR` set, the prompt is one line of plain text. Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line being typed.
+The prompt's first line is a row of blocks in purple and grey, a cell apart: `ssh` with a dot for what the agent is doing, the agent's type and name (its constructor arguments), the directory the last command ended in and, inside a git repository when the git tool is bound to the agent, the branch. The dot is green when the agent is idle, yellow when something is running or waiting on it, so your command will queue, and red when the agent has failed or exited; a hollow dot means the status could not be read. The dot is read when the prompt is drawn and does not change while you type. A terminal with only 16 colours shows the slabs in its own magenta and grey. The row sits on a band a shade off your terminal's background, from edge to edge, which sets the session's prompts apart from the shell you started it in; set `GOLEM_SSH_BACKGROUND=0` to drop the band. At the right edge the prompt shows the last exit status, when it was not zero, the number of commands waiting on the agent, when there are any, and how long the last command took. You type on the line below, after `❯`. Each command in the scrollback keeps these blocks, so you can see the directory it ran in. When colours are off, for example with `NO_COLOR` set, the prompt is one line of plain text. Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line being typed.
 
 The prompt edits like a shell:
 
@@ -264,7 +264,7 @@ The prompt edits like a shell:
 - **History is kept per agent** across sessions, in `ssh-history/` under the CLI's configuration directory, readable only by you. Up and Down recall, Ctrl+R searches, and a suggestion from history appears as you type. A line that starts with a space is not saved.
 - **Typed text is coloured.** A command name turns red when the agent does not know it.
 
-While a command runs, a line shows how long it has been running. Its output appears when it finishes, with standard error dimmed.
+While a command runs, a line shows a small animation, how long the command has been running and how to stop waiting for it. The animation is drawn with runes; set `GOLEM_SSH_RUNES=0` if your terminal's fonts have none and it shows boxes, and a plain shape takes their place. Its output appears when it finishes, with standard error dimmed.
 
 `golem ssh` answers two words itself: `help` explains the session, and `tools` lists the tools bound to the agent. `help NAME` still asks bash, and `builtin help` or `command tools` reach bash's own.
 
@@ -289,7 +289,6 @@ Other options:
 - `--cwd DIR` starts in `DIR` instead of the agent's starting directory.
 - `--timeout SECONDS` stops any command still running after that many seconds.
 - `--tool NAME` uses another binding whose `run` operation matches bash's; the default is `bash`.
-- `--powerline` joins the prompt's blocks with points and shows the git branch behind a branch glyph. These are Powerline glyphs: they need a font that has them, such as a Nerd Font, and other fonts show a box or a question mark in their place. A program cannot tell which font a terminal uses, so the default is straight edges and the word `git`, which every font shows, except in kitty, WezTerm and Ghostty, which draw the glyphs themselves. `--no-powerline` forces straight edges. To choose once for every session, set `GOLEM_SSH_POWERLINE=1` or `GOLEM_SSH_POWERLINE=0` in your shell profile.
 
 Pressing Ctrl+C while a command runs stops waiting for it. `golem ssh` asks Golem to cancel the call: a call that was still queued is cancelled, but Golem cannot stop one that has started, so that command keeps running on the agent until it finishes or reaches its time limit, and your next command waits behind it. `golem ssh` prints the `golem tool invoke --lookup` command that fetches its result later. At the prompt the session continues and shows status 130; with `-c` or piped input, `golem ssh` exits with status 130.
 
