@@ -8450,9 +8450,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Appends an oplog entry without forcing a durable commit. Callers that
     /// require ordering must await the append before exposing subsequent work.
     pub async fn add_to_oplog(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
-        match self.oplog.add(entry).await {
-            Err(OplogError::Fenced(fence)) => Err(self.retired_by(fence)),
-            result => result,
+        self.oplog
+            .add(entry)
+            .await
+            .map_err(|error| self.retire_if_fenced(error))
+    }
+
+    /// Gives `error`, and records the retirement for a lost shard first when it is a fence.
+    fn retire_if_fenced(&self, error: OplogError) -> OplogError {
+        match error {
+            OplogError::Fenced(fence) => self.retired_by(fence),
+            error => error,
         }
     }
 
@@ -9077,14 +9085,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 self.oplog
                     .add_durable_stream_batch(Box::new(move |_| entries))
-                    .await?;
+                    .await
+                    .map_err(|error| self.retire_if_fenced(error))?;
             } else {
                 // Through the fence-aware helper: a revert is a write like any other, and if the
                 // shard has a new owner this must surface rather than be discarded.
                 self.add_to_oplog(OplogEntry::revert(dropped_region.clone()))
                     .await?;
             }
-            self.durable_stream_commit()(None).await;
+            // Below the commit threshold the add only buffers, so this commit is where a new
+            // owner of the shard is found. A refused commit gives the error, and the caller then
+            // deletes no filesystem snapshot of the dropped region.
+            self.commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
             self.reattach_worker_status().await;
             self.current_component.store(Arc::new(restored_component));
             Ok(reverted)

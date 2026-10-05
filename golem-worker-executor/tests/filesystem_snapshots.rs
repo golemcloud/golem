@@ -40,7 +40,7 @@ use golem_worker_executor::services::golem_config::{
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, start_with_overrides, take_agent_oplog_over_at_epoch,
 };
 use pretty_assertions::{assert_eq, assert_ne};
 use std::path::{Path, PathBuf};
@@ -3367,6 +3367,82 @@ async fn a_revert_deletes_the_snapshots_of_the_dropped_region_and_a_start_restor
     assert_eq!(held, vec![first.clone()]);
     assert_eq!(tree, before);
     assert_eq!(store.restored_names().get(restores..), Some(&[first][..]));
+    Ok(())
+}
+
+/// A revert whose commit finds that the shard has a new owner gives an error, and deletes no
+/// filesystem snapshot of the dropped region: the new owner holds the whole history.
+#[test]
+#[timeout("4m")]
+async fn a_revert_whose_commit_finds_a_new_owner_fails_and_deletes_no_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let store = TestFilesystemSnapshotStore::new();
+    let executor =
+        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+    let agent = Agent::start(&executor, &context, initial_file_system, "fenced", &[]).await?;
+    let (first_index, first) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "first.txt",
+                content: "first",
+            },
+        )
+        .await?;
+    let (_, second) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "second.txt",
+                content: "second",
+            },
+        )
+        .await?;
+    let incarnation = agent.incarnation(&executor, &context).await?;
+    store_holds(&store, &incarnation, &[first.as_str(), second.as_str()]).await?;
+    // The last committed entry is the confirmation of the second snapshot. This lowers the chance
+    // that an entry is still buffered, which would let an earlier commit find the new owner; it
+    // cannot prove it, because the oplog that the test reads holds only committed entries.
+    eventually(Duration::from_secs(30), || async {
+        let oplog = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?;
+        Ok(oplog.last().and_then(|entry| match &entry.entry {
+            PublicOplogEntry::SnapshotConfirmed(confirmed)
+                if confirmed.filesystem_snapshot == second =>
+            {
+                Some(())
+            }
+            _ => None,
+        }))
+    })
+    .await?;
+    take_agent_oplog_over_at_epoch(deps, &context, &agent.owned(&context), 1).await?;
+
+    let reverted = executor
+        .revert(
+            &agent.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: first_index,
+            }),
+        )
+        .await;
+    assert!(
+        reverted.is_err(),
+        "a revert whose commit the new owner refused must fail, it gave {reverted:?}"
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut held = store.snapshot_names(&incarnation.0, incarnation.1).await;
+    held.sort();
+    let mut expected = vec![first, second];
+    expected.sort();
+
+    assert_eq!(held, expected);
     Ok(())
 }
 
