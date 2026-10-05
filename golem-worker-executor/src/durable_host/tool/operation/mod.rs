@@ -317,7 +317,7 @@ impl std::fmt::Debug for OwnerToolOperations {
 impl OwnerToolOperations {
     /// Store tasks settle terminal selections. Keep driving them even if a different abandoned
     /// task returns an error, without dropping the in-progress owner election or lane drain.
-    pub(crate) async fn fence_for_jump<T: Send + 'static>(
+    pub async fn fence_for_jump<T: Send + 'static>(
         self: &Arc<Self>,
         store: &mut wasmtime::StoreContextMut<'_, T>,
         mut on_error: impl FnMut(wasmtime::Error),

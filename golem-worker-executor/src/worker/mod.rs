@@ -3880,7 +3880,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Accepts a destructive replay cut without depending on the requesting Store future to
     /// remain polled. The owner loop performs teardown and commits the cut before constructing the
     /// replacement Store. Competing requests collapse to the earliest deleted index.
-    pub(crate) async fn request_runtime_jump(self: &Arc<Self>, first_deleted: OplogIndex) {
+    pub async fn request_runtime_jump(self: &Arc<Self>, first_deleted: OplogIndex) {
         {
             let mut pending = self.pending_runtime_jump.lock().await;
             // Publish the stream fence in the same non-yielding section that accepts the cut. Its
@@ -3905,11 +3905,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         });
     }
 
-    pub(crate) fn runtime_append_tasks(&self) -> Arc<tasks::RuntimeAppendTasks> {
+    pub fn runtime_append_tasks(&self) -> Arc<tasks::RuntimeAppendTasks> {
         self.runtime_append_tasks.lock().unwrap().clone()
     }
 
-    pub(crate) async fn runtime_jump_publication_gate(
+    pub async fn runtime_jump_publication_gate(
         &self,
     ) -> tokio::sync::MutexGuard<'_, Option<OplogIndex>> {
         self.pending_runtime_jump.lock().await

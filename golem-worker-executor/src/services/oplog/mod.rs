@@ -75,7 +75,7 @@ mod raw_session;
 mod reader;
 
 #[cfg(test)]
-pub(crate) use ephemeral::tests::fixture as gated_ephemeral_fixture;
+pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
 
 #[cfg(test)]
 pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};

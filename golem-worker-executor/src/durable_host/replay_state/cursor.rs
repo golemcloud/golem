@@ -3492,7 +3492,7 @@ impl ReplayState {
     }
 
     /// Includes foreign work: another scope may have observed bytes from the incomplete attempt.
-    pub(crate) async fn has_attempt_suffix(&self, start: OplogIndex) -> bool {
+    pub async fn has_attempt_suffix(&self, start: OplogIndex) -> bool {
         !matches!(
             self.lookup_oplog_entry_with_condition(
                 start,

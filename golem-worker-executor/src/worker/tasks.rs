@@ -27,18 +27,18 @@ use tokio_util::task::task_tracker::TaskTrackerToken;
 /// Append producers may outlive their Store (for example an HTTP body held by a transport).
 /// Sealing a generation rejects new recordings while preserving every already accepted append.
 #[derive(Default)]
-pub(crate) struct RuntimeAppendTasks {
+pub struct RuntimeAppendTasks {
     sealed: Mutex<bool>,
     tasks: TaskTracker,
 }
 
 impl RuntimeAppendTasks {
-    pub(crate) fn register(&self) -> Option<TaskTrackerToken> {
+    pub fn register(&self) -> Option<TaskTrackerToken> {
         let sealed = self.sealed.lock().unwrap();
         (!*sealed).then(|| self.tasks.token())
     }
 
-    pub(crate) async fn seal_and_wait(&self) {
+    pub async fn seal_and_wait(&self) {
         {
             let mut sealed = self.sealed.lock().unwrap();
             *sealed = true;
@@ -69,7 +69,7 @@ struct ActorOwners {
 }
 
 impl WorkerTasks {
-    pub(crate) fn actors_stopping(&self) -> bool {
+    pub fn actors_stopping(&self) -> bool {
         self.0.actors.lock().unwrap().closed
     }
 

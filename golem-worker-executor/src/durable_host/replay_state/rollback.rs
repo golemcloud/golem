@@ -2,7 +2,7 @@ use super::*;
 
 /// Finds the complete suffix abandoned by an incomplete atomic region before any Store claims it.
 #[cfg(test)]
-pub(crate) async fn atomic_rollback_region(
+pub async fn atomic_rollback_region(
     oplog: &dyn Oplog,
     skipped_regions: &DeletedRegions,
     horizon: OplogIndex,
@@ -10,7 +10,7 @@ pub(crate) async fn atomic_rollback_region(
     suffix_rollback_region(oplog, skipped_regions, horizon, None).await
 }
 
-pub(crate) async fn suffix_rollback_region(
+pub async fn suffix_rollback_region(
     oplog: &dyn Oplog,
     skipped_regions: &DeletedRegions,
     horizon: OplogIndex,

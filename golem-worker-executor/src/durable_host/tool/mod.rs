@@ -5001,7 +5001,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
     }
 }
 
-pub(crate) async fn fence_tool_operations_for_jump<Ctx: WorkerCtx>(
+pub async fn fence_tool_operations_for_jump<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
 ) -> Result<(), WorkerExecutorError> {
     let operations = store.data().durable_ctx().owner_execution.tool_operations();
