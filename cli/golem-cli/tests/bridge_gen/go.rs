@@ -976,6 +976,11 @@ fn go_grep_tool() -> Tool {
     });
 
     let replace = tool.commands.nodes[1].body.as_mut().unwrap();
+    replace.stderr = Some(StreamSpec {
+        doc: doc("diagnostics"),
+        mime: vec![],
+        required: false,
+    });
     replace.errors = vec![ErrorCase {
         name: "bad-pattern".to_string(),
         doc: doc("bad pattern"),
@@ -1043,7 +1048,9 @@ fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
         "var configGroup = Tool.Group(\"config\")",
         "var _ = configGroup.Globals[ConfigGlobals](",
         "var Root = Tool.Body[RootArgs, []string](",
-        "var Replace = Tool.StdoutCommand[ReplaceArgs, golem.Unit](\"replace\"",
+        "var Replace = Tool.OutputCommand[ReplaceArgs, golem.Unit](\"replace\"",
+        "s.Stdout().Required()",
+        "s.Stderr()\n",
         "var ConfigGet = configGroup.Command[ConfigGetArgs, values.Option[string]](\"get\"",
         "s.Positional(&a.Key).Default(\"all\")",
         "s.Map(&a.Labels)",

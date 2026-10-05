@@ -47,8 +47,11 @@ func mustTypedValue[T any](t *testing.T, v T) TypedValue {
 func localUnderlying(d *definitions, e *toolEntry) underlyingLayer {
 	return underlyingLayer{start: func(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
 		n := e.root.find(path)
-		wantStdout := n != nil && n.body != nil && n.body.stdout
-		return localCall(d, e, path, input, stdin, wantStdout, AnonymousPrincipal{}), nil
+		var streams ToolStreams
+		if n != nil && n.body != nil {
+			streams = n.body.streams()
+		}
+		return localCall(d, e, path, input, stdin, streams, AnonymousPrincipal{}), nil
 	}}
 }
 
@@ -58,6 +61,9 @@ type middlewareRun struct {
 	params TypedValue
 	stdin  string
 	under  underlyingLayer
+	// stderr receives the middleware's standard error; without it the caller
+	// did not take one.
+	stderr *fakeSink
 }
 
 // runMiddlewareFor invokes a middleware the way the host would, returning the
@@ -75,13 +81,18 @@ func runMiddlewareFor(t *testing.T, r *toolRegistry, d *definitions, name string
 		stdin = &byteReader{src: &fakeSource{items: []streamItem{chunk(run.stdin)}}}
 	}
 	sink := &fakeSink{}
+	var stderr byteStreamSink
+	if run.stderr != nil {
+		stderr = run.stderr
+	}
 	inv := &middlewareInvocation{
 		toolName:    "vcs",
 		parameters:  run.params,
 		commandPath: run.path,
 		input:       run.input,
 		stdin:       stdin,
-		stdout:      &ToolStdout{sink: sink},
+		stdout:      newToolOutput("stdout", sink),
+		stderr:      newToolOutput("stderr", stderr),
 		principal:   AnonymousPrincipal{},
 		under:       run.under,
 	}
@@ -174,16 +185,16 @@ func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
 	}
 }
 
-func TestStdoutMiddlewareForwardsAndRewritesOutput(t *testing.T) {
+func TestOutputMiddlewareForwardsAndRewritesOutput(t *testing.T) {
 	v, r, d := newVcs(t)
 	e, _ := r.get("vcs")
 	quiet := v.tool.Middleware[Unit]("forward", ToolMiddlewareSpec{})
-	_ = quiet.HandleStdout(v.push, func(ctx *ToolMiddlewareStdoutContext[Unit], a PushArgs) (int32, error) {
-		return quiet.UnderlyingStdout(ctx, v.push).Forward(a)
+	_ = quiet.HandleOutput(v.push, func(ctx *ToolMiddlewareOutputContext[Unit], a PushArgs) (int32, error) {
+		return quiet.UnderlyingOutput(ctx, v.push).Forward(a)
 	})
 	prefix := v.tool.Middleware[Unit]("prefix", ToolMiddlewareSpec{})
-	_ = prefix.HandleStdout(v.push, func(ctx *ToolMiddlewareStdoutContext[Unit], a PushArgs) (int32, error) {
-		inv, err := prefix.UnderlyingStdout(ctx, v.push).Start(a)
+	_ = prefix.HandleOutput(v.push, func(ctx *ToolMiddlewareOutputContext[Unit], a PushArgs) (int32, error) {
+		inv, err := prefix.UnderlyingOutput(ctx, v.push).Start(a)
 		if err != nil {
 			return 0, err
 		}
@@ -199,14 +210,20 @@ func TestStdoutMiddlewareForwardsAndRewritesOutput(t *testing.T) {
 
 	input := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "origin" })
 	for name, want := range map[string]string{"forward": "HELLO", "prefix": "> HELLO"} {
+		stderr := &fakeSink{}
 		res, sink := runMiddlewareFor(t, r, d, name, middlewareRun{
-			path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, Unit{}), stdin: "hello", under: localUnderlying(d, e),
+			path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, Unit{}), stdin: "hello",
+			under: localUnderlying(d, e), stderr: stderr,
 		})
 		if res.IsErr() {
 			t.Fatalf("%s: %+v", name, res.Err())
 		}
 		if string(sink.written) != want || !sink.finished {
 			t.Errorf("%s: stdout %q finished=%v", name, sink.written, sink.finished)
+		}
+		// Neither handler takes stderr, so it passes through.
+		if string(stderr.written) != "pushing origin" || !stderr.finished {
+			t.Errorf("%s: stderr %q finished=%v", name, stderr.written, stderr.finished)
 		}
 	}
 }
@@ -375,53 +392,79 @@ func TestMiddlewareDeclarationErrors(t *testing.T) {
 	})
 }
 
-// TestMiddlewareRelaysStderrBeneath — a middleware has no stderr API yet, so
-// the layer beneath's standard error reaches the caller through it unchanged,
-// and is released when the middleware has none of its own.
-func TestMiddlewareRelaysStderrBeneath(t *testing.T) {
+// TestUniversalMiddlewarePassesOutputsThrough — a universal middleware that
+// does not take an output of the call beneath passes it on unchanged, failure
+// included, and one the caller did not take is drained.
+func TestUniversalMiddlewarePassesOutputsThrough(t *testing.T) {
 	_, r, d := newVcs(t)
 	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", ToolMiddlewareSpec{})
 	_ = audit.Handle(func(ctx *UniversalToolMiddlewareContext[AuditParams]) (Option[TypedValue], error) {
 		return ctx.Next(ctx.Input())
 	})
 	e, _ := r.getMiddleware("audit")
-	released := false
 	under := underlyingLayer{start: func([]string, types.TypedSchemaValue, io.Reader) (toolCall, error) {
 		return toolCall{
-			stderr: &byteReader{
-				src:     &fakeSource{items: []streamItem{chunk("warn")}},
-				release: func() { released = true },
-			},
+			stderr: &byteReader{src: &fakeSource{items: []streamItem{chunk("warn"), failure(StreamResourceExhausted())}}},
 			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 				return witTypes.None[types.TypedSchemaValue](), nil
 			},
 			cancel: func() {},
 		}, nil
 	}}
-	run := func(stderr *ToolStdout) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	run := func(stderr byteStreamSink) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 		return d.runMiddleware(e, &middlewareInvocation{
 			toolName: "vcs", commandPath: []string{"commit"},
 			parameters: mustTypedValue(t, AuditParams{}),
 			stdin:      &byteReader{absent: absentStdin},
-			stdout:     &ToolStdout{absent: absentStdout},
-			stderr:     stderr,
+			stdout:     newToolOutput("stdout", nil),
+			stderr:     newToolOutput("stderr", stderr),
 			principal:  AnonymousPrincipal{},
 			under:      under,
 		})
 	}
 
 	sink := &fakeSink{}
-	if res := run(&ToolStdout{sink: sink}); res.IsErr() {
-		t.Fatalf("relaying stderr failed: %+v", res.Err())
+	if res := run(sink); res.IsErr() {
+		t.Fatalf("passing stderr through failed: %+v", res.Err())
 	}
-	if string(sink.written) != "warn" || !sink.finished || released {
-		t.Errorf("stderr %q finished=%v released=%v", sink.written, sink.finished, released)
+	if string(sink.written) != "warn" || sink.failed == nil || sink.failed.String() != StreamResourceExhausted().String() {
+		t.Errorf("stderr %q failed with %v", sink.written, sink.failed)
 	}
+	if res := run(nil); res.IsErr() {
+		t.Fatalf("without a stderr taken: %+v", res.Err())
+	}
+}
 
-	if res := run(&ToolStdout{absent: absentStdout}); res.IsErr() {
-		t.Fatalf("without a stderr of its own: %+v", res.Err())
+// TestAdapterDropsAnOutputItsCommandDoesNotDeclare — an output of the wrapped
+// command that the presented command does not declare is discarded rather than
+// failing the call.
+func TestAdapterDropsAnOutputItsCommandDoesNotDeclare(t *testing.T) {
+	v, r, d := newVcs(t)
+	v2 := defineToolInto[V2](r, d, "vcs2", ToolSpec{Version: "2.0.0"}, true)
+	send := v2.OutputCommand[SaveArgs, int32]("send", func(a *SaveArgs, s *ToolCommandSpec) {
+		s.Positional(&a.Text)
+		s.Stdout()
+	})
+	adapter := v2.Adapter[Unit]("send-on-push", v.tool, ToolMiddlewareSpec{})
+	_ = adapter.HandleOutput(send, func(ctx *ToolMiddlewareOutputContext[Unit], a SaveArgs) (int32, error) {
+		inv, err := adapter.UnderlyingOutput(ctx, v.push).Call(func(b *PushArgs) {
+			b.Name = "origin"
+			b.In = strings.NewReader(a.Text)
+		})
+		if err != nil {
+			return 0, err
+		}
+		return inv.Wait()
+	})
+	e, _ := r.get("vcs")
+	input := encodeArgs(t, send.ce, func(a *SaveArgs) { a.Text = "abc" })
+	res, sink := runMiddlewareFor(t, r, d, "send-on-push", middlewareRun{
+		path: []string{"send"}, input: input, params: mustTypedValue(t, Unit{}), under: localUnderlying(d, e),
+	})
+	if res.IsErr() {
+		t.Fatalf("the adapted call failed: %+v", res.Err())
 	}
-	if !released {
-		t.Errorf("the stderr beneath was not released")
+	if string(sink.written) != "ABC" {
+		t.Errorf("stdout %q", sink.written)
 	}
 }

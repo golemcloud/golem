@@ -121,7 +121,7 @@ func (c *DynamicToolClient) ToolName() string { return c.toolName }
 // Call runs a command with an already-packed input and returns the raw result,
 // none for a command that produces nothing.
 func (c *DynamicToolClient) Call(path []string, input TypedValue) (Option[TypedValue], error) {
-	inv, err := c.Start(path, input, nil, false)
+	inv, err := c.Start(path, input, nil, ToolStreams{})
 	if err != nil {
 		return None[TypedValue](), err
 	}
@@ -129,14 +129,15 @@ func (c *DynamicToolClient) Call(path []string, input TypedValue) (Option[TypedV
 }
 
 // Start starts a command with an already-packed input and the given standard
-// input, which may be nil; stdout asks for the command's standard output.
-func (c *DynamicToolClient) Start(path []string, input TypedValue, stdin io.Reader, stdout bool) (*ToolInvocation[Option[TypedValue]], error) {
-	call, err := startToolCall(c.toolName, path, input.wit, stdin, stdout)
+// input, which may be nil, requesting the outputs streams selects. The host
+// refuses a request that does not match what the command declares.
+func (c *DynamicToolClient) Start(path []string, input TypedValue, stdin io.Reader, streams ToolStreams) (*ToolInvocation[Option[TypedValue]], error) {
+	call, err := startToolCall(c.toolName, path, input.wit, stdin, streams)
 	if err != nil {
 		return nil, err
 	}
 	name := c.toolName
-	return &ToolInvocation[Option[TypedValue]]{call: call, finish: func(call toolCall) (Option[TypedValue], error) {
+	return newInvocation(call, func(call toolCall) (Option[TypedValue], error) {
 		res, rpcErr := call.wait()
 		if rpcErr != nil {
 			return None[TypedValue](), toolCallErrorFromWit(name, path, *rpcErr)
@@ -146,7 +147,7 @@ func (c *DynamicToolClient) Start(path []string, input TypedValue, stdin io.Read
 			return None[TypedValue](), nil
 		}
 		return Some(TypedValue{wit: value}), nil
-	}}, nil
+	}), nil
 }
 
 // Bind connects to the discovered tool. Nothing is checked until a call: the

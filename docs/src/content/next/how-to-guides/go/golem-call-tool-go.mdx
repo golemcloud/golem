@@ -91,19 +91,22 @@ archive := Tool.Bind("archive-search")
 res, err := Query.On(archive).Call(func(a *QueryArgs) { a.Text = "golem" })
 ```
 
-## Stdin and Stdout
+## Stdin, Stdout and Stderr
 
-A field bound with `Stdin` is an `io.Reader`; set it to feed the command. A required one left nil is refused before anything is sent. A command declared with `StdoutCommand` returns a running invocation instead of the result:
+A field bound with `Stdin` is an `io.Reader`; set it to feed the command. A required one left nil is refused before anything is sent. A command declared with `OutputCommand` (it writes standard output, standard error or both) returns a running invocation instead of the result:
 
 ```go
 inv, err := tools.Upper.Call(func(a *tools.UpperArgs) { a.In = strings.NewReader("hello") })
 if err != nil {
 	return err
 }
-out, _, err := inv.Collect() // or read inv.Stdout(), then inv.Wait()
+out, err := inv.Collect() // out.Result, out.Stdout, out.Stderr
 ```
 
-Read the output while the command runs: `Wait` alone stalls a command that writes more than the stream buffers. `inv.Cancel()` asks the runtime to cancel the call.
+- `inv.Stdout()` and `inv.Stderr()` take an output to read while the command runs; then `inv.Wait()` returns the result. Bytes on stderr do not mean the command failed.
+- `Wait` drains and discards every output not taken before it, so a command never stalls on output nobody reads; taking one afterwards reads `golem.ErrOutputDrained`. An output you took is yours: read it while waiting, or a command writing more than the stream buffers stalls.
+- `Collect` reads both outputs concurrently while awaiting the result; a failed result is reported before a failed stdout, and that before a failed stderr, with what was read returned either way.
+- `inv.Cancel()` asks the runtime to cancel the call.
 
 ## Errors
 
@@ -129,9 +132,9 @@ if errors.As(err, &ce) && ce.Kind == golem.ToolCallDeclaredError {
 ```
 
 - Supply every field of the command's input record by its wire name: inherited globals, positionals, the tail (a list), options and flags. Nothing is filled in from declared defaults.
-- `client.Start(path, args, stdin)` runs a command that reads standard input or writes standard output, and returns the running invocation.
+- `client.Start(path, args, stdin)` runs a command that reads standard input or has outputs, and returns the running invocation with every output the command declares; `client.Call` discards them.
 - `cmd.Input()` is the input record and `cmd.Output()` the result type, as `schema.Ref`s that pack, unpack and render JSON Schema; `tool.Command(path)`, `tool.Commands()` and `cmd.Errors()` describe the rest. Arguments that do not match fail with `*schema.ValidationError` before anything is sent. A snapshot never refreshes itself.
-- `golem.BindTool(name)` gives a dynamic client that forwards already packed `golem.TypedValue`s unchecked, with the same `Call` and `Start`.
+- `golem.BindTool(name)` gives a dynamic client that forwards already packed `golem.TypedValue`s unchecked, with the same `Call` and `Start`; its `Start` takes `golem.ToolStreams{Stdout: true, Stderr: true}` to request outputs, which must match what the command declares.
 
 ### Related Guides
 | Guide | Description |

@@ -29,11 +29,11 @@ func newToolStdin(stdin toolExports.Stdin) *byteReader {
 	return &byteReader{src: stdin.Some()}
 }
 
-// newToolStdout adapts the host-supplied writer, or produces one that explains
-// its own absence.
-func newToolStdout(stdout toolExports.Stdout) *ToolStdout {
-	if stdout.IsNone() {
-		return &ToolStdout{absent: absentStdout}
+// hostOutput is the writer the host supplied for an output, nil when the
+// caller did not attach it.
+func hostOutput(out toolExports.Stdout) byteStreamSink {
+	if out.IsNone() {
+		return nil
 	}
-	return &ToolStdout{sink: stdout.Some()}
+	return out.Some()
 }

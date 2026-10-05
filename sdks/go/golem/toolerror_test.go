@@ -135,7 +135,7 @@ func invokeLookup(t *testing.T, d *definitions, r *toolRegistry, name string) wi
 	t.Helper()
 	e, _ := r.get("lookup")
 	input := encodeArgs(t, e.root.body, func(a *LookupArgs) { a.Name = name })
-	return d.invokeCommand(e, nil, input, nil, &ToolStdout{absent: absentStdout}, nil)
+	return d.invokeCommand(e, nil, input, nil, hostOutputs{}, nil)
 }
 
 func TestDeclaredErrorTravelsAsCustomErrorWithItsPayload(t *testing.T) {

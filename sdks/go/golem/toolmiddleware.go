@@ -15,7 +15,6 @@
 package golem
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -156,17 +155,18 @@ func (m *ToolMiddleware[T, P, W]) Handle[A any, O any](
 	})
 }
 
-// HandleStdout intercepts a command of the presented tool that writes standard
-// output, which the handler writes through [ToolMiddlewareStdoutContext.Stdout].
-func (m *ToolMiddleware[T, P, W]) HandleStdout[A any, O any](
-	cmd *ToolStdoutCommand[T, A, O], h func(*ToolMiddlewareStdoutContext[P], A) (O, error),
+// HandleOutput intercepts a command of the presented tool that has outputs,
+// which the handler writes through [ToolMiddlewareOutputContext.Stdout] and
+// [ToolMiddlewareOutputContext.Stderr].
+func (m *ToolMiddleware[T, P, W]) HandleOutput[A any, O any](
+	cmd *ToolOutputCommand[T, A, O], h func(*ToolMiddlewareOutputContext[P], A) (O, error),
 ) Registered {
 	return m.e.setHandler(cmd.ce, func(inv *middlewareInvocation, args reflect.Value) (reflect.Value, error) {
 		ctx, err := newMiddlewareContext[P](inv)
 		if err != nil {
 			return reflect.Value{}, err
 		}
-		out, err := h(&ToolMiddlewareStdoutContext[P]{ToolMiddlewareContext: ctx}, args.Interface().(A))
+		out, err := h(&ToolMiddlewareOutputContext[P]{ToolMiddlewareContext: ctx}, args.Interface().(A))
 		return reflect.ValueOf(&out).Elem(), err
 	})
 }
@@ -176,10 +176,9 @@ func (m *ToolMiddleware[T, P, W]) Underlying[A any, O any](ctx ToolMiddlewareCal
 	return &ToolUnderlying[A, O]{inv: ctx.middlewareInvocation(), ce: cmd.ce, m: m.e}
 }
 
-// UnderlyingStdout reaches a command of the wrapped tool that writes standard
-// output.
-func (m *ToolMiddleware[T, P, W]) UnderlyingStdout[A any, O any](ctx ToolMiddlewareCall, cmd *ToolStdoutCommand[W, A, O]) *ToolUnderlyingStdout[A, O] {
-	return &ToolUnderlyingStdout[A, O]{inv: ctx.middlewareInvocation(), ce: cmd.ce, m: m.e}
+// UnderlyingOutput reaches a command of the wrapped tool that has outputs.
+func (m *ToolMiddleware[T, P, W]) UnderlyingOutput[A any, O any](ctx ToolMiddlewareCall, cmd *ToolOutputCommand[W, A, O]) *ToolUnderlyingOutput[A, O] {
+	return &ToolUnderlyingOutput[A, O]{inv: ctx.middlewareInvocation(), ce: cmd.ce, m: m.e}
 }
 
 // ToolMiddlewareCall is the context of a running middleware handler, which is
@@ -219,15 +218,19 @@ func (c *ToolMiddlewareContext[P]) ToolName() string { return c.inv.toolName }
 // CommandPath returns the command being invoked, from the tool's root.
 func (c *ToolMiddlewareContext[P]) CommandPath() []string { return slices.Clone(c.inv.commandPath) }
 
-// ToolMiddlewareStdoutContext is the context of a handler for a command that
-// writes standard output.
-type ToolMiddlewareStdoutContext[P any] struct {
+// ToolMiddlewareOutputContext is the context of a handler for a command that
+// has outputs.
+type ToolMiddlewareOutputContext[P any] struct {
 	*ToolMiddlewareContext[P]
 }
 
 // Stdout returns the middleware's standard output. It is finished when the
 // handler succeeds and failed when it returns an error or panics.
-func (c *ToolMiddlewareStdoutContext[P]) Stdout() *ToolStdout { return c.inv.stdout }
+func (c *ToolMiddlewareOutputContext[P]) Stdout() *ToolOutput { return c.inv.stdout }
+
+// Stderr returns the middleware's standard error, finished and failed like
+// Stdout.
+func (c *ToolMiddlewareOutputContext[P]) Stderr() *ToolOutput { return c.inv.stderr }
 
 // ToolUnderlying is a command of the wrapped tool, reached from a middleware
 // handler.
@@ -247,54 +250,29 @@ func (u *ToolUnderlying[A, O]) Forward(a A) (O, error) {
 	return finishUnderlying[O](u.ce, u.inv, u.m, forwardArgs(a))
 }
 
-// ToolUnderlyingStdout is a command of the wrapped tool that writes standard
-// output, reached from a middleware handler.
-type ToolUnderlyingStdout[A any, O any] struct {
+// ToolUnderlyingOutput is a command of the wrapped tool that has outputs,
+// reached from a middleware handler. An output of the running call that the
+// handler does not take passes through to the middleware's own.
+type ToolUnderlyingOutput[A any, O any] struct {
 	inv *middlewareInvocation
 	ce  *commandEntry
 	m   *middlewareEntry
 }
 
 // Call starts the command beneath, starting from its declared defaults.
-func (u *ToolUnderlyingStdout[A, O]) Call(fill func(*A)) (*ToolInvocation[O], error) {
+func (u *ToolUnderlyingOutput[A, O]) Call(fill func(*A)) (*ToolInvocation[O], error) {
 	return startUnderlying[O](u.ce, u.inv, u.m, fillArgs(fill))
 }
 
 // Start starts the command beneath with complete arguments, unchanged.
-func (u *ToolUnderlyingStdout[A, O]) Start(a A) (*ToolInvocation[O], error) {
+func (u *ToolUnderlyingOutput[A, O]) Start(a A) (*ToolInvocation[O], error) {
 	return startUnderlying[O](u.ce, u.inv, u.m, forwardArgs(a))
 }
 
-// Forward runs the command beneath, writing its output to the middleware's
-// own, and returns its result.
-func (u *ToolUnderlyingStdout[A, O]) Forward(a A) (O, error) {
-	var zero O
-	inv, err := u.Start(a)
-	if err != nil {
-		return zero, err
-	}
-	return relayAndWait(u.inv.stdout, inv)
-}
-
-// relayAndWait copies the output of a call beneath into the middleware's own
-// and awaits its result. A failure of the call's own output stream yields to
-// the call's error, which says why it failed; a failure writing the
-// middleware's output cancels the call.
-func relayAndWait[O any](dst *ToolStdout, inv *ToolInvocation[O]) (O, error) {
-	var zero O
-	srcErr, dstErr := relayStdout(dst, inv.call.stdout)
-	if dstErr != nil {
-		inv.Cancel()
-		return zero, dstErr
-	}
-	out, err := inv.Wait()
-	if err != nil {
-		return zero, err
-	}
-	if srcErr != nil {
-		return zero, srcErr
-	}
-	return out, nil
+// Forward runs the command beneath, passing its outputs through to the
+// middleware's own, and returns its result.
+func (u *ToolUnderlyingOutput[A, O]) Forward(a A) (O, error) {
+	return finishUnderlying[O](u.ce, u.inv, u.m, forwardArgs(a))
 }
 
 func forwardArgs[A any](a A) func(reflect.Value) {
@@ -310,11 +288,13 @@ func startUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *midd
 	if err != nil {
 		return nil, err
 	}
-	call, err := inv.startBeneath(ce.node.path, input, stdin)
+	call, err := inv.under.start(ce.node.path, input, stdin)
 	if err != nil {
 		return nil, err
 	}
-	return commandInvocation[O](ce, inv.toolName, call), nil
+	started := commandInvocation[O](ce, inv.toolName, call)
+	started.passThrough = inv
+	return started, nil
 }
 
 func finishUnderlying[O any](ce *commandEntry, inv *middlewareInvocation, m *middlewareEntry, fill func(reflect.Value)) (O, error) {
@@ -398,64 +378,27 @@ func (c *UniversalToolMiddlewareContext[P]) Input() TypedValue { return TypedVal
 
 // Stdout returns the middleware's standard output. It is finished when the
 // handler succeeds and failed when it returns an error or panics.
-func (c *UniversalToolMiddlewareContext[P]) Stdout() *ToolStdout { return c.inv.stdout }
+func (c *UniversalToolMiddlewareContext[P]) Stdout() *ToolOutput { return c.inv.stdout }
+
+// Stderr returns the middleware's standard error, finished and failed like
+// Stdout.
+func (c *UniversalToolMiddlewareContext[P]) Stderr() *ToolOutput { return c.inv.stderr }
 
 // Start hands the call to the layer beneath with the given input and the
-// original standard input, and returns the running invocation.
+// original standard input, and returns the running invocation. An output the
+// handler does not take passes through to the middleware's own.
 func (c *UniversalToolMiddlewareContext[P]) Start(input TypedValue) (*ToolInvocation[Option[TypedValue]], error) {
-	var stdin io.Reader
-	if c.inv.stdin.present() {
-		stdin = c.inv.stdin
-	}
-	call, err := c.inv.startBeneath(c.inv.commandPath, input.wit, stdin)
-	if err != nil {
-		return nil, err
-	}
-	tool, path := c.inv.toolName, c.inv.commandPath
-	return &ToolInvocation[Option[TypedValue]]{call: call, finish: func(call toolCall) (Option[TypedValue], error) {
-		res, rpcErr := call.wait()
-		if rpcErr != nil {
-			return None[TypedValue](), toolCallErrorFromWit(tool, path, *rpcErr)
-		}
-		if res.IsNone() {
-			return None[TypedValue](), nil
-		}
-		return Some(TypedValue{wit: res.Some()}), nil
-	}}, nil
+	return c.inv.startRaw(input.wit)
 }
 
-// Next hands the call to the layer beneath, writing its output to the
-// middleware's own, and returns its result.
+// Next hands the call to the layer beneath, passing its outputs through to
+// the middleware's own, and returns its result.
 func (c *UniversalToolMiddlewareContext[P]) Next(input TypedValue) (Option[TypedValue], error) {
 	inv, err := c.Start(input)
 	if err != nil {
 		return None[TypedValue](), err
 	}
-	return relayAndWait(c.inv.stdout, inv)
-}
-
-// relayStdout copies the output of the layer beneath into the middleware's
-// own, when both exist, reporting a failure to read it apart from a failure to
-// write it.
-func relayStdout(dst *ToolStdout, src *byteReader) (srcErr, dstErr error) {
-	if src == nil || dst == nil || dst.absent != "" {
-		return nil, nil
-	}
-	buf := make([]byte, 32*1024)
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return nil, werr
-			}
-		}
-		if errors.Is(err, io.EOF) {
-			return nil, nil
-		}
-		if err != nil {
-			return err, nil
-		}
-	}
+	return inv.Wait()
 }
 
 // middlewareInvocation is the state of one middleware invocation.
@@ -467,52 +410,52 @@ type middlewareInvocation struct {
 	commandPath []string
 	input       types.TypedSchemaValue
 	stdin       *byteReader
-	stdout      *ToolStdout
-	stderr      *ToolStdout
+	stdout      *ToolOutput
+	stderr      *ToolOutput
 	principal   Principal
 	under       underlyingLayer
 }
 
-func (inv *middlewareInvocation) outputs() []*ToolStdout {
-	return []*ToolStdout{inv.stdout, inv.stderr}
+func (inv *middlewareInvocation) outputs() []*ToolOutput {
+	return []*ToolOutput{inv.stdout, inv.stderr}
 }
 
-// startBeneath starts a call on the layer beneath. Its standard error is
-// relayed into the middleware's own in the background, and the relay is joined
-// before the call's result is returned; without a standard error of its own,
-// the middleware releases the one beneath so it cannot hold the call up.
-func (inv *middlewareInvocation) startBeneath(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
-	call, err := inv.under.start(path, input, stdin)
-	if err != nil || call.stderr == nil {
-		return call, err
+// startRaw starts the invoked command beneath with the given input and the
+// original standard input.
+func (inv *middlewareInvocation) startRaw(input types.TypedSchemaValue) (*ToolInvocation[Option[TypedValue]], error) {
+	var stdin io.Reader
+	if inv.stdin.present() {
+		stdin = inv.stdin
 	}
-	src := call.stderr
-	call.stderr = nil
-	if inv.stderr == nil || inv.stderr.absent != "" {
-		src.close()
-		return call, nil
+	call, err := inv.under.start(inv.commandPath, input, stdin)
+	if err != nil {
+		return nil, err
 	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		srcErr, dstErr := relayStdout(inv.stderr, src)
-		var se *StreamError
-		switch {
-		case dstErr != nil:
-			src.close()
-		case errors.As(srcErr, &se):
-			_ = inv.stderr.Fail(se.Failure)
-		case srcErr != nil:
-			_ = inv.stderr.Fail(StreamFailed(srcErr.Error()))
+	tool, path := inv.toolName, inv.commandPath
+	started := newInvocation(call, func(call toolCall) (Option[TypedValue], error) {
+		res, rpcErr := call.wait()
+		if rpcErr != nil {
+			return None[TypedValue](), toolCallErrorFromWit(tool, path, *rpcErr)
 		}
-	}()
-	wait := call.wait
-	call.wait = func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
-		res, rpcErr := wait()
-		<-done
-		return res, rpcErr
+		if res.IsNone() {
+			return None[TypedValue](), nil
+		}
+		return Some(TypedValue{wit: res.Some()}), nil
+	})
+	started.passThrough = inv
+	return started, nil
+}
+
+// undeclare makes the middleware's outputs that the presented command does
+// not declare fail a write, as a tool's own would.
+func (inv *middlewareInvocation) undeclare(ce *commandEntry) {
+	st := ce.spec.settings
+	if st.stdout == nil {
+		inv.stdout.undeclared = fmt.Sprintf("golem: command %s declares no stdout", ce.label())
 	}
-	return call, nil
+	if st.stderr == nil {
+		inv.stderr.undeclared = fmt.Sprintf("golem: command %s declares no stderr", ce.label())
+	}
 }
 
 // underlyingLayer is the layer beneath a middleware. It is a struct of
@@ -631,7 +574,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 			result = witTypes.Some(v.wit)
 		}
 		return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
-			Result: result, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
+			Result: result, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
 		})
 	}
 
@@ -651,6 +594,7 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 	if terr != nil {
 		return fail(*terr)
 	}
+	inv.undeclare(ce)
 	out, err := runWithOutputs(label, inv.outputs(), func() (reflect.Value, error) { return h(inv, args) })
 	if err != nil {
 		return fail(d.handlerError(ce, err))
@@ -659,38 +603,26 @@ func (d *definitions) runMiddleware(e *middlewareEntry, inv *middlewareInvocatio
 }
 
 // passThrough hands a command a transparent middleware does not handle
-// straight to the tool beneath.
+// straight to the tool beneath, passing its outputs through.
 func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
-	var result Option[types.TypedSchemaValue]
+	var result Option[TypedValue]
 	_, err := runWithOutputs("middleware "+inv.entry.name, inv.outputs(), func() (reflect.Value, error) {
-		var stdin io.Reader
-		if inv.stdin.present() {
-			stdin = inv.stdin
-		}
-		call, err := inv.startBeneath(inv.commandPath, inv.input, stdin)
+		started, err := inv.startRaw(inv.input)
 		if err != nil {
 			return reflect.Value{}, err
 		}
-		srcErr, dstErr := relayStdout(inv.stdout, call.stdout)
-		if dstErr != nil {
-			call.cancel()
-			return reflect.Value{}, dstErr
-		}
-		res, rpcErr := call.wait()
-		if rpcErr != nil {
-			return reflect.Value{}, toolCallErrorFromWit(inv.toolName, inv.commandPath, *rpcErr)
-		}
-		if srcErr != nil {
-			return reflect.Value{}, srcErr
-		}
-		result = optionFromWit(res)
-		return reflect.Value{}, nil
+		result, err = started.Wait()
+		return reflect.Value{}, err
 	})
 	if err != nil {
 		return fail(passThroughToolError(err))
 	}
+	wire := witTypes.None[types.TypedSchemaValue]()
+	if v, has := result.Get(); has {
+		wire = witTypes.Some(v.wit)
+	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
-		Result: optionToWit(result), Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
+		Result: wire, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
 	})
 }

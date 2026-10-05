@@ -284,10 +284,11 @@ func (g *ToolGroup[T]) Command[A any, O any](name string, spec func(*A, *ToolCom
 	return &ToolCommand[T, A, O]{ce: declareBody[A, O](g.node.child(name), spec, false)}
 }
 
-// StdoutCommand declares a subcommand that writes standard output besides
-// returning its result.
-func (g *ToolGroup[T]) StdoutCommand[A any, O any](name string, spec func(*A, *ToolCommandSpec)) *ToolStdoutCommand[T, A, O] {
-	return &ToolStdoutCommand[T, A, O]{ce: declareBody[A, O](g.node.child(name), spec, true)}
+// OutputCommand declares a subcommand that writes standard output, standard
+// error or both besides returning its result; its spec declares which with
+// Stdout and Stderr.
+func (g *ToolGroup[T]) OutputCommand[A any, O any](name string, spec func(*A, *ToolCommandSpec)) *ToolOutputCommand[T, A, O] {
+	return &ToolOutputCommand[T, A, O]{ce: declareBody[A, O](g.node.child(name), spec, true)}
 }
 
 // Body declares what this group itself does when invoked without a
@@ -296,9 +297,10 @@ func (g *ToolGroup[T]) Body[A any, O any](spec func(*A, *ToolCommandSpec)) *Tool
 	return &ToolCommand[T, A, O]{ce: declareBody[A, O](g.node, spec, false)}
 }
 
-// StdoutBody is [ToolGroup.Body] for a body that writes standard output.
-func (g *ToolGroup[T]) StdoutBody[A any, O any](spec func(*A, *ToolCommandSpec)) *ToolStdoutCommand[T, A, O] {
-	return &ToolStdoutCommand[T, A, O]{ce: declareBody[A, O](g.node, spec, true)}
+// OutputBody is [ToolGroup.Body] for a body that writes standard output or
+// standard error.
+func (g *ToolGroup[T]) OutputBody[A any, O any](spec func(*A, *ToolCommandSpec)) *ToolOutputCommand[T, A, O] {
+	return &ToolOutputCommand[T, A, O]{ce: declareBody[A, O](g.node, spec, true)}
 }
 
 // commandEntry is one command body: its argument spec, its handler, and the
@@ -307,9 +309,10 @@ type commandEntry struct {
 	node     *toolNode
 	argsType reflect.Type
 	outType  reflect.Type
-	stdout   bool
-	spec     *ToolCommandSpec
-	invoke   func(*ToolStdoutContext, reflect.Value) (reflect.Value, error)
+	// outputs marks a command declared with OutputCommand.
+	outputs bool
+	spec    *ToolCommandSpec
+	invoke  func(*ToolOutputContext, reflect.Value) (reflect.Value, error)
 
 	resolved bool
 	layout   *commandLayout
@@ -317,14 +320,17 @@ type commandEntry struct {
 
 func (ce *commandEntry) label() string { return ce.node.label() }
 
-func declareBody[A any, O any](n *toolNode, spec func(*A, *ToolCommandSpec), stdout bool) *commandEntry {
+func declareBody[A any, O any](n *toolNode, spec func(*A, *ToolCommandSpec), outputs bool) *commandEntry {
 	ptr, target := newSpecTarget(reflect.TypeFor[A]())
-	s := &ToolCommandSpec{state: specState{target: target}, stdoutAllow: stdout}
+	s := &ToolCommandSpec{state: specState{target: target}, outputAllow: outputs}
 	if spec != nil {
 		spec(ptr.Interface().(*A), s)
 	}
+	if outputs && s.settings.stdout == nil && s.settings.stderr == nil {
+		s.state.fail("an OutputCommand declares no output; declare one with Stdout or Stderr, or use Command")
+	}
 	ce := &commandEntry{
-		node: n, argsType: reflect.TypeFor[A](), outType: reflect.TypeFor[O](), stdout: stdout, spec: s,
+		node: n, argsType: reflect.TypeFor[A](), outType: reflect.TypeFor[O](), outputs: outputs, spec: s,
 	}
 	e := n.entry
 	for _, msg := range s.state.errs {
@@ -343,7 +349,7 @@ func declareBody[A any, O any](n *toolNode, spec func(*A, *ToolCommandSpec), std
 	return ce
 }
 
-func (ce *commandEntry) setHandler(h func(*ToolStdoutContext, reflect.Value) (reflect.Value, error)) Registered {
+func (ce *commandEntry) setHandler(h func(*ToolOutputContext, reflect.Value) (reflect.Value, error)) Registered {
 	e := ce.node.entry
 	switch {
 	case e.remote:
@@ -373,26 +379,26 @@ func (c *ToolCommand[T, A, O]) Path() []string { return slices.Clone(c.ce.node.p
 // ErrX.New(payload); any other error fails the invocation. Call it from a
 // package-level var so the binding happens before the component is invoked.
 func (c *ToolCommand[T, A, O]) Handle(h func(*ToolContext, A) (O, error)) Registered {
-	return c.ce.setHandler(func(ctx *ToolStdoutContext, args reflect.Value) (reflect.Value, error) {
+	return c.ce.setHandler(func(ctx *ToolOutputContext, args reflect.Value) (reflect.Value, error) {
 		out, err := h(&ctx.ToolContext, args.Interface().(A))
 		return reflect.ValueOf(&out).Elem(), err
 	})
 }
 
-// ToolStdoutCommand is a declared command that writes standard output besides
-// returning a result.
-type ToolStdoutCommand[T any, A any, O any] struct {
+// ToolOutputCommand is a declared command that writes standard output or
+// standard error besides returning a result.
+type ToolOutputCommand[T any, A any, O any] struct {
 	ce     *commandEntry
 	target string
 }
 
 // Path returns the command's path from the tool's root.
-func (c *ToolStdoutCommand[T, A, O]) Path() []string { return slices.Clone(c.ce.node.path) }
+func (c *ToolOutputCommand[T, A, O]) Path() []string { return slices.Clone(c.ce.node.path) }
 
-// Handle binds the command's implementation, which writes its output through
-// [ToolStdoutContext.Stdout].
-func (c *ToolStdoutCommand[T, A, O]) Handle(h func(*ToolStdoutContext, A) (O, error)) Registered {
-	return c.ce.setHandler(func(ctx *ToolStdoutContext, args reflect.Value) (reflect.Value, error) {
+// Handle binds the command's implementation, which writes its outputs through
+// [ToolOutputContext.Stdout] and [ToolOutputContext.Stderr].
+func (c *ToolOutputCommand[T, A, O]) Handle(h func(*ToolOutputContext, A) (O, error)) Registered {
+	return c.ce.setHandler(func(ctx *ToolOutputContext, args reflect.Value) (reflect.Value, error) {
 		out, err := h(ctx, args.Interface().(A))
 		return reflect.ValueOf(&out).Elem(), err
 	})
@@ -922,6 +928,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 		Constraints: l.constraints,
 		Stdin:       witTypes.None[toolCommon.StreamSpec](),
 		Stdout:      witTypes.None[toolCommon.StreamSpec](),
+		Stderr:      witTypes.None[toolCommon.StreamSpec](),
 		Result:      witTypes.None[toolCommon.ResultSpec](),
 		Annotations: witTypes.None[toolCommon.CommandAnnotations](),
 	}
@@ -970,10 +977,11 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 			Doc: l.stdin.doc.toWit(), Mime: slices.Clone(l.stdin.mime), Required: !l.stdin.optional,
 		})
 	}
-	if ce.stdout {
-		body.Stdout = witTypes.Some(toolCommon.StreamSpec{
-			Doc: toolDoc{summary: st.stdoutDoc}.toWit(), Mime: slices.Clone(st.stdoutMime),
-		})
+	if st.stdout != nil {
+		body.Stdout = witTypes.Some(st.stdout.toWit())
+	}
+	if st.stderr != nil {
+		body.Stderr = witTypes.Some(st.stderr.toWit())
 	}
 	if ce.outType != reflect.TypeFor[Unit]() {
 		body.Result = witTypes.Some(toolCommon.ResultSpec{
@@ -1057,7 +1065,7 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSc
 // handler, and package the result as a self-contained typed value.
 func (d *definitions) invokeCommand(
 	e *toolEntry, commandPath []string, input types.TypedSchemaValue,
-	stdin *byteReader, stdout *ToolStdout, principal Principal,
+	stdin *byteReader, outs hostOutputs, principal Principal,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
 	n := e.root.find(commandPath)
@@ -1065,19 +1073,55 @@ func (d *definitions) invokeCommand(
 		return fail(types.MakeToolErrorInvalidCommandPath(slices.Clone(commandPath)))
 	}
 	ce := n.body
-	if ce.invoke == nil {
-		return fail(toolDefinitionError(d))
+	stdout, stderr, terr := ce.outputsFor(outs)
+	if terr == nil && ce.invoke == nil {
+		def := toolDefinitionError(d)
+		terr = &def
 	}
-	args, terr := ce.decodeArgs(d, input, stdin, principal)
+	var args reflect.Value
+	if terr == nil {
+		args, terr = ce.decodeArgs(d, input, stdin, principal)
+	}
 	if terr != nil {
+		refused := StreamFailed(fmt.Sprintf("command %s was refused before it ran", ce.label()))
+		stdout.fail(refused)
+		stderr.fail(refused)
 		return fail(*terr)
 	}
-	ctx := &ToolStdoutContext{ToolContext: ToolContext{tool: e.name, path: slices.Clone(commandPath)}, stdout: stdout}
-	out, err := runWithStdout(ce.label(), stdout, func() (reflect.Value, error) { return ce.invoke(ctx, args) })
+	ctx := &ToolOutputContext{
+		ToolContext: ToolContext{tool: e.name, path: slices.Clone(commandPath)}, stdout: stdout, stderr: stderr,
+	}
+	out, err := runWithOutputs(ce.label(), []*ToolOutput{stdout, stderr},
+		func() (reflect.Value, error) { return ce.invoke(ctx, args) })
 	if err != nil {
 		return fail(d.handlerError(ce, err))
 	}
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](d.encodeResult(ce, out))
+}
+
+// hostOutputs are the writers the host supplied for an invocation's standard
+// output and standard error, nil where the caller attached none.
+type hostOutputs struct{ stdout, stderr byteStreamSink }
+
+// outputsFor pairs what the host supplied with what the command declares. A
+// required output the caller did not attach refuses the call; an undeclared
+// one fails a write, and is finished empty if the host supplied it anyway.
+func (ce *commandEntry) outputsFor(outs hostOutputs) (stdout, stderr *ToolOutput, terr *types.ToolError) {
+	pair := func(name string, decl *outputDecl, sink byteStreamSink) *ToolOutput {
+		o := newToolOutput(name, sink)
+		switch {
+		case decl == nil:
+			o.undeclared = fmt.Sprintf("golem: command %s declares no %s", ce.label(), name)
+		case decl.required && sink == nil && terr == nil:
+			e := types.MakeToolErrorInvalidInput(fmt.Sprintf("command %s requires its %s to be taken", ce.label(), name))
+			terr = &e
+		}
+		return o
+	}
+	st := ce.spec.settings
+	stdout = pair("stdout", st.stdout, outs.stdout)
+	stderr = pair("stderr", st.stderr, outs.stderr)
+	return stdout, stderr, terr
 }
 
 // decodeArgs fills a command's argument struct from an invocation: the
@@ -1115,6 +1159,7 @@ func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) toolComm
 	res := toolCommon.InvocationResult{
 		Result: witTypes.None[types.TypedSchemaValue](),
 		Stdout: witTypes.None[*witTypes.StreamReader[uint8]](),
+		Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
 	}
 	if ce.outType != reflect.TypeFor[Unit]() {
 		c := d.compile(ce.outType)
@@ -1148,19 +1193,13 @@ func passThroughToolError(err error) types.ToolError {
 	return types.MakeToolErrorInvalidResult(err.Error())
 }
 
-// runWithStdout calls a handler, recovering a panic rather than letting it
-// kill the component, and selects the output stream's terminal: finished when
+// runWithOutputs calls a handler, recovering a panic rather than letting it
+// kill the component, and selects each output stream's terminal: finished when
 // the handler succeeds, failed when it returns an error or panics. The wire
 // accepts exactly one terminal and treats a dropped writer as abandoned, so
 // choosing one here keeps a failing handler from looking like an abandoned
 // transfer.
-func runWithStdout(label string, stdout *ToolStdout, run func() (reflect.Value, error)) (reflect.Value, error) {
-	return runWithOutputs(label, []*ToolStdout{stdout}, run)
-}
-
-// runWithOutputs runs a handler, finishing every output stream when it
-// succeeds and failing them when it fails.
-func runWithOutputs(label string, outputs []*ToolStdout, run func() (reflect.Value, error)) (out reflect.Value, err error) {
+func runWithOutputs(label string, outputs []*ToolOutput, run func() (reflect.Value, error)) (out reflect.Value, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if re, ok := r.(*RaisedToolError); ok {
@@ -1174,7 +1213,7 @@ func runWithOutputs(label string, outputs []*ToolStdout, run func() (reflect.Val
 				continue
 			}
 			if err != nil {
-				_ = o.Fail(StreamFailed(err.Error()))
+				o.fail(StreamFailed(err.Error()))
 			} else if ferr := o.finish(); ferr != nil {
 				err = ferr
 			}

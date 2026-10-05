@@ -307,14 +307,25 @@ impl GoToolBridgeGenerator {
         } else {
             format!("{var} {}", lower_first(summary))
         });
+        let outputs = [("Stdout", &body.stdout), ("Stderr", &body.stderr)]
+            .into_iter()
+            .filter_map(|(method, spec)| {
+                spec.as_ref().map(|spec| {
+                    format!(
+                        "s.{method}(){}",
+                        if spec.required { ".Required()" } else { "" }
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
         let (constructor, name_arg) = match (
             index == 0 || !node.subcommands.is_empty(),
-            body.stdout.is_some(),
+            !outputs.is_empty(),
         ) {
             (true, false) => ("Body", String::new()),
-            (true, true) => ("StdoutBody", String::new()),
+            (true, true) => ("OutputBody", String::new()),
             (false, false) => ("Command", format!("{}, ", go_string(&node.name))),
-            (false, true) => ("StdoutCommand", format!("{}, ", go_string(&node.name))),
+            (false, true) => ("OutputCommand", format!("{}, ", go_string(&node.name))),
         };
         let owner = if index == 0 || !node.subcommands.is_empty() {
             self.parent_expr(index)
@@ -326,7 +337,7 @@ impl GoToolBridgeGenerator {
             .iter()
             .map(|case| self.names.error_of[&(index, case.name.clone())].clone())
             .collect::<Vec<_>>();
-        if fields.is_empty() && raises.is_empty() {
+        if fields.is_empty() && raises.is_empty() && outputs.is_empty() {
             writer.line(format!(
                 "var {var} = {owner}.{constructor}[{args_type}, {result}]({name_arg}nil)"
             ));
@@ -337,6 +348,9 @@ impl GoToolBridgeGenerator {
             writer.indent();
             for field in &fields {
                 writer.line(format!("s.{}", field.binding("a")));
+            }
+            for output in &outputs {
+                writer.line(output.clone());
             }
             if !raises.is_empty() {
                 writer.line(format!("s.Raises({})", raises.join(", ")));

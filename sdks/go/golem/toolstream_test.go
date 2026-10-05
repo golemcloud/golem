@@ -152,27 +152,28 @@ func TestStdinFailureReasonsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAbsentStreamsExplainThemselves — a command invoked without a stream gets
-// a reader and writer that say so, rather than a nil dereference.
+// TestAbsentStreamsExplainThemselves — a command invoked without a stdin gets
+// a reader that says so, rather than a nil dereference; an output the caller
+// did not take discards what is written.
 func TestAbsentStreamsExplainThemselves(t *testing.T) {
 	r := &byteReader{absent: absentStdin}
 	if _, err := r.Read(make([]byte, 4)); err == nil || !strings.Contains(err.Error(), "without a stdin stream") {
 		t.Errorf("reading an absent stdin gave %v", err)
 	}
-	w := &ToolStdout{absent: absentStdout}
-	if _, err := w.Write([]byte("x")); err == nil || !strings.Contains(err.Error(), "without a stdout stream") {
-		t.Errorf("writing an absent stdout gave %v", err)
+	w := newToolOutput("stdout", nil)
+	if n, err := w.Write([]byte("x")); n != 1 || err != nil || w.Attached() {
+		t.Errorf("writing an untaken stdout gave %d, %v; attached=%v", n, err, w.Attached())
 	}
 	// Finishing one that was never supplied is not an error: the dispatcher
 	// finishes unconditionally.
 	if err := w.finish(); err != nil {
-		t.Errorf("finishing an absent stdout gave %v", err)
+		t.Errorf("finishing an untaken stdout gave %v", err)
 	}
 }
 
 func TestStdoutWritesAndFinishes(t *testing.T) {
 	sink := &fakeSink{}
-	w := &ToolStdout{sink: sink}
+	w := newToolOutput("stdout", sink)
 	if _, err := io.WriteString(w, "output"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestStdoutWritesAndFinishes(t *testing.T) {
 // handler that failed the stream must not then have it finished underneath it.
 func TestStdoutFirstTerminalWins(t *testing.T) {
 	sink := &fakeSink{}
-	w := &ToolStdout{sink: sink}
+	w := newToolOutput("stdout", sink)
 	if err := w.Fail(StreamCancelled()); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
@@ -209,7 +210,7 @@ func TestStdoutFirstTerminalWins(t *testing.T) {
 func TestStdoutSurfacesWriteErrors(t *testing.T) {
 	closed := streams.MakeStreamWriteErrorClosed(
 		streams.MakeByteStreamCloseCauseFailed(StreamFailed("consumer died").wit))
-	w := &ToolStdout{sink: &fakeSink{writeErr: &closed}}
+	w := newToolOutput("stdout", &fakeSink{writeErr: &closed})
 	_, err := w.Write([]byte("x"))
 	var se *StreamError
 	if !errors.As(err, &se) {
@@ -220,7 +221,7 @@ func TestStdoutSurfacesWriteErrors(t *testing.T) {
 	}
 
 	concurrent := streams.MakeStreamWriteErrorConcurrentOperation()
-	w = &ToolStdout{sink: &fakeSink{writeErr: &concurrent}}
+	w = newToolOutput("stdout", &fakeSink{writeErr: &concurrent})
 	if _, err := w.Write([]byte("x")); err == nil || !strings.Contains(err.Error(), "concurrent operation") {
 		t.Errorf("concurrent write gave %v", err)
 	}
@@ -234,7 +235,7 @@ func invokeWithStreams(
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	t.Helper()
 	return d.invokeCommand(e, nil, input,
-		&byteReader{src: &fakeSource{items: in}}, &ToolStdout{sink: sink}, nil)
+		&byteReader{src: &fakeSource{items: in}}, hostOutputs{stdout: sink}, nil)
 }
 
 type Pipe struct{}
@@ -248,11 +249,12 @@ type PipeArgs struct {
 // mode it is given, mirroring the tool-streaming test components.
 func declarePipe(r *toolRegistry, d *definitions) {
 	def := defineToolInto[Pipe](r, d, "pipe", ToolSpec{Version: "0.1.0"}, false)
-	cmd := def.StdoutBody[PipeArgs, uint64](func(a *PipeArgs, s *ToolCommandSpec) {
+	cmd := def.OutputBody[PipeArgs, uint64](func(a *PipeArgs, s *ToolCommandSpec) {
 		s.Positional(&a.Mode)
 		s.Stdin(&a.In)
+		s.Stdout()
 	})
-	_ = cmd.Handle(func(ctx *ToolStdoutContext, in PipeArgs) (uint64, error) {
+	_ = cmd.Handle(func(ctx *ToolOutputContext, in PipeArgs) (uint64, error) {
 		switch in.Mode {
 		case "resource-exhausted":
 			return 0, ctx.Stdout().Fail(StreamResourceExhausted())

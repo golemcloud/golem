@@ -31,7 +31,7 @@ import (
 // it is the form a suspended caller is resumed into, and it lets the stdin pump
 // run while the call is in flight.
 func startToolCallHost(
-	tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, stdout bool,
+	tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, streams ToolStreams,
 ) (toolCall, error) {
 	created := toolHost.ToolRpcCreate(tool)
 	if created.Tag() == witTypes.ResultErr {
@@ -45,17 +45,13 @@ func startToolCallHost(
 		stdinArg = witTypes.Some(handle)
 		go pumpToolStdin(writer, closed, stdin)
 	}
-	stdoutArg := witTypes.None[*toolHost.ToolOutput]()
-	var out *byteReader
-	if stdout {
-		handle, reader := toolHost.CreateOutput()
-		stdoutArg = witTypes.Some(handle)
-		out = &byteReader{src: reader}
-	}
+	stdoutArg, stdout := requestOutput(streams.Stdout)
+	stderrArg, stderr := requestOutput(streams.Stderr)
 
-	future := rpc.AsyncInvokeAndAwait(slices.Clone(path), input, stdinArg, stdoutArg, witTypes.None[*toolHost.ToolOutput]())
+	future := rpc.AsyncInvokeAndAwait(slices.Clone(path), input, stdinArg, stdoutArg, stderrArg)
 	return toolCall{
-		stdout: out,
+		stdout: stdout,
+		stderr: stderr,
 		wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 			res := future.Get()
 			future.Drop()
@@ -68,6 +64,15 @@ func startToolCallHost(
 		},
 		cancel: future.Cancel,
 	}, nil
+}
+
+// requestOutput creates the target and reader of an output the call requests.
+func requestOutput(requested bool) (witTypes.Option[*toolHost.ToolOutput], *byteReader) {
+	if !requested {
+		return witTypes.None[*toolHost.ToolOutput](), nil
+	}
+	handle, reader := toolHost.CreateOutput()
+	return witTypes.Some(handle), &byteReader{src: reader, release: reader.Drop}
 }
 
 // pumpToolStdin copies the caller's reader into the call's standard input and

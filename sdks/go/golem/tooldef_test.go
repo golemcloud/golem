@@ -74,7 +74,7 @@ type Vcs struct{}
 type vcsTool struct {
 	tool       *ToolDefinition[Vcs]
 	commit     *ToolCommand[Vcs, CommitArgs, CommitResult]
-	push       *ToolStdoutCommand[Vcs, PushArgs, int32]
+	push       *ToolOutputCommand[Vcs, PushArgs, int32]
 	errNothing *ToolErrorCase[Unit, Vcs]
 	errReject  *ToolErrorCase[Rejected, Vcs]
 	seen       *CommitArgs
@@ -123,15 +123,15 @@ func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 	remote.Globals[RemoteGlobals](func(g *RemoteGlobals, s *ToolGlobalsSpec) {
 		s.Option(&g.Timeout).Default(30)
 	})
-	v.push = remote.StdoutCommand[PushArgs, int32]("push", func(a *PushArgs, s *ToolCommandSpec) {
+	v.push = remote.OutputCommand[PushArgs, int32]("push", func(a *PushArgs, s *ToolCommandSpec) {
 		s.Positional(&a.Name)
 		s.Flag(&a.Force).Short('f')
 		s.Stdin(&a.In).Optional().Mime("text/plain")
-		s.StdoutDoc("the pushed bytes, upper-cased")
-		s.StdoutMime("text/plain")
+		s.Stdout().Doc("the pushed bytes, upper-cased").Mime("text/plain")
+		s.Stderr().Doc("progress")
 		s.Raises(v.errReject)
 	})
-	_ = v.push.Handle(func(ctx *ToolStdoutContext, a PushArgs) (int32, error) {
+	_ = v.push.Handle(func(ctx *ToolOutputContext, a PushArgs) (int32, error) {
 		switch a.Name {
 		case "forbidden":
 			return 0, v.errReject.New(Rejected{Reason: "protected remote"})
@@ -147,6 +147,9 @@ func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 		}
 		data, err := io.ReadAll(a.In)
 		if err != nil {
+			return 0, err
+		}
+		if _, err := io.WriteString(ctx.Stderr(), "pushing "+a.Name); err != nil {
 			return 0, err
 		}
 		n, err := ctx.Stdout().Write([]byte(strings.ToUpper(string(data))))
@@ -187,13 +190,13 @@ func loopback(t *testing.T, r *toolRegistry, d *definitions, principal Principal
 	var calls []types.TypedSchemaValue
 	prev := startToolCall
 	t.Cleanup(func() { startToolCall = prev })
-	startToolCall = func(tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, stdout bool) (toolCall, error) {
+	startToolCall = func(tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, streams ToolStreams) (toolCall, error) {
 		calls = append(calls, input)
 		e, ok := r.get(tool)
 		if !ok {
 			return toolCall{}, toolCallErrorFromWit(tool, path, types.MakeToolRpcErrorNotFound(tool))
 		}
-		return localCall(d, e, path, input, stdin, stdout, principal), nil
+		return localCall(d, e, path, input, stdin, streams, principal), nil
 	}
 	return &calls
 }
@@ -202,21 +205,26 @@ func loopback(t *testing.T, r *toolRegistry, d *definitions, principal Principal
 // caller, and hands back what the caller sees.
 func localCall(
 	d *definitions, e *toolEntry, path []string, input types.TypedSchemaValue,
-	stdin io.Reader, stdout bool, principal Principal,
+	stdin io.Reader, streams ToolStreams, principal Principal,
 ) toolCall {
 	in := &byteReader{absent: absentStdin}
 	if stdin != nil {
 		in = &byteReader{src: &readerSource{r: stdin}}
 	}
-	sink := &fakeSink{}
-	out := &ToolStdout{absent: absentStdout}
-	if stdout {
-		out = &ToolStdout{sink: sink}
+	stdout, stderr := &fakeSink{}, &fakeSink{}
+	var outs hostOutputs
+	if streams.Stdout {
+		outs.stdout = stdout
 	}
-	res := d.invokeCommand(e, path, input, in, out, principal)
+	if streams.Stderr {
+		outs.stderr = stderr
+	}
+	res := d.invokeCommand(e, path, input, in, outs, principal)
 
-	var reader *byteReader
-	if stdout {
+	replay := func(requested bool, sink *fakeSink) *byteReader {
+		if !requested {
+			return nil
+		}
 		items := []streamItem{}
 		if len(sink.written) > 0 {
 			items = append(items, chunk(string(sink.written)))
@@ -224,10 +232,11 @@ func localCall(
 		if sink.failed != nil {
 			items = append(items, failure(*sink.failed))
 		}
-		reader = &byteReader{src: &fakeSource{items: items}}
+		return &byteReader{src: &fakeSource{items: items}}
 	}
 	return toolCall{
-		stdout: reader,
+		stdout: replay(streams.Stdout, stdout),
+		stderr: replay(streams.Stderr, stderr),
 		wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 			if res.Tag() == witTypes.ResultErr {
 				e := types.MakeToolRpcErrorRemoteToolError(res.Err())
@@ -465,7 +474,7 @@ func TestToolCallInputIsTheCanonicalRecord(t *testing.T) {
 	if root := packed.Graph.TypeNodes[packed.Graph.Root].Body; root.Tag() != types.SchemaTypeBodyRecordType {
 		t.Fatal("reflection's input graph root is not a record")
 	}
-	if got := d.invokeCommand(e, []string{"ci"}, packed, nil, &ToolStdout{absent: absentStdout}, nil); got.IsErr() {
+	if got := d.invokeCommand(e, []string{"ci"}, packed, nil, hostOutputs{}, nil); got.IsErr() {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
 	if s := v.seen; s.Dir != "/src" || s.Branch != "dev" || s.Author.Unwrap() != "ann" || s.Signoff || s.Verbose != 1 {
@@ -522,7 +531,7 @@ func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
 	}
 }
 
-func TestStdoutCommandStreamsItsOutput(t *testing.T) {
+func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 	v, r, d := newVcs(t)
 	loopback(t, r, d, AnonymousPrincipal{})
 
@@ -533,12 +542,12 @@ func TestStdoutCommandStreamsItsOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, n, err := inv.Collect()
+	got, err := inv.Collect()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(out) != "HELLO WORLD" || n != 11+30 {
-		t.Errorf("got %q and %d", out, n)
+	if string(got.Stdout) != "HELLO WORLD" || string(got.Stderr) != "pushing origin" || got.Result != 11+30 {
+		t.Errorf("got %q, %q and %d", got.Stdout, got.Stderr, got.Result)
 	}
 
 	inv, _ = v.push.Call(func(a *PushArgs) { a.Name = "panic" })
@@ -546,6 +555,84 @@ func TestStdoutCommandStreamsItsOutput(t *testing.T) {
 	var se *StreamError
 	if !errors.As(err, &se) || se.Failure.String() != "failed: command remote push panicked: handler gave up" {
 		t.Errorf("stdout of a panicking command ended with %v", err)
+	}
+	if _, err := inv.Wait(); err == nil {
+		t.Errorf("a panicking command succeeded")
+	}
+}
+
+func TestWaitDrainsTheOutputsNotTaken(t *testing.T) {
+	v, r, d := newVcs(t)
+	loopback(t, r, d, AnonymousPrincipal{})
+
+	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "origin"; a.In = strings.NewReader("abc") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := inv.Stderr()
+	n, err := inv.Wait()
+	if err != nil || n != 3+30 {
+		t.Fatalf("wait gave %d, %v", n, err)
+	}
+	if data, err := io.ReadAll(stderr); err != nil || string(data) != "pushing origin" {
+		t.Errorf("the taken stderr read %q, %v", data, err)
+	}
+	if _, err := io.ReadAll(inv.Stdout()); !errors.Is(err, ErrOutputDrained) {
+		t.Errorf("stdout taken after Wait read %v", err)
+	}
+	if _, err := inv.Collect(); !errors.Is(err, ErrOutputDrained) {
+		t.Errorf("collecting after Wait gave %v", err)
+	}
+}
+
+type Echo struct{}
+
+type EchoArgs struct{ Text string }
+
+func TestOutputsFollowTheirDeclarations(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	tool := defineToolInto[Echo](r, d, "echo", ToolSpec{}, false)
+	var attached, undeclared error
+	echo := tool.OutputCommand[EchoArgs, Unit]("say", func(a *EchoArgs, s *ToolCommandSpec) {
+		s.Positional(&a.Text)
+		s.Stdout().Required()
+		s.Stderr()
+	})
+	_ = echo.Handle(func(ctx *ToolOutputContext, a EchoArgs) (Unit, error) {
+		if !ctx.Stderr().Attached() {
+			attached = errors.New("stderr not attached")
+		}
+		if _, err := io.WriteString(ctx.Stderr(), "note"); err != nil {
+			return Unit{}, err
+		}
+		_, err := io.WriteString(ctx.Stdout(), a.Text)
+		return Unit{}, err
+	})
+	plain := tool.Command[EchoArgs, Unit]("quiet", func(a *EchoArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
+	_ = plain.Handle(func(*ToolContext, EchoArgs) (Unit, error) { return Unit{}, nil })
+	if _, ok := r.discover(d); !ok {
+		t.Fatalf("discovery failed: %s", allDefErrors(d.errs))
+	}
+	e, _ := r.get("echo")
+	input := encodeArgs(t, echo.ce, func(a *EchoArgs) { a.Text = "hi" })
+
+	out := &fakeSink{}
+	if res := d.invokeCommand(e, []string{"say"}, input, nil, hostOutputs{stdout: out}, nil); res.IsErr() {
+		t.Fatalf("an optional stderr left out failed the call: %+v", res.Err())
+	}
+	if string(out.written) != "hi" || !out.finished || attached == nil {
+		t.Errorf("stdout %q finished=%v; an unattached stderr reported attached", out.written, out.finished)
+	}
+
+	res := d.invokeCommand(e, []string{"say"}, input, nil, hostOutputs{stderr: &fakeSink{}}, nil)
+	if res.IsOk() || !strings.Contains(res.Err().InvalidInput(), "requires its stdout") {
+		t.Errorf("a required stdout left out gave %+v", res)
+	}
+
+	ctx := &ToolOutputContext{}
+	ctx.stdout, ctx.stderr, _ = plain.ce.outputsFor(hostOutputs{})
+	if _, undeclared = ctx.Stdout().Write([]byte("x")); undeclared == nil || !strings.Contains(undeclared.Error(), "declares no stdout") {
+		t.Errorf("writing an undeclared stdout gave %v", undeclared)
 	}
 }
 
@@ -574,7 +661,7 @@ func TestRequiredStdinIsRefusedBeforeSending(t *testing.T) {
 	}
 
 	e, _ := r.get("cat")
-	res := d.invokeCommand(e, nil, (*calls)[0], &byteReader{absent: absentStdin}, &ToolStdout{absent: absentStdout}, nil)
+	res := d.invokeCommand(e, nil, (*calls)[0], &byteReader{absent: absentStdin}, hostOutputs{}, nil)
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput {
 		t.Errorf("a host invocation without the required stdin was accepted")
 	}
@@ -583,7 +670,7 @@ func TestRequiredStdinIsRefusedBeforeSending(t *testing.T) {
 func TestToolInvocationRejectsUnknownCommandsAndMalformedInput(t *testing.T) {
 	_, r, d := newVcs(t)
 	e, _ := r.get("vcs")
-	none := &ToolStdout{absent: absentStdout}
+	none := hostOutputs{}
 
 	res := d.invokeCommand(e, []string{"nope"}, types.TypedSchemaValue{}, nil, none, nil)
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidCommandPath {
@@ -693,12 +780,22 @@ func TestToolDeclarationErrors(t *testing.T) {
 			})
 			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
 		}, `defaults to the formatter "yaml"`},
-		"stdout settings on a plain command": {func(tool *ToolDefinition[Tst]) {
+		"an output on a plain command": {func(tool *ToolDefinition[Tst]) {
 			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
 				s.Option(&a.Name)
-				s.StdoutMime("text/plain")
+				s.Stderr().Mime("text/plain")
 			})
-		}, "declare it with StdoutCommand"},
+		}, "Stderr on a command without outputs; declare it with OutputCommand"},
+		"an output command without outputs": {func(tool *ToolDefinition[Tst]) {
+			tool.OutputCommand[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
+		}, "an OutputCommand declares no output"},
+		"an output declared twice": {func(tool *ToolDefinition[Tst]) {
+			tool.OutputCommand[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+				s.Option(&a.Name)
+				s.Stdout()
+				s.Stdout()
+			})
+		}, "Stdout is called twice"},
 		"value-is on a flag": {func(tool *ToolDefinition[Tst]) {
 			c := tool.Command[CommitArgs, string]("x", func(a *CommitArgs, s *ToolCommandSpec) {
 				s.Option(&a.Message)

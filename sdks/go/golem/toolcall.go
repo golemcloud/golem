@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -173,8 +174,8 @@ func toolCallErrorFromWit(tool string, path []string, e types.ToolRpcError) *Too
 	return out
 }
 
-// toolCall is a started call as the host hands it back: the remote's standard
-// output when one was requested, and the pending outcome.
+// toolCall is a started call as the host hands it back: the outputs that were
+// requested, and the pending outcome.
 type toolCall struct {
 	stdout *byteReader
 	stderr *byteReader
@@ -209,9 +210,10 @@ func (c *ToolCommand[T, A, O]) On(client *ToolClient[T]) *ToolCommand[T, A, O] {
 	return &ToolCommand[T, A, O]{ce: c.ce, target: client.name}
 }
 
-// Call starts the command and returns the running invocation, whose standard
-// output is read while the command runs. fill is as for [ToolCommand.Call].
-func (c *ToolStdoutCommand[T, A, O]) Call(fill func(*A)) (*ToolInvocation[O], error) {
+// Call starts the command and returns the running invocation, whose outputs
+// are read while the command runs. Every output the command declares is
+// requested. fill is as for [ToolCommand.Call].
+func (c *ToolOutputCommand[T, A, O]) Call(fill func(*A)) (*ToolInvocation[O], error) {
 	target := c.ce.targetName(c.target)
 	call, err := c.ce.start(target, fillArgs(fill))
 	if err != nil {
@@ -222,8 +224,8 @@ func (c *ToolStdoutCommand[T, A, O]) Call(fill func(*A)) (*ToolInvocation[O], er
 
 // On targets the command at the tool registered under the client's name,
 // instead of the definition's own.
-func (c *ToolStdoutCommand[T, A, O]) On(client *ToolClient[T]) *ToolStdoutCommand[T, A, O] {
-	return &ToolStdoutCommand[T, A, O]{ce: c.ce, target: client.name}
+func (c *ToolOutputCommand[T, A, O]) On(client *ToolClient[T]) *ToolOutputCommand[T, A, O] {
+	return &ToolOutputCommand[T, A, O]{ce: c.ce, target: client.name}
 }
 
 func fillArgs[A any](fill func(*A)) func(reflect.Value) {
@@ -254,8 +256,17 @@ func (ce *commandEntry) start(target string, fill func(reflect.Value)) (toolCall
 	if err != nil {
 		return toolCall{}, err
 	}
-	return startToolCall(target, ce.node.path, input, stdin, ce.stdout)
+	return startToolCall(target, ce.node.path, input, stdin, ce.streams())
 }
+
+// streams are the outputs a call of the command requests: every declared one.
+func (ce *commandEntry) streams() ToolStreams {
+	st := ce.spec.settings
+	return ToolStreams{Stdout: st.stdout != nil, Stderr: st.stderr != nil}
+}
+
+// ToolStreams selects the outputs a call requests.
+type ToolStreams struct{ Stdout, Stderr bool }
 
 // prepare builds a call's input: the declared defaults, then fill, rendered
 // as the canonical input record, and the standard input field.
@@ -301,21 +312,56 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 	return out, nil
 }
 
-// ToolInvocation is a running call of a command that writes standard output.
-// Read Stdout while the command runs, then Wait for its result; or Collect
-// both.
+// ToolInvocation is a running call of a command with outputs. Take an output
+// with Stdout or Stderr and read it while the command runs, then Wait for the
+// result; or Collect everything.
+//
+// Wait drains, and discards, every output that was not taken, so a command
+// writing more than the stream buffers never stalls on output nobody reads.
+// An output taken is the caller's to read: Wait leaves it alone, and if it is
+// not read concurrently a command writing more than the buffers hold stalls.
+//
+// Beneath a middleware, an output the middleware does not take is passed
+// through to its own output of the same name instead of being discarded.
 type ToolInvocation[O any] struct {
 	call   toolCall
 	finish func(toolCall) (O, error)
-	done   bool
-	out    O
-	err    error
+	stdout invocationOutput
+	stderr invocationOutput
+	// passThrough is set for a call beneath a middleware, whose untaken outputs
+	// go to the middleware's own.
+	passThrough *middlewareInvocation
+	done        bool
+	out         O
+	err         error
 }
+
+// invocationOutput is one output of a running call and who has it.
+type invocationOutput struct {
+	r       *byteReader
+	taken   bool
+	drained bool
+}
+
+func (o *invocationOutput) take() io.Reader {
+	switch {
+	case o.drained:
+		return errReader{ErrOutputDrained}
+	case o.r == nil:
+		return strings.NewReader("")
+	}
+	o.taken = true
+	return o.r
+}
+
+type errReader struct{ err error }
+
+func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
 // commandInvocation is a running call of a declared command, whose result is
 // decoded into the command's result type.
 func commandInvocation[O any](ce *commandEntry, target string, call toolCall) *ToolInvocation[O] {
-	return &ToolInvocation[O]{call: call, finish: func(c toolCall) (O, error) {
+	return newInvocation(call, func(c toolCall) (O, error) {
 		var zero O
 		out, err := ce.finish(target, c)
 		if err != nil {
@@ -323,37 +369,134 @@ func commandInvocation[O any](ce *commandEntry, target string, call toolCall) *T
 		}
 		o, _ := out.Interface().(O)
 		return o, nil
-	}}
+	})
 }
 
-// Stdout returns the command's standard output. It ends with io.EOF when the
-// command finishes it, and with a [StreamError] when the command fails.
-func (i *ToolInvocation[O]) Stdout() io.Reader {
-	if i.call.stdout == nil {
-		return strings.NewReader("")
+func newInvocation[O any](call toolCall, finish func(toolCall) (O, error)) *ToolInvocation[O] {
+	return &ToolInvocation[O]{
+		call: call, finish: finish,
+		stdout: invocationOutput{r: call.stdout}, stderr: invocationOutput{r: call.stderr},
 	}
-	return i.call.stdout
 }
 
-// Wait awaits the command's result. The output must be read, or be about to be
-// read concurrently, or a command writing more than the stream buffers stalls.
+// Stdout takes the command's standard output. It ends with io.EOF when the
+// command finishes it and with a [StreamError] when the command fails it; it
+// is empty for a command without one, and fails with [ErrOutputDrained] after
+// Wait drained it.
+func (i *ToolInvocation[O]) Stdout() io.Reader { return i.stdout.take() }
+
+// Stderr takes the command's standard error, like Stdout. Bytes on it do not
+// mean the command failed.
+func (i *ToolInvocation[O]) Stderr() io.Reader { return i.stderr.take() }
+
+// Wait awaits the command's result, draining every output that was not taken
+// meanwhile (see [ToolInvocation]).
 func (i *ToolInvocation[O]) Wait() (O, error) {
-	if !i.done {
-		i.done = true
-		i.out, i.err = i.finish(i.call)
+	if i.done {
+		return i.out, i.err
+	}
+	i.done = true
+	var relays []chan error
+	for _, o := range []struct {
+		out *invocationOutput
+		dst func(*middlewareInvocation) *ToolOutput
+	}{
+		{&i.stdout, func(m *middlewareInvocation) *ToolOutput { return m.stdout }},
+		{&i.stderr, func(m *middlewareInvocation) *ToolOutput { return m.stderr }},
+	} {
+		if o.out.taken || o.out.drained || o.out.r == nil {
+			continue
+		}
+		o.out.drained = true
+		var dst *ToolOutput
+		if i.passThrough != nil {
+			dst = o.dst(i.passThrough)
+		}
+		done := make(chan error, 1)
+		relays = append(relays, done)
+		go func(src *byteReader) { done <- passOn(dst, src, i.call.cancel) }(o.out.r)
+	}
+	i.out, i.err = i.finish(i.call)
+	for _, done := range relays {
+		// A failure writing a middleware's own output cancelled the call
+		// beneath, and is why it failed.
+		if err := <-done; err != nil {
+			var zero O
+			i.out, i.err = zero, err
+		}
 	}
 	return i.out, i.err
+}
+
+// passOn copies an output of a call into dst, or discards it when there is no
+// dst or the command dst belongs to does not declare it. A failure of the
+// output itself is passed on as dst's terminal; a failure writing dst cancels
+// the call and is returned.
+func passOn(dst *ToolOutput, src *byteReader, cancel func()) error {
+	if dst == nil || dst.undeclared != "" {
+		_, _ = io.Copy(io.Discard, src)
+		return nil
+	}
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				src.close()
+				cancel()
+				return werr
+			}
+		}
+		var se *StreamError
+		switch {
+		case err == nil:
+		case errors.Is(err, io.EOF):
+			return nil
+		case errors.As(err, &se):
+			dst.fail(se.Failure)
+			return nil
+		default:
+			dst.fail(StreamFailed(err.Error()))
+			return nil
+		}
+	}
 }
 
 // Cancel asks the runtime to cancel the call.
 func (i *ToolInvocation[O]) Cancel() { i.call.cancel() }
 
-// Collect reads the whole output, then awaits the result.
-func (i *ToolInvocation[O]) Collect() ([]byte, O, error) {
-	data, readErr := io.ReadAll(i.Stdout())
-	out, err := i.Wait()
-	if err != nil {
-		return data, out, err
+// ToolCollected is everything a call produced.
+type ToolCollected[O any] struct {
+	Result O
+	Stdout []byte
+	Stderr []byte
+}
+
+// Collect reads every output to its end while awaiting the result. A failed
+// result is reported before a failed standard output, and that before a
+// failed standard error; what was read is returned either way.
+func (i *ToolInvocation[O]) Collect() (ToolCollected[O], error) {
+	var c ToolCollected[O]
+	read := func(r io.Reader, into *[]byte) chan error {
+		done := make(chan error, 1)
+		go func() {
+			data, err := io.ReadAll(r)
+			*into = data
+			done <- err
+		}()
+		return done
 	}
-	return data, out, readErr
+	stdout := read(i.Stdout(), &c.Stdout)
+	stderr := read(i.Stderr(), &c.Stderr)
+	result, err := i.Wait()
+	c.Result = result
+	stdoutErr, stderrErr := <-stdout, <-stderr
+	switch {
+	case err != nil:
+		return c, err
+	case stdoutErr != nil:
+		return c, stdoutErr
+	default:
+		return c, stderrErr
+	}
 }

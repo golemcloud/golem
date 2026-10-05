@@ -46,10 +46,10 @@ fn replace_go_component(component: &Path, package: &str, source: &str) {
 /// A Go tool is called with typed arguments by an agent of its own component
 /// through the tool's own declaration, and by a Go agent of another component
 /// through the generated guest tool client — a plain command with globals and a
-/// tail, a stdout command fed from standard input, and declared errors matched
-/// on the caller's side. The second caller's binding installs a typed Go
-/// middleware that rewrites one command, refuses a value, and passes the
-/// stdout command through untouched.
+/// tail, a command with stdout and stderr fed from standard input, and declared
+/// errors matched on the caller's side. The second caller's binding installs a
+/// typed Go middleware that rewrites one command, refuses a value, and passes
+/// the output command and both its outputs through untouched.
 #[test]
 #[timeout("25 minutes")]
 async fn test_go_tools_e2e() {

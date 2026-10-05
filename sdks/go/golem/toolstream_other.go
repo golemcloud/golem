@@ -24,12 +24,10 @@ import (
 // generated reader and writer to the stream interfaces would drag their
 // //go:wasmimport methods into a native link, which has no bodies for them. The
 // adapters themselves are target-independent and tested directly; only these
-// two constructors are not (see toolstream_wasm.go).
+// two functions are not (see toolstream_wasm.go).
 
 func newToolStdin(_ toolExports.Stdin) *byteReader {
 	return &byteReader{absent: absentStdin}
 }
 
-func newToolStdout(_ toolExports.Stdout) *ToolStdout {
-	return &ToolStdout{absent: absentStdout}
-}
+func hostOutput(_ toolExports.Stdout) byteStreamSink { return nil }

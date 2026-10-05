@@ -427,7 +427,7 @@ func recordToolCalls(t *testing.T, outcome func(path []string) (witTypes.Option[
 	var calls [][]string
 	prev := startToolCall
 	t.Cleanup(func() { startToolCall = prev })
-	startToolCall = func(_ string, path []string, input types.TypedSchemaValue, _ io.Reader, _ bool) (toolCall, error) {
+	startToolCall = func(_ string, path []string, input types.TypedSchemaValue, _ io.Reader, _ ToolStreams) (toolCall, error) {
 		root := input.Graph.TypeNodes[input.Graph.Root].Body
 		if root.Tag() != types.SchemaTypeBodyRecordType {
 			t.Errorf("the input graph is not rooted at a record")

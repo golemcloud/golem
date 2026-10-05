@@ -113,21 +113,26 @@ Globals are options and flags only; each command embeds the globals of every nod
 
 Constraints refer to bindings, `binding.ValueIs(v)` or, for any field including an inherited global, `s.Present(&a.F)` / `s.ValueIs(&a.F, v)`: `RequiresAll`, `RequiresAny`, `AllOrNone`, `Mutex`, `MutexGroups(s.AllOf(…), …)`, `Implies(lhs, rhs)` and `Forbids(lhs, …)`, with `s.AllOf`/`s.AnyOf` to group references.
 
-## Stdin and Stdout
+## Stdin, Stdout and Stderr
 
-A command that writes standard output is declared with `StdoutCommand`; its handler gets a `*golem.ToolStdoutContext`:
+A command that writes standard output, standard error or both is declared with `OutputCommand`, and its spec declares which; its handler gets a `*golem.ToolOutputContext`:
 
 ```go
 type UpperArgs struct{ In io.Reader }
 
-var Upper = Tool.StdoutCommand[UpperArgs, golem.Unit]("upper", func(a *UpperArgs, s *golem.ToolCommandSpec) {
+var Upper = Tool.OutputCommand[UpperArgs, golem.Unit]("upper", func(a *UpperArgs, s *golem.ToolCommandSpec) {
 	s.Stdin(&a.In).Mime("text/plain")
-	s.StdoutMime("text/plain")
+	s.Stdout().Mime("text/plain").Required()
+	s.Stderr().Doc("skipped lines")
 })
 
-var _ = Upper.Handle(func(ctx *golem.ToolStdoutContext, a UpperArgs) (golem.Unit, error) {
+var _ = Upper.Handle(func(ctx *golem.ToolOutputContext, a UpperArgs) (golem.Unit, error) {
 	scanner := bufio.NewScanner(a.In)
 	for scanner.Scan() {
+		if scanner.Text() == "" {
+			fmt.Fprintln(ctx.Stderr(), "skipping an empty line")
+			continue
+		}
 		if _, err := io.WriteString(ctx.Stdout(), strings.ToUpper(scanner.Text())+"\n"); err != nil {
 			return golem.Unit{}, err
 		}
@@ -136,7 +141,9 @@ var _ = Upper.Handle(func(ctx *golem.ToolStdoutContext, a UpperArgs) (golem.Unit
 })
 ```
 
-Stdout is finished when the handler succeeds and failed when it returns an error or panics; `ctx.Stdout().Fail(golem.StreamFailed("reason"))` ends it with a specific cause. A producer failure on stdin surfaces as a `*golem.StreamError`, never as `io.EOF`.
+- `s.Stdout()` and `s.Stderr()` return the stream's spec: `.Doc`, `.Mime`, and `.Required()`. An output is optional unless required: a caller may leave it out, and then what the handler writes to it is discarded (`ctx.Stderr().Attached()` tells). A call without a required one is refused before the handler runs.
+- Each output is finished when the handler succeeds and failed when it returns an error or panics; `ctx.Stdout().Fail(golem.StreamFailed("reason"))` ends one with a specific cause. Writing to an output the command does not declare is an error.
+- A producer failure on stdin surfaces as a `*golem.StreamError`, never as `io.EOF`.
 
 ## Deploy
 

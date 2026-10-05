@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -235,7 +236,7 @@ type ToolCommandSpec struct {
 	state       specState
 	settings    commandSettings
 	constraints []constraintDecl
-	stdoutAllow bool
+	outputAllow bool
 }
 
 // commandSettings is everything a spec declares about the command itself.
@@ -247,8 +248,15 @@ type commandSettings struct {
 	formatters       []toolCommon.Formatter
 	defaultFormatter string
 	raises           []*toolErrorInfo
-	stdoutDoc        string
-	stdoutMime       []string
+	stdout           *outputDecl
+	stderr           *outputDecl
+}
+
+// outputDecl is a declared standard output or standard error.
+type outputDecl struct {
+	doc      string
+	mime     []string
+	required bool
 }
 
 // ToolGlobalsSpec declares a node's global options and flags, which every
@@ -407,21 +415,45 @@ func (s *ToolCommandSpec) Raises(cases ...ToolErrorDef) {
 	}
 }
 
-// StdoutDoc documents a stdout command's output stream.
-func (s *ToolCommandSpec) StdoutDoc(text string) {
-	if !s.stdoutAllow {
-		s.state.fail("StdoutDoc on a command without standard output; declare it with StdoutCommand")
+// Stdout declares the command's standard output, which the handler writes
+// through [ToolOutputContext.Stdout]. It is optional unless marked Required.
+func (s *ToolCommandSpec) Stdout() *ToolOutputSpec { return s.output("Stdout", &s.settings.stdout) }
+
+// Stderr declares the command's standard error, which the handler writes
+// through [ToolOutputContext.Stderr]. It is optional unless marked Required.
+func (s *ToolCommandSpec) Stderr() *ToolOutputSpec { return s.output("Stderr", &s.settings.stderr) }
+
+func (s *ToolCommandSpec) output(method string, slot **outputDecl) *ToolOutputSpec {
+	if !s.outputAllow {
+		s.state.fail("%s on a command without outputs; declare it with OutputCommand", method)
 	}
-	s.settings.stdoutDoc = text
+	if *slot != nil {
+		s.state.fail("%s is called twice", method)
+	}
+	*slot = &outputDecl{}
+	return &ToolOutputSpec{d: *slot}
 }
 
-// StdoutMime lists the media types a stdout command produces.
-func (s *ToolCommandSpec) StdoutMime(mime ...string) {
-	if !s.stdoutAllow {
-		s.state.fail("StdoutMime on a command without standard output; declare it with StdoutCommand")
-	}
-	s.settings.stdoutMime = append(s.settings.stdoutMime, mime...)
+func (o *outputDecl) toWit() toolCommon.StreamSpec {
+	return toolCommon.StreamSpec{Doc: toolDoc{summary: o.doc}.toWit(), Mime: slices.Clone(o.mime), Required: o.required}
 }
+
+// ToolOutputSpec is a declared output stream. Each setter returns it, so
+// declarations chain.
+type ToolOutputSpec struct{ d *outputDecl }
+
+// Doc documents what the stream carries.
+func (o *ToolOutputSpec) Doc(text string) *ToolOutputSpec { o.d.doc = text; return o }
+
+// Mime lists the media types the stream carries.
+func (o *ToolOutputSpec) Mime(types ...string) *ToolOutputSpec {
+	o.d.mime = append(o.d.mime, types...)
+	return o
+}
+
+// Required makes the stream one every caller must take; a call without it is
+// refused before the handler runs.
+func (o *ToolOutputSpec) Required() *ToolOutputSpec { o.d.required = true; return o }
 
 // Argument bindings. Each setter returns the binding, so declarations chain.
 

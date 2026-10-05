@@ -1,5 +1,5 @@
 // Package vcs is the Go tool fixture driven by go_tools.rs: a tool with
-// globals, a group, a tail, a stdout command, standard input and declared
+// globals, a group, a tail, a command with stdout and stderr, standard input and declared
 // errors, a typed middleware over it, and an agent that calls the tool from its
 // own component.
 package vcs
@@ -60,9 +60,11 @@ type PushArgs struct {
 	In   io.Reader
 }
 
-var Push = Tool.Group("remote").StdoutCommand[PushArgs, int32]("push", func(a *PushArgs, s *golem.ToolCommandSpec) {
+var Push = Tool.Group("remote").OutputCommand[PushArgs, int32]("push", func(a *PushArgs, s *golem.ToolCommandSpec) {
 	s.Positional(&a.Name)
 	s.Stdin(&a.In).Optional()
+	s.Stdout().Mime("text/plain")
+	s.Stderr().Doc("progress")
 	s.Raises(ErrRejected)
 })
 
@@ -88,7 +90,10 @@ var _ = Commit.Handle(func(_ *golem.ToolContext, a CommitArgs) (CommitResult, er
 	}, nil
 })
 
-var _ = Push.Handle(func(ctx *golem.ToolStdoutContext, a PushArgs) (int32, error) {
+var _ = Push.Handle(func(ctx *golem.ToolOutputContext, a PushArgs) (int32, error) {
+	if _, err := io.WriteString(ctx.Stderr(), "pushing "+a.Name); err != nil {
+		return 0, err
+	}
 	if a.Name == "forbidden" {
 		return 0, ErrRejected.New(Rejected{Reason: "protected " + a.Name})
 	}

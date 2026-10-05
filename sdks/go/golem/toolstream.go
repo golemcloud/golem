@@ -26,21 +26,22 @@ import (
 // Tool byte streams.
 //
 // A command reads standard input from the io.Reader field it binds with
-// [ToolCommandSpec.Stdin], and a stdout command writes through
-// [ToolStdoutContext.Stdout], an ordinary io.Writer — p3 makes the underlying
-// host calls blocking, so there is no callback or future to thread through.
+// [ToolCommandSpec.Stdin], and an output command writes through
+// [ToolOutputContext.Stdout] and [ToolOutputContext.Stderr], ordinary
+// io.Writers — p3 makes the underlying host calls blocking, so there is no
+// callback or future to thread through.
 //
 // The wire protocol has explicit terminals the author does not have to
-// remember: a handler that succeeds finishes the output stream, and one that
-// fails or panics fails it. Call [ToolStdout.Fail] to end it with a specific
-// cause instead.
+// remember: a handler that succeeds finishes its output streams, and one that
+// fails or panics fails them. Call [ToolOutput.Fail] to end one with a
+// specific cause instead.
 
-// Messages explaining a stream that the host did not supply, shared by the
-// per-target constructors.
-const (
-	absentStdin  = "golem: this command was invoked without a stdin stream"
-	absentStdout = "golem: this command was invoked without a stdout stream"
-)
+// absentStdin explains a standard input the host did not supply.
+const absentStdin = "golem: this command was invoked without a stdin stream"
+
+// ErrOutputDrained is what reading a tool call's output fails with when
+// [ToolInvocation.Wait] already drained it, because it was not taken before.
+var ErrOutputDrained = errors.New("golem: the output was drained by Wait before it was taken")
 
 // StreamFailure is a recoverable failure carried by a byte stream. Clean end of
 // input is not a failure: it arrives as io.EOF.
@@ -178,79 +179,114 @@ func (r *byteReader) Read(p []byte) (int, error) {
 	}
 }
 
-// ToolStdout is a command's standard output, written as an ordinary io.Writer.
+// ToolOutput is a command's standard output or standard error, written as an
+// ordinary io.Writer.
 //
-// The stream is finished when the handler returns and failed when it panics, so
-// nothing has to be closed by hand. [ToolStdout.Fail] ends it with a specific
-// cause instead; the first terminal wins and later ones are ignored.
-type ToolStdout struct {
+// The stream is finished when the handler returns and failed when it fails or
+// panics, so nothing has to be closed by hand. [ToolOutput.Fail] ends it with a
+// specific cause instead; the first terminal wins and later ones are ignored.
+//
+// An optional output the caller did not ask for discards what is written to it;
+// [ToolOutput.Attached] tells the two apart. Writing to an output the command
+// does not declare is an error.
+type ToolOutput struct {
+	name string
+	// sink is the host's writer, nil when the caller did not attach the stream.
 	sink byteStreamSink
-	// absent explains why there is no stream, so a Write says so rather than
-	// dereferencing nil.
-	absent string
+	// undeclared explains why the command has no such output, so a Write says
+	// so instead of discarding silently.
+	undeclared string
 	// terminal records that finish or fail already ran, since the wire accepts
 	// exactly one and the SDK also selects one automatically.
 	terminal bool
 }
 
+// newToolOutput is a declared output, attached when sink is not nil.
+func newToolOutput(name string, sink byteStreamSink) *ToolOutput {
+	return &ToolOutput{name: name, sink: sink}
+}
+
+// Attached reports whether the caller receives what is written; an optional
+// output the caller did not ask for discards it.
+func (w *ToolOutput) Attached() bool { return w.sink != nil }
+
 // Write sends bytes to the stream.
-func (w *ToolStdout) Write(p []byte) (int, error) {
-	if w.absent != "" {
-		return 0, errors.New(w.absent)
+func (w *ToolOutput) Write(p []byte) (int, error) {
+	if w.undeclared != "" {
+		return 0, errors.New(w.undeclared)
 	}
 	if w.terminal {
-		return 0, errors.New("golem: stdout is already finished")
+		return 0, fmt.Errorf("golem: %s is already finished", w.name)
 	}
-	if len(p) == 0 {
-		return 0, nil
+	if len(p) == 0 || w.sink == nil {
+		return len(p), nil
 	}
 	if res := w.sink.Write(p); res.Tag() == witTypes.ResultErr {
-		return 0, writeError(res.Err())
+		return 0, writeError(w.name, res.Err())
 	}
 	return len(p), nil
 }
 
 // Fail ends the stream with the given cause instead of finishing it cleanly.
-func (w *ToolStdout) Fail(cause StreamFailure) error {
-	if w.absent != "" {
-		return errors.New(w.absent)
+func (w *ToolOutput) Fail(cause StreamFailure) error {
+	if w.undeclared != "" {
+		return errors.New(w.undeclared)
 	}
 	if w.terminal {
 		return nil
 	}
 	w.terminal = true
+	if w.sink == nil {
+		return nil
+	}
 	if res := w.sink.Fail(cause.wit); res.Tag() == witTypes.ResultErr {
-		return writeError(res.Err())
+		return writeError(w.name, res.Err())
 	}
 	return nil
 }
 
-// finish selects the clean terminal, unless one was already selected.
-func (w *ToolStdout) finish() error {
-	if w.absent != "" || w.terminal {
+// finish selects the clean terminal, unless one was already selected. A
+// stream the host supplied for an undeclared output is finished empty.
+func (w *ToolOutput) finish() error {
+	if w.terminal {
 		return nil
 	}
 	w.terminal = true
+	if w.sink == nil {
+		return nil
+	}
 	if res := w.sink.Finish(); res.Tag() == witTypes.ResultErr {
-		return writeError(res.Err())
+		return writeError(w.name, res.Err())
 	}
 	return nil
 }
 
-func writeError(e streams.StreamWriteError) error {
+// fail is Fail for the SDK's own use, which also ends a stream the host
+// supplied for an undeclared output.
+func (w *ToolOutput) fail(cause StreamFailure) {
+	if w.terminal {
+		return
+	}
+	w.terminal = true
+	if w.sink != nil {
+		w.sink.Fail(cause.wit)
+	}
+}
+
+func writeError(name string, e streams.StreamWriteError) error {
 	switch e.Tag() {
 	case streams.StreamWriteErrorConcurrentOperation:
-		return errors.New("golem: concurrent operation on the stdout stream")
+		return fmt.Errorf("golem: concurrent operation on the %s stream", name)
 	case streams.StreamWriteErrorClosed:
 		cause := e.Closed()
 		switch cause.Tag() {
 		case streams.ByteStreamCloseCauseFinished:
-			return errors.New("golem: stdout stream is already finished")
+			return fmt.Errorf("golem: %s stream is already finished", name)
 		case streams.ByteStreamCloseCauseConsumerCancelled:
-			return errors.New("golem: the consumer cancelled the stdout stream")
+			return fmt.Errorf("golem: the consumer cancelled the %s stream", name)
 		case streams.ByteStreamCloseCauseFailed:
 			return &StreamError{Failure: StreamFailure{cause.Failed()}}
 		}
 	}
-	return fmt.Errorf("golem: stdout stream write failed")
+	return fmt.Errorf("golem: %s stream write failed", name)
 }

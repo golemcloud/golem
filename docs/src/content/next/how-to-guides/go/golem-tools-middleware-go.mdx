@@ -38,11 +38,11 @@ var _ = Policy.Handle(inventory.Adjust, func(ctx *golem.ToolMiddlewareContext[Pa
 
 Blank-import the package from `main.go`. Use `golem.Unit` as the parameter type for a middleware that takes none.
 
-## Commands That Write Standard Output
+## Commands With Outputs
 
 ```go
-var _ = Policy.HandleStdout(inventory.Import, func(ctx *golem.ToolMiddlewareStdoutContext[Params], a inventory.ImportArgs) (int32, error) {
-	inv, err := Policy.UnderlyingStdout(ctx, inventory.Import).Start(a)
+var _ = Policy.HandleOutput(inventory.Import, func(ctx *golem.ToolMiddlewareOutputContext[Params], a inventory.ImportArgs) (int32, error) {
+	inv, err := Policy.UnderlyingOutput(ctx, inventory.Import).Start(a)
 	if err != nil {
 		return 0, err
 	}
@@ -53,7 +53,9 @@ var _ = Policy.HandleStdout(inventory.Import, func(ctx *golem.ToolMiddlewareStdo
 })
 ```
 
-`UnderlyingStdout(...).Forward(a)` copies the output through unchanged and returns the result; `Start` returns the running invocation for rewriting it. `ctx.Stdout()` is finished when the handler succeeds and failed when it returns an error or panics.
+- `UnderlyingOutput(...).Forward(a)` passes both outputs through unchanged and returns the result; `Start` returns the running invocation for rewriting them.
+- An output of the running call that the handler does not take — stderr above — passes through to the middleware's own when the handler waits; take it to replace it, or read it into `io.Discard` to drop it.
+- `ctx.Stdout()` and `ctx.Stderr()` are finished when the handler succeeds and failed when it returns an error or panics. A failure of an output beneath reaches the caller as the same failure.
 
 ## Adapters
 
@@ -90,13 +92,13 @@ var _ = Audit.Handle(func(ctx *golem.UniversalToolMiddlewareContext[AuditParams]
 	if p.Deny {
 		return golem.None[golem.TypedValue](), errors.New("denied by audit policy")
 	}
-	return ctx.Next(ctx.Input()) // forwards stdin, copies stdout into ctx.Stdout()
+	return ctx.Next(ctx.Input()) // forwards stdin, passes stdout and stderr through
 })
 ```
 
 - The result is `golem.None` for a command without one.
 - `ctx.Input().WithJSON(newArgs)` rewrites the arguments before `Next`; read and build values with `v.JSON()`, `golem.DecodeTypedValue[T]` and `golem.EncodeTypedValue`.
-- `ctx.Start(input)` returns the running invocation, for rewriting standard output.
+- `ctx.Start(input)` returns the running invocation, for rewriting an output; one not taken passes through to `ctx.Stdout()` / `ctx.Stderr()`.
 - A failure beneath is a `*golem.ToolCallError`; return it to pass it on unchanged.
 - `ctx.ToolMetadata()` describes the wrapped tool (commands, arguments, results and errors), as in [`golem-call-tool-go`](/next/how-to-guides/go/golem-call-tool-go).
 

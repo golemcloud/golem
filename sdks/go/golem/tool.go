@@ -129,15 +129,13 @@ func init() {
 		stderr toolExports.Stderr,
 		principal common.Principal,
 	) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
-		// Commands defined in Go declare no standard error; one supplied
-		// regardless is finished empty.
-		defer func() { _ = newToolStdout(stderr).finish() }()
 		e, ok := toolDefs.get(toolName)
 		if !ok {
 			return witTypes.Err[toolCommon.InvocationResult](types.MakeToolErrorInvalidToolName(toolName))
 		}
-		return defs.invokeCommand(e, commandPath, input,
-			newToolStdin(stdin), newToolStdout(stdout), principalFromWit(principal))
+		return defs.invokeCommand(e, commandPath, input, newToolStdin(stdin),
+			hostOutputs{stdout: hostOutput(stdout), stderr: hostOutput(toolExports.Stdout(stderr))},
+			principalFromWit(principal))
 	}
 
 	mwExports.Exports.DiscoverToolMiddlewares = func() witTypes.Result[[]toolCommon.ToolMiddleware, types.ToolError] {
@@ -180,8 +178,8 @@ func init() {
 			commandPath: commandPath,
 			input:       input,
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
-			stdout:      newToolStdout(toolExports.Stdout(stdout)),
-			stderr:      newToolStdout(toolExports.Stdout(stderr)),
+			stdout:      newToolOutput("stdout", hostOutput(toolExports.Stdout(stdout))),
+			stderr:      newToolOutput("stderr", hostOutput(toolExports.Stdout(stderr))),
 			principal:   principalFromWit(principal),
 			under:       newUnderlyingLayer(wrapped),
 		})
@@ -203,16 +201,20 @@ func (c *ToolContext) Tool() string { return c.tool }
 // root; empty means the root command's own body.
 func (c *ToolContext) CommandPath() []string { return append([]string(nil), c.path...) }
 
-// ToolStdoutContext is the context handed to a command declared with
-// StdoutCommand, which also carries its standard output.
-type ToolStdoutContext struct {
+// ToolOutputContext is the context handed to a command declared with
+// OutputCommand, which also carries its outputs.
+type ToolOutputContext struct {
 	ToolContext
-	stdout *ToolStdout
+	stdout, stderr *ToolOutput
 }
 
 // Stdout returns the command's standard output. The stream is finished when
 // the handler succeeds and failed when it returns an error or panics.
-func (c *ToolStdoutContext) Stdout() *ToolStdout { return c.stdout }
+func (c *ToolOutputContext) Stdout() *ToolOutput { return c.stdout }
+
+// Stderr returns the command's standard error, finished and failed like
+// Stdout. Bytes on it do not mean the command failed.
+func (c *ToolOutputContext) Stderr() *ToolOutput { return c.stderr }
 
 // toolDefinitionError reports a broken tool declaration. The WIT has no variant
 // for "this component's own metadata is wrong"; invalid-result is the closest,

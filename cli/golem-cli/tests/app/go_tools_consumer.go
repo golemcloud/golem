@@ -51,13 +51,14 @@ func init() {
 			a.Stdin = strings.NewReader("hello tools")
 		})
 		check(err == nil, "push: %v", err)
-		out, n, err := inv.Collect()
+		out, err := inv.Collect()
 		check(err == nil, "push output: %v", err)
-		check(string(out) == "HELLO TOOLS" && n == 11, "push gave %q and %d", out, n)
+		check(string(out.Stdout) == "HELLO TOOLS" && out.Result == 11, "push gave %q and %d", out.Stdout, out.Result)
+		check(string(out.Stderr) == "pushing origin", "push reported %q on stderr", out.Stderr)
 
 		inv, err = vcs.RemotePush.Call(func(a *vcs.RemotePushArgs) { a.Name = "forbidden" })
 		check(err == nil, "push: %v", err)
-		_, err = inv.Wait()
+		_, err = inv.Wait() // drains the untaken stdout and stderr
 		rejected, ok := vcs.ErrRejected.Match(err)
 		check(ok, "a forbidden push gave %v", err)
 

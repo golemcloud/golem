@@ -24,6 +24,6 @@ import (
 )
 
 // Off the wasm target there is no host to call through; see toolcall_wasm.go.
-func startToolCallHost(tool string, path []string, _ types.TypedSchemaValue, _ io.Reader, _ bool) (toolCall, error) {
+func startToolCallHost(tool string, path []string, _ types.TypedSchemaValue, _ io.Reader, _ ToolStreams) (toolCall, error) {
 	return toolCall{}, fmt.Errorf("golem: calling tool %s %s is only available inside a component", tool, commandLabel(path))
 }

@@ -697,8 +697,8 @@ func (c *ReflectedToolClient) command(path []string) (ReflectedCommand, error) {
 }
 
 // Call runs a command with named arguments and returns its result as canonical
-// JSON, or nil when the command produces none. A command that writes standard
-// output is started with Start instead.
+// JSON, or nil when the command produces none; its outputs, if any, are
+// discarded. Start a command to read them.
 func (c *ReflectedToolClient) Call(path []string, args map[string]any) (any, error) {
 	inv, err := c.Start(path, args, nil)
 	if err != nil {
@@ -708,7 +708,8 @@ func (c *ReflectedToolClient) Call(path []string, args map[string]any) (any, err
 }
 
 // Start starts a command with named arguments and the given standard input,
-// which may be nil, and returns the running invocation.
+// which may be nil, and returns the running invocation with every output the
+// command declares.
 func (c *ReflectedToolClient) Start(path []string, args map[string]any, stdin io.Reader) (*ToolInvocation[any], error) {
 	cmd, err := c.command(path)
 	if err != nil {
@@ -728,11 +729,11 @@ func (c *ReflectedToolClient) Start(path []string, args map[string]any, stdin io
 		return nil, err
 	}
 	name := c.tool.Name()
-	call, err := startToolCall(name, path, input, stdin, body.Stdout.IsSome())
+	call, err := startToolCall(name, path, input, stdin, ToolStreams{Stdout: body.Stdout.IsSome(), Stderr: body.Stderr.IsSome()})
 	if err != nil {
 		return nil, err
 	}
-	return &ToolInvocation[any]{call: call, finish: func(call toolCall) (any, error) {
+	return newInvocation(call, func(call toolCall) (any, error) {
 		res, rpcErr := call.wait()
 		if rpcErr != nil {
 			return nil, toolCallErrorFromWit(name, path, *rpcErr)
@@ -758,5 +759,5 @@ func (c *ReflectedToolClient) Start(path []string, args map[string]any, stdin io
 			}
 		}
 		return nil, &ToolCallError{Tool: name, CommandPath: path, Kind: ToolCallInvalidResult, Message: err.Error()}
-	}}, nil
+	}), nil
 }
