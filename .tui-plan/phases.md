@@ -60,7 +60,7 @@ Acceptance:
 
 ## 3. Jobs, Sessions, And Safety
 
-Prerequisites: quit policy and exact action/risk inventory.
+Prerequisite: exact action/risk inventory.
 
 Deliverables:
 

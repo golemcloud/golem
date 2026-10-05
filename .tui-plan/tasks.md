@@ -53,8 +53,8 @@ in progress.md; this file describes only the current rebuild and its gates.
   contextual actions for Build & Deploy, Server, and REPL.
 - [ ] Lock wide, short, narrow, and extreme header/footer priority rules,
   including Jobs, Live, and remote-lock status.
-- [ ] Lock quit behavior for active Jobs and TUI-owned Server, REPL, and Live
-  sessions.
+- [x] Lock active-work quit behavior: Return is safe/default; Force quit is
+  explicit and stops all TUI-owned child processes during cleanup.
 - [ ] Inventory exact contextual action coverage and risk class for each
   minimal resource subject.
 - [ ] Choose Activity soft/default and hard maximum Agent counts plus overflow
@@ -68,7 +68,8 @@ in progress.md; this file describes only the current rebuild and its gates.
 
 The rebuild is not globally decision-complete until every non-deferred planning
 gate is checked. The accepted local Dev and read-only Ops slice may proceed
-while later mutation, Activity, Metrics, and final shell/quit gates remain open.
+while later mutation, Activity, Metrics, final shell priorities, and Live
+integration remain open.
 
 ## Accepted Implementation Slice
 
@@ -85,8 +86,7 @@ while later mutation, Activity, Metrics, and final shell/quit gates remain open.
   typed operations that never create missing resources.
 - [x] Move fake Metrics to preview/test data and render truthful production
   unavailability.
-- [x] Use conservative quit blocking while active work exists until the final
-  quit-policy session.
+- [x] Offer safe Return and explicit Force quit while active work exists.
 
 ## Checkpoint 0: Synchronize The Planning Sources
 
@@ -118,8 +118,8 @@ gate for later Ops actions.
   risk class, target resolution, review requirement, and availability reason.
 - [x] Make global and contextual palettes filters over the same action registry;
   preserve query while switching scope.
-- [x] Keep modified shortcuts active inside every text-editing mode except REPL
-  PTY input.
+- [x] Keep modified shortcuts active inside text-editing modes; nested PTY input
+  owns every key except the ctrl+x handoff to TUI control.
 - [x] Add reducer/state tests for workspace, view, subject, breadcrumb, palette,
   capability, and stale-context transitions.
 - [x] Remove replaced flat shortcut and workspace compatibility paths in the
@@ -162,9 +162,9 @@ Recommended commit checkpoint: shell, navigation, layout, and preferences.
 
 ## Checkpoint 3: Jobs, Persistent Sessions, And Safety
 
-Planning prerequisites for the full checkpoint: quit policy and exact Ops
-action-risk inventory. The accepted slice implements finite local Dev Jobs and
-conservative quit blocking only.
+Planning prerequisite for the full checkpoint: exact Ops action-risk inventory.
+The accepted slice implements finite local Dev Jobs and explicit active-work
+Return/Force quit behavior.
 
 - [~] Introduce the global bounded Jobs registry for finite Dev commands and Ops
   mutations. Finite Dev commands are live; later Ops mutations must join the
@@ -187,8 +187,8 @@ conservative quit blocking only.
 - [ ] Resolve and display bulk target counts, consequences, and available plans
   or diffs before execution.
 - [~] Implement context-switch and quit handling for every Job/session state.
-  Dev Job, REPL, and cross-Server handling plus conservative quit blocking are
-  live; the later Live session and final quit policy remain open.
+  Dev Job, REPL, and cross-Server handling plus explicit force quit are live;
+  the later Live session still needs integration with the same policy.
 - [~] Test local/remote availability, unlock expiry, typed confirmation,
   concurrent-mutation rejection, cancellation, masking, and stale completions.
   Accepted-slice availability, forms, cancellation, and stale results are

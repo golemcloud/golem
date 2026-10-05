@@ -1,5 +1,36 @@
 # Progress
 
+## 2026-10-05: Unified Commands And Nested Terminal Ownership
+
+- Collapsed global and contextual command palettes into one Commands overlay
+  with All/Context scopes, left/right and mouse switching, and preserved query.
+- Made the leader own and clear every footer shortcut row so shorter transient
+  menus never reveal unrelated shortcuts behind them.
+- Unified finite commands, Server, and REPL around one nested-terminal input
+  contract: launch enters CLI input, ctrl+x returns to TUI control, and Enter or
+  clicking the running pane re-enters CLI input. Every other key reaches the
+  PTY while CLI input owns the keyboard.
+- Removed the synthetic stdin row, exposed the real PTY cursor in every nested
+  terminal, reserved stable terminal scrollbar geometry, and synchronize PTY
+  dimensions after all rendered layout changes.
+- Put a centered Run action first in command and session review forms, removed
+  internal build-step selection, and size review/quit dialogs from their
+  content rather than expanding them to the general data-overlay size.
+- Locked active-work quit behavior as safe Return by default with an explicit
+  Force quit choice.
+
+Manual terminal acceptance and the later Live-session integration remain open.
+
+Validation:
+
+- `cargo fmt --package golem-cli -- --check`
+- `cargo check -p golem-cli --features tui-preview`
+- `cargo test -p golem-cli --lib --features tui-preview -- tui:: --report-time`
+  (236 passed)
+- `git diff --check`
+- `cargo make install-golem-dev-release`
+- `/home/noise64/.cargo/bin/golem tui --help`
+
 ## 2026-10-01: Isolated And Minimized TUI Preview Tooling
 
 - Kept browser, terminal, and static-export preview hosts behind the optional

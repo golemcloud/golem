@@ -117,16 +117,17 @@ inside the group rather than consuming the top-level ctrl+x namespace.
 
 ### Palettes
 
-- ctrl+p opens the global palette.
-- ctrl+x a opens the contextual action palette.
-- While a palette is open, those same shortcuts switch between All and Context
-  scopes without closing the overlay or clearing the query.
+- ctrl+p opens Commands on the All scope.
+- ctrl+x a opens the same Commands overlay on the Context scope.
+- Left and right switch between All and Context without closing the overlay or
+  clearing the query.
 - Palette scope is also mouse-selectable.
 - Context scope includes relevant unavailable actions and their reasons.
 - All scope includes navigation, context, layout, Jobs, resource actions, and
   system commands.
 - Modified shortcuts remain active while palette, quick-find, or form text is
-  being edited. REPL raw input is the explicit exception.
+  being edited. A nested terminal owns every key except ctrl+x while its input
+  mode is active.
 
 ## Dev Workspace
 
@@ -177,8 +178,12 @@ session.
 - Each launch uses an immutable context, the application root as working
   directory, and a fresh terminal. The PTY receives the actual pane content
   size rather than the outer terminal size.
-- The terminal owns printable input, arrows, Enter, and ctrl+c while focused.
-  ctrl+x escapes to TUI commands; ctrl+x ctrl+x forwards a literal ctrl+x.
+- A newly launched nested process automatically owns input until it stops.
+  Its pane labels the owner as CLI or TUI. While CLI owns input, every key,
+  including tab and ctrl+c, reaches the PTY except ctrl+x.
+- ctrl+x returns input to persistent TUI control. Enter or a click in the
+  running terminal pane returns input to the CLI. A second ctrl+x from TUI
+  control opens the visible leader menu.
 - Mouse wheel scrolls terminal history. Explicit Scrollback mode gives arrows,
   pageup, pagedown, home, and end to history; esc returns to live input.
 - Terminal scrollback is bounded to 2,000 lines. Build & Deploy retains the
@@ -190,13 +195,16 @@ session.
 
 - Plan, Build, Deploy, and Clean are independent application-wide actions.
   Component selectors are deliberately omitted.
-- Build reviews build steps, skip-check, force-build, and per-launch --yes.
+- Build reviews skip-check, force-build, and per-launch --yes. Internal
+  half-public build-step selection is deliberately omitted.
 - Plan and Deploy review full-diff, force-build, rollback version or revision,
   one post-deploy Agent policy, and per-launch --yes. Plan invokes deploy with
   --plan; it is not a prerequisite for Deploy.
 - Clean removes all application build artifacts and reviews per-launch --yes.
 - Form values are remembered per context for the TUI session after launch.
-  Cancel is transactional, and --yes always reopens disabled.
+  Run is the first, centered, initially selected action; options remain in the
+  standard selectable table below it. Cancel is transactional, and --yes
+  always reopens disabled.
 - Only one Plan, Build, Deploy, or Clean command may run for an application at
   a time. Later commands are unavailable rather than queued.
 - This slice enables Dev commands only for manifest-backed local contexts.
@@ -432,7 +440,6 @@ these decision groups, which tasks.md tracks before their checkpoints:
 
 - final wide, short, narrow, and extreme header/footer priority rules,
   including Jobs, Live, and remote-lock status;
-- quit behavior for active Jobs and TUI-owned persistent sessions;
 - exact action coverage and risk class for each minimal resource subject;
 - concrete soft/default and hard bounds plus overflow review for multi-agent
   Activity;
@@ -441,7 +448,6 @@ these decision groups, which tasks.md tracks before their checkpoints:
 - Metrics acquisition and companion tooling, deliberately postponed until the
   provider-independent TUI passes review.
 
-Until quit behavior is planned, quitting is unavailable while a finite Job or
-TUI-owned Server or REPL session is active and explains that the work must be
-stopped first. This is a conservative implementation constraint, not the final
-quit policy.
+When finite Jobs or TUI-owned sessions are active, ctrl+q opens a compact
+choice with Return selected by default and Force quit as the explicit second
+choice. Force quit stops every TUI-owned child process during normal cleanup.

@@ -633,3 +633,7 @@ renderers are no longer live contracts.
   terminal review. Selected-target consolidation and cross-Server context-switch
   enforcement remain named implementation follow-ups rather than hidden
   acceptance assumptions.
+- Follow-up interaction pass unifies All/Context Commands, makes CLI/TUI input
+  ownership visible for every nested terminal, adds exact pane-driven PTY
+  resize, content-sized review dialogs with Run first, and a safe/default
+  Return plus explicit Force quit dialog. Terminal acceptance remains pending.

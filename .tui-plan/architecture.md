@@ -141,7 +141,8 @@ finite Jobs:
 
 - Server owns process control, bound ports, data directory, and terminal
   buffer. Process/ports-file evidence is not presented as HTTP health.
-- REPL owns PTY screen, input mode, scrollback, resize, and process lifecycle.
+- Each nested command or session owns a PTY screen, input mode, scrollback,
+  resize, and process lifecycle through the same terminal interaction model.
 - Live owns exact Agent identity, connection/retry state, follow state, and a
   bounded transient buffer.
 
@@ -156,7 +157,8 @@ If a TUI freshness rule conflicts with an existing cache, change the shared
 cache contract with focused tests instead of bypassing it in the renderer.
 
 Each PTY has one TerminalScreen with 2,000 lines of scrollback and is resized to
-the content rectangle from LayoutSnapshot. A finite Job keeps its terminal
+the exact visible terminal rectangle from LayoutSnapshot after every layout
+change, not only outer-terminal resize. A finite Job keeps its terminal
 after completion. The registry keeps active Jobs and the latest 20 completed
 Jobs, evicting the oldest completed record first.
 

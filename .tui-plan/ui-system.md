@@ -148,7 +148,9 @@ palette, or shortcut. Context switching must not be a top-level workspace.
 Settings must be reachable through palette, modal, or scoped actions. Settings
 must not be a top-level workspace unless this document is revised.
 
-The command palette is the universal jump surface. It should be able to search
+Commands is one universal jump surface with All and Context scopes. `ctrl+p`
+opens All, `ctrl+x a` opens Context, and left/right or mouse switches the scope
+without clearing the current query. It should be able to search
 and open:
 
 - actions;
@@ -239,8 +241,8 @@ focus modes next, then exits the current drilldown one level. Normal shell
 `esc` should not be the primary quit command.
 
 ctrl+q quits from a normal shell state. If Jobs or TUI-owned sessions are
-active, quit follows the explicit lifecycle policy that remains a planning gate
-in tasks.md and never silently abandons a mutating Job.
+active, it opens Return/Force quit choices with Return selected. Force quit is
+explicit and stops all TUI-owned child processes during cleanup.
 
 The initial navigation history model is back/step-out only. Forward history is
 deferred until there is a concrete workflow that needs it.
@@ -533,9 +535,11 @@ other text field is focused, printable keys must type into that field. Only
 escape, control keys, leader commands, and explicit accept/cancel keys should
 interrupt text entry.
 
-REPL raw-input mode must be explicit. Starting or showing a REPL panel should
-not silently capture all normal TUI keys unless the user focuses the REPL input
-mode. Leaving REPL focus returns keyboard input to the TUI.
+All nested terminals use the same explicit ownership model. Launch gives input
+to the CLI automatically and the pane shows that ownership. ctrl+x returns to
+persistent TUI control; Enter or clicking the running pane returns to CLI input.
+While the CLI owns input, every other key, including tab and ctrl+c, reaches the
+PTY. The same rules apply to finite commands, Server, and REPL.
 
 Lists and tables should use arrow-first navigation:
 
@@ -574,7 +578,7 @@ switching workspaces does not stop it.
 
 Context switching confirms and stops context-bound Jobs and REPL. Server may
 continue only when the server target is unchanged. Live closes on context
-change. The remaining quit policy is tracked explicitly in tasks.md.
+change. Active-work quit uses the explicit Return/Force quit dialog.
 
 ## Context And Environments
 
@@ -770,7 +774,8 @@ These are required planning gates, not implementation details to infer:
   Server, and REPL;
 - responsive header/footer priority rules for Jobs, Live, context, and remote
   lock state;
-- quit behavior with active Jobs and TUI-owned Server, REPL, and Live sessions;
+- integration of the accepted active-work quit behavior with the future Live
+  session;
 - exact contextual action and risk inventory for each minimal Ops subject;
 - Activity soft/default and hard Agent bounds and overflow review;
 - backend-independent Metrics range, aggregation, refresh, auto-refresh, and

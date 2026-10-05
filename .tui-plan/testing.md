@@ -87,8 +87,9 @@ High-value scenarios:
 - non-manifest, unreachable, and incomplete contexts keep unavailable views
   and actions discoverable with concrete reasons;
 - only visual preferences survive restart; operational session state does not;
-- quit behavior covers every active Job and TUI-owned session combination once
-  the quit-policy planning gate is closed.
+- active-work quit defaults to Return and requires an explicit Force quit for
+  every implemented TUI-owned Job/session combination; Live joins this matrix
+  when implemented.
 # TUI preview verification
 
 The `tui-preview` feature contains the host and a feature-gated production
