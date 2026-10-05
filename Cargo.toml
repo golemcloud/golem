@@ -66,14 +66,12 @@ async-broadcast = "0.7.2"
 async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-lock = "3.4.0"
-async-recursion = "1.1.1"
 async-rwlock = "1.3.0"
-async-scoped = "0.9.0"
 async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
 aws-config = "1.5.10"
-aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio", "rustls"] }
+aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 backtrace-on-stack-overflow = "0.3.0"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22.1"
@@ -119,7 +117,6 @@ fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 fd-lock = "4.0.4"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-fmt = "0.1.0"
 flate2 = "1.1.0"
 fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", "enable-rustls-ring", "custom-reconnect-errors"] }
 fs-set-times = "0.20.3"
@@ -207,7 +204,6 @@ poem-openapi-derive = "=5.1.16"
 portable-pty = "0.9.0"
 postgres = "0.19.10"
 pretty_assertions = "1.4.1"
-pretty_env_logger = "0.5.0"
 prettyplease = "0.2.25"
 proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.92"
@@ -302,7 +298,7 @@ tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 tower = "0.5.2"
-try_match = "0.4.2"
+try_match = { version = "0.4.2", default-features = false }
 trybuild = "1.0"
 tryhard = "0.5.1"
 typed-path = { version = "0.10.0", default-features = false }
@@ -317,7 +313,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.7", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.8", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"

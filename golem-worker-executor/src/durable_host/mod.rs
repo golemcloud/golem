@@ -3794,7 +3794,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let tx_id = try_match!(
             begin_entry,
-            OplogEntry::BeginRemoteTransaction { transaction_id, .. }
+            OplogEntry::BeginRemoteTransaction { transaction_id, .. } => transaction_id
         )
         .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
 
