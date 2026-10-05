@@ -6593,10 +6593,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
             .await?;
         let snapshots = this.agent_filesystem_snapshots();
         let on_stale = |agent: &OwnedAgentId, fingerprint| {
-            crate::worker::filesystem_snapshots::delete_snapshots_of_stale_incarnation(
-                &snapshots,
-                agent,
-                fingerprint,
+            // Only a durable agent has a member in the recovery index.
+            snapshots.delete_all_snapshots(
+                &crate::filesystem_snapshot::AgentSnapshots::agent(agent, fingerprint),
+                AgentMode::Durable,
             )
         };
         let workers = this

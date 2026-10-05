@@ -37,7 +37,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::oplog::{OplogEntry, RawSnapshotData};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, UsableAutomaticSnapshot};
+use golem_common::model::{AgentId, UsableAutomaticSnapshot};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
@@ -1068,19 +1068,6 @@ pub(crate) fn reverted_snapshot_names(
         )
         .1
         .into_boxed_slice()
-}
-
-/// Requests the delete of all snapshots of the dead incarnation `fingerprint` of `agent`, whose
-/// recovery-index member is stale. Only durable agents have such a member.
-pub(crate) fn delete_snapshots_of_stale_incarnation(
-    snapshots: &AgentFilesystemSnapshots,
-    agent: &OwnedAgentId,
-    fingerprint: AgentFingerprint,
-) {
-    snapshots.delete_all_snapshots(
-        &AgentSnapshots::agent(agent, fingerprint),
-        AgentMode::Durable,
-    )
 }
 
 #[cfg(test)]
@@ -2580,68 +2567,5 @@ mod tests {
             ),
             Box::from([p1])
         );
-    }
-
-    #[test]
-    async fn the_recovery_scan_requests_the_delete_of_all_snapshots_of_a_stale_running_worker() {
-        let store = Arc::new(SpacedStore::default());
-        let shutdown = crate::services::shutdown::Shutdown::new();
-        let snapshots = AgentFilesystemSnapshots::bind(
-            &crate::services::golem_config::FilesystemSnapshotsConfig::default(),
-            crate::services::agent_filesystem_snapshots::StoreSource::given(
-                store.clone(),
-                crate::services::golem_config::FilesystemSnapshotUploadConfig::default(),
-            ),
-            false,
-            &shutdown,
-        )
-        .unwrap();
-        let stale = golem_common::model::OwnedAgentId::new(
-            golem_common::model::environment::EnvironmentId::new(),
-            &AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: "stale".to_string(),
-            },
-        );
-        let fingerprint = AgentFingerprint(uuid::Uuid::new_v4());
-        let agent = AgentSnapshots::agent(&stale, fingerprint);
-        let tree = tempfile::tempdir().unwrap();
-        crate::filesystem_snapshot::FilesystemSnapshotStore::save(
-            store.as_ref(),
-            &agent,
-            &crate::filesystem_snapshot::SnapshotName::new(
-                FilesystemSnapshotName::periodic().as_str(),
-            )
-            .unwrap(),
-            tree.path(),
-            None,
-            crate::filesystem_snapshot::never_cancelled(),
-            &crate::filesystem_snapshot::Unlimited,
-        )
-        .await
-        .unwrap();
-
-        super::delete_snapshots_of_stale_incarnation(&snapshots, &stale, fingerprint);
-        let deleted = tokio::time::timeout(Duration::from_secs(10), async {
-            futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter(
-                futures::StreamExt::then(futures::stream::repeat(()), |()| async {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                    crate::filesystem_snapshot::FilesystemSnapshotStore::list(
-                        &store.memory,
-                        &agent,
-                        &crate::filesystem_snapshot::Unlimited,
-                    )
-                    .await
-                    .map(|listed| listed.is_empty())
-                    .unwrap_or(false)
-                }),
-                |empty| std::future::ready(*empty),
-            )))
-            .await
-        })
-        .await;
-
-        assert_eq!(deleted, Ok(Some(true)));
-        shut_down(shutdown).await;
     }
 }
