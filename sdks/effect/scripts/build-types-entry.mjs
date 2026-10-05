@@ -9,7 +9,7 @@
  */
 import { fileURLToPath } from "node:url"
 import { dirname, relative, resolve } from "node:path"
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import ts from "typescript"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -171,37 +171,34 @@ facades.push(
   ["Ignite/IgniteClient", resolve(distDir, "ignite.mjs")],
 )
 
-// Component builds need the tree-shakeable source modules, while published
+// Component builds need a complete tree-shakeable module graph, while public
 // subpath imports use the facades below to share state with the bundled entry.
-// Preserve the source implementations under one private root before replacing
-// the public files, and keep their relative imports within that same graph.
-const componentDir = resolve(distDir, "src/internal/component")
-const componentFiles = new Map(
-  [
-    ["index", resolve(distDir, "src/index.js")],
-    ["HttpRouter", resolve(distDir, "src/HttpRouter.js")],
-  ].map(([modulePath, source]) => [source, resolve(componentDir, `${modulePath}.js`)]),
-)
-for (const [source, output] of componentFiles) {
-  mkdirSync(dirname(output), { recursive: true })
-  const input = readFileSync(source, "utf8")
-  const componentSource =
-    source === resolve(distDir, "src/index.js")
-      ? input.replace(
-          /^export \{ (?:guest as golemAgent200Guest|toolGuest as golemTool010Guest|toolMiddlewareGuest)[^\n]*\n/gm,
-          "",
-        )
-      : input
-  writeFileSync(
-    output,
-    rewriteRelativeImports(
-      componentSource,
-      source,
-      (target) => componentFiles.get(target) ?? target,
-      output,
-    ),
-  )
+// Preserve every runtime module under one private root before replacing the
+// public files so all transitive imports remain inside the modular graph.
+const componentDir = resolve(distDir, "component")
+rmSync(componentDir, { recursive: true, force: true })
+function copyComponentModules(sourceDir, outputDir) {
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    const source = resolve(sourceDir, entry.name)
+    const output = resolve(outputDir, entry.name)
+    if (entry.isDirectory()) {
+      copyComponentModules(source, output)
+    } else if (source.endsWith(".js") || source.endsWith(".mjs")) {
+      mkdirSync(dirname(output), { recursive: true })
+      copyFileSync(source, output)
+    }
+  }
 }
+copyComponentModules(resolve(distDir, "src"), componentDir)
+const componentIndex = resolve(componentDir, "index.js")
+writeFileSync(
+  componentIndex,
+  readFileSync(componentIndex, "utf8").replace(
+    /^export \{ (?:guest as golemAgent200Guest|toolGuest as golemTool010Guest|toolMiddlewareGuest)[^\n]*\n/gm,
+    "",
+  ),
+)
+writeFileSync(resolve(componentDir, "WitCodec.js"), 'export * from "./internal/WitCodec.js";\n')
 
 for (const [modulePath, owner, namespace] of facades) {
   const source = program.getSourceFile(resolve(root, "src", `${modulePath}.ts`))

@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { nodeResolve } from "@rollup/plugin-node-resolve"
+import { rollup } from "rollup"
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const npmCli = process.env.npm_execpath
@@ -93,6 +95,76 @@ try {
     ],
     { cwd: temporaryDirectory },
   )
+  const componentInput = join(temporaryDirectory, "component.mjs")
+  writeFileSync(
+    componentInput,
+    `import { Effect, Schema } from "effect"
+import { WitCodec } from "@golemcloud/effect-golem"
+import { defineAgent } from "@golemcloud/effect-golem/Agent"
+import { method } from "@golemcloud/effect-golem/Method"
+import { UnsupportedSchemaError } from "@golemcloud/effect-golem/WitCodec"
+
+if (WitCodec.UnsupportedSchemaError !== UnsupportedSchemaError)
+  throw new Error("WitCodec root and subpath imports have different identities")
+
+defineAgent({
+  name: "PackedCounter",
+  id: { initial: Schema.Number },
+  methods: { get: method({ input: {}, success: Schema.Number }) },
+}).implement({
+  init: ({ initial }) => Effect.succeed({ value: initial }),
+  methods: (state) => ({ get: () => Effect.succeed(state.value) }),
+})
+`,
+  )
+  const { componentConfiguration: installedComponentConfiguration } = await import(
+    pathToFileURL(join(installed, "build", "component.mjs"))
+  )
+  const componentOptions = await installedComponentConfiguration(rollup, () => ({
+    input: componentInput,
+    external: (id) =>
+      id === "effect" ||
+      id === "effect/http" ||
+      id === "node:sqlite" ||
+      id.startsWith("golem:") ||
+      id.startsWith("wasi:"),
+    plugins: [nodeResolve({ extensions: [".mjs", ".js"] })],
+    onwarn: (warning) => {
+      if (warning.code !== "CIRCULAR_DEPENDENCY") throw new Error(warning.message)
+    },
+  }))
+  const componentBundle = await rollup(componentOptions)
+  try {
+    const { output } = await componentBundle.generate({ format: "esm", inlineDynamicImports: true })
+    const capabilitiesAsset = output.find(
+      (item) => item.type === "asset" && item.fileName === "capabilities.json",
+    )
+    if (!capabilitiesAsset) throw new Error("Packed component build omitted capabilities.json")
+    const capabilities = JSON.parse(String(capabilitiesAsset.source))
+    if (
+      capabilities.agents !== true ||
+      capabilities.tools !== false ||
+      capabilities.middleware !== false
+    )
+      throw new Error(
+        `Packed component selected incorrect capabilities: ${JSON.stringify(capabilities)}`,
+      )
+    const chunk = output.find((item) => item.type === "chunk")
+    if (!chunk) throw new Error("Packed component build omitted its JavaScript chunk")
+    const retained = Object.entries(chunk.modules)
+      .filter(([, info]) => info.renderedLength > 0)
+      .map(([id]) => id.replaceAll("\\", "/"))
+    if (!retained.some((id) => id.endsWith("/dist/component/internal/agent.js")))
+      throw new Error("Packed component build did not retain the modular agent runtime")
+    if (!retained.some((id) => id.endsWith("/dist/component/internal/WitCodec.js")))
+      throw new Error("Packed component build did not retain the canonical WitCodec runtime")
+    if (retained.some((id) => id.endsWith("/dist/component/WitCodec.js")))
+      throw new Error("Packed component build retained a second WitCodec implementation")
+    if (retained.some((id) => id.endsWith("/dist/index.mjs")))
+      throw new Error("Packed component build followed the public SDK bundle")
+  } finally {
+    await componentBundle.close()
+  }
   if (
     manifest.dependencies["@golemcloud/http-contract"] ||
     manifest.dependencies["@golemcloud/golem-ts-sdk"]

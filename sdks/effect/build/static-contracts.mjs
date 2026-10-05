@@ -27,6 +27,7 @@ function metadataLoader(runtime) {
     cache.set(file, module)
     const source = file
       .replace(`${path.sep}dist${path.sep}src${path.sep}`, `${path.sep}src${path.sep}`)
+      .replace(`${path.sep}dist${path.sep}component${path.sep}`, `${path.sep}src${path.sep}`)
       .replace(/\.js$/, ".ts")
     const input = fs.existsSync(source) ? source : file
     const code = ts.transpileModule(fs.readFileSync(input, "utf8"), {
