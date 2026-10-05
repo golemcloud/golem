@@ -458,3 +458,153 @@ async fn ssh_presents_a_siblings_stderr() {
         "err-1\nerr-2\ntool error: selected: \"interleave failure\"\n",
     );
 }
+
+// The prompt edits like a shell: unfinished input continues on a new line, Tab completes from
+// the agent, and a later session recalls what an earlier one ran.
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_prompt_feels_like_a_shell() {
+    let ctx = context().await;
+
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        session.expect_str("Connected to")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+
+        // An open here-document continues on a new line and runs as one command.
+        enter(
+            session,
+            "mkdir -p /tmp/ssh-edit && cd /tmp/ssh-edit && cat > alpha.txt <<EOF",
+        )?;
+        session.expect_str("\u{b7} ")?;
+        enter(session, "first line")?;
+        enter(session, "EOF")?;
+        answer_cursor_query(session)?;
+        session.expect_str("/tmp/ssh-edit")?;
+
+        // Tab completes a path on the agent, from the directory the session is in.
+        session.send("cat al\t")?;
+        session.expect_str("alpha.txt")?;
+        enter(session, "")?;
+        session.expect_str("first line")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+
+        // Tab completes command names: the shell's own, and the tools bound to the agent.
+        session.send("hostn\t")?;
+        session.expect_str("hostname")?;
+        session.send("\u{3}")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        session.send("fixtu\t")?;
+        session.expect_str("fixture")?;
+        session.send("\u{3}")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+
+        enter(session, "echo recall-$((4800+21))")?;
+        session.expect_str("recall-4821")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+
+    // A later session on the same agent recalls the last command with Up.
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        session.send("\x1b[A")?;
+        session.expect_str("4800+21")?;
+        enter(session, "")?;
+        session.expect_str("recall-4821")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+
+    // Two bash calls that sleep on one agent can fail that agent, an executor defect this test
+    // must not depend on. So each agent below runs one sleeping command at most, and a quick
+    // command first settles the session's own fetch of the command names.
+
+    // A slow command shows the indicator, which is erased before the output is written.
+    ctx.cli_interactive(["ssh", DENIED_FILES], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        enter(session, "true")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+
+        enter(session, "sleep 2; printf 'sle%s\\n' pt")?;
+        session.expect_str("Ctrl+C to stop waiting")?;
+        session.expect_str("\x1b[2K")?;
+        session.expect_str("slept")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+
+    // Ctrl+C stops waiting for a running command without ending the session.
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        enter(session, "true")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+
+        enter(session, "sleep 6")?;
+        session.expect_str("Ctrl+C to stop waiting")?;
+        session.send("\u{3}")?;
+        // Golem does not stop a call that has started, and says so without an error.
+        session.expect_str("\x1b[2KStopped waiting. The command is still running on")?;
+        session.expect_str("--lookup")?;
+        answer_cursor_query(session)?;
+        session.expect_str("[130]")?;
+
+        // The session goes on. The next command is sent once the one left running has ended.
+        std::thread::sleep(Duration::from_secs(10));
+        enter(session, "printf 'aft%s\\n' er")?;
+        session.expect_str("after")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+
+    // `help` and `tools` are answered by the session itself.
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        enter(session, "help")?;
+        session.expect_str("How this session works")?;
+        session.expect_str("exit [N]")?;
+        answer_cursor_query(session)?;
+        enter(session, "tools")?;
+        session.expect_regex("  bash\r\n  fixture")?;
+        session.expect_str("Run `NAME --help`")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+
+    // An agent with only bash bound lists only bash.
+    ctx.cli_interactive(["ssh", BASH_ONLY], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        enter(session, "tools")?;
+        session.expect_regex("  bash\r\nRun `NAME --help`")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+}

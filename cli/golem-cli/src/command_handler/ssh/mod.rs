@@ -19,34 +19,46 @@
 //! no other shell state crosses calls. Reading the next line happens locally and holds no
 //! invocation open on the agent.
 
+mod completion;
 mod contract;
+mod editor;
+mod highlight;
+mod history;
+mod progress;
+mod syntax;
 
+use self::completion::{Completions, Fetch};
 use self::contract::{
-    BashResult, CallFailure, InputMode, LocalCommand, NOT_RUN_EXIT, Outcome, PromptPart,
-    check_run_contract, classify_invoke_error, decode_result, exit_code, global_args, input_mode,
-    local_command, lookup_command, prompt, run_argv, strip_cursor_reports,
+    BashResult, CallFailure, CancelOutcome, InputMode, LocalCommand, NOT_RUN_EXIT, Outcome,
+    PromptPart, banner, check_run_contract, classify_cancel, classify_invoke_error, decode_result,
+    dimmed, exit_code, global_args, help_text, input_mode, interrupted_message, local_command,
+    lookup_command, prompt, run_argv, strip_cursor_reports, tools_listing,
 };
+use self::editor::SshPrompt;
+use self::history::{SessionHistory, history_file};
+use self::progress::Ticker;
 use crate::command_handler::Handlers;
 use crate::command_handler::tool::ToolOwner;
 use crate::context::Context;
-use crate::error::service::{ServiceError, ServiceErrorKind};
+use crate::error::service::{MapServiceError, ServiceError, ServiceErrorKind};
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
-use crate::log::{LogOutput, Output, log_anyhow_error, log_error, logln, set_log_output};
+use crate::log::{
+    LogOutput, Output, log_anyhow_error, log_error, log_preformatted, log_warn, logln,
+    set_log_output,
+};
 use crate::model::agent::RawAgentId;
 use anyhow::anyhow;
+use golem_client::api::WorkerClient;
 use golem_client::model::NativeToolInvocationMode;
 use golem_common::base_model::tool::ToolName;
 use golem_common::model::IdempotencyKey;
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_common::schema::tool::Tool;
 use golem_schema::tool::argv::{self, ParsedToolArguments};
-use reedline::{
-    Color, DefaultHinter, Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus,
-    Reedline, Signal,
-};
-use std::borrow::Cow;
+use reedline::{Color, Reedline, Signal};
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines, Stdin};
 use tracing::debug;
 
@@ -66,12 +78,115 @@ struct Session {
     start_cwd: String,
     /// The directory the last command ended in, passed as `--cwd` to the next one.
     cwd: String,
+    /// Whether `run` takes `--timeout`, which then bounds the editor's helper scripts.
+    helper_timeout: bool,
 }
 
 enum Submission {
     Completed(BashResult),
     Failed(CallFailure),
-    Interrupted,
+    /// Ctrl+C stopped waiting; this is what the cancel request then did.
+    Interrupted(CancelOutcome),
+}
+
+/// How long the editor waits for a helper script before it gives up on it.
+const HELPER_WAIT: Duration = Duration::from_secs(3);
+
+/// How long Ctrl+C waits for the answer to its cancel request.
+const CANCEL_WAIT: Duration = Duration::from_secs(5);
+
+/// How long the request that takes a timed-out helper script out of the agent's queue may
+/// take before the editor moves on without its answer.
+const HELPER_CANCEL_WAIT: Duration = Duration::from_secs(1);
+
+/// The tool's own limit on a helper script, in seconds.
+const HELPER_TIME_LIMIT: u32 = 5;
+
+/// Runs the editor's helper scripts on the agent. The editor calls it from its blocking
+/// thread, never from an async task.
+struct AgentFetcher {
+    ctx: Arc<Context>,
+    owner: ToolOwner,
+    tool: String,
+    definition: Tool,
+    with_timeout: bool,
+    runtime: tokio::runtime::Handle,
+}
+
+impl Fetch for AgentFetcher {
+    fn run(&self, cwd: &str, script: &str) -> Option<String> {
+        let argv = run_argv(cwd, self.with_timeout.then_some(HELPER_TIME_LIMIT), script);
+        let Ok(ParsedToolArguments::Invoke {
+            command_path,
+            input,
+        }) = argv::parse(&self.definition, &argv)
+        else {
+            return None;
+        };
+        let input = ExternalTypedSchemaValue::try_from(*input).ok()?;
+        let key = IdempotencyKey::fresh();
+        let tool_handler = self.ctx.tool_handler();
+        let call = tool_handler.invoke_tool_scalar(
+            &self.owner,
+            &self.tool,
+            command_path,
+            Some(input),
+            &key,
+            NativeToolInvocationMode::Await,
+            None,
+        );
+        let give_up = async {
+            debug!("a helper script got no answer in time");
+            // The agent is busy and the script is still queued: take it out again, without
+            // holding the prompt for long if that request is slow as well.
+            let cancel = cancel_call(&self.ctx, &self.owner, &key);
+            let _ = tokio::time::timeout(HELPER_CANCEL_WAIT, cancel).await;
+        };
+        let response = self
+            .runtime
+            .block_on(within(HELPER_WAIT, call, give_up))?
+            .inspect_err(|error| debug!(error = %error, "a helper script failed"))
+            .ok()?;
+        let result = decode_result(response.result).ok()?;
+        (result.exit_code == 0).then_some(result.stdout)
+    }
+}
+
+/// Awaits `call` for at most `wait`. When it has not answered by then, runs `give_up` and
+/// answers `None`.
+async fn within<T>(
+    wait: Duration,
+    call: impl Future<Output = T>,
+    give_up: impl Future<Output = ()>,
+) -> Option<T> {
+    match tokio::time::timeout(wait, call).await {
+        Ok(answer) => Some(answer),
+        Err(_) => {
+            give_up.await;
+            None
+        }
+    }
+}
+
+/// Asks Golem to cancel the call under `key`. True when the call was still queued and is now
+/// cancelled; Golem does not stop a call that has started.
+async fn cancel_call(
+    ctx: &Arc<Context>,
+    owner: &ToolOwner,
+    key: &IdempotencyKey,
+) -> anyhow::Result<bool> {
+    let agent = owner
+        .agent_id
+        .as_ref()
+        .ok_or_else(|| anyhow!("the session has no agent"))?;
+    Ok(ctx
+        .golem_clients()
+        .await?
+        .worker
+        .cancel_invocation(&agent.component_id.0, &agent.agent_id, &key.value)
+        .await
+        .map(|result| result.canceled)
+        .map_service_error()?)
 }
 
 impl SshCommandHandler {
@@ -98,6 +213,7 @@ impl SshCommandHandler {
 
         let mut session = match self.connect(&agent, tool.as_str(), timeout).await {
             Ok((owner, definition)) => Session {
+                helper_timeout: check_run_contract(&definition, true).is_ok(),
                 owner,
                 agent: agent.0,
                 tool: tool.as_str().to_string(),
@@ -156,12 +272,46 @@ impl SshCommandHandler {
         anyhow!(PipedExitCode(NOT_RUN_EXIT))
     }
 
+    fn fetcher(&self, session: &Session) -> AgentFetcher {
+        AgentFetcher {
+            ctx: self.ctx.clone(),
+            owner: session.owner.clone(),
+            tool: session.tool.clone(),
+            definition: session.definition.clone(),
+            with_timeout: session.helper_timeout,
+            runtime: tokio::runtime::Handle::current(),
+        }
+    }
+
+    /// The agent's history file, or history for this session only when the file cannot be used.
+    fn history(&self, session: &Session) -> SessionHistory {
+        let Some(agent) = &session.owner.agent_id else {
+            return SessionHistory::in_memory();
+        };
+        let path = history_file(
+            self.ctx.config_dir(),
+            self.ctx.worker_service_url().as_str(),
+            &session.owner.application_name.to_string(),
+            &session.owner.environment_name.to_string(),
+            &agent.component_id.0.to_string(),
+            &agent.agent_id,
+        );
+        SessionHistory::open(&path).unwrap_or_else(|error| {
+            log_warn(format!(
+                "the command history in {} cannot be used ({error}); this session's commands \
+                 will not be kept",
+                path.display()
+            ));
+            SessionHistory::in_memory()
+        })
+    }
+
     /// `-c`: one submission. On success the process output is exactly the script's.
     async fn run_once(&self, session: &Session, script: &str) -> u8 {
         let key = IdempotencyKey::fresh();
         match self.submit(session, script, &key).await {
             Submission::Completed(result) => {
-                write_output(&result);
+                write_output(&result, false);
                 exit_code(Outcome::Ran(result.exit_code))
             }
             Submission::Failed(failure) => {
@@ -171,8 +321,8 @@ impl SshCommandHandler {
                 }
                 exit_code(Outcome::NotRun)
             }
-            Submission::Interrupted => {
-                self.report_interrupted(session, &key);
+            Submission::Interrupted(outcome) => {
+                self.report_interrupted(session, &key, &outcome);
                 exit_code(Outcome::Interrupted)
             }
         }
@@ -186,17 +336,32 @@ impl SshCommandHandler {
         let terminal = mode != InputMode::Lines;
         let colorize = terminal && self.ctx.should_colorize();
         if terminal {
-            logln(format!(
-                "Connected to {} via `{}`. Each command runs in a fresh shell; only the directory \
-                 carries over. `exit` or Ctrl+D to leave.",
-                session.agent, session.tool
-            ));
+            logln(banner(&session.agent, &session.tool));
         }
+        let completions = Completions::new(Arc::new(self.fetcher(session)), &session.cwd);
         let mut input = match mode {
-            InputMode::Editor => Input::Editor(Some(Box::new(editor(colorize)))),
+            InputMode::Editor => {
+                // Fetched once and in the background, so command names are coloured from the
+                // first prompt on.
+                let loader = completions.clone();
+                tokio::task::spawn_blocking(move || {
+                    loader.load_commands();
+                });
+                Input::Editor(Some(Box::new(editor::build(
+                    colorize,
+                    self.history(session),
+                    completions.clone(),
+                ))))
+            }
             InputMode::PromptedLines => Input::lines(true),
             InputMode::Lines => Input::lines(false),
         };
+        let mut history_failed = false;
+        // The indicator belongs to the editor on a terminal wide enough to hold it on one line.
+        let show_progress = mode == InputMode::Editor
+            && std::io::stderr().is_terminal()
+            && crossterm::terminal::size().is_ok_and(|(columns, _)| progress::fits(columns));
+        let dim_stderr = colorize && std::io::stderr().is_terminal();
 
         let mut last_status = 0;
         loop {
@@ -211,14 +376,28 @@ impl SshCommandHandler {
             if line.trim().is_empty() {
                 continue;
             }
-            if let Some(LocalCommand::Exit(status)) = local_command(&line) {
-                return Ok(status.unwrap_or(last_status));
+            match local_command(&line) {
+                Some(LocalCommand::Exit(status)) => return Ok(status.unwrap_or(last_status)),
+                // Only a person at a terminal asks the session; piped lines all go to the tool.
+                Some(LocalCommand::Help) if terminal => {
+                    log_preformatted(help_text(&session.tool, session.timeout));
+                    continue;
+                }
+                Some(LocalCommand::Tools) if terminal => {
+                    self.print_tools(session).await;
+                    continue;
+                }
+                _ => {}
             }
 
             let key = IdempotencyKey::fresh();
-            match self.submit(session, &line, &key).await {
+            let ticker = show_progress.then(|| Ticker::start(colorize));
+            let submission = self.submit(session, &line, &key).await;
+            // Erased before anything else is written.
+            drop(ticker);
+            match submission {
                 Submission::Completed(result) => {
-                    write_output(&result);
+                    write_output(&result, dim_stderr);
                     if terminal {
                         end_line(&result, colorize);
                     }
@@ -246,10 +425,19 @@ impl SshCommandHandler {
                     }
                     last_status = exit_code(Outcome::NotRun);
                 }
-                Submission::Interrupted => {
-                    self.report_interrupted(session, &key);
-                    return Ok(exit_code(Outcome::Interrupted));
+                Submission::Interrupted(outcome) => {
+                    self.report_interrupted(session, &key, &outcome);
+                    if !terminal {
+                        return Ok(exit_code(Outcome::Interrupted));
+                    }
+                    last_status = exit_code(Outcome::Interrupted);
                 }
+            }
+            // Any command may have changed the agent's files or the session's directory.
+            completions.command_finished(&session.cwd);
+            if !history_failed && let Err(error) = input.sync_history() {
+                history_failed = true;
+                log_warn(format!("the command history could not be saved: {error}"));
             }
         }
     }
@@ -290,16 +478,32 @@ impl SshCommandHandler {
             NativeToolInvocationMode::Await,
             None,
         );
-        tokio::select! {
-            response = call => match response {
-                Ok(response) => match decode_result(response.result) {
-                    Ok(result) => Submission::Completed(result),
-                    Err(failure) => Submission::Failed(failure),
-                },
-                Err(error) => Submission::Failed(invoke_failure(error)),
+        let response = tokio::select! {
+            response = call => Some(response),
+            _ = tokio::signal::ctrl_c() => None,
+        };
+        match response {
+            Some(Ok(response)) => match decode_result(response.result) {
+                Ok(result) => Submission::Completed(result),
+                Err(failure) => Submission::Failed(failure),
             },
-            _ = tokio::signal::ctrl_c() => Submission::Interrupted,
+            Some(Err(error)) => Submission::Failed(invoke_failure(error)),
+            None => Submission::Interrupted(self.cancel(session, key).await),
         }
+    }
+
+    /// Asks Golem to cancel the call Ctrl+C stopped waiting for, and reads the answer.
+    async fn cancel(&self, session: &Session, key: &IdempotencyKey) -> CancelOutcome {
+        let request = cancel_call(&self.ctx, &session.owner, key);
+        classify_cancel(match tokio::time::timeout(CANCEL_WAIT, request).await {
+            Ok(Ok(cancelled)) => Ok(cancelled),
+            Ok(Err(error)) => Err(match error_response(&error) {
+                Some((_, _, messages)) if !messages.is_empty() => messages.join("; "),
+                Some((_, rendered, _)) => rendered,
+                None => format!("{error:#}"),
+            }),
+            Err(_) => Err("no answer to the cancel request".to_string()),
+        })
     }
 
     /// Bash refused the remembered directory before running anything: go back to where the
@@ -344,13 +548,16 @@ impl SshCommandHandler {
         }
     }
 
-    fn report_interrupted(&self, session: &Session, key: &IdempotencyKey) {
+    fn report_interrupted(&self, session: &Session, key: &IdempotencyKey, outcome: &CancelOutcome) {
         set_log_output(Output::Stderr);
-        log_error(format!(
-            "interrupted; the command may still be running on {}",
-            session.agent
+        logln(interrupted_message(
+            outcome,
+            &session.agent,
+            session.timeout,
         ));
-        self.report_lookup(session, key);
+        if matches!(outcome, CancelOutcome::Running { .. }) {
+            self.report_lookup(session, key);
+        }
     }
 
     /// Tells the user how to fetch the result of a command whose outcome this session did not
@@ -367,6 +574,60 @@ impl SshCommandHandler {
                 &session.tool,
             )
         ));
+    }
+
+    /// `tools`: the tools bound to the session's agent.
+    async fn print_tools(&self, session: &Session) {
+        match self.bound_tools(session).await {
+            Ok(tools) => log_preformatted(tools_listing(&tools)),
+            Err(error) => log_error(format!("the tools could not be listed: {error:#}")),
+        }
+    }
+
+    /// The name and summary of every tool registered in the agent's environment that Golem
+    /// resolves for this agent, by name.
+    async fn bound_tools(&self, session: &Session) -> anyhow::Result<Vec<(String, String)>> {
+        let tool_handler = self.ctx.tool_handler();
+        let mut names: Vec<String> = tool_handler
+            .registered_tools(&session.owner)
+            .await?
+            .iter()
+            .filter_map(|tool| tool.commands.nodes.first().map(|root| root.name.clone()))
+            .collect();
+        names.sort();
+        names.dedup();
+        let described = futures_util::future::join_all(
+            names
+                .iter()
+                .map(|name| tool_handler.describe_bound_tool(&session.owner, name)),
+        )
+        .await;
+
+        let mut tools = Vec::new();
+        let mut first_error = None;
+        for (name, described) in names.into_iter().zip(described) {
+            match described {
+                Ok(described) => {
+                    let summary = described
+                        .definition
+                        .commands
+                        .nodes
+                        .first()
+                        .map(|root| root.doc.summary.clone())
+                        .unwrap_or_default();
+                    tools.push((name, summary));
+                }
+                // Registered in the environment, but not bound to this agent.
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        match first_error {
+            // The session's own tool is bound, so finding none means the lookups failed.
+            Some(error) if tools.is_empty() => Err(error),
+            _ => Ok(tools),
+        }
     }
 
     /// The global options that select this session's agent.
@@ -419,13 +680,19 @@ fn error_response(error: &anyhow::Error) -> Option<(u16, String, Vec<String>)> {
     }
 }
 
-/// Writes the script's stdout and stderr unchanged to the process's.
-fn write_output(result: &BashResult) {
+/// Writes the script's stdout and stderr to the process's. They are unchanged unless
+/// `dim_stderr` is set, which marks stderr at an interactive prompt.
+fn write_output(result: &BashResult, dim_stderr: bool) {
     let mut stdout = std::io::stdout().lock();
     let _ = stdout.write_all(result.stdout.as_bytes());
     let _ = stdout.flush();
+    let text = if dim_stderr {
+        dimmed(&result.stderr)
+    } else {
+        result.stderr.as_str().into()
+    };
     let mut stderr = std::io::stderr().lock();
-    let _ = stderr.write_all(result.stderr.as_bytes());
+    let _ = stderr.write_all(text.as_bytes());
     let _ = stderr.flush();
 }
 
@@ -463,15 +730,6 @@ fn paint(colorize: bool, part: PromptPart, text: &str) -> String {
     .to_string()
 }
 
-/// The line editor: in-memory history with a dim suggestion from it. It paints on stderr.
-fn editor(colorize: bool) -> Reedline {
-    Reedline::create()
-        .with_hinter(Box::new(
-            DefaultHinter::default().with_style(Color::DarkGray.normal()),
-        ))
-        .with_ansi_colors(colorize)
-}
-
 enum Input {
     /// A terminal: the editor, taken out while a blocking read runs.
     Editor(Option<Box<Reedline>>),
@@ -495,6 +753,14 @@ impl Input {
         Input::Lines {
             lines: BufReader::new(tokio::io::stdin()).lines(),
             prompt,
+        }
+    }
+
+    /// Writes the editor's history to its file.
+    fn sync_history(&mut self) -> std::io::Result<()> {
+        match self {
+            Input::Editor(Some(editor)) => editor.sync_history(),
+            _ => Ok(()),
         }
     }
 
@@ -543,45 +809,38 @@ impl Input {
     }
 }
 
-struct SshPrompt(String);
-
-impl Prompt for SshPrompt {
-    fn render_prompt_left(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.0)
-    }
-
-    fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Borrowed("")
-    }
-
-    fn render_prompt_indicator(&self, _mode: PromptEditMode) -> Cow<'_, str> {
-        Cow::Borrowed("")
-    }
-
-    fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
-        Cow::Borrowed("\u{b7} ")
-    }
-
-    fn render_prompt_history_search_indicator(
-        &self,
-        history_search: PromptHistorySearch,
-    ) -> Cow<'_, str> {
-        let failing = match history_search.status {
-            PromptHistorySearchStatus::Failing => "failing ",
-            PromptHistorySearchStatus::Passing => "",
-        };
-        Cow::Owned(format!(
-            "({failing}reverse-search: {}) ",
-            history_search.term
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::within;
     use crate::command::{GolemCliCommand, GolemCliSubcommand};
     use clap::Parser;
+    use std::cell::Cell;
+    use std::time::Duration;
     use test_r::test;
+
+    #[test]
+    fn a_call_that_does_not_answer_in_time_is_given_up() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+
+        let gave_up = Cell::new(false);
+        let late: Option<()> = runtime.block_on(within(
+            Duration::from_millis(20),
+            std::future::pending(),
+            async { gave_up.set(true) },
+        ));
+        assert_eq!(late, None);
+        assert!(gave_up.get());
+
+        let gave_up = Cell::new(false);
+        let prompt = runtime.block_on(within(Duration::from_secs(30), async { 7 }, async {
+            gave_up.set(true)
+        }));
+        assert_eq!(prompt, Some(7));
+        assert!(!gave_up.get());
+    }
 
     #[test]
     fn a_command_script_may_start_with_a_dash() {

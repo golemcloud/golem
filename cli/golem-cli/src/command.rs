@@ -780,8 +780,13 @@ pub enum GolemCliSubcommand {
     /// in does; it is passed as `--cwd` to the next one. Anything that must last belongs in the
     /// agent's files. Waiting at the prompt holds no invocation open on the agent.
     ///
-    /// Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line. When stdin is not a
-    /// terminal, each input line is one command and no prompt is printed.
+    /// The prompt continues unfinished input on a new line, completes command names and paths
+    /// on the agent with Tab, and keeps a history per agent. `help` explains the session and
+    /// `tools` lists the tools bound to the agent. Leave with `exit`, `exit N` or Ctrl+D.
+    /// Ctrl+C clears the line; while a command runs it stops waiting for it, and the command
+    /// keeps running on the agent unless it was still queued.
+    ///
+    /// When stdin is not a terminal, each input line is one command and no prompt is printed.
     #[command(after_help = crate::command_examples::SSH)]
     Ssh {
         /// The existing agent, in the same forms `tool invoke --agent` accepts

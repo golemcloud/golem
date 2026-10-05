@@ -28,7 +28,7 @@ use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
     EnvironmentToolGrantGetView, EnvironmentToolGrantListView, EnvironmentToolGrantRestoreView,
-    EnvironmentToolGrantView,
+    EnvironmentToolGrantView, ResolvedEnvironmentIdentity,
 };
 use crate::model::format::Format;
 use crate::model::tool_deployment::{DeployedToolListView, DeployedToolView};
@@ -68,6 +68,7 @@ use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use golem_schema::tool::argv as arguments;
 use std::io::Read;
@@ -81,11 +82,14 @@ pub struct ToolCommandHandler {
 }
 
 /// The resolved target of a native tool call: an existing agent, or a component baseline.
+#[derive(Clone)]
 pub(crate) struct ToolOwner {
     pub application_name: ApplicationName,
     pub environment_name: EnvironmentName,
     pub agent_id: Option<AgentId>,
     pub component_id: Option<ComponentId>,
+    /// The environment the owner lives in.
+    pub environment: ResolvedEnvironmentIdentity,
 }
 
 impl ToolCommandHandler {
@@ -367,6 +371,7 @@ impl ToolCommandHandler {
                 environment_name: environment.environment_name.clone(),
                 agent_id: None,
                 component_id: Some(component.id),
+                environment,
             }
         } else {
             unreachable!("clap requires exactly one native tool target")
@@ -555,14 +560,16 @@ impl ToolCommandHandler {
             .resolve_component(&matched.environment, &matched.component_name, None)
             .await?
             .ok_or_else(|| anyhow!("Component '{}' is not deployed", matched.component_name))?;
+        let environment = matched.environment;
         Ok(ToolOwner {
-            application_name: matched.environment.application_name,
-            environment_name: matched.environment.environment_name,
+            application_name: environment.application_name.clone(),
+            environment_name: environment.environment_name.clone(),
             agent_id: Some(AgentId {
                 component_id: component.id,
                 agent_id: matched.agent_id.0,
             }),
             component_id: None,
+            environment,
         })
     }
 
@@ -586,6 +593,32 @@ impl ToolCommandHandler {
             })
             .await
             .map_service_error()?)
+    }
+
+    /// The definitions of the tools registered in the owner's environment, from its current
+    /// deployment. Which of them are bound to the owner is a separate question; see
+    /// [`Self::describe_bound_tool`].
+    pub(crate) async fn registered_tools(&self, owner: &ToolOwner) -> anyhow::Result<Vec<Tool>> {
+        let environment = &owner.environment;
+        environment
+            .with_current_deployment_revision_or_default_warn(|revision| async move {
+                Ok(self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment
+                    .list_deployment_registered_tools(
+                        &environment.environment_id.0,
+                        revision.into(),
+                    )
+                    .await
+                    .map_service_error()?
+                    .values
+                    .into_iter()
+                    .map(|tool| tool.definition)
+                    .collect())
+            })
+            .await
     }
 
     /// Submits one scalar tool invocation under the given idempotency key.

@@ -74,6 +74,10 @@ pub enum Outcome {
 pub enum LocalCommand {
     /// `exit` leaves with the last command's status; `exit N` leaves with `N`.
     Exit(Option<u8>),
+    /// `help` explains how the session works.
+    Help,
+    /// `tools` lists the tools bound to the agent.
+    Tools,
 }
 
 /// Checks that `tool` offers the `run` command `golem ssh` submits to, before anything is
@@ -261,20 +265,22 @@ fn error_detail(payload: &TypedSchemaValue) -> String {
     }
 }
 
-/// Recognises a line that is exactly `exit` or `exit N`, ignoring surrounding whitespace. As in
-/// bash, `N` is taken modulo 256.
+/// Recognises the lines the session answers itself, each alone on its line and ignoring
+/// surrounding whitespace: `exit` or `exit N` (as in bash, `N` is taken modulo 256), `help`
+/// and `tools`. Anything more, such as `help cd` or `builtin help`, is a command for the tool.
 pub fn local_command(line: &str) -> Option<LocalCommand> {
     let mut words = line.split_whitespace();
-    if words.next() != Some("exit") {
-        return None;
-    }
-    match (words.next(), words.next()) {
-        (None, _) => Some(LocalCommand::Exit(None)),
-        (Some(status), None) if status.bytes().all(|byte| byte.is_ascii_digit()) => Some(
-            LocalCommand::Exit(Some(status.bytes().fold(0u8, |status, digit| {
-                status.wrapping_mul(10).wrapping_add(digit - b'0')
-            }))),
-        ),
+    match (words.next(), words.next(), words.next()) {
+        (Some("help"), None, _) => Some(LocalCommand::Help),
+        (Some("tools"), None, _) => Some(LocalCommand::Tools),
+        (Some("exit"), None, _) => Some(LocalCommand::Exit(None)),
+        (Some("exit"), Some(status), None) if status.bytes().all(|byte| byte.is_ascii_digit()) => {
+            Some(LocalCommand::Exit(Some(
+                status.bytes().fold(0u8, |status, digit| {
+                    status.wrapping_mul(10).wrapping_add(digit - b'0')
+                }),
+            )))
+        }
         _ => None,
     }
 }
@@ -444,13 +450,127 @@ pub fn exit_code(outcome: Outcome) -> u8 {
     }
 }
 
+/// What the cancel request did to a call that Ctrl+C stopped waiting for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CancelOutcome {
+    /// The call was still queued and will not run.
+    Cancelled,
+    /// The call had started and runs on; `error` is set when the request itself failed.
+    Running { error: Option<String> },
+}
+
+/// Reads the answer to a cancel request: whether it cancelled, or the failed request's message.
+/// Golem cancels a call only while it is queued. For a running one it answers that the
+/// invocation was not found, which is an answer and not a failure.
+pub fn classify_cancel(answer: Result<bool, String>) -> CancelOutcome {
+    match answer {
+        Ok(true) => CancelOutcome::Cancelled,
+        Ok(false) => CancelOutcome::Running { error: None },
+        Err(message) if message.contains("Invocation not found") => {
+            CancelOutcome::Running { error: None }
+        }
+        Err(message) => CancelOutcome::Running {
+            error: Some(message),
+        },
+    }
+}
+
+/// What to tell the user after Ctrl+C stopped waiting for a command.
+pub fn interrupted_message(outcome: &CancelOutcome, agent: &str, timeout: Option<u32>) -> String {
+    match outcome {
+        CancelOutcome::Cancelled => "Cancelled before it started.".to_string(),
+        CancelOutcome::Running { error } => {
+            let failed = error
+                .as_ref()
+                .map(|error| format!("The cancel request failed: {error}. "))
+                .unwrap_or_default();
+            let limit = match timeout {
+                Some(seconds) => format!("its time limit ({seconds} s)"),
+                None => "the tool's time limit".to_string(),
+            };
+            format!(
+                "{failed}Stopped waiting. The command is still running on {agent} and stops at \
+                 {limit} at the latest. Your next command will wait behind it."
+            )
+        }
+    }
+}
+
+/// The first lines of an interactive session.
+pub fn banner(agent: &str, tool: &str) -> String {
+    format!(
+        "Connected to {agent} via `{tool}`. Each command runs in a fresh shell; only the \
+         directory carries over. Type `help` for how this session works; `exit` or Ctrl+D to \
+         leave."
+    )
+}
+
+/// What `help` prints.
+pub fn help_text(tool: &str, timeout: Option<u32>) -> String {
+    let limit = match timeout {
+        Some(seconds) => format!("This session stops a command after {seconds} seconds."),
+        None => "The built-in bash tool stops a command after 600 seconds; `--timeout` changes \
+                 that."
+            .to_string(),
+    };
+    format!(
+        "How this session works
+  Each command runs in a fresh shell on the agent, through its `{tool}` tool.
+  Only the directory carries over: variables, functions, aliases and `$?` do not.
+  Keep anything that must last in the agent's files.
+  Output appears when the command finishes; the built-in bash tool cuts each stream at 2 MiB.
+  {limit}
+
+Keys
+  Enter       run the command; an open quote or here-document continues on a new line
+  Tab         complete a command name or a path on the agent
+  Up, Ctrl+R  recall and search earlier commands, kept per agent across sessions
+  Ctrl+C      clear the line; while a command runs, stop waiting for it
+  Ctrl+D      leave
+
+Session commands
+  help        this text; `help NAME` asks bash
+  tools       the tools bound to this agent
+  exit [N]    leave, with status N"
+    )
+}
+
+/// What `tools` prints: each bound tool with its summary, when it has one.
+pub fn tools_listing(tools: &[(String, String)]) -> String {
+    if tools.is_empty() {
+        return "No tools are bound to this agent.".to_string();
+    }
+    let width = tools.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+    let mut listing = String::new();
+    for (name, summary) in tools {
+        listing.push_str(format!("  {name:width$}  {summary}").trim_end());
+        listing.push('\n');
+    }
+    listing.push_str("Run `NAME --help` at the prompt for a tool's commands.");
+    listing
+}
+
+/// Dims a command's stderr at the prompt so it reads apart from stdout. Text that carries its
+/// own styling is left alone.
+pub fn dimmed(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.is_empty() || text.contains('\x1b') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let (body, newline) = match text.strip_suffix('\n') {
+        Some(body) => (body, "\n"),
+        None => (text, ""),
+    };
+    std::borrow::Cow::Owned(format!("\x1b[2m{body}\x1b[0m{newline}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BashResult, CallFailure, INTERRUPTED_EXIT, InputMode, LocalCommand, NOT_RUN_EXIT, Outcome,
-        PromptPart, check_run_contract, classify_invoke_error, decode_result, exit_code,
-        global_args, input_mode, local_command, lookup_command, prompt, run_argv,
-        strip_cursor_reports,
+        BashResult, CallFailure, CancelOutcome, INTERRUPTED_EXIT, InputMode, LocalCommand,
+        NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract, classify_cancel,
+        classify_invoke_error, decode_result, dimmed, exit_code, global_args, help_text,
+        input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv,
+        strip_cursor_reports, tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
     use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
@@ -945,5 +1065,130 @@ mod tests {
                 "{error:?}"
             );
         }
+    }
+
+    #[test]
+    fn help_and_tools_alone_are_local() {
+        assert_eq!(local_command("help"), Some(LocalCommand::Help));
+        assert_eq!(local_command("  tools "), Some(LocalCommand::Tools));
+        assert_eq!(local_command("exit"), Some(LocalCommand::Exit(None)));
+        assert_eq!(
+            local_command("exit 300"),
+            Some(LocalCommand::Exit(Some(44)))
+        );
+        // Anything more is a command for bash, which has its own `help`.
+        for line in [
+            "help cd",
+            "builtin help",
+            "command tools",
+            "tools --help",
+            "help; ls",
+            "exit 1 2",
+            "exit abc",
+            "",
+        ] {
+            assert_eq!(local_command(line), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_cancel_answer_says_whether_the_command_still_runs() {
+        assert_eq!(classify_cancel(Ok(true)), CancelOutcome::Cancelled);
+        assert_eq!(
+            classify_cancel(Ok(false)),
+            CancelOutcome::Running { error: None }
+        );
+        assert_eq!(
+            classify_cancel(Err("Invalid request: Invocation not found".to_string())),
+            CancelOutcome::Running { error: None }
+        );
+        assert_eq!(
+            classify_cancel(Err("connection refused".to_string())),
+            CancelOutcome::Running {
+                error: Some("connection refused".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn the_interruption_message_names_what_happens_next() {
+        assert_eq!(
+            interrupted_message(&CancelOutcome::Cancelled, "A(\"a\")", Some(30)),
+            "Cancelled before it started."
+        );
+        assert_eq!(
+            interrupted_message(
+                &CancelOutcome::Running { error: None },
+                "A(\"a\")",
+                Some(30)
+            ),
+            "Stopped waiting. The command is still running on A(\"a\") and stops at its time \
+             limit (30 s) at the latest. Your next command will wait behind it."
+        );
+        assert_eq!(
+            interrupted_message(
+                &CancelOutcome::Running {
+                    error: Some("connection refused".to_string())
+                },
+                "A(\"a\")",
+                None
+            ),
+            "The cancel request failed: connection refused. Stopped waiting. The command is \
+             still running on A(\"a\") and stops at the tool's time limit at the latest. Your \
+             next command will wait behind it."
+        );
+    }
+
+    #[test]
+    fn help_explains_the_session_and_its_limits() {
+        let text = help_text("bash", None);
+        for expected in [
+            "fresh shell on the agent, through its `bash` tool",
+            "Only the directory carries over",
+            "after 600 seconds",
+            "2 MiB",
+            "Tab ",
+            "Ctrl+C ",
+            "tools ",
+            "exit [N]",
+        ] {
+            assert!(
+                text.contains(expected),
+                "{expected:?} is missing from:\n{text}"
+            );
+        }
+        assert!(help_text("sh", Some(45)).contains("stops a command after 45 seconds"));
+        assert!(!text.ends_with('\n'));
+    }
+
+    #[test]
+    fn the_banner_points_at_help() {
+        let text = banner("A(\"a\")", "bash");
+        assert!(
+            text.starts_with("Connected to A(\"a\") via `bash`."),
+            "{text}"
+        );
+        assert!(text.contains("Type `help`"), "{text}");
+    }
+
+    #[test]
+    fn tools_are_listed_with_their_summaries() {
+        assert_eq!(tools_listing(&[]), "No tools are bound to this agent.");
+        assert_eq!(
+            tools_listing(&[
+                ("bash".to_string(), String::new()),
+                ("fixture".to_string(), "Test commands".to_string()),
+            ]),
+            "  bash\n  fixture  Test commands\nRun `NAME --help` at the prompt for a tool's \
+             commands."
+        );
+    }
+
+    #[test]
+    fn stderr_is_dimmed_unless_it_is_already_styled() {
+        assert_eq!(dimmed(""), "");
+        assert_eq!(dimmed("warn\n"), "\x1b[2mwarn\x1b[0m\n");
+        assert_eq!(dimmed("a\nb"), "\x1b[2ma\nb\x1b[0m");
+        assert_eq!(dimmed("\x1b[31mred\x1b[0m\n"), "\x1b[31mred\x1b[0m\n");
     }
 }
