@@ -995,6 +995,11 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
     let (executor, worker, faults) = setup(last_unique_id, deps, component).await?;
     let key = IdempotencyKey::new("completion-during-stop".into());
     let context = InvocationContextStack::fresh();
+    // Make the actor-owned invocation prefix fall inside the later Jump, forcing checkpoint
+    // fallback while leaving the invocation's completion itself in retained history.
+    let invalidated_prefix = worker
+        .add_and_commit_oplog(OplogEntry::grow_memory(1))
+        .await?;
     worker
         .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
@@ -1018,15 +1023,15 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
             }),
         })
         .await?;
-    let discarded = worker
+    worker
         .add_and_commit_oplog(OplogEntry::grow_memory(37))
         .await?;
     worker
         .add_to_oplog(OplogEntry::jump(
             None,
             OplogRegion {
-                start: discarded,
-                end: discarded.next(),
+                start: invalidated_prefix,
+                end: invalidated_prefix.next(),
             },
         ))
         .await?;
@@ -1045,7 +1050,7 @@ async fn pending_failure_waits_for_completion_projection_without_blocking_succes
                 .component_revision,
         })
         .await?;
-    // Reconstruction's checkpoint read is before publication, unlike the recovery-index gate.
+    // Actor-owned reconstruction must reach the checkpoint before publishing the repaired status.
     let fold = faults.pause_next("read_cached_status");
     let receipt = tokio::spawn({
         let worker = worker.clone();
@@ -1145,6 +1150,31 @@ async fn jump_projection_finishes_without_its_producer(
         let discarded = worker
             .add_and_commit_oplog(OplogEntry::grow_memory(11))
             .await?;
+        let key = IdempotencyKey::new(format!("invalidate-prefix-{cancel_full_waiter}"));
+        let context = InvocationContextStack::fresh();
+        let started = worker
+            .add_and_commit_oplog(OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                idempotency_key: key,
+                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                    method_name: "increment".into(),
+                    input: data_value!().value().clone(),
+                    principal: Principal::anonymous(),
+                    scope_card: None,
+                })),
+                invocation_context: context.to_oplog_data(),
+                trace_id: context.trace_id,
+                trace_states: context.trace_states,
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
+            })
+            .await?;
         worker.add_to_oplog(OplogEntry::grow_memory(23)).await?;
         let jump_index = worker.oplog().current_oplog_index().await.next();
         worker
@@ -1196,6 +1226,7 @@ async fn jump_projection_finishes_without_its_producer(
             before.total_linear_memory_size
         );
         assert!(status.skipped_regions.is_in_deleted_region(discarded));
+        assert!(status.skipped_regions.is_in_deleted_region(started));
         // A second authoritative read neither commits the sentinel nor redoes reconstruction.
         let checkpoint_reads = faults.calls("read_cached_status");
         assert_eq!(*worker.get_last_known_status().await, *status);
