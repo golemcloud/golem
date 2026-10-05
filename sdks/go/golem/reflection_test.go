@@ -216,16 +216,23 @@ type fakeRPC struct {
 	tree      types.SchemaValueTree
 	has       bool
 	err       error
+	cancelled bool
 }
 
 var fakeID = InvocationID{AgentID: "Greeter(\"ada\")", IdempotencyKey: "k1"}
 
-func (f *fakeRPC) call(method string, _ types.SchemaValueTree) (witTypes.Option[types.SchemaValueTree], InvocationID, error) {
+func (f *fakeRPC) start(method string, _ types.SchemaValueTree) (pendingRPC, error) {
 	f.gotMethod, f.gotForm = method, "call"
-	if !f.has {
-		return witTypes.None[types.SchemaValueTree](), fakeID, f.err
-	}
-	return witTypes.Some(f.tree), fakeID, f.err
+	return pendingRPC{
+		id: fakeID,
+		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
+			if !f.has {
+				return witTypes.None[types.SchemaValueTree](), f.err
+			}
+			return witTypes.Some(f.tree), f.err
+		},
+		cancel: func() { f.cancelled = true },
+	}, nil
 }
 
 func (f *fakeRPC) trigger(method string, _ types.SchemaValueTree) (InvocationID, error) {
@@ -579,4 +586,77 @@ func packWit(ref core.Ref, value any) (types.SchemaValueTree, error) {
 		return types.SchemaValueTree{}, err
 	}
 	return witschema.ValueToWit(built)
+}
+
+// TestReflectedConfigOverridesAreChecked — untyped configuration entries are
+// checked against the snapshot's declarations, every problem at once, and
+// rendered as the declared type.
+func TestReflectedConfigOverridesAreChecked(t *testing.T) {
+	d := newDefinitions()
+	cfgConfiguredAgent[demoAppConfig](d)
+	found, errs := d.discover()
+	if len(errs) > 0 {
+		t.Fatalf("definition errors: %s", allDefErrors(errs))
+	}
+	r := newReflectedAgentType(found[0])
+
+	values, err := r.configValues([]configOverride{
+		{path: []string{"greeting"}, json: "hello"},
+		{path: []string{"db", "url"}, value: core.StringValue{Value: "pg://db"}, native: true},
+	})
+	if err != nil || len(values) != 2 {
+		t.Fatalf("valid overrides gave %d values, %v", len(values), err)
+	}
+	for i, want := range []string{"hello", "pg://db"} {
+		v, err := witschema.ValueToCore(values[i].Value.Value)
+		if err != nil || v.(core.StringValue).Value != want {
+			t.Errorf("override %d is %v, %v", i, v, err)
+		}
+		if root := values[i].Value.Graph.TypeNodes[values[i].Value.Graph.Root].Body.Tag(); root != types.SchemaTypeBodyStringType {
+			t.Errorf("override %d is typed as tag %d", i, root)
+		}
+	}
+
+	_, err = r.configValues([]configOverride{
+		{path: []string{"greting"}, json: "typo"},
+		{path: []string{"db", "password"}, json: "hunter2"},
+		{path: []string{"greeting"}, json: 42},
+		{path: []string{"db", "url"}, value: core.BoolValue{Value: true}, native: true},
+	})
+	for _, want := range []string{
+		"greting is not a declared configuration path",
+		"db.password is a secret",
+		"greeting: ",
+		"db.url: ",
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("invalid overrides gave %v, want it to mention %q", err, want)
+		}
+	}
+}
+
+// TestAPendingCallIsCancelledOrAwaited — a pending call identifies itself
+// before its result, and cancelling it stops the wait.
+func TestAPendingCallIsCancelledOrAwaited(t *testing.T) {
+	r := snapshotOf(t)
+	rpc := &fakeRPC{tree: greetResult(t, r, "hi"), has: true}
+	client := &ReflectedAgentClient{agentType: r, agentID: "greeter-1", rpc: rpc}
+
+	p, err := client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
+	if err != nil || p.ID != fakeID {
+		t.Fatalf("CallAsync gave %+v, %v", p, err)
+	}
+	if got, err := p.Wait(); got != "hi" || err != nil {
+		t.Fatalf("Wait gave %v, %v", got, err)
+	}
+	p.Cancel()
+	if rpc.cancelled {
+		t.Error("cancelling an awaited call reached the host")
+	}
+
+	p, _ = client.CallAsync("greet", map[string]any{"greeting": "hi", "times": 1})
+	p.Cancel()
+	if _, err := p.Wait(); !errors.Is(err, ErrCallCancelled) || !rpc.cancelled {
+		t.Errorf("a cancelled call gave %v (cancelled=%v)", err, rpc.cancelled)
+	}
 }

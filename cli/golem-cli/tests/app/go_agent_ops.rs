@@ -82,6 +82,10 @@ async fn test_go_agent_ops() {
           go-agent-ops:main:
             dir: {component_dir}
             templates: go
+        agents:
+          ConfiguredGreeter:
+            config:
+              greeting: "default"
     "#, version = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -134,6 +138,9 @@ async fn test_go_agent_ops() {
         .find_map(|line| line.trim().parse().ok())
         .unwrap_or_else(|| panic!("no count in {invocations}"));
     assert!(n >= 6, "{invocations}");
+
+    let reflected = invoke("reflected", &[]).await;
+    assert!(reflected.contains("hej r|hej r|true"), "{reflected}");
 
     // A Go producer that fails mid-stream fails its invocation: the reader
     // must never see the items it got as a complete stream.

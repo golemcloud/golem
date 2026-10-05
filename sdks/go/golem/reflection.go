@@ -15,8 +15,11 @@
 package golem
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"time"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
@@ -209,6 +212,59 @@ func parametersRecord(conv witschema.Converted, convErr error, in common.InputSc
 	return core.NewRefAt(conv.Graph, core.SchemaType{Body: core.RecordType{Fields: fields}}), nil
 }
 
+// configValues checks untyped configuration entries against the snapshot's
+// declarations and renders them for the wire. Every problem is reported, not
+// just the first.
+func (r ReflectedAgentType) configValues(entries []configOverride) ([]common.TypedAgentConfigValue, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if r.convErr != nil {
+		return nil, r.convErr
+	}
+	var problems []error
+	out := make([]common.TypedAgentConfigValue, 0, len(entries))
+	for _, e := range entries {
+		label := strings.Join(e.path, ".")
+		idx := slices.IndexFunc(r.wit.Config, func(d common.AgentConfigDeclaration) bool { return slices.Equal(d.Path, e.path) })
+		if idx < 0 {
+			problems = append(problems, fmt.Errorf("%s is not a declared configuration path", label))
+			continue
+		}
+		decl := r.wit.Config[idx]
+		if decl.Source == common.AgentConfigSourceSecret {
+			problems = append(problems, fmt.Errorf("%s is a secret, which the platform provisions", label))
+			continue
+		}
+		ref, err := r.conv.Ref(decl.ValueType)
+		value := e.value
+		if err == nil {
+			if e.native {
+				_, err = ref.UnpackJSON(value)
+			} else {
+				value, err = ref.PackJSON(e.json)
+			}
+		}
+		var tree types.SchemaValueTree
+		if err == nil {
+			tree, err = witschema.ValueToWit(value)
+		}
+		if err != nil {
+			problems = append(problems, fmt.Errorf("%s: %w", label, err))
+			continue
+		}
+		graph := r.wit.Schema
+		graph.Root = decl.ValueType
+		out = append(out, common.TypedAgentConfigValue{
+			Path: slices.Clone(e.path), Value: types.TypedSchemaValue{Graph: graph, Value: tree},
+		})
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("golem: %s configuration: %w", r.Name(), errors.Join(problems...))
+	}
+	return out, nil
+}
+
 // packJSONTree validates canonical JSON against a type and renders it for the
 // wire.
 func packJSONTree(ref core.Ref, value any) (types.SchemaValueTree, error) {
@@ -232,9 +288,53 @@ type ReflectedAgentClient struct {
 // through. The interface keeps packing, validation and decoding testable
 // without a host.
 type agentRPC interface {
-	call(method string, input types.SchemaValueTree) (witTypes.Option[types.SchemaValueTree], InvocationID, error)
+	start(method string, input types.SchemaValueTree) (pendingRPC, error)
 	trigger(method string, input types.SchemaValueTree) (InvocationID, error)
 	schedule(at time.Time, method string, input types.SchemaValueTree) (*ScheduledInvocation, error)
+}
+
+// pendingRPC is an invocation in flight: its identity, its outcome, and a way
+// to cancel it.
+type pendingRPC struct {
+	id     InvocationID
+	wait   func() (witTypes.Option[types.SchemaValueTree], error)
+	cancel func()
+}
+
+// ErrCallCancelled is what waiting on a call cancelled with
+// [PendingCall.Cancel] reports. Cancelling only stops waiting: the call may
+// already have run.
+var ErrCallCancelled = errors.New("golem: the call was cancelled before its result was awaited")
+
+// PendingCall is a reflected or dynamic invocation in flight.
+type PendingCall[T any] struct {
+	// ID identifies the invocation, available before the result is.
+	ID     InvocationID
+	wait   func() (T, error)
+	cancel func()
+	done   bool
+	out    T
+	err    error
+}
+
+// Wait waits for the invocation to finish and returns its result.
+func (p *PendingCall[T]) Wait() (T, error) {
+	if !p.done {
+		p.done = true
+		p.out, p.err = p.wait()
+	}
+	return p.out, p.err
+}
+
+// Cancel makes a best-effort attempt to cancel the invocation; a later Wait
+// reports [ErrCallCancelled]. It does nothing once the result was awaited.
+func (p *PendingCall[T]) Cancel() {
+	if p.done {
+		return
+	}
+	p.done = true
+	p.cancel()
+	p.err = ErrCallCancelled
 }
 
 // AgentType returns the snapshot this client was built from.
@@ -263,17 +363,39 @@ func (c *ReflectedAgentClient) pack(method string, args map[string]any) (Reflect
 // canonical JSON (nil when the method returns nothing), together with the
 // invocation's identity.
 func (c *ReflectedAgentClient) Call(method string, args map[string]any) (any, InvocationID, error) {
-	m, input, err := c.pack(method, args)
+	p, err := c.CallAsync(method, args)
 	if err != nil {
 		return nil, InvocationID{}, err
 	}
-	res, id, err := c.rpc.call(method, input)
+	out, err := p.Wait()
+	return out, p.ID, err
+}
+
+// CallAsync invokes a method with named arguments and returns at once; the
+// result is read, as for Call, with the pending call's Wait.
+func (c *ReflectedAgentClient) CallAsync(method string, args map[string]any) (*PendingCall[any], error) {
+	m, input, err := c.pack(method, args)
 	if err != nil {
-		return nil, id, err
+		return nil, err
 	}
+	p, err := c.rpc.start(method, input)
+	if err != nil {
+		return nil, err
+	}
+	return &PendingCall[any]{ID: p.id, cancel: p.cancel, wait: func() (any, error) {
+		res, err := p.wait()
+		if err != nil {
+			return nil, err
+		}
+		return c.decodeResult(m, method, res)
+	}}, nil
+}
+
+// decodeResult reads a method's result against the snapshot.
+func (c *ReflectedAgentClient) decodeResult(m ReflectedMethod, method string, res witTypes.Option[types.SchemaValueTree]) (any, error) {
 	output, err := m.Output()
 	if err != nil {
-		return nil, id, err
+		return nil, err
 	}
 	out, declared := output.Get()
 	tree, has := optionFromWit(res).Get()
@@ -281,21 +403,21 @@ func (c *ReflectedAgentClient) Call(method string, args map[string]any) (any, In
 	case has && !declared:
 		// Cardinality is part of the contract, so an unexpected value is a
 		// remote output error rather than something to quietly drop.
-		return nil, id, fmt.Errorf("golem: %s.%s returned a value but declares none", c.agentType.Name(), method)
+		return nil, fmt.Errorf("golem: %s.%s returned a value but declares none", c.agentType.Name(), method)
 	case !has && declared:
-		return nil, id, fmt.Errorf("golem: %s.%s returned nothing but declares a result", c.agentType.Name(), method)
+		return nil, fmt.Errorf("golem: %s.%s returned nothing but declares a result", c.agentType.Name(), method)
 	case !has:
-		return nil, id, nil
+		return nil, nil
 	}
 	value, err := witschema.ValueToCore(tree)
 	if err == nil {
 		var unpacked any
 		unpacked, err = out.UnpackJSON(value)
 		if err == nil {
-			return unpacked, id, nil
+			return unpacked, nil
 		}
 	}
-	return nil, id, fmt.Errorf("golem: %s.%s returned an unreadable result: %w", c.agentType.Name(), method, err)
+	return nil, fmt.Errorf("golem: %s.%s returned an unreadable result: %w", c.agentType.Name(), method, err)
 }
 
 // Trigger invokes a method without waiting for its result.

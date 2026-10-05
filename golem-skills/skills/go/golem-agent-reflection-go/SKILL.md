@@ -109,7 +109,9 @@ fmt.Println(client.AgentID(), total, invocation.IdempotencyKey)
 ```
 
 - `Get` takes the constructor arguments by name and creates the agent if it does not exist; `golem.WithPhantomID(uuid)` addresses a phantom instance and `NewPhantom` allocates one. `Bind(agentID)` addresses an existing id of this type.
+- `golem.WithConfigJSON(path, value)` overrides one declared configuration value at creation, as canonical JSON (`golem.WithConfigValue(path, schema.SchemaValue)` takes a schema-model value); `Get`, `NewPhantom` and `Bind` accept it. Undeclared paths, secrets and invalid values are refused before anything is sent. An agent that already exists keeps the configuration it was created with.
 - `Call`, `Trigger` and `Schedule` return the invocation's `golem.InvocationID` (agent id and idempotency key) — for an ephemeral agent, the only record of which instance ran.
+- `CallAsync` returns a `*golem.PendingCall`: its `ID` is known at once, `Wait()` returns the result, and `Cancel()` stops waiting (the call may already have run; `Wait` then reports `golem.ErrCallCancelled`). A scheduled call is cancelled through the `*golem.ScheduledInvocation` that `Schedule` returns.
 - Missing, unexpected or invalid arguments fail with `*schema.ValidationError`, listing every problem, before anything is sent.
 - Remote failures are `*golem.RemoteCallError`; for a remote agent error, its `Cause` is a `*golem.AgentError`.
 
@@ -149,17 +151,13 @@ if v, has := out.Get(); has {
 }
 ```
 
-`golem.MakeAgentID(typeName, constructor, phantom)` builds an id from a packed constructor, so a dynamic caller can address any instance; the first call to it creates a durable agent.
+A dynamic client also has `CallAsync`, `Trigger` and `Schedule`. `golem.MakeAgentID(typeName, constructor, phantom)` builds an id from a packed constructor, so a dynamic caller can address any instance; the first call to it creates a durable agent.
 
 ## Canonical JSON
 
 - Integers up to 32 bits are JSON numbers; `s64`, `u64`, duration nanoseconds and quantity mantissas are base-10 strings (`"5"`). A duration is `{"nanoseconds": "…"}`.
 - An absent option is `null`; a result is `{"ok": …}` or `{"err": …}`; a variant case is its name, or `{name: payload}`; a map is `[[k, v], …]`; flags are an array of names; binary is unpadded base64url.
 - Streams, futures and other capabilities cannot be packed as JSON; call such methods through a typed client.
-
-## Current Surface
-
-- Creation-time configuration overrides are not accepted by reflected clients; use a full client with `DefineConfiguredFullAgentClient` when the target's configuration is known.
 
 ### Related Skills
 

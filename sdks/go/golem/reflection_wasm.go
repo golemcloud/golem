@@ -65,17 +65,25 @@ type witRPC struct {
 	target string
 }
 
-// call awaits through the asynchronous import, for the same reason
+// start invokes through the asynchronous import, for the same reason
 // [MethodDef.Call] does: it is the form a suspended caller is resumed into.
-func (w witRPC) call(method string, input types.SchemaValueTree) (witTypes.Option[types.SchemaValueTree], InvocationID, error) {
+func (w witRPC) start(method string, input types.SchemaValueTree) (pendingRPC, error) {
 	inv := w.rpc.AsyncInvokeAndAwait(method, input, noScopeCard())
-	id := invocationIDFrom(inv.Metadata)
-	res := inv.Future.Get()
-	inv.Future.Drop()
-	if res.Tag() == witTypes.ResultErr {
-		return witTypes.None[types.SchemaValueTree](), id, rpcErrorToGo(w.target, method, res.Err())
-	}
-	return res.Ok(), id, nil
+	return pendingRPC{
+		id: invocationIDFrom(inv.Metadata),
+		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
+			res := inv.Future.Get()
+			inv.Future.Drop()
+			if res.Tag() == witTypes.ResultErr {
+				return witTypes.None[types.SchemaValueTree](), rpcErrorToGo(w.target, method, res.Err())
+			}
+			return res.Ok(), nil
+		},
+		cancel: func() {
+			inv.Future.Cancel()
+			inv.Future.Drop()
+		},
+	}, nil
 }
 
 func (w witRPC) trigger(method string, input types.SchemaValueTree) (InvocationID, error) {
@@ -138,8 +146,11 @@ func (r ReflectedAgentType) NewPhantom(ctorArgs map[string]any, opts ...ClientOp
 	return r.Get(ctorArgs, append(opts, WithPhantomID(uuidFromWit(apiHost.GenerateIdempotencyKey())))...)
 }
 
-// Bind addresses an existing agent by its id, which must name this agent type.
-func (r ReflectedAgentType) Bind(agentID string) (*ReflectedAgentClient, error) {
+// Bind addresses an agent by its id, which must name this agent type. Binding
+// does not create it; the first call to a durable id does, with the
+// configuration overrides given here. An agent that already exists keeps the
+// configuration it was created with.
+func (r ReflectedAgentType) Bind(agentID string, opts ...ClientOpt) (*ReflectedAgentClient, error) {
 	if r.Mode() == Ephemeral {
 		return nil, fmt.Errorf("golem: %s is ephemeral; an ephemeral agent id cannot be bound", r.Name())
 	}
@@ -150,7 +161,18 @@ func (r ReflectedAgentType) Bind(agentID string) (*ReflectedAgentClient, error) 
 	if parsed.TypeName != r.Name() {
 		return nil, fmt.Errorf("golem: agent id %q names %s, not %s", agentID, parsed.TypeName, r.Name())
 	}
-	rpc, err := bindRPC(parsed)
+	var o clientOpts
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.phantomID.IsSome() {
+		return nil, fmt.Errorf("golem: %s: an agent id already names its phantom; WithPhantomID does not apply to Bind", r.Name())
+	}
+	agentConfig, err := reflectedAgentConfig(r, o)
+	if err != nil {
+		return nil, err
+	}
+	rpc, err := bindRPC(parsed, agentConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -170,11 +192,11 @@ func (r ReflectedAgentType) AgentID(ctorArgs map[string]any, phantom Option[UUID
 // reflectedAgentConfig resolves creation-time configuration overrides against
 // the snapshot's declarations.
 func reflectedAgentConfig(r ReflectedAgentType, o clientOpts) ([]common.TypedAgentConfigValue, error) {
-	if len(o.configs) == 0 {
-		return nil, nil
+	if len(o.configs) > 0 {
+		return nil, fmt.Errorf("golem: %s: WithConfig needs the target's Go config type; "+
+			"configure a reflected client with WithConfigJSON or WithConfigValue", r.Name())
 	}
-	return nil, fmt.Errorf(
-		"golem: %s: configuration overrides are not available on reflected clients yet", r.Name())
+	return r.configValues(o.overrides)
 }
 
 // DiscoverTools returns a snapshot of every tool the calling agent may reach in
@@ -221,7 +243,7 @@ func BindAgentID(agentID string) (*DynamicAgentClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	rpc, err := bindRPC(parsed)
+	rpc, err := bindRPC(parsed, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -246,12 +268,12 @@ func makeAgentID(typeName string, ctor types.SchemaValueTree, phantom Option[UUI
 	return res.Ok(), nil
 }
 
-func bindRPC(parsed RawAgentID) (witRPC, error) {
+func bindRPC(parsed RawAgentID, agentConfig []common.TypedAgentConfigValue) (witRPC, error) {
 	phantom := witTypes.None[types.Uuid]()
 	if id, present := parsed.PhantomID.Get(); present {
 		phantom = witTypes.Some(uuidToWit(id))
 	}
-	created := host.WasmRpcCreate(parsed.TypeName, parsed.Constructor.wit.Value, phantom, nil)
+	created := host.WasmRpcCreate(parsed.TypeName, parsed.Constructor.wit.Value, phantom, agentConfig)
 	if created.Tag() == witTypes.ResultErr {
 		return witRPC{}, rpcErrorToGo(parsed.TypeName, "<bind>", created.Err())
 	}

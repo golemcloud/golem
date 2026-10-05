@@ -72,23 +72,41 @@ func (c *DynamicAgentClient) Parsed() RawAgentID { return c.parsed }
 // its result, none for a method that returns nothing, together with the
 // invocation's identity.
 func (c *DynamicAgentClient) Call(method string, input core.SchemaValue) (Option[core.SchemaValue], InvocationID, error) {
+	p, err := c.CallAsync(method, input)
+	if err != nil {
+		return None[core.SchemaValue](), InvocationID{}, err
+	}
+	out, err := p.Wait()
+	return out, p.ID, err
+}
+
+// CallAsync invokes a method with an already-packed parameter record and
+// returns at once; the result is read, as for Call, with the pending call's
+// Wait.
+func (c *DynamicAgentClient) CallAsync(method string, input core.SchemaValue) (*PendingCall[Option[core.SchemaValue]], error) {
 	tree, err := witschema.ValueToWit(input)
 	if err != nil {
-		return None[core.SchemaValue](), InvocationID{}, fmt.Errorf("golem: %s: %w", method, err)
+		return nil, fmt.Errorf("golem: %s: %w", method, err)
 	}
-	res, id, err := c.rpc.call(method, tree)
+	p, err := c.rpc.start(method, tree)
 	if err != nil {
-		return None[core.SchemaValue](), id, err
+		return nil, err
 	}
-	result, has := optionFromWit(res).Get()
-	if !has {
-		return None[core.SchemaValue](), id, nil
-	}
-	value, err := witschema.ValueToCore(result)
-	if err != nil {
-		return None[core.SchemaValue](), id, fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
-	}
-	return Some(value), id, nil
+	return &PendingCall[Option[core.SchemaValue]]{ID: p.id, cancel: p.cancel, wait: func() (Option[core.SchemaValue], error) {
+		res, err := p.wait()
+		if err != nil {
+			return None[core.SchemaValue](), err
+		}
+		result, has := optionFromWit(res).Get()
+		if !has {
+			return None[core.SchemaValue](), nil
+		}
+		value, err := witschema.ValueToCore(result)
+		if err != nil {
+			return None[core.SchemaValue](), fmt.Errorf("golem: %s returned an unreadable result: %w", method, err)
+		}
+		return Some(value), nil
+	}}, nil
 }
 
 // Trigger invokes a method without waiting for its result.

@@ -17,7 +17,9 @@ package golem
 import (
 	"fmt"
 	"reflect"
+	"slices"
 
+	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -428,6 +430,31 @@ func WithConfig[Cfg any](value Cfg) ClientOpt {
 			return encodeConfigOverrides(d, value)
 		})
 	}
+}
+
+// WithConfigJSON supplies one local config value of a reflected client's
+// target at creation, as canonical JSON for the declared path. It is checked
+// against the snapshot's declaration before anything is sent.
+func WithConfigJSON(path []string, value any) ClientOpt {
+	return func(o *clientOpts) {
+		o.overrides = append(o.overrides, configOverride{path: slices.Clone(path), json: value})
+	}
+}
+
+// WithConfigValue is [WithConfigJSON] for a value already in the schema model.
+func WithConfigValue(path []string, value core.SchemaValue) ClientOpt {
+	return func(o *clientOpts) {
+		o.overrides = append(o.overrides, configOverride{path: slices.Clone(path), value: value, native: true})
+	}
+}
+
+// configOverride is one untyped configuration entry: canonical JSON, or a
+// schema-model value when native.
+type configOverride struct {
+	path   []string
+	json   any
+	value  core.SchemaValue
+	native bool
 }
 
 // encodeConfigOverrides encodes each local leaf of a config value into a typed

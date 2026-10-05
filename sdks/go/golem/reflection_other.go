@@ -39,7 +39,7 @@ func (r ReflectedAgentType) NewPhantom(map[string]any, ...ClientOpt) (*Reflected
 	return nil, errOutsideComponent
 }
 
-func (r ReflectedAgentType) Bind(string) (*ReflectedAgentClient, error) {
+func (r ReflectedAgentType) Bind(string, ...ClientOpt) (*ReflectedAgentClient, error) {
 	return nil, errOutsideComponent
 }
 

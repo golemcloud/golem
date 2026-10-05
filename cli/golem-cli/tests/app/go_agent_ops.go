@@ -28,6 +28,17 @@ var Failing = Source.Method[golem.Unit, golem.AgentStream[int32]]("failing")
 
 type sourceState struct{}
 
+type GreeterID struct{ Name string }
+
+type GreeterConfig struct{ Greeting string }
+
+// Greeter is configured, so a reflected caller can override its configuration.
+var Greeter = golem.DefineConfiguredAgent[GreeterID, GreeterConfig](golem.Spec{Name: "ConfiguredGreeter"})
+
+var Greet = Greeter.Method[golem.Unit, string]("greet")
+
+type greeterState struct{ greeting, name string }
+
 type OpsID struct{ Name string }
 
 type NameIn struct{ Name string }
@@ -42,6 +53,7 @@ var (
 	Counters    = Ops.Method[golem.Unit, string]("counters")
 	Invocations = Ops.Method[golem.Unit, int64]("invocations")
 	ReadFailing = Ops.Method[golem.Unit, string]("readFailing")
+	Reflected   = Ops.Method[golem.Unit, string]("reflected")
 )
 
 type counterState struct{ N int64 }
@@ -70,7 +82,44 @@ func init() {
 		})
 	})
 
+	greeter := Greeter.ImplementConfigured(func(ctx *golem.InitContext[GreeterID, greeterState, GreeterConfig]) *greeterState {
+		return &greeterState{greeting: ctx.Config().Greeting, name: ctx.ID().Name}
+	})
+	greeter.Handle(Greet, func(ctx *golem.Context[greeterState], _ golem.Unit) string {
+		return ctx.State.greeting + " " + ctx.State.name
+	})
+
 	ops := Ops.Implement(func(OpsID) *opsState { return &opsState{} })
+
+	// A reflected caller creates a configured agent with an override, calls it
+	// both ways, and is refused an undeclared configuration path locally.
+	ops.Handle(Reflected, func(*golem.Context[opsState], golem.Unit) string {
+		t, found := golem.DiscoverAgentType("ConfiguredGreeter")
+		if !found {
+			return "not discovered"
+		}
+		_, err := t.Get(map[string]any{"name": "x"}, golem.WithConfigJSON([]string{"greting"}, "typo"))
+		if err == nil {
+			return "an undeclared path was accepted"
+		}
+		c, err := t.Get(map[string]any{"name": "r"}, golem.WithConfigJSON([]string{"greeting"}, "hej"))
+		if err != nil {
+			return "get: " + err.Error()
+		}
+		called, _, err := c.Call("greet", map[string]any{})
+		if err != nil {
+			return "call: " + err.Error()
+		}
+		pending, err := c.CallAsync("greet", map[string]any{})
+		if err != nil {
+			return "callAsync: " + err.Error()
+		}
+		awaited, err := pending.Wait()
+		if err != nil {
+			return "wait: " + err.Error()
+		}
+		return fmt.Sprintf("%v|%v|%t", called, awaited, pending.ID.AgentID == c.AgentID())
+	})
 
 	// A failed production must not reach the reader as a clean end.
 	ops.Handle(ReadFailing, func(*golem.Context[opsState], golem.Unit) string {
