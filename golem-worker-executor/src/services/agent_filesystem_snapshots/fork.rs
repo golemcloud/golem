@@ -59,7 +59,7 @@ pub(crate) enum Baseline {
     Present,
     /// The copy does not hold the snapshot of the baseline with this name.
     Missing(FilesystemSnapshotName),
-    /// The baseline has no filesystem snapshot, or the service keeps no snapshots.
+    /// The baseline has no filesystem snapshot.
     NotChecked,
 }
 
@@ -121,7 +121,9 @@ impl ForkCopy {
 
     /// Copies every snapshot of the source into the stage `stage_id` of `target`, which holds
     /// none, and checks that the snapshot `baseline` resolves there. A copy that fails, or an
-    /// attempt that never reaches its publication, has the snapshots of the stage deleted.
+    /// attempt that never reaches its publication, has the snapshots of the stage deleted. A
+    /// service that keeps no snapshots copies nothing: a named `baseline` is then missing from the
+    /// target, so the fork refuses to publish a target that could not start.
     pub(crate) async fn copy(
         mut self,
         target: &OwnedAgentId,
@@ -133,7 +135,10 @@ impl ForkCopy {
             return Ok(Copied {
                 ticket: None,
                 stage_id,
-                baseline: Baseline::NotChecked,
+                baseline: match baseline {
+                    Some(name) => Baseline::Missing(name.clone()),
+                    None => Baseline::NotChecked,
+                },
             });
         };
         ticket.stage = Some(stage.clone());

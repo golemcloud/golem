@@ -4616,6 +4616,39 @@ fn a_revert_delete_of_the_source_waits_for_the_fork() {
     })
 }
 
+/// A disabled service copies nothing, so a target whose baseline names a filesystem snapshot
+/// lacks it, and the fork refuses to publish it.
+#[test]
+fn the_copy_of_a_fork_of_a_disabled_service_misses_a_named_baseline() {
+    paused(async {
+        let snapshots = AgentFilesystemSnapshots::disabled();
+        let source = agent_snapshots("fork-source");
+        let name = FilesystemSnapshotName::update();
+        let baseline_of = |baseline: Option<FilesystemSnapshotName>| {
+            let (snapshots, source) = (&snapshots, &source);
+            async move {
+                let (target, stage_id, _) = fork_target("fork-target");
+                snapshots
+                    .begin_fork(source, fork_flight(&target.agent_id, [7; 32]))
+                    .await
+                    .unwrap()
+                    .copy(&target, stage_id, baseline.as_ref())
+                    .await
+                    .unwrap()
+                    .baseline()
+            }
+        };
+
+        assert_eq!(
+            [
+                baseline_of(Some(name.clone())).await,
+                baseline_of(None).await
+            ],
+            [Baseline::Missing(name), Baseline::NotChecked]
+        );
+    })
+}
+
 #[test]
 fn the_copy_of_a_fork_checks_the_snapshot_of_the_baseline_in_the_stage() {
     paused(async {
