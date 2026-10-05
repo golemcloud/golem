@@ -32,6 +32,8 @@ mod scope;
 mod spawner;
 mod store;
 
+#[cfg(test)]
+pub(crate) use runs::run_delay;
 pub(crate) use store::RusticSnapshotStore;
 
 /// The range of the storage call deadline that the store accepts: at least the shortest try of a

@@ -44,6 +44,8 @@ pub(crate) use memory::InMemorySnapshotStore;
 #[cfg(test)]
 pub(crate) use memory::SpacedTimes;
 use rustic::RusticSnapshotStore;
+#[cfg(test)]
+pub(crate) use rustic::run_delay;
 
 /// The filesystem snapshots of one incarnation of an agent.
 ///
@@ -159,6 +161,24 @@ pub(crate) enum Withdrawal {
     Stopped,
     /// The deadline of the waits of the call passed.
     Deadline,
+}
+
+/// How a withdrawal ends a store call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WithdrawnCall {
+    /// The call gives `Failed` with the failure of its last run.
+    Failed,
+    /// The call gives `Stopped` with the cause.
+    Stopped(Withdrawal),
+}
+
+/// Gives how a withdrawal with `cause` ends a call. The deadline gives `Failed` when a run of the
+/// call failed on the storage (`ran`); each other case gives `Stopped` with the cause.
+pub(crate) fn withdrawn_call(cause: Withdrawal, ran: bool) -> WithdrawnCall {
+    match (cause, ran) {
+        (Withdrawal::Deadline, true) => WithdrawnCall::Failed,
+        (cause, _) => WithdrawnCall::Stopped(cause),
+    }
 }
 
 /// The slots of one store call, from the limiter of the caller. The store takes one slot for each
@@ -825,6 +845,24 @@ mod tests {
                 snapshot_time(now, Some(Timestamp::from(5_000))),
             ),
             (now, now, Timestamp::from(1_001), Timestamp::from(5_001))
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_stops_a_call_and_its_deadline_fails_a_call_whose_run_failed() {
+        assert_eq!(
+            [
+                super::withdrawn_call(super::Withdrawal::Stopped, false),
+                super::withdrawn_call(super::Withdrawal::Stopped, true),
+                super::withdrawn_call(super::Withdrawal::Deadline, false),
+                super::withdrawn_call(super::Withdrawal::Deadline, true),
+            ],
+            [
+                super::WithdrawnCall::Stopped(super::Withdrawal::Stopped),
+                super::WithdrawnCall::Stopped(super::Withdrawal::Stopped),
+                super::WithdrawnCall::Stopped(super::Withdrawal::Deadline),
+                super::WithdrawnCall::Failed,
+            ]
         );
     }
 }

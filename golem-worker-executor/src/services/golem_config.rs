@@ -2472,7 +2472,7 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_RETRY: RetryConfig = RetryConfig {
     max_jitter_factor: None,
 };
 
-fn default_filesystem_snapshot_storage_retry() -> RetryConfig {
+pub(crate) fn default_filesystem_snapshot_storage_retry() -> RetryConfig {
     DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_RETRY
 }
 

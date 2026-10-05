@@ -20,7 +20,9 @@
 //! take, run, wait and check gave, and at a take it looks at the shutdown first, then the cancel,
 //! then the limiter.
 
-use crate::filesystem_snapshot::{Failed, RunSlots, Slot, SnapshotInfo, Withdrawal};
+use crate::filesystem_snapshot::{
+    Failed, RunSlots, Slot, SnapshotInfo, Withdrawal, WithdrawnCall, withdrawn_call,
+};
 use golem_common::model::RetryConfig;
 use golem_common::retries::get_delay;
 use rand::Rng as _;
@@ -197,15 +199,10 @@ pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> Next
         (_, Some((_, Some(Checked::Found(info)))), _) => NextRun::Answer(RunOutcome::Saved(info)),
         (_, Some((_, Some(Checked::Other))), _) => NextRun::Answer(RunOutcome::NameInUse),
         (_, Some((_, Some(Checked::Unreadable))), _) => NextRun::Answer(RunOutcome::FailedWithLast),
-        (_, _, Some(Withdrawal::Stopped)) => {
-            NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped))
-        }
-        (_, _, Some(Withdrawal::Deadline)) if seen.ran => {
-            NextRun::Answer(RunOutcome::FailedWithLast)
-        }
-        (_, _, Some(Withdrawal::Deadline)) => {
-            NextRun::Answer(RunOutcome::Stopped(Withdrawal::Deadline))
-        }
+        (_, _, Some(cause)) => NextRun::Answer(match withdrawn_call(cause, seen.ran) {
+            WithdrawnCall::Failed => RunOutcome::FailedWithLast,
+            WithdrawnCall::Stopped(cause) => RunOutcome::Stopped(cause),
+        }),
         (RunEnd::Cancelled, _, None) => NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped)),
         (RunEnd::CallFailed, _, None) => {
             match run_delay(retry, seen.failed_runs, jitter)
@@ -232,7 +229,7 @@ pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> Next
 /// the wait grows by that part of itself, and stays at most the `max_delay` of `retry`. A jitter
 /// that is negative or not a number counts as none, and a wait too large for a [`Duration`] is
 /// the `max_delay`, so no jitter panics.
-pub(super) fn run_delay(retry: &RetryConfig, failed_runs: u32, jitter: f64) -> Option<Duration> {
+pub(crate) fn run_delay(retry: &RetryConfig, failed_runs: u32, jitter: f64) -> Option<Duration> {
     let without_jitter = RetryConfig {
         max_jitter_factor: None,
         ..retry.clone()

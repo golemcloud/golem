@@ -22,7 +22,7 @@
 use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore,
     InMemorySnapshotStore, ReadError, RestoreFailure, RunSlots, SaveError, SnapshotInfo,
-    SnapshotName, Unlimited, Withdrawal,
+    SnapshotName, Unlimited,
 };
 use crate::services::agent_filesystem_snapshots::StoreSource;
 use crate::services::golem_config::FilesystemSnapshotUploadConfig;
@@ -335,8 +335,13 @@ impl TestFilesystemSnapshotStore {
                 drop(slot);
                 failed()
             }
-            Err(Withdrawal::Deadline) => failed(),
-            Err(Withdrawal::Stopped) => SaveError::Stopped(Withdrawal::Stopped),
+            // The first run failed on the storage, so the deadline gives `Failed`.
+            Err(cause) => match crate::filesystem_snapshot::withdrawn_call(cause, true) {
+                crate::filesystem_snapshot::WithdrawnCall::Failed => failed(),
+                crate::filesystem_snapshot::WithdrawnCall::Stopped(cause) => {
+                    SaveError::Stopped(cause)
+                }
+            },
         }
     }
 

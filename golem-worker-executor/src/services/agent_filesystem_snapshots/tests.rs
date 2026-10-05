@@ -40,7 +40,8 @@ type SavedParent = Option<(Box<str>, ChangeDetection)>;
 
 /// A store over the in-memory store that a test can make fail, hold and count. Each call runs as
 /// the rustic store runs it: each scripted run takes a slot of the limiter of the call, and a run
-/// that fails is followed by a wait of [`scripted_wait`] that a withdrawal ends, until the call has
+/// that fails is followed by the wait of the run delay of the store, which a withdrawal ends, until
+/// the call has
 /// made `runs` runs.
 #[derive(Default)]
 struct ScriptedStore {
@@ -229,11 +230,12 @@ impl ScriptedStore {
     }
 
     /// Runs `run` as the runs of one call with the limiter `slots`: each run takes a slot first, a
-    /// run that fails is followed by a wait of [`scripted_wait`] with no slot, and a withdrawal at
+    /// run that fails is followed by the wait of the run delay of the store with no slot, and a
+    /// withdrawal at
     /// a take or in a wait ends the call with `Stopped`, or with the last failure when the cause is
     /// the deadline and a run failed. The call answers the last failure after its runs. A run whose
-    /// write lands late is followed by the wait for that write with no slot, which tells the
-    /// limiter nothing; then the call answers what the check of its own name found, or goes on as
+    /// write lands late is followed by the wait for that write with no slot, which it reports
+    /// to the limiter as a wait for late writes; then the call answers what the check of its own name found, or goes on as
     /// after a failed run. After a shutdown, a call gives `Stopped`.
     async fn runs<T, E, F, R>(
         &self,
@@ -285,12 +287,19 @@ impl ScriptedStore {
                         landed.ok_or(failure)
                     }
                 };
-                match ran {
-                    Ok(answer) => Some((Some(answer), None)),
-                    Err(failure) if number >= most => {
-                        Some((Some(Err(failed(Failed::new(failure)))), None))
-                    }
-                    Err(failure) => {
+                let retry = golem_common::model::RetryConfig {
+                    max_attempts: u32::try_from(most).unwrap_or(u32::MAX),
+                    ..crate::services::golem_config::default_filesystem_snapshot_storage_retry()
+                };
+                let delay = crate::filesystem_snapshot::run_delay(
+                    &retry,
+                    u32::try_from(number).unwrap_or(u32::MAX),
+                    0.0,
+                );
+                match (ran, delay) {
+                    (Ok(answer), _) => Some((Some(answer), None)),
+                    (Err(failure), None) => Some((Some(Err(failed(Failed::new(failure)))), None)),
+                    (Err(failure), Some(delay)) => {
                         slots.waiting_after_failure();
                         tokio::select! {
                             biased;
@@ -298,7 +307,7 @@ impl ScriptedStore {
                                 Some(withdrawn(cause, Some(failure), failed, stopped)),
                                 None,
                             )),
-                            () = tokio::time::sleep(scripted_wait(number)) => {
+                            () = tokio::time::sleep(delay) => {
                                 Some((None, Some((number + 1, Some(failure), run))))
                             }
                         }
@@ -351,14 +360,6 @@ impl Drop for CallCount<'_> {
     }
 }
 
-/// The wait of a scripted call after its run number `failed_run` failed: 2 s, then four times the
-/// wait before, at most 120 s, as the runs of the store wait.
-fn scripted_wait(failed_run: usize) -> Duration {
-    (Duration::from_secs(2)
-        * 4u32.saturating_pow(u32::try_from(failed_run).unwrap_or(u32::MAX) - 1))
-    .min(Duration::from_secs(120))
-}
-
 /// The answer of a scripted call that a withdrawal ended after `last`, the failure of its last
 /// run.
 fn withdrawn<T, E>(
@@ -367,9 +368,15 @@ fn withdrawn<T, E>(
     failed: fn(Failed) -> E,
     stopped: fn(Withdrawal) -> E,
 ) -> Result<T, E> {
-    match (cause, last) {
-        (Withdrawal::Deadline, Some(last)) => Err(failed(Failed::new(last))),
-        (cause, _) => Err(stopped(cause)),
+    match (
+        crate::filesystem_snapshot::withdrawn_call(cause, last.is_some()),
+        last,
+    ) {
+        (crate::filesystem_snapshot::WithdrawnCall::Failed, Some(last)) => {
+            Err(failed(Failed::new(last)))
+        }
+        (crate::filesystem_snapshot::WithdrawnCall::Failed, None) => Err(stopped(cause)),
+        (crate::filesystem_snapshot::WithdrawnCall::Stopped(cause), _) => Err(stopped(cause)),
     }
 }
 
