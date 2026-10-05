@@ -118,20 +118,39 @@ struct ScriptedStore {
     /// The registry of the service over the store. Each write that arrives while no work of its
     /// agent is counted there fails, and is recorded in `unbusy_writes`.
     registry: Mutex<Option<Arc<Registry>>>,
-    /// The writes that arrived while no work of their agent was counted.
-    unbusy_writes: Mutex<Vec<&'static str>>,
+    /// The writes that arrived while no work of their agent was counted. The end of [`paused`]
+    /// checks that it is empty.
+    unbusy_writes: Arc<Mutex<Vec<&'static str>>>,
 }
 
-impl Drop for ScriptedStore {
-    fn drop(&mut self) {
-        if !std::thread::panicking() {
-            assert_eq!(
-                *self.unbusy_writes.lock().unwrap(),
-                Vec::<&'static str>::new(),
-                "every store write arrives while its agent is busy"
-            );
-        }
-    }
+thread_local! {
+    /// The writes that arrived while no work of their agent was counted, of each scripted store
+    /// that the test on this thread made with [`scripted_store`].
+    static UNBUSY_WRITES: std::cell::RefCell<Vec<Arc<Mutex<Vec<&'static str>>>>> =
+        std::cell::RefCell::default();
+}
+
+/// A new scripted store, whose writes the end of the test checks.
+fn scripted_store() -> ScriptedStore {
+    let store = ScriptedStore::default();
+    UNBUSY_WRITES.with(|stores| stores.borrow_mut().push(Arc::clone(&store.unbusy_writes)));
+    store
+}
+
+/// The finish step of each test: every write of each scripted store of the test arrived while
+/// its agent was busy.
+fn finish_scripted_stores() {
+    let unbusy = UNBUSY_WRITES.with(|stores| {
+        std::mem::take(&mut *stores.borrow_mut())
+            .iter()
+            .flat_map(|writes| writes.lock().unwrap().clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        unbusy,
+        Vec::<&'static str>::new(),
+        "every store write arrives while its agent is busy"
+    );
 }
 
 /// The time of the first save of a scripted store.
@@ -747,7 +766,9 @@ fn paused<T: Send + 'static>(test: impl std::future::Future<Output = T> + Send +
     let (running, ended) = std::sync::mpsc::channel::<()>();
     let runner = std::thread::spawn(move || {
         let _running = running;
-        tokio::runtime::Builder::new_current_thread()
+        // The runtime ends with this statement, so the tasks of the test have ended when the
+        // finish step reads the stores.
+        let output = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .start_paused(true)
             .build()
@@ -756,7 +777,9 @@ fn paused<T: Send + 'static>(test: impl std::future::Future<Output = T> + Send +
                 tokio::time::timeout(TEST_PATIENCE, test)
                     .await
                     .unwrap_or_else(|_| panic!("the test did not end within {TEST_PATIENCE:?}"))
-            })
+            });
+        finish_scripted_stores();
+        output
     });
     if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = ended.recv_timeout(TEST_WALL_LIMIT) {
         panic!("the test did not end within {TEST_WALL_LIMIT:?} of wall-clock time");
@@ -814,7 +837,7 @@ fn settings(max_uploads: usize, max_restores: usize) -> FilesystemSnapshotUpload
 
 /// A scripted store whose calls make up to `runs` runs.
 fn store_with_runs(runs: usize) -> Arc<ScriptedStore> {
-    let store = ScriptedStore::default();
+    let store = scripted_store();
     store.runs.store(runs, Ordering::SeqCst);
     Arc::new(store)
 }
@@ -930,7 +953,7 @@ async fn ended(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) {
 #[test]
 fn each_admission_makes_a_new_name_with_the_prefix_of_its_kind() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("names");
 
@@ -961,7 +984,7 @@ fn each_admission_makes_a_new_name_with_the_prefix_of_its_kind() {
 #[test]
 fn a_second_admission_of_an_agent_gets_upload_in_flight_until_the_first_ends() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -1010,7 +1033,7 @@ fn a_second_admission_of_an_agent_gets_upload_in_flight_until_the_first_ends() {
 #[test]
 fn a_dropped_admission_frees_its_agent_and_writes_nothing() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("dropped");
 
@@ -1062,7 +1085,7 @@ fn a_disabled_service_admits_nothing_and_restores_nothing() {
 #[test]
 fn a_job_saves_discards_and_calls_the_confirmer_once_with_its_own_name() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("confirmed");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -1144,7 +1167,7 @@ fn an_error_that_allows_no_retry_ends_the_job_after_one_attempt() {
 /// with `outcome`. Gives the deletes that the last job made, its name, whether the store holds it,
 /// and whether the store holds each older one.
 async fn after_older_uploads(outcome: ConfirmOutcome) -> (Vec<String>, String, bool, Vec<bool>) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = Arc::new(scripted_store());
     let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
         retained_periodic_snapshots: 3,
         retained_update_snapshots: 2,
@@ -1254,7 +1277,7 @@ fn confirmed_runs_retention_after_the_confirmation() {
 #[test]
 fn a_confirmed_periodic_upload_keeps_the_newest_by_kind() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("retention");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -1454,7 +1477,7 @@ fn the_labels_and_the_messages_of_the_service_name_what_they_count_and_report() 
 #[test]
 fn an_admission_waits_for_the_open_file_calls_as_long_as_the_settings_say() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let settings = settings(4, 4);
         let snapshots = service(&store, settings.clone());
         let agent = agent_snapshots("capture-wait");
@@ -1472,7 +1495,7 @@ fn an_admission_waits_for_the_open_file_calls_as_long_as_the_settings_say() {
 #[test]
 fn a_copy_of_all_snapshots_holds_each_snapshot_of_the_agent() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let from = agent_snapshots("copied-from");
         let (target, stage_id, to) = fork_target("copied-to");
@@ -1542,7 +1565,7 @@ fn an_admission_during_a_delete_of_all_snapshots_gets_deleting_all_snapshots_unt
 #[test]
 fn the_decision_of_a_job_carries_its_outcome_before_the_job_ends() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -1591,7 +1614,7 @@ async fn with_a_save_held(
     Arc<Gate>,
     FilesystemSnapshotName,
 ) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = Arc::new(scripted_store());
     let gate = Arc::new(Gate::default());
     *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
     let snapshots = service(&store, settings(4, 4));
@@ -1687,7 +1710,7 @@ fn a_terminal_interrupt_ends_the_wait_of_a_manual_update() {
 #[test]
 fn a_start_without_a_running_upload_asks_the_store_at_once() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("start-without-upload");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -1826,7 +1849,7 @@ fn a_terminal_interrupt_ends_the_wait_of_a_start_and_skips_the_check() {
 #[test]
 fn delete_all_snapshots_cancels_the_job_and_deletes_them_after_its_save_returned() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let save_gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&save_gate));
         let snapshots = service(&store, settings(4, 4));
@@ -1868,7 +1891,7 @@ fn delete_all_snapshots_cancels_the_job_and_deletes_them_after_its_save_returned
 #[test]
 fn a_cancelled_confirmation_deletes_nothing() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         let confirm = Arc::new(ScriptedConfirmer {
             outcome: Mutex::new(ConfirmOutcome::Confirmed),
@@ -1939,7 +1962,7 @@ fn a_store_that_fails_every_delete_of_all_snapshots_leaves_the_service_running()
 #[test]
 fn each_delete_holds_a_slot_of_the_uploads() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(1, 4));
@@ -1983,7 +2006,7 @@ fn each_delete_holds_a_slot_of_the_uploads() {
 #[test]
 fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 2));
         let agent = agent_snapshots("restores");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -2039,7 +2062,7 @@ fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
 #[test]
 fn a_restore_gives_the_saved_tree() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 2));
         let agent = agent_snapshots("restore");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -2143,7 +2166,7 @@ fn a_name_whose_save_failed_is_never_given_to_another_capture() {
 #[test]
 fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_delete() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let shutdown = CancellationToken::new();
@@ -2181,7 +2204,7 @@ fn a_shutdown_before_the_confirmation_stops_the_job_without_a_confirmation_or_a_
 #[test]
 fn a_parent_reaches_the_store_with_its_detection() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("parent");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -2255,7 +2278,7 @@ async fn update_uploads_with_retention(
 #[test]
 fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("update-retention");
 
@@ -2283,7 +2306,7 @@ fn an_update_retention_keeps_the_own_snapshot_and_the_newest_older_updates() {
 #[test]
 fn a_dropped_update_retention_deletes_nothing_and_frees_the_agent() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("dropped-update-retention");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -2343,7 +2366,7 @@ async fn with_a_delete_held(
     AgentSnapshots,
     Arc<Gate>,
 ) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = Arc::new(scripted_store());
     let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
         retained_periodic_snapshots: 1,
         retained_update_snapshots: 1,
@@ -2408,7 +2431,7 @@ fn delete_all_snapshots_ends_a_delete_of_a_superseded_snapshot_at_once() {
 #[test]
 fn upload_answers_stopped_at_once_and_discards_the_capture_after_the_save_returned() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -2469,7 +2492,7 @@ async fn submit(
 #[test]
 fn a_manual_update_cuts_the_deletes_of_a_running_job_and_never_its_save() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let agent = agent_snapshots("update-during-save");
         let gate = store.hold_saves_of(&agent);
         let snapshots = service(&store, settings(4, 4));
@@ -2494,7 +2517,7 @@ fn a_manual_update_cuts_the_deletes_of_a_running_job_and_never_its_save() {
 #[test]
 fn an_upload_whose_slots_are_gone_stops_and_frees_the_agent() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let holder = agent_snapshots("slot-holder");
         let gate = store.hold_saves_of(&holder);
         let snapshots = service(&store, settings(1, 4));
@@ -2518,7 +2541,7 @@ fn an_upload_whose_slots_are_gone_stops_and_frees_the_agent() {
 #[test]
 fn the_delete_of_a_superseded_snapshot_waits_for_a_slot_of_the_uploads() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(1, 4));
         let agent = agent_snapshots("superseded-waits");
         let confirm_gate = Arc::new(Gate::default());
@@ -2732,7 +2755,7 @@ fn a_save_of_another_agent_runs_while_an_upload_waits_between_two_attempts() {
 #[test]
 fn delete_all_snapshots_starts_only_after_the_held_save_ended_and_leaves_no_snapshot() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let agent = agent_snapshots("held-detached-save");
         let gate = store.detach_saves_of(&agent);
         let snapshots = service(&store, settings(4, 4));
@@ -2873,7 +2896,7 @@ fn a_start_waits_only_for_a_job_that_got_a_slot() {
 #[test]
 fn a_manual_update_after_a_revert_stop_is_admitted_while_the_old_save_still_runs() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let agent = agent_snapshots("update-after-revert");
         let gate = store.hold_saves_of(&agent);
         let snapshots = service(&store, settings(4, 4));
@@ -2918,7 +2941,7 @@ fn a_manual_update_after_a_revert_stop_is_admitted_while_the_old_save_still_runs
 fn a_manual_update_gets_save_running_or_no_slot_by_its_cause() {
     paused(async {
         // A save of the agent that runs on after its job stopped.
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let agent = agent_snapshots("update-behind-a-save");
         let gate = store.hold_saves_of(&agent);
         let snapshots = service(&store, settings(4, 4));
@@ -2977,7 +3000,7 @@ fn a_manual_update_waits_for_a_running_save_at_most_the_rest_of_confirmation_wai
     paused(async {
         // The update first waits for the running job, then in its upload for the save that runs
         // on: both waits together end at `confirmation_wait`.
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let agent = agent_snapshots("update-deadline");
         let gate = store.hold_saves_of(&agent);
         let snapshots = Arc::new(service(&store, settings(4, 4)));
@@ -3022,7 +3045,7 @@ fn a_manual_update_waits_for_a_running_save_at_most_the_rest_of_confirmation_wai
 #[test]
 fn a_dropped_upload_now_caller_ends_the_admission_and_the_save_runs_to_its_end() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3067,7 +3090,7 @@ fn a_dropped_upload_now_caller_ends_the_admission_and_the_save_runs_to_its_end()
 #[test]
 fn a_cancelled_save_is_discarded_after_the_call_returned_and_never_published() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3109,7 +3132,7 @@ fn a_cancelled_save_is_discarded_after_the_call_returned_and_never_published() {
 /// `lost`, which both already hold their value. Gives the answer, the calls of `save`, the runs
 /// of the store and the free slots after the answer, and fails when the tree is not discarded.
 async fn upload_after_a_stop(stop: bool, lost: bool) -> (Result<(), String>, usize, usize, usize) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = Arc::new(scripted_store());
     let snapshots = service(&store, settings(4, 4));
     let core = snapshots.core.as_ref().unwrap();
     let agent = agent_snapshots("stopped-before-the-upload");
@@ -3152,7 +3175,7 @@ fn an_upload_whose_caller_stopped_before_it_starts_answers_stopped_and_makes_no_
 #[test]
 fn a_lost_shard_during_a_save_cancels_the_save_in_the_store_before_the_upload_answers() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3188,7 +3211,7 @@ fn a_lost_shard_during_a_save_cancels_the_save_in_the_store_before_the_upload_an
 #[test]
 fn a_shutdown_discards_a_dropped_save_only_after_the_store_stopped() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let save_gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&save_gate));
         let shutdown_gate = Arc::new(Gate::default());
@@ -3219,7 +3242,7 @@ fn a_shutdown_discards_a_dropped_save_only_after_the_store_stopped() {
 #[test]
 fn a_delete_of_all_snapshots_waits_for_a_running_delete_of_names_of_its_agent() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.delete_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3262,7 +3285,7 @@ fn an_all_ends_the_retry_sleep_of_a_names_of_its_agent() {
 #[test]
 fn a_delete_of_names_stops_the_upload_of_one_of_them_and_runs_after_its_store_call_ended() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let agent = agent_snapshots("revert-of-a-held-save");
         let gate = store.detach_saves_of(&agent);
         let snapshots = service(&store, settings(4, 4));
@@ -3313,7 +3336,7 @@ fn no_admission_succeeds_while_a_job_deletes_its_older_snapshots() {
 #[test]
 fn a_confirmed_upload_keeps_the_names_of_its_confirmation_whatever_their_age() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
             retained_periodic_snapshots: 1,
             ..values(4, 4)
@@ -3357,7 +3380,7 @@ fn a_confirmed_upload_keeps_the_names_of_its_confirmation_whatever_their_age() {
 #[test]
 fn an_ephemeral_admission_is_disabled_and_makes_no_store_call() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("ephemeral");
 
@@ -3384,7 +3407,7 @@ fn an_ephemeral_admission_is_disabled_and_makes_no_store_call() {
 #[test]
 fn every_store_write_arrives_while_its_agent_is_busy() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("writes");
         let (target_id, stage_id, target) = fork_target("copied");
@@ -3427,7 +3450,7 @@ fn every_store_write_arrives_while_its_agent_is_busy() {
 #[test]
 fn a_dropped_fork_keeps_both_incarnations_busy_until_its_copy_returns() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.copy_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3538,7 +3561,7 @@ fn a_newer_periodic_admission_replaces_a_save_in_its_backoff_and_discards_its_ca
 fn a_periodic_admission_during_a_run_is_refused_at_once_and_the_old_job_confirms_when_the_run_succeeds()
  {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3606,7 +3629,7 @@ fn a_manual_update_is_woken_by_the_failed_run_replaces_the_job_and_never_sleeps_
 #[test]
 fn a_manual_update_that_finds_a_decided_job_in_its_deletes_waits_for_its_end() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let delete_gate = Arc::new(Gate::default());
         *store.delete_gate.lock().unwrap() = Some(Arc::clone(&delete_gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3725,7 +3748,7 @@ fn a_manual_update_whose_run_failed_before_its_deadline_answers_the_storage_erro
 #[test]
 fn a_manual_update_whose_first_take_comes_after_its_deadline_with_a_free_slot_runs_once() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let agent = agent_snapshots("update-late-take");
         let discarded = Arc::new(AtomicUsize::new(0));
@@ -3784,7 +3807,7 @@ fn a_stop_and_the_deadline_together_answer_stopped() {
 #[test]
 fn a_stop_answers_a_delete_in_its_run_at_once() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let delete_gate = Arc::new(Gate::default());
         *store.delete_gate.lock().unwrap() = Some(Arc::clone(&delete_gate));
         let snapshots = service(&store, settings(4, 4));
@@ -3883,7 +3906,7 @@ fn retention_stopped(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshot
 #[test]
 fn a_manual_update_stops_the_deletes_of_the_running_job_before_it_waits_for_the_job() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let agent = agent_snapshots("update-stops-retention-first");
         let gate = store.hold_saves_of(&agent);
         let snapshots = Arc::new(service(&store, settings(4, 4)));
@@ -3967,7 +3990,7 @@ fn a_save_waiting_for_a_late_publish_is_replaced_by_a_periodic_admission_and_its
 #[test]
 fn a_clean_save_is_not_replaced_while_its_job_confirms_although_a_stale_report_came() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         store.reports_late_on_success.store(true, Ordering::SeqCst);
         let snapshots = Arc::new(service(&store, settings(4, 4)));
         let agent = agent_snapshots("clean-save-not-replaced");
@@ -4107,7 +4130,7 @@ fn a_manual_update_replaces_a_periodic_save_that_waits_out_a_late_write_and_a_de
 #[test]
 fn a_manual_update_waits_for_the_end_of_a_job_that_confirmed_when_its_run_succeeded() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let gate = Arc::new(Gate::default());
         *store.save_gate.lock().unwrap() = Some(Arc::clone(&gate));
         let snapshots = service(&store, settings(4, 4));
@@ -4140,7 +4163,7 @@ fn a_manual_update_waits_for_the_end_of_a_job_that_confirmed_when_its_run_succee
 /// runs the same overlap with a prune. Gives whether the upload was
 /// admitted, the names that the store keeps, and the content of the tree of the new name.
 async fn save_during_a_clean_up(save_first: bool) -> (bool, usize, Option<Vec<u8>>) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = Arc::new(scripted_store());
     let snapshots = service(&store, settings(4, 4));
     let agent = agent_snapshots("save-during-clean-up");
     let deferred = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
@@ -4329,7 +4352,7 @@ async fn with_a_revert_hold() -> (
     AgentSnapshots,
     RevertHold,
 ) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = Arc::new(scripted_store());
     let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
         retained_periodic_snapshots: 1,
         ..values(4, 4)
@@ -4415,7 +4438,7 @@ async fn holds_snapshots(store: &ScriptedStore, agent: &AgentSnapshots) -> bool 
 async fn stage_after(
     publish: impl FnOnce(Copied, golem_common::model::AgentFingerprint),
 ) -> (bool, bool) {
-    let store = Arc::new(ScriptedStore::default());
+    let store = Arc::new(scripted_store());
     let snapshots = service(&store, settings(4, 4));
     let source = agent_snapshots("fork-source");
     let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
@@ -4547,7 +4570,7 @@ fn an_export_conflict_after_the_session_deadline_keeps_the_own_stage() {
 #[test]
 fn a_fork_waits_only_for_another_attempt_of_its_request_and_for_a_pending_delete_of_its_source() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = Arc::new(service(&store, settings(4, 4)));
         let source = agent_snapshots("fork-source");
         let (target, _, _) = fork_target("fork-target");
@@ -4598,7 +4621,7 @@ fn a_fork_waits_only_for_another_attempt_of_its_request_and_for_a_pending_delete
 #[test]
 fn a_revert_delete_of_the_source_waits_for_the_fork() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let source = agent_snapshots("fork-source");
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
@@ -4658,7 +4681,7 @@ fn the_copy_of_a_fork_of_a_disabled_service_misses_a_named_baseline() {
 #[test]
 fn the_copy_of_a_fork_checks_the_snapshot_of_the_baseline_in_the_stage() {
     paused(async {
-        let store = Arc::new(ScriptedStore::default());
+        let store = Arc::new(scripted_store());
         let snapshots = service(&store, settings(4, 4));
         let source = agent_snapshots("fork-source");
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Deferred);
