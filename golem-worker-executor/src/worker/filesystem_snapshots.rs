@@ -550,21 +550,6 @@ pub(crate) trait UpdateSnapshotHost {
     fn lost_shard_signal(&self) -> watch::Receiver<bool>;
 }
 
-/// The retention of a saved manual-update snapshot.
-#[must_use = "a dropped update retention deletes no older snapshot; delete them after the record commits"]
-pub(crate) struct UpdateRetention {
-    saved: Box<SavedUpdate>,
-}
-
-impl UpdateRetention {
-    /// Deletes the older update snapshots in the background, except `kept`, the update snapshot
-    /// names that the status of the agent holds after the update record committed. Call it after
-    /// the update record commits.
-    pub(crate) fn delete_older_snapshots(self, kept: &[FilesystemSnapshotName]) {
-        self.saved.delete_older_snapshots(kept);
-    }
-}
-
 /// How the snapshot part of a manual update ended.
 pub(crate) enum UpdateSnapshot<Stop> {
     /// The store holds the filesystem snapshot `name`, or the tree holds only initial files and
@@ -572,7 +557,7 @@ pub(crate) enum UpdateSnapshot<Stop> {
     Saved {
         snapshot: RawSnapshotData,
         name: Option<FilesystemSnapshotName>,
-        retention: Option<UpdateRetention>,
+        retention: Option<Box<SavedUpdate>>,
     },
     /// The update fails with the details.
     Fail(String),
@@ -645,9 +630,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
         Ok(saved) => UpdateSnapshot::Saved {
             snapshot,
             name: Some(name),
-            retention: Some(UpdateRetention {
-                saved: Box::new(saved),
-            }),
+            retention: Some(Box::new(saved)),
         },
         Err(error) => failed_update_upload(&error, host.lost_shard()),
     }
