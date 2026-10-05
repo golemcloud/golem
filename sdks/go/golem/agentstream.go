@@ -50,9 +50,11 @@ import (
 // Forwarding one you have not read costs nothing — the endpoint moves, no items
 // are pumped through this component.
 //
-// Clean completion is end of input. A producer that fails must NOT close the
-// stream cleanly, because the reader cannot tell that apart from success; model
-// recoverable failures in the item type, as AgentStream[Result[T, E]].
+// Clean completion is end of input, and a stream has no failure end of its own.
+// A producer that fails must not close it cleanly, because the reader could not
+// tell that apart from success: ProduceStream fails the invocation instead, as
+// the other SDKs do. Model recoverable failures in the item type, as
+// AgentStream[Result[T, E]].
 
 var (
 	// ErrStreamTransferred reports a stream used after it was handed on.
@@ -159,21 +161,26 @@ func StreamOf[T any](items ...T) AgentStream[T] {
 }
 
 // ProduceStream runs produce on its own goroutine and returns the stream it
-// writes to. Returning nil closes the stream cleanly; returning an error
-// abandons it, because a consumer must not read a failed production as a
-// complete one.
+// writes to. Returning nil closes the stream cleanly. Returning an error, or
+// panicking, fails the invocation the stream belongs to — the component traps,
+// as a failing producer does in the other SDKs — because a stream has no failure
+// end and a consumer must not read a failed production as a complete one.
 func ProduceStream[T any](produce func(*AgentStreamWriter[T]) error) AgentStream[T] {
 	w, s := NewAgentStream[T]()
 	go func() {
 		if err := produce(w); err != nil {
-			// Abandon rather than close: dropping the writer without a clean
-			// close is how the wire distinguishes an incomplete stream.
-			w.abandon()
+			failProduction(err)
 			return
 		}
 		_ = w.Close()
 	}()
 	return s
+}
+
+// failProduction ends a failed production by failing the invocation. It is a
+// variable so native tests can observe it instead of crashing the test binary.
+var failProduction = func(err error) {
+	panic(fmt.Sprintf("golem: stream producer failed: %v", err))
 }
 
 // Next reads the next value. It reports ok=false with a nil error at clean end
@@ -320,16 +327,6 @@ func (w *AgentStreamWriter[T]) Close() error {
 	w.closed = true
 	w.sink.drop()
 	return nil
-}
-
-// abandon drops the writer without marking completion, which is how a failed
-// production is distinguished from a finished one.
-func (w *AgentStreamWriter[T]) abandon() {
-	if w.closed {
-		return
-	}
-	w.closed = true
-	w.sink.drop()
 }
 
 // defaultStreamCodec converts items through the SDK's own codec for T.

@@ -52,7 +52,7 @@ func serveHTTP(ctx context.Context, h http.Handler, req HTTPRequest) HTTPRespons
 					return
 				}
 				// The head is already on its way, and a stream has no failure end
-				// state: the body ends where the handler stopped.
+				// state: failing the production fails the request.
 				err = fmt.Errorf("golem: the HTTP handler panicked after sending the response head: %v", p)
 				return
 			}

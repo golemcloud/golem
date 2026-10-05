@@ -289,3 +289,42 @@ func TestAReceivedStreamCanBeStoredInAStructField(t *testing.T) {
 		t.Fatal("the received stream cannot decode its items")
 	}
 }
+
+// observeFailedProduction replaces failing the invocation, which off wasm would
+// crash the test binary, with reporting the failure.
+func observeFailedProduction(t *testing.T) <-chan error {
+	t.Helper()
+	failed := make(chan error, 1)
+	prev := failProduction
+	failProduction = func(err error) { failed <- err }
+	t.Cleanup(func() { failProduction = prev })
+	return failed
+}
+
+// TestAFailedProductionIsNotEndOfInput — a producer that fails must not look
+// like one that finished: the invocation fails instead of the stream closing.
+func TestAFailedProductionIsNotEndOfInput(t *testing.T) {
+	failed := observeFailedProduction(t)
+	s := ProduceStream(func(w *AgentStreamWriter[int32]) error {
+		if err := w.Write(1); err != nil {
+			return err
+		}
+		return errors.New("disk gone")
+	})
+	if v, ok, err := s.Next(); !ok || err != nil || v != 1 {
+		t.Fatalf("first item %d, %v, %v", v, ok, err)
+	}
+	if err := <-failed; err == nil || err.Error() != "disk gone" {
+		t.Fatalf("the production failed with %v", err)
+	}
+
+	done := ProduceStream(func(w *AgentStreamWriter[int32]) error { return w.Write(2) })
+	if got, err := done.Collect(); err != nil || len(got) != 1 || got[0] != 2 {
+		t.Fatalf("a finished production gave %v, %v", got, err)
+	}
+	select {
+	case err := <-failed:
+		t.Fatalf("a finished production failed with %v", err)
+	default:
+	}
+}

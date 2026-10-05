@@ -38,8 +38,8 @@ import (
 //	})
 //	if nf, ok := ErrNothingToCommit.Match(err); ok { … }
 //
-// A command declared with StdoutCommand returns a [ToolInvocation] instead,
-// whose standard output is read while the command runs.
+// A command declared with OutputCommand returns a [ToolInvocation] instead,
+// whose standard output and standard error are read while the command runs.
 
 // ToolCallErrorKind classifies a failed tool call.
 type ToolCallErrorKind uint8

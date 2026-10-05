@@ -134,4 +134,30 @@ async fn test_go_agent_ops() {
         .find_map(|line| line.trim().parse().ok())
         .unwrap_or_else(|| panic!("no count in {invocations}"));
     assert!(n >= 6, "{invocations}");
+
+    // A Go producer that fails mid-stream fails its invocation: the reader
+    // must never see the items it got as a complete stream.
+    let failing = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "OpsAgent(\"f\")",
+            "readFailing",
+        ])
+        .await;
+    let text = format!("{}\n{}", failing.stdout_text(), failing.stderr_text());
+    assert!(
+        !failing.success(),
+        "a failed production was not reported: {text}"
+    );
+    // The failure reaches the caller either through the call itself, carrying
+    // the producer's panic, or through its read of the stream, depending on
+    // whether the caller is still waiting for the result when the producer
+    // fails.
+    assert!(
+        text.contains("stream producer failed: intentional producer failure")
+            || text.contains("durable stream ended with error"),
+        "{text}"
+    );
 }

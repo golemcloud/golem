@@ -297,14 +297,18 @@ func TestAPanicBeforeTheHeadFailsTheRequest(t *testing.T) {
 
 // A stream has no failure end state, so a panic once the head is out can only
 // end the body where the handler stopped.
-func TestAPanicAfterTheHeadEndsTheBody(t *testing.T) {
+func TestAPanicAfterTheHeadFailsTheRequest(t *testing.T) {
+	failed := observeFailedProduction(t)
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "partial")
 		panic("boom")
 	})
 	resp := serveHTTP(context.Background(), h, request("GET", "/p", None[string](), nil))
-	if body, _ := bodyOf(t, resp); body != "partial" {
-		t.Fatalf("body %q", body)
+	if chunk, ok, err := resp.Body.Next(); !ok || err != nil || string(chunk) != "partial" {
+		t.Fatalf("first chunk %q, %v, %v", chunk, ok, err)
+	}
+	if err := <-failed; !strings.Contains(err.Error(), "panicked after sending the response head: boom") {
+		t.Fatalf("the production failed with %v", err)
 	}
 }
 

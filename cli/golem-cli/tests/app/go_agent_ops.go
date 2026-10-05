@@ -7,6 +7,7 @@ import (
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/oplog"
+	"github.com/golemcloud/golem/sdks/go/golem/retry"
 )
 
 type CounterID struct{ Name string }
@@ -17,6 +18,15 @@ var (
 	Increment = Counter.Method[golem.Unit, int64]("increment")
 	Value     = Counter.Method[golem.Unit, int64]("value")
 )
+
+type SourceID struct{ Name string }
+
+var Source = golem.DefineAgent[SourceID](golem.Spec{Name: "SourceAgent"})
+
+// Failing streams one item and then fails its production.
+var Failing = Source.Method[golem.Unit, golem.AgentStream[int32]]("failing")
+
+type sourceState struct{}
 
 type OpsID struct{ Name string }
 
@@ -31,6 +41,7 @@ var (
 	RevertOne   = Ops.Method[NameIn, int64]("revertOne")
 	Counters    = Ops.Method[golem.Unit, string]("counters")
 	Invocations = Ops.Method[golem.Unit, int64]("invocations")
+	ReadFailing = Ops.Method[golem.Unit, string]("readFailing")
 )
 
 type counterState struct{ N int64 }
@@ -47,7 +58,28 @@ func init() {
 	})
 	counter.Handle(Value, func(ctx *golem.Context[counterState], _ golem.Unit) int64 { return ctx.State.N })
 
+	source := Source.Implement(func(SourceID) *sourceState { return &sourceState{} })
+	source.Handle(Failing, func(*golem.Context[sourceState], golem.Unit) golem.AgentStream[int32] {
+		// The failure is deliberate; retrying it would only repeat it.
+		retry.Set(retry.Named("stream-failure-test", retry.Never()).WithPriority(1 << 31))
+		return golem.ProduceStream(func(w *golem.AgentStreamWriter[int32]) error {
+			if err := w.Write(1); err != nil {
+				return err
+			}
+			return fmt.Errorf("intentional producer failure")
+		})
+	})
+
 	ops := Ops.Implement(func(OpsID) *opsState { return &opsState{} })
+
+	// A failed production must not reach the reader as a clean end.
+	ops.Handle(ReadFailing, func(*golem.Context[opsState], golem.Unit) string {
+		items, err := Failing.Call(Source.Get(SourceID{Name: "s"}), golem.Unit{}).Collect()
+		if err == nil {
+			return fmt.Sprintf("clean-eof:%v", items)
+		}
+		return fmt.Sprintf("failed:%v", err)
+	})
 
 	ops.Handle(Self, func(*golem.Context[opsState], golem.Unit) string {
 		md := golem.MustGetSelfMetadata()
