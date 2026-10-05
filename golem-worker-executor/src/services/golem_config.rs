@@ -3522,6 +3522,37 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_snapshots_store_settings_accept_a_retry_at_the_edges_and_refuse_one_past_them() {
+        let with_retry = |min_delay: u64, max_delay: u64, multiplier: f64| {
+            FilesystemSnapshotStoreConfig::new(KEY, Duration::from_secs(60), 1, 1)
+                .and_then(|config| {
+                    config.with_storage_retry(RetryConfig {
+                        min_delay: Duration::from_secs(min_delay),
+                        max_delay: Duration::from_secs(max_delay),
+                        multiplier,
+                        ..default_filesystem_snapshot_storage_retry()
+                    })
+                })
+                .err()
+        };
+
+        assert_eq!(
+            [
+                with_retry(2, 2, 4.0),
+                with_retry(3, 2, 4.0),
+                with_retry(2, 120, 1.0),
+                with_retry(2, 120, 0.999),
+            ],
+            [
+                None,
+                Some("storage_retry.min_delay must not be greater than max_delay".to_string()),
+                None,
+                Some("storage_retry.multiplier must be at least 1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn filesystem_snapshots_store_settings_refuse_a_jitter_factor_that_is_not_a_number() {
         let with_jitter = |factor: f64| {
             FilesystemSnapshotStoreConfig::new(KEY, Duration::from_secs(60), 1, 1)

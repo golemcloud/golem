@@ -2007,6 +2007,57 @@ mod tests {
     }
 
     #[test]
+    fn names_for_an_agent_whose_delete_of_all_runs_and_an_empty_request_at_the_limit_add_nothing() {
+        let mut state = limited(1, 10, 10);
+        let (running, full, empty) = (
+            agent_snapshots("running-all"),
+            agent_snapshots("fills-the-limit"),
+            agent_snapshots("empty-request"),
+        );
+        request_all(&mut state, &running);
+        let taken = take(&mut state).map(|(agent, work)| (agent == running, work));
+        request_all(&mut state, &full);
+
+        let names = request_names(&mut state, &running, &snapshot_names(&["p-1"]));
+        let nothing = request_names(&mut state, &empty, &[]);
+
+        assert_eq!(taken, Some((true, Work::All)));
+        assert_eq!(
+            (
+                names.overflow,
+                nothing.overflow,
+                state
+                    .cleanups
+                    .get(&running)
+                    .map(|cleanup| cleanup.pending.clone()),
+                state.cleanups.contains_key(&empty),
+                (
+                    state.pending_entries,
+                    state.pending_names_entries,
+                    state.pending_names_total
+                ),
+            ),
+            (false, false, Some(None), false, (1, 0, 0))
+        );
+    }
+
+    #[test]
+    fn a_delete_of_all_for_an_agent_whose_clean_up_runs_counts_one_pending_entry() {
+        let mut state = State::default();
+        let agent = agent_snapshots("all-while-running");
+        request_names(&mut state, &agent, &snapshot_names(&["p-1"]));
+        let taken = take(&mut state).map(|(_, work)| work_names(&work));
+
+        let requested = request_all(&mut state, &agent);
+
+        assert_eq!(
+            taken,
+            Some(std::collections::BTreeSet::from(["p-1".to_string()]))
+        );
+        assert_eq!((requested.overflow, state.pending_entries), (false, 1));
+    }
+
+    #[test]
     fn a_delete_of_names_stops_only_the_job_whose_name_it_holds() {
         let mut state = State::default();
         let agent = agent_snapshots("stops");

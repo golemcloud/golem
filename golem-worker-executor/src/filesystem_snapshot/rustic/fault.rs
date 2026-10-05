@@ -625,6 +625,31 @@ mod tests {
     }
 
     #[test]
+    fn missing_blob_reads_only_a_hex_start_of_one_to_64_digits() {
+        let not_found = |id: &str| anyhow::anyhow!("Blob ID `{id}` not found in index");
+
+        assert_eq!(
+            [
+                "",
+                "xyz",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "ABCD",
+            ]
+            .map(|id| missing_blob(not_found(id).as_ref())),
+            [
+                None,
+                None,
+                None,
+                Some(Box::from(
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                )),
+                Some(Box::from("abcd")),
+            ]
+        );
+    }
+
+    #[test]
     fn the_config_marker_is_found_in_the_chain() {
         let exists = failed_call(anyhow::Error::new(ConfigExists));
         let other = failed_call(anyhow::anyhow!("the bucket is gone"));

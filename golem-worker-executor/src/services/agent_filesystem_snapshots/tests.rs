@@ -4538,7 +4538,7 @@ fn an_export_conflict_after_the_session_deadline_keeps_the_own_stage() {
 }
 
 #[test]
-fn a_fork_waits_for_another_attempt_of_its_request_and_for_a_pending_delete_of_its_source() {
+fn a_fork_waits_only_for_another_attempt_of_its_request_and_for_a_pending_delete_of_its_source() {
     paused(async {
         let store = Arc::new(ScriptedStore::default());
         let snapshots = Arc::new(service(&store, settings(4, 4)));
@@ -4546,6 +4546,7 @@ fn a_fork_waits_for_another_attempt_of_its_request_and_for_a_pending_delete_of_i
         let (target, _, _) = fork_target("fork-target");
         let flight = fork_flight(&target.agent_id, [3; 32]);
         let first = snapshots.begin_fork(&source, flight.clone()).await.unwrap();
+        let first_waited = first.waited();
 
         let second = {
             let (snapshots, source, flight) =
@@ -4577,11 +4578,12 @@ fn a_fork_waits_for_another_attempt_of_its_request_and_for_a_pending_delete_of_i
 
         assert_eq!(
             (
+                first_waited,
                 second_waited_while_the_first_lives,
                 second_waited,
                 third_waited
             ),
-            (true, true, true)
+            (false, true, true, true)
         );
     })
 }

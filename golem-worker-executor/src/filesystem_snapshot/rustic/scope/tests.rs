@@ -525,6 +525,49 @@ async fn a_catch_up_whose_new_pack_a_prune_removed_leaves_no_index_file_of_it_in
     );
 }
 
+/// A source that gets a new index file before each listing of its index files never lets the
+/// catch-up end: the copy gives `Race` after exactly [`MOST_CATCH_UPS`] rounds. The source stops
+/// growing after four times that many listings, so a copy that counts its rounds wrong ends.
+#[test]
+#[timeout("60s")]
+async fn a_copy_whose_source_gets_a_new_index_file_at_each_listing_gives_race_after_the_last_round()
+{
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let from = new_namespace();
+    let listings = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let storage = {
+        let (inner, from, listings) = (inner.clone(), from.clone(), listings.clone());
+        ScriptedBlobStorage::in_namespaces(inner.clone(), move |namespace, op_label, path| {
+            if op_label == "copy_list" && namespace == &from && path == Path::new("index") {
+                let listing = listings.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if listing < 4 * MOST_CATCH_UPS {
+                    // Each listing runs alone, so the in-memory store takes the write at once.
+                    futures::executor::block_on(inner.put_raw(
+                        "test",
+                        "test",
+                        from.clone(),
+                        &Path::new("index").join(format!("{listing:08x}")),
+                        b"new index",
+                    ))
+                    .unwrap();
+                }
+            }
+            Script::Pass
+        })
+    };
+    let to = new_namespace();
+    put_all(&*storage, &from, &REPOSITORY).await;
+
+    let copied = copy_scope(&files(&storage, &from), &files(&storage, &to), false).await;
+
+    assert!(matches!(copied, Err(CopyError::Race)), "{copied:?}");
+    // The first listing of the copy, then one listing for each round.
+    assert_eq!(
+        listings.load(std::sync::atomic::Ordering::SeqCst),
+        1 + MOST_CATCH_UPS
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn a_copy_run_again_removes_the_snapshot_files_that_its_source_no_longer_has() {

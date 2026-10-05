@@ -580,3 +580,85 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
         self.inner.shut_down().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TestFilesystemSnapshotStore;
+    use crate::filesystem_snapshot::{
+        AgentSnapshots, FilesystemSnapshotStore, RunSlots, SaveError, Slot, SnapshotName,
+        Withdrawal,
+    };
+    use futures::future::BoxFuture;
+    use golem_common::model::{AgentFingerprint, OwnedAgentId};
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use test_r::{test, timeout};
+
+    /// Slots that are always free, that count the takes and the waits after a failed run, and that
+    /// withdraw the call at the take number `withdraw_at`.
+    struct CountedSlots {
+        takes: AtomicUsize,
+        waits: AtomicUsize,
+        withdraw_at: usize,
+    }
+
+    impl RunSlots for CountedSlots {
+        fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
+            let take = self.takes.fetch_add(1, Ordering::SeqCst) + 1;
+            Box::pin(std::future::ready(if take >= self.withdraw_at {
+                Err(Withdrawal::Stopped)
+            } else {
+                Ok(Slot::new(()))
+            }))
+        }
+
+        fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
+            Box::pin(std::future::pending())
+        }
+
+        fn waiting_after_failure(&self) {
+            self.waits.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn an_injected_failed_save_with_free_slots_fails_after_its_two_runs() {
+        let store = TestFilesystemSnapshotStore::new();
+        store.fail_next_saves(1);
+        let slots = CountedSlots {
+            takes: AtomicUsize::new(0),
+            waits: AtomicUsize::new(0),
+            withdraw_at: 10,
+        };
+
+        let saved = store
+            .save(
+                &AgentSnapshots::agent(
+                    &OwnedAgentId::new(
+                        golem_common::model::environment::EnvironmentId::new(),
+                        &golem_common::model::AgentId {
+                            component_id: golem_common::model::component::ComponentId::new(),
+                            agent_id: "failed-runs".to_string(),
+                        },
+                    ),
+                    AgentFingerprint(uuid::Uuid::new_v4()),
+                ),
+                &SnapshotName::new("p-00000000-0000-4000-8000-000000000001").unwrap(),
+                Path::new("/no-tree"),
+                None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &slots,
+            )
+            .await;
+
+        assert!(matches!(saved, Err(SaveError::Failed(_))), "{saved:?}");
+        assert_eq!(
+            (
+                slots.takes.load(Ordering::SeqCst),
+                slots.waits.load(Ordering::SeqCst)
+            ),
+            (2, 1)
+        );
+    }
+}
