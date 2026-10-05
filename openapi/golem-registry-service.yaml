@@ -20992,9 +20992,9 @@ components:
     ToolMiddlewareMergeMode:
       type: string
       enum:
-      - Prepend
-      - Append
-      - Replace
+      - prepend
+      - append
+      - replace
     ToolMiddlewarePublication:
       type: object
       title: ToolMiddlewarePublication

@@ -39,10 +39,8 @@ async fn effect_ambient_native_client_executes_through_golem() {
     assert!(output.success_or_dump());
     fs::write_str(
         ctx.cwd_path_join("effect-main/src/counter-agent.ts"),
-        &fs::read_to_string(
-            ctx.test_data_path_join("effect-source-conformance/native-consumer.ts"),
-        )
-        .unwrap(),
+        fs::read_to_string(ctx.test_data_path_join("effect-source-conformance/native-consumer.ts"))
+            .unwrap(),
     )
     .unwrap();
     configure_effect_bridge_path(&ctx, "native-conformance");
@@ -310,7 +308,7 @@ async fn effect_imported_mcp_client_projects_contract_and_runs_middleware() {
     write_middleware(&ctx, middleware_port);
     fs::write_str(
         ctx.cwd_path_join("effect-main/src/counter-agent.ts"),
-        &fs::read_to_string(ctx.test_data_path_join("effect-source-conformance/mcp-consumer.ts"))
+        fs::read_to_string(ctx.test_data_path_join("effect-source-conformance/mcp-consumer.ts"))
             .unwrap(),
     )
     .unwrap();

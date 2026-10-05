@@ -3989,6 +3989,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "test-r",
  "tokio",
  "uuid",
 ]

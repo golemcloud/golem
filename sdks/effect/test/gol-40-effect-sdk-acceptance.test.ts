@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { Effect, Fiber, Stream } from "effect"
+import { Effect, Fiber, Result, Stream } from "effect"
 import { ToolTransport } from "../src/Tool.js"
 import { ToolType } from "../src/ToolReflection.js"
 import { compileDefinition, resetTools } from "../src/internal/tool/model.js"
@@ -95,7 +95,7 @@ describe("GOL-40 Effect SDK acceptance", () => {
           generatedStarted.result,
           Stream.runCollect(generatedStarted.stdout!),
           Stream.runCollect(generatedStarted.stderr!),
-        ],
+        ] as const,
         { concurrency: "unbounded" },
       ),
     )
@@ -118,21 +118,26 @@ describe("GOL-40 Effect SDK acceptance", () => {
         Effect.provideService(ToolTransport, transport),
         Effect.provideService(ToolClient, noHost),
       ),
-    ).then((value) => [value.result, [value.stdout], [value.stderr]] as const)
+    ).then(
+      (value) =>
+        [
+          value.result.pipe(Result.getOrThrow),
+          value.stdout.pipe(Result.getOrThrow),
+          value.stderr.pipe(Result.getOrThrow),
+        ] as const,
+    )
 
     expect(reflectedResult[0]).toEqual({
       artifactId: "18446744073709551614",
       digest: "deadbeef",
       warnings: ["unsigned metadata"],
     })
-    expect(new TextDecoder().decode(reflectedResult[1][0])).toBe(
+    expect(new TextDecoder().decode(reflectedResult[1])).toBe(
       new TextDecoder().decode(
         Uint8Array.from([...generatedResult[1]].flatMap((chunk) => [...chunk])),
       ),
     )
-    expect([...reflectedResult[2][0]]).toEqual(
-      [...generatedResult[2]].flatMap((chunk) => [...chunk]),
-    )
+    expect([...reflectedResult[2]!]).toEqual([...generatedResult[2]].flatMap((chunk) => [...chunk]))
     expect(observations).toHaveLength(2)
     expect(observations.every((entry) => entry.principal === principal && entry.stdinClosed)).toBe(
       true,

@@ -19,6 +19,12 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
+#[cfg(test)]
+test_r::enable!();
+
+#[cfg(test)]
+mod acceptance_tests;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalOwner {
@@ -619,6 +625,7 @@ pub fn default_store_path() -> &'static FilePath {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use test_r::test;
 
     fn request() -> ApprovalRequest {
         ApprovalRequest {

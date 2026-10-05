@@ -9,8 +9,6 @@ class Map {
 
 toolDefinition('static-map-shadow')
   .body((body) =>
-    body
-      .option('define', KeyValue(s.s64()), { default: new Map() })
-      .returns(z.string()),
+    body.option('define', KeyValue(s.s64()), { default: new Map() }).returns(z.string()),
   )
   .implement({ 'static-map-shadow': async () => ok('done') });

@@ -6,20 +6,21 @@
 //
 //     http://license.golem.cloud/LICENSE
 
+use crate::{
+    ApprovalDecision, ApprovalOwner, ApprovalRecord, ApprovalRequest, ApprovalServiceConfig,
+    ApprovalState, ApprovalStore, CallbackState,
+};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_human_approval::{
-    ApprovalDecision, ApprovalOwner, ApprovalRecord, ApprovalRequest, ApprovalServiceConfig,
-    ApprovalState, ApprovalStore, CallbackState,
-};
 use reqwest::Client;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+use test_r::{test, timeout};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
@@ -89,7 +90,7 @@ async fn start_approval_server(store_path: &Path, callback_url: &str) -> Running
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let store = ApprovalStore::open(store_path).unwrap();
-    let app = golem_human_approval::router(
+    let app = crate::router(
         store,
         ApprovalServiceConfig {
             request_token: REQUEST_TOKEN.to_string(),
@@ -222,7 +223,8 @@ async fn record(response: reqwest::Response) -> ApprovalRecord {
     response.error_for_status().unwrap().json().await.unwrap()
 }
 
-#[tokio::test]
+#[test]
+#[timeout("30s")]
 async fn approval_1_request_identity_auth_state_and_late_decision_contract() {
     let harness = Harness::start().await;
     let request = request(1, 41);
@@ -299,7 +301,8 @@ async fn approval_1_request_identity_auth_state_and_late_decision_contract() {
     );
 }
 
-#[tokio::test]
+#[test]
+#[timeout("30s")]
 async fn approval_1_rejects_unrecognized_principal_kinds() {
     let harness = Harness::start().await;
     let mut request = request(2, 42);
@@ -312,7 +315,8 @@ async fn approval_1_rejects_unrecognized_principal_kinds() {
     );
 }
 
-#[tokio::test]
+#[test]
+#[timeout("30s")]
 async fn approval_2_pending_request_survives_service_restart() {
     let mut harness = Harness::start().await;
     let request = request(3, 43);
@@ -343,7 +347,8 @@ async fn approval_2_pending_request_survives_service_restart() {
     assert_eq!(harness.callback.calls.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
+#[test]
+#[timeout("30s")]
 async fn approval_3_concurrent_duplicate_decisions_deliver_one_callback() {
     let harness = Harness::start().await;
     let request = request(4, 44);
@@ -390,7 +395,8 @@ async fn approval_3_concurrent_duplicate_decisions_deliver_one_callback() {
     assert_eq!(stored.callback, CallbackState::Delivered);
 }
 
-#[tokio::test]
+#[test]
+#[timeout("30s")]
 async fn approval_3_decisions_require_auth_and_exact_owner() {
     let harness = Harness::start().await;
     let request = request(5, 45);
@@ -431,7 +437,8 @@ async fn approval_3_decisions_require_auth_and_exact_owner() {
     assert_eq!(harness.callback.calls.load(Ordering::SeqCst), 0);
 }
 
-#[tokio::test]
+#[test]
+#[timeout("30s")]
 async fn approval_4_detach_cancel_and_termination_have_distinct_terminals() {
     let harness = Harness::start().await;
 

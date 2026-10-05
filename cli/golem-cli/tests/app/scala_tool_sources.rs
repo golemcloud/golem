@@ -318,22 +318,24 @@ async fn scala_generated_client_invokes_imported_mcp_projection_through_golem() 
         }
     }
 
-    let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 6);
-    assert!(calls.iter().all(|call| call.authorized));
-    assert_eq!(
-        calls
-            .iter()
-            .map(|call| call.item_id.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "none",
-            "text",
-            "binary",
-            "blocks",
-            "failure",
-            "middleware-applied"
-        ]
-    );
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 6);
+        assert!(calls.iter().all(|call| call.authorized));
+        assert_eq!(
+            calls
+                .iter()
+                .map(|call| call.item_id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "none",
+                "text",
+                "binary",
+                "blocks",
+                "failure",
+                "middleware-applied"
+            ]
+        );
+    }
     upstream.shutdown().await;
 }

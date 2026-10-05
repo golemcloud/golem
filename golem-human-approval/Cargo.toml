@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2024"
 license-file = "../LICENSE"
 
+[lib]
+harness = false
+
 [dependencies]
 axum = { workspace = true }
 reqwest = { workspace = true }
@@ -14,6 +17,7 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+test-r = { workspace = true }
 
 [[bin]]
 name = "golem-human-approval-service"

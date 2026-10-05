@@ -1,4 +1,5 @@
 use super::*;
+use test_r::test;
 
 fn backend() -> RateLimitBackendImpl {
     RateLimitBackendImpl::new("k3-contract".to_string())

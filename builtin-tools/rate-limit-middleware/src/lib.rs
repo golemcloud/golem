@@ -10,6 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
+test_r::enable!();
+
+#[cfg(test)]
 mod k3_persistent_rate_limit_contract_tests;
 
 #[derive(Clone, Debug, PartialEq, Eq, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
@@ -230,6 +233,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
+    use test_r::test;
 
     fn backend() -> RateLimitBackendImpl {
         RateLimitBackendImpl::new("test".to_string())

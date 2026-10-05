@@ -884,7 +884,7 @@ jobs:
       matrix:
         part:
           - name: check
-            test-args: --lib --bins --test agent --test http_router --test tool_canonical --test schema_reexport --test reflection_recipe_compile
+            test-args: --lib --bins --test agent --test http_router --test rich_tool_conformance --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
           - name: ui
@@ -914,6 +914,7 @@ jobs:
           expected='agent
           http_router
           reflection_recipe_compile
+          rich_tool_conformance
           schema_reexport
           tool
           tool_canonical
