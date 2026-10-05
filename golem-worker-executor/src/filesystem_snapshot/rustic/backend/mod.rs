@@ -32,6 +32,7 @@ use rustic_core::{
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::runtime::Handle;
 use tokio_util::task::task_tracker::TaskTrackerToken;
@@ -152,32 +153,49 @@ impl BlobBackend {
 
     /// Reads the files of the type `tpe` with `ids` ahead, at most [`SNAPSHOT_FILE_READS`] at a
     /// time and at most one for each of its slots of reads ahead, and keeps them until a read of
-    /// rustic takes each one. It returns when every read has ended. A read that fails or finds no
-    /// file keeps nothing, so the read of rustic asks the storage again and gives its own answer.
-    pub(super) fn read_ahead(&self, tpe: FileType, ids: impl IntoIterator<Item = Id>) {
+    /// rustic takes each one. A read that finds no file keeps nothing, so the read of rustic gives
+    /// its own answer. After the first read that fails, no new read starts; the call returns when
+    /// every read in flight has ended, with the error of the first read that failed.
+    pub(super) fn read_ahead(
+        &self,
+        tpe: FileType,
+        ids: impl IntoIterator<Item = Id>,
+    ) -> RusticResult<()> {
         let paths = ids
             .into_iter()
             .filter_map(|id| file_path(tpe, &id).ok())
             .collect::<Vec<_>>();
+        let failed = AtomicBool::new(false);
+        let failed = &failed;
         let read = self.runtime.block_on(
             futures::stream::iter(paths)
                 .map(|path| async move {
-                    let _slot = self.read_slots.acquire().await.ok()?;
-                    let content = self
-                        .files
-                        .get(StorageCall::Read.label(), &path)
-                        .await
-                        .ok()??;
-                    Some((path, Bytes::from(content)))
+                    if failed.load(Ordering::SeqCst) {
+                        return Ok(None);
+                    }
+                    let Ok(_slot) = self.read_slots.acquire().await else {
+                        return Ok(None);
+                    };
+                    if failed.load(Ordering::SeqCst) {
+                        return Ok(None);
+                    }
+                    match self.files.get(StorageCall::Read.label(), &path).await {
+                        Ok(content) => Ok(content.map(|content| (path, Bytes::from(content)))),
+                        Err(error) => {
+                            failed.store(true, Ordering::SeqCst);
+                            Err(storage_error(StorageCall::Read, &path, error))
+                        }
+                    }
                 })
                 .buffer_unordered(SNAPSHOT_FILE_READS)
-                .filter_map(std::future::ready)
                 .collect::<Vec<_>>(),
         );
+        let read = read.into_iter().collect::<RusticResult<Vec<_>>>()?;
         self.read_ahead
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .extend(read);
+            .extend(read.into_iter().flatten());
+        Ok(())
     }
 
     /// Gives the backend with a stage for the snapshot file of a save.

@@ -2048,7 +2048,7 @@ fn scope_snapshots_except<S: Open>(
         .filter(|id| !known.contains(id))
         .copied()
         .collect::<Vec<_>>();
-    backend.read_ahead(FileType::Snapshot, new.iter().map(|id| **id));
+    backend.read_ahead(FileType::Snapshot, new.iter().map(|id| **id))?;
     new.into_iter()
         .try_fold(
             ScopeSnapshots {

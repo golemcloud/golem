@@ -1801,3 +1801,65 @@ fn restore_snapshot(
     repository.restore(plan, options, entries, &destination)?;
     Ok(())
 }
+
+#[test]
+#[timeout("120s")]
+async fn a_read_ahead_that_fails_reads_no_file_twice_and_starts_no_new_read() {
+    // Each read of a snapshot file is refused, with an answer that a new try can change.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let scope = new_scope();
+    save_numbered(&store(inner.clone(), STORAGE_CALL_DEADLINE), &scope, 0..40).await;
+    let storage = ScriptedBlobStorage::new(inner, |op_label, path| {
+        if op_label == "read" && path.starts_with("snapshots") {
+            Script::Refuse
+        } else {
+            Script::Pass
+        }
+    });
+    let store = RusticSnapshotStore::with_policy(
+        storage.clone(),
+        key(),
+        StorePolicy {
+            deadline: STORAGE_CALL_DEADLINE,
+            save_threads: None,
+            restore_reader_threads: NonZeroUsize::new(6).unwrap(),
+            prune: PruneSettings {
+                fast_repack: true,
+                keep_delete: Duration::from_secs(15 * 60),
+            },
+            prune_threshold: Percent(u16::MAX),
+            retry: one_run(),
+            publish_bound: publish_bound_for(STORAGE_CALL_DEADLINE, Duration::from_secs(15 * 60)),
+            in_call_tries: super::files::IN_CALL_TRIES,
+        },
+        Arc::new(SystemClock),
+    );
+
+    let listed = store
+        .list(&scope, &crate::filesystem_snapshot::Unlimited)
+        .await;
+    let reads = storage
+        .calls()
+        .into_iter()
+        .filter(|(op_label, path)| *op_label == "read" && path.starts_with("snapshots"))
+        .fold(
+            std::collections::HashMap::<String, usize>::new(),
+            |mut reads, (_, path)| {
+                *reads.entry(path).or_default() += 1;
+                reads
+            },
+        );
+
+    assert!(listed.is_err());
+    assert!(
+        reads
+            .values()
+            .all(|count| *count <= super::files::IN_CALL_TRIES as usize),
+        "a snapshot file was read more than its tries: {reads:?}"
+    );
+    assert!(
+        reads.len() <= super::backend::SNAPSHOT_FILE_READS,
+        "{} snapshot files were read",
+        reads.len()
+    );
+}
