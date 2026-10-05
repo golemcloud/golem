@@ -257,6 +257,17 @@ golem ssh 'MyAgent("m1")'
 
 The prompt shows the agent, the directory the last command ended in and, when it was not zero, the last exit status. Leave with `exit`, `exit N` or Ctrl+D; Ctrl+C clears the line being typed.
 
+The prompt edits like a shell:
+
+- **Unfinished input continues.** An open quote, a here-document, a trailing `|`, `&&`, `||` or `\`, or an unclosed `if`, loop, `case`, `{` or `(` continues on a new line marked `·`. Ctrl+C discards it. `golem ssh` recognises these itself and sends anything it is not sure about as typed, so bash reports the error.
+- **Tab completes** command names, including the tools bound to the agent, and paths on the agent. To learn the command names, `golem ssh` runs one short command on the agent when the session opens, and a completion that is not already known runs another; these appear among the agent's invocations. If the agent does not answer within about three seconds, Tab offers nothing.
+- **History is kept per agent** across sessions, in `ssh-history/` under the CLI's configuration directory, readable only by you. Up and Down recall, Ctrl+R searches, and a suggestion from history appears as you type. A line that starts with a space is not saved.
+- **Typed text is coloured.** A command name turns red when the agent does not know it.
+
+While a command runs, a line shows how long it has been running. Its output appears when it finishes, with standard error dimmed.
+
+`golem ssh` answers two words itself: `help` explains the session, and `tools` lists the tools bound to the agent. `help NAME` still asks bash, and `builtin help` or `command tools` reach bash's own.
+
 <Callout type="info">
 Every command runs in a fresh shell. Only the directory a command ends in carries over to the next one; variables, functions, aliases, shell options and `$?` do not. Write anything that must last to the agent's files, for example a file you `source`.
 </Callout>
@@ -279,4 +290,6 @@ Other options:
 - `--timeout SECONDS` stops any command still running after that many seconds.
 - `--tool NAME` uses another binding whose `run` operation matches bash's; the default is `bash`.
 
-Pressing Ctrl+C while a command runs stops waiting for it and ends the session with status 130. The command may still be running on the agent; `golem ssh` prints its idempotency key and the `golem tool invoke --lookup` command that fetches its result later. If the connection fails before the result arrives, the command may or may not have run, so `golem ssh` prints the same lookup command and ends the session with status 255 instead of continuing from a directory it no longer knows.
+Pressing Ctrl+C while a command runs stops waiting for it. `golem ssh` asks Golem to cancel the call: a call that was still queued is cancelled, but Golem cannot stop one that has started, so that command keeps running on the agent until it finishes or reaches its time limit, and your next command waits behind it. `golem ssh` prints the `golem tool invoke --lookup` command that fetches its result later. At the prompt the session continues and shows status 130; with `-c` or piped input, `golem ssh` exits with status 130.
+
+If the connection fails before a result arrives, the command may or may not have run, so `golem ssh` prints the same lookup command and ends the session with status 255 instead of continuing from a directory it no longer knows.

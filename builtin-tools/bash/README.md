@@ -41,8 +41,10 @@ golem ssh 'MyAgent("one")'
 golem ssh 'MyAgent("one")' -c 'printf ready; exit 7'
 ```
 
-It remembers nothing but the directory: every command is still a fresh shell. The component does
-not depend on it.
+It remembers nothing but the directory: every command is still a fresh shell. Its prompt completes
+command names and paths with Tab by running `compgen -c`, once when a session opens, and a short
+listing loop through this tool, so those calls appear among the agent's invocations. The component
+does not depend on it.
 
 ## Contract
 
