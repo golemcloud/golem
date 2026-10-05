@@ -353,6 +353,19 @@ pub struct GenerateBridgeSdkMarkerHash<'a> {
     pub kind: &'static str,
     pub language: &'a GuestLanguage,
     pub bridge_mode: BridgeMode,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateBridgeSdkMarkerHashSource<'a> {
+    source: &'a BridgeSdkTargetSource,
+    target_name: &'a str,
+    kind: &'static str,
+    language: &'a GuestLanguage,
+    bridge_mode: BridgeMode,
+    rust_config: &'a crate::bridge_gen::rust::RustBridgeGeneratorConfig,
+    generator_version: u32,
 }
 
 impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
@@ -369,14 +382,17 @@ impl TaskResultMarkerHashSource for GenerateBridgeSdkMarkerHash<'_> {
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(format!(
-            "source={}\ntargetName={}\nkind={}\nlanguage={}\nbridgeMode={}\ngeneratorVersion=1",
-            serde_json::to_string(self.source)?,
-            self.target_name,
-            self.kind,
-            self.language.id(),
-            self.bridge_mode.id(),
-        )))
+        Ok(HashFromString(serde_json::to_string(
+            &GenerateBridgeSdkMarkerHashSource {
+                source: self.source,
+                target_name: self.target_name,
+                kind: self.kind,
+                language: self.language,
+                bridge_mode: self.bridge_mode,
+                rust_config: &self.rust_config,
+                generator_version: 2,
+            },
+        )?))
     }
 }
 
@@ -595,6 +611,7 @@ mod tests {
             kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::External,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();
@@ -605,6 +622,7 @@ mod tests {
             kind: "agent",
             language: &language,
             bridge_mode: BridgeMode::Guest,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();
@@ -618,8 +636,53 @@ mod tests {
         };
 
         assert_ne!(external_source, guest_source);
-        assert!(external_source.contains("bridgeMode=external"));
-        assert!(guest_source.contains("bridgeMode=internal"));
+        let external: serde_json::Value = serde_json::from_str(&external_source).unwrap();
+        let guest: serde_json::Value = serde_json::from_str(&guest_source).unwrap();
+        assert_eq!(external["bridgeMode"], "external");
+        assert_eq!(guest["bridgeMode"], "guest");
+        assert_eq!(external["generatorVersion"], 2);
+    }
+
+    #[test]
+    fn bridge_sdk_marker_hash_source_includes_rust_generator_configuration() {
+        let source = BridgeSdkTargetSource::local(ComponentName("app:producer".to_string()));
+        let language = GuestLanguage::Rust;
+        let marker = |config| {
+            GenerateBridgeSdkMarkerHash {
+                output_dir: Path::new("bridge/alpha"),
+                source: &source,
+                target_name: "AlphaAgent",
+                kind: "agent",
+                language: &language,
+                bridge_mode: BridgeMode::External,
+                rust_config: config,
+            }
+            .source()
+            .unwrap()
+        };
+        let default = marker(Default::default());
+        let configured = marker(
+            crate::bridge_gen::rust::RustBridgeGeneratorConfig::from_cli(
+                &[".*=Eq".into()],
+                &["anyhow = \"1\"".into()],
+                Path::new("/work"),
+            )
+            .unwrap(),
+        );
+        let TaskResultMarkerHashSourceKind::HashFromString(default) = default else {
+            panic!("expected bridge marker to hash from string");
+        };
+        let TaskResultMarkerHashSourceKind::HashFromString(configured) = configured else {
+            panic!("expected bridge marker to hash from string");
+        };
+        assert_ne!(default, configured);
+        let configured: serde_json::Value = serde_json::from_str(&configured).unwrap();
+        assert!(configured["rustConfig"].is_object());
+        assert_eq!(configured["rustConfig"]["deriveRules"][0]["pattern"], ".*");
+        assert_eq!(
+            configured["rustConfig"]["dependencies"]["anyhow"]["version"],
+            "1"
+        );
     }
 
     #[test]
@@ -641,6 +704,7 @@ mod tests {
                 kind: "agent",
                 language: &language,
                 bridge_mode,
+                rust_config: Default::default(),
             },
         )
         .unwrap();
@@ -653,6 +717,7 @@ mod tests {
                 kind: "agent",
                 language: &language,
                 bridge_mode,
+                rust_config: Default::default(),
             },
         )
         .unwrap();
@@ -814,6 +879,7 @@ mod tests {
                     kind: "tool",
                     language: &language,
                     bridge_mode: BridgeMode::Guest,
+                    rust_config: Default::default(),
                 },
             )
             .unwrap()
@@ -846,6 +912,7 @@ mod tests {
             kind: "tool",
             language: &language,
             bridge_mode: BridgeMode::Guest,
+            rust_config: Default::default(),
         }
         .source()
         .unwrap();

@@ -25,8 +25,8 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{
-    BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
-    PrecreatedPlan, RegistryServiceConfig,
+    BuiltinArtifactsConfig, BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig,
+    PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
 };
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::config::BlobStorageConfig;
@@ -252,6 +252,7 @@ fn registry_service_config(
                     component_limit: u64::MAX,
                     worker_connection_limit: u64::MAX,
                     storage_limit: u64::MAX,
+                    blob_storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
@@ -312,6 +313,10 @@ fn registry_service_config(
             accounts
         },
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
+        builtin_artifacts: BuiltinArtifactsConfig {
+            cache_dir: Some(args.data_dir.join("builtin-artifacts")),
+            ..Default::default()
+        },
         security_scheme: golem_registry_service::config::SecuritySchemeConfig {
             strict_issuer_url_validation: false,
         },
@@ -621,6 +626,10 @@ mod tests {
             };
             assert_eq!(worker_blobs.root, registry_blobs.root);
             assert_eq!(worker_blobs.root, args.data_dir.join("blobs"));
+            assert_eq!(
+                registry_config.builtin_artifacts.cache_dir,
+                Some(args.data_dir.join("builtin-artifacts"))
+            );
         }
     }
 }

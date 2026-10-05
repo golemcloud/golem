@@ -338,6 +338,18 @@ impl BlobStorage for S3BlobStorageWithS3Mock {
             .await
     }
 
+    async fn list_blobs_below(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Vec<(PathBuf, BlobMetadata)>, Error> {
+        self.storage
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
     async fn delete_dir(
         &self,
         target_label: &'static str,
@@ -462,6 +474,172 @@ fn custom_storage() -> BlobStorageNamespace {
 
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
+
+#[test]
+#[test_r::timeout("120s")]
+async fn s3_list_blobs_below_ignores_directory_markers(
+    #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_ignores_directory_markers(test, namespace).await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn prefixed_s3_list_blobs_below_ignores_directory_markers(
+    #[tagged_as("s3_prefixed")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_ignores_directory_markers(test, namespace).await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn s3_list_blobs_below_includes_namespace_root_object(
+    #[tagged_as("s3")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_includes_namespace_root_object(test, namespace).await;
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn prefixed_s3_list_blobs_below_includes_namespace_root_object(
+    #[tagged_as("s3_prefixed")] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[tagged_as("cs")] namespace: &BlobStorageNamespace,
+) {
+    test_s3_list_blobs_below_includes_namespace_root_object(test, namespace).await;
+}
+
+async fn test_s3_list_blobs_below_includes_namespace_root_object(
+    test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    storage
+        .put_raw(
+            "root_object_inventory",
+            "put-root",
+            namespace.clone(),
+            Path::new(""),
+            &[1, 2, 3, 4, 5],
+        )
+        .await
+        .unwrap();
+
+    for expected_size in [5, 5] {
+        let blobs = storage
+            .list_blobs_below(
+                "root_object_inventory",
+                "list",
+                namespace.clone(),
+                Path::new(""),
+            )
+            .await
+            .unwrap();
+        assert!(
+            blobs.iter().any(|(path, metadata)| {
+                path.as_os_str().is_empty() && metadata.size == expected_size
+            }),
+            "namespace-root object must contribute to recursive inventory: {blobs:?}"
+        );
+    }
+
+    storage
+        .put_raw(
+            "root_object_inventory",
+            "replace-root",
+            namespace.clone(),
+            Path::new(""),
+            &[0; 10],
+        )
+        .await
+        .unwrap();
+    let replaced = storage
+        .list_blobs_below(
+            "root_object_inventory",
+            "list-replaced",
+            namespace.clone(),
+            Path::new(""),
+        )
+        .await
+        .unwrap();
+    assert!(
+        replaced
+            .iter()
+            .any(|(path, metadata)| path.as_os_str().is_empty() && metadata.size == 10),
+        "replacement bytes at the namespace root must remain in inventory: {replaced:?}"
+    );
+}
+
+async fn test_s3_list_blobs_below_ignores_directory_markers(
+    test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let root = Path::new("recursive-list");
+    storage
+        .create_dir("recursive_list", "create-root", namespace.clone(), root)
+        .await
+        .unwrap();
+    storage
+        .create_dir(
+            "recursive_list",
+            "create-explicit",
+            namespace.clone(),
+            &root.join("explicit"),
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "recursive_list",
+            "put-explicit",
+            namespace.clone(),
+            &root.join("explicit/object"),
+            &[1, 2, 3],
+        )
+        .await
+        .unwrap();
+    storage
+        .put_raw(
+            "recursive_list",
+            "put-implicit",
+            namespace.clone(),
+            &root.join("implicit/deep/object"),
+            &[4, 5, 6, 7],
+        )
+        .await
+        .unwrap();
+
+    let mut blobs = storage
+        .list_blobs_below("recursive_list", "list", namespace.clone(), root)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(path, metadata)| (path, metadata.size))
+        .collect::<Vec<_>>();
+    blobs.sort_by(|left, right| left.0.cmp(&right.0));
+    assert_eq!(
+        blobs,
+        vec![
+            (root.join("explicit/object"), 3),
+            (root.join("implicit/deep/object"), 4),
+        ]
+    );
+
+    let mut explicit_entries = storage
+        .list_dir(
+            "recursive_list",
+            "list-explicit",
+            namespace.clone(),
+            &root.join("explicit"),
+        )
+        .await
+        .unwrap();
+    explicit_entries.sort();
+    assert_eq!(explicit_entries, vec![root.join("explicit/object")]);
+}
 
 #[test]
 #[test_r::timeout("120s")]

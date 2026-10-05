@@ -1,5 +1,5 @@
 use super::*;
-use golem_api_grpc::proto::golem::schema::{
+use golem_schema::proto::golem::schema::{
     ListValue, RecordValue, SchemaValueStreamReference, schema_value,
 };
 use test_r::test;

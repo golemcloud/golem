@@ -4927,7 +4927,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 #[derive(Clone)]
 struct DurableStreamingTaskParams {
     streams: StreamSession,
-    input: golem_api_grpc::proto::golem::schema::SchemaValue,
+    input: golem_schema::proto::golem::schema::SchemaValue,
     input_mappings: Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
     expected_callee_fingerprint: AgentFingerprint,
     attempt_id: uuid::Uuid,

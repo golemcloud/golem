@@ -140,11 +140,12 @@ effect runs — an idempotent `WriteRemote`, which opens no committed scope — 
 executor that has just lost the shard; its commit is then refused and the new owner runs it
 again, the same window as a crash before that commit. Non-idempotent, batched and transactional
 calls commit their scope `Start` first, so a refusal stops them before the effect. Oplogs that
-assert no epoch are never refused: ephemeral agents' oplogs (their archive layer appends without
-one), a handle opened before this executor has an assignment, fork stages and their publication,
-and compressed archive chunks. Nor do two writes a primary oplog makes outside its entries: the
-prefix it drops once the archive transfer has copied it (`drop_prefix` takes no epoch, and a
-latched fence does not stop the transfer), and blob uploads of large payloads.
+assert no epoch are never refused: a handle opened before this executor has an assignment, and
+fork stages and their publication. The archive transfer is fenced like the primary oplog (see
+"Resharding, revocation and the oplog epoch fence" below), and so is an ephemeral agent's oplog,
+which writes only through the compressed archive levels. Two writes stay outside the fence: the
+blob archive layer, because blob storage has no conditional write, and blob uploads of large
+payloads.
 
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
@@ -256,6 +257,9 @@ failures therefore fail only that maintenance attempt: they are logged, never fa
 the authoritative source remains intact, and threshold, scheduled or sweep maintenance retries
 with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
 An archive read needed for replay still fails recovery rather than being treated as absent data.
+A write the shard-epoch fence refuses is not a storage failure: it ends the transfer as
+`OplogError::Fenced`, latches the oplog's fence and is never retried, because the oplog now
+belongs to the shard's new owner (see "Resharding, revocation and the oplog epoch fence").
 
 Producer-targeted attachment controls (consumer-side finalization, activation, refresh) reach the
 producer's executor through `Rpc::control_durable_stream_attachment`, which returns
@@ -388,6 +392,27 @@ owner leaves by:
   retirement synchronously (`Worker::record_retirement`); the stop follows once that lock is
   released, and `stop_internal` hands the generation to `interrupt_and_retire(ShardLost)`, the
   one retirement that fails the waiters and drops it.
+- **Archive transfer.** Opening the layered oplog records the owner's epoch on every compressed
+  archive level's own key (`services/oplog/compressed.rs::CompressedOplogArchive::opened`) before
+  the archive watermark is read, so an older owner's transfer either landed before the record,
+  and the watermark covers it, or is refused after it. Each level asserts the epoch on its
+  appends, trims and delete-when-empty, and the primary oplog asserts it on the trim that follows
+  archiving (the `expected_epoch` of `IndexedStorage::drop_prefix`). A refused step ends the transfer
+  (`multilayer.rs::BackgroundTransfer::run`): an append the storage turned away is not verified,
+  so the new owner's history does not trip fail-stop validation, and a source whose entries were
+  not archived is not trimmed. The refusal latches on the archive handle, `Oplog::fence` reports
+  it for the whole layered oplog, and `archive` stops asking for more work. An open refused at the
+  primary oplog, or at an ephemeral oplog's first level, records nothing on the remaining levels:
+  the handle is finished and never writes them. An emptied level is
+  removed with `delete_empty_with_epoch`, which keeps its epoch record: the owner keeps writing
+  the level, and an older owner is still refused. A fully archived ephemeral oplog's emptied
+  levels keep their records too: removing one would leave nothing that remembers the newest
+  owner, and any older handle could claim the level again. Deleting the agent removes the
+  records with it, so a transfer still in flight on an older owner cannot write the deleted
+  agent's archive back. An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
+  it; the open-oplog cache replaces an ephemeral handle for an opener at a newer epoch, as it
+  replaces a primary one. The blob archive layer has no conditional write and stays outside the
+  fence.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and
@@ -802,6 +827,17 @@ also used to detect durable constructs spanning the cut. Before committing, the 
 that the restored component, retained manual or promoted periodic snapshot payload, replay metadata
 and initial files are available. This is input preflight, not speculative replay; a later replay
 failure does not undo the committed `Revert`.
+
+Filesystem metadata has one deliberately deterministic exception to ordinary durable host-call
+recording. P2/P3 `stat` and `stat-at` on the exact path of a **read-only** component or pinned
+entity-activation initial file still execute the sandbox stat, but clear access and modification
+timestamps and return without an oplog `Start`/`End`. Type, size, and link count therefore come from
+the reconstructed filesystem, while the only volatile fields are removed. Mutable paths and aliases
+retain the ordinary `ReadLocal` durable path. An unexpected failure while statting a path already
+classified as immutable traps the invocation so a retry cannot choose a different oplog shape. The
+host-call observation counter is still incremented on the successful fast path. The predicate lives in
+`services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`; the P2/P3 adapters live in
+`wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
 ## Concurrency and guest completion delivery
 

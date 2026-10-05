@@ -43,23 +43,27 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 use tracing::{Instrument, Level, info};
 
-pub struct ThroughputEcho {
+pub struct ThroughputEcho<const AGGREGATE: bool> {
     config: RunConfig,
 }
-pub struct ThroughputLargeInput {
+pub struct ThroughputLargeInput<const AGGREGATE: bool> {
     config: RunConfig,
 }
-pub struct ThroughputCpuIntensive {
+pub struct ThroughputCpuIntensive<const AGGREGATE: bool> {
     config: RunConfig,
 }
 
 #[async_trait]
-impl Benchmark for ThroughputEcho {
+impl<const AGGREGATE: bool> Benchmark for ThroughputEcho<AGGREGATE> {
     type BenchmarkContext = ThroughputBenchmark;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "throughput-echo"
+        if AGGREGATE {
+            "throughput-echo-aggregate"
+        } else {
+            "throughput-echo"
+        }
     }
 
     fn description() -> &'static str {
@@ -139,7 +143,7 @@ impl Benchmark for ThroughputEcho {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        benchmark_context.run(context, recorder).await;
+        benchmark_context.run(context, recorder, AGGREGATE).await;
         Ok(())
     }
 
@@ -155,12 +159,16 @@ impl Benchmark for ThroughputEcho {
 }
 
 #[async_trait]
-impl Benchmark for ThroughputLargeInput {
+impl<const AGGREGATE: bool> Benchmark for ThroughputLargeInput<AGGREGATE> {
     type BenchmarkContext = ThroughputBenchmark;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "throughput-large-input"
+        if AGGREGATE {
+            "throughput-large-input-aggregate"
+        } else {
+            "throughput-large-input"
+        }
     }
 
     fn description() -> &'static str {
@@ -246,7 +254,7 @@ impl Benchmark for ThroughputLargeInput {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        benchmark_context.run(context, recorder).await;
+        benchmark_context.run(context, recorder, AGGREGATE).await;
         Ok(())
     }
 
@@ -262,12 +270,16 @@ impl Benchmark for ThroughputLargeInput {
 }
 
 #[async_trait]
-impl Benchmark for ThroughputCpuIntensive {
+impl<const AGGREGATE: bool> Benchmark for ThroughputCpuIntensive<AGGREGATE> {
     type BenchmarkContext = ThroughputBenchmark;
     type IterationContext = IterationContext;
 
     fn name() -> &'static str {
-        "throughput-cpu-intensive"
+        if AGGREGATE {
+            "throughput-cpu-intensive-aggregate"
+        } else {
+            "throughput-cpu-intensive"
+        }
     }
 
     fn description() -> &'static str {
@@ -350,7 +362,7 @@ impl Benchmark for ThroughputCpuIntensive {
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
-        benchmark_context.run(context, recorder).await;
+        benchmark_context.run(context, recorder, AGGREGATE).await;
         Ok(())
     }
 
@@ -783,7 +795,12 @@ impl ThroughputBenchmark {
         .await;
     }
 
-    pub async fn run(&self, iteration: &IterationContext, recorder: BenchmarkRecorder) {
+    pub async fn run(
+        &self,
+        iteration: &IterationContext,
+        recorder: BenchmarkRecorder,
+        aggregate: bool,
+    ) {
         async fn measure_agents(
             user: &TestUserContext<BenchmarkTestDependencies>,
             routing_table: &Option<RoutingTable>,
@@ -794,6 +811,7 @@ impl ThroughputBenchmark {
             method_name: &str,
             params: &(dyn Fn(usize) -> TypedSchemaValue + Send + Sync + 'static),
             prefix: &str,
+            aggregate: bool,
         ) {
             let result_futures = targets
                 .iter()
@@ -821,15 +839,24 @@ impl ThroughputBenchmark {
 
             let start = Instant::now();
             let results = result_futures.join().await;
-            recorder.duration(&format!("{prefix}batch-duration").into(), start.elapsed());
-            recorder.count(
-                &format!("{prefix}batch-completions").into(),
-                results.iter().map(Vec::len).sum::<usize>() as u64,
-            );
+            if aggregate {
+                recorder.duration(&format!("{prefix}batch-duration").into(), start.elapsed());
+                recorder.count(
+                    &format!("{prefix}batch-completions").into(),
+                    results.iter().map(Vec::len).sum::<usize>() as u64,
+                );
+            }
             for (idx, (results, target)) in results.iter().zip(targets).enumerate() {
                 let prefix = target.prefix(prefix, routing_table);
                 for result in results {
-                    result.record(recorder, &prefix, idx.to_string().as_str());
+                    if aggregate {
+                        for failure in &result.failures {
+                            recorder
+                                .failure(&format!("{prefix}invocation").into(), failure.clone());
+                        }
+                    } else {
+                        result.record(recorder, &prefix, idx.to_string().as_str());
+                    }
                 }
             }
         }
@@ -852,6 +879,7 @@ impl ThroughputBenchmark {
             &self.rust_method_name,
             &self.agent_params,
             "rust-agent-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_rust_agents"))
         .await;
@@ -874,6 +902,7 @@ impl ThroughputBenchmark {
             &self.ts_method_name,
             &self.agent_params,
             "ts-agent-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_ts_agents"))
         .await;
@@ -934,14 +963,22 @@ impl ThroughputBenchmark {
 
             let start = Instant::now();
             let results = result_futures.join().await;
-            recorder.duration(&"rust-agent-http-batch-duration".into(), start.elapsed());
-            recorder.count(
-                &"rust-agent-http-batch-completions".into(),
-                results.iter().map(Vec::len).sum::<usize>() as u64,
-            );
+            if aggregate {
+                recorder.duration(&"rust-agent-http-batch-duration".into(), start.elapsed());
+                recorder.count(
+                    &"rust-agent-http-batch-completions".into(),
+                    results.iter().map(Vec::len).sum::<usize>() as u64,
+                );
+            }
             for (idx, results) in results.iter().enumerate() {
                 for result in results {
-                    result.record(&recorder, "rust-agent-http-", idx.to_string().as_str());
+                    if aggregate {
+                        for failure in &result.failures {
+                            recorder.failure(&"rust-agent-http-invocation".into(), failure.clone());
+                        }
+                    } else {
+                        result.record(&recorder, "rust-agent-http-", idx.to_string().as_str());
+                    }
                 }
             }
         }
@@ -973,14 +1010,22 @@ impl ThroughputBenchmark {
 
             let start = Instant::now();
             let results = result_futures.join().await;
-            recorder.duration(&"ts-agent-http-batch-duration".into(), start.elapsed());
-            recorder.count(
-                &"ts-agent-http-batch-completions".into(),
-                results.iter().map(Vec::len).sum::<usize>() as u64,
-            );
+            if aggregate {
+                recorder.duration(&"ts-agent-http-batch-duration".into(), start.elapsed());
+                recorder.count(
+                    &"ts-agent-http-batch-completions".into(),
+                    results.iter().map(Vec::len).sum::<usize>() as u64,
+                );
+            }
             for (idx, results) in results.iter().enumerate() {
                 for result in results {
-                    result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
+                    if aggregate {
+                        for failure in &result.failures {
+                            recorder.failure(&"ts-agent-http-invocation".into(), failure.clone());
+                        }
+                    } else {
+                        result.record(&recorder, "ts-agent-http-", idx.to_string().as_str());
+                    }
                 }
             }
         }
@@ -1005,6 +1050,7 @@ impl ThroughputBenchmark {
             &self.ts_method_name,
             &self.agent_params,
             "ts-agent-rpc-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_ts_rpc"))
         .await;
@@ -1027,6 +1073,7 @@ impl ThroughputBenchmark {
             &self.rust_method_name,
             &self.agent_params,
             "rust-agent-rpc-",
+            aggregate,
         )
         .instrument(tracing::info_span!("measure_rust_rpc"))
         .await;
@@ -1090,5 +1137,33 @@ impl ThroughputBenchmark {
         }
         delete_workers(&iteration.user, &rust_rpc_workers, &recorder).await;
         cleanup_user_state(&iteration.user, &iteration.env_id, &recorder).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn aggregate_variants_have_distinct_benchmark_names() {
+        assert_eq!(ThroughputEcho::<false>::name(), "throughput-echo");
+        assert_eq!(ThroughputEcho::<true>::name(), "throughput-echo-aggregate");
+        assert_eq!(
+            ThroughputLargeInput::<false>::name(),
+            "throughput-large-input"
+        );
+        assert_eq!(
+            ThroughputLargeInput::<true>::name(),
+            "throughput-large-input-aggregate"
+        );
+        assert_eq!(
+            ThroughputCpuIntensive::<false>::name(),
+            "throughput-cpu-intensive"
+        );
+        assert_eq!(
+            ThroughputCpuIntensive::<true>::name(),
+            "throughput-cpu-intensive-aggregate"
+        );
     }
 }

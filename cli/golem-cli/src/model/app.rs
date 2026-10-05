@@ -380,6 +380,7 @@ pub struct BridgeSdkTarget {
     pub target_language: GuestLanguage,
     pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -513,6 +514,253 @@ pub struct CustomBridgeSdkTarget {
     pub agent_type_names: HashSet<AgentTypeName>,
     pub target_language: Option<GuestLanguage>,
     pub output_dir: Option<PathBuf>,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BridgeSdks {
+    targets: BTreeMap<(GuestLanguage, BridgeMode), BridgeSdkTargets>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BridgeSdkTargets {
+    pub agents: app_raw::LenientTokenList,
+    pub tools: Option<app_raw::LenientTokenList>,
+    pub output_dir: Option<PathBuf>,
+    pub generator_config: BridgeGeneratorConfig,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum BridgeGeneratorConfig {
+    #[default]
+    None,
+    Rust(crate::bridge_gen::rust::RustBridgeGeneratorConfig),
+}
+
+impl BridgeGeneratorConfig {
+    pub fn rust(&self) -> Option<&crate::bridge_gen::rust::RustBridgeGeneratorConfig> {
+        match self {
+            Self::None => None,
+            Self::Rust(config) => Some(config),
+        }
+    }
+
+    fn is_configured(&self) -> bool {
+        self.rust().is_some_and(|config| config.is_configured())
+    }
+}
+
+impl BridgeSdks {
+    pub fn get(&self, language: GuestLanguage, mode: BridgeMode) -> Option<&BridgeSdkTargets> {
+        self.targets.get(&(language, mode))
+    }
+
+    pub fn for_all_used_modes(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, BridgeMode, &BridgeSdkTargets)> {
+        self.targets
+            .iter()
+            .filter_map(|((language, mode), targets)| {
+                (!targets.agents.is_empty()
+                    || targets
+                        .tools
+                        .as_ref()
+                        .is_some_and(|tools| !tools.is_empty()))
+                .then_some((*language, *mode, targets))
+            })
+    }
+
+    fn from_raw(
+        raw: app_raw::BridgeSdks,
+        source_dir: &Path,
+        validation: &mut ValidationBuilder,
+    ) -> Self {
+        let mut result = Self::default();
+        for (language, targets) in [
+            (GuestLanguage::TypeScript, raw.ts),
+            (GuestLanguage::Effect, raw.effect),
+            (GuestLanguage::Scala, raw.scala),
+            (GuestLanguage::MoonBit, raw.moonbit),
+            (GuestLanguage::Go, raw.go),
+        ] {
+            let Some(targets) = targets else {
+                continue;
+            };
+            if let Some(external) = targets.external {
+                result.add_targets(
+                    language,
+                    BridgeMode::External,
+                    external.agents,
+                    None,
+                    external.output_dir,
+                    BridgeGeneratorConfig::None,
+                    source_dir,
+                    validation,
+                );
+            }
+            if let Some(internal) = targets.internal {
+                result.add_targets(
+                    language,
+                    BridgeMode::Guest,
+                    internal.agents,
+                    Some(internal.tools),
+                    internal.output_dir,
+                    BridgeGeneratorConfig::None,
+                    source_dir,
+                    validation,
+                );
+            }
+        }
+
+        if let Some(targets) = raw.rust {
+            if let Some(external) = targets.external {
+                let config = result.normalize_rust_config(
+                    &external.additional_derives,
+                    external.additional_dependencies,
+                    source_dir,
+                    BridgeMode::External,
+                    validation,
+                );
+                result.add_targets(
+                    GuestLanguage::Rust,
+                    BridgeMode::External,
+                    external.common.agents,
+                    None,
+                    external.common.output_dir,
+                    BridgeGeneratorConfig::Rust(config),
+                    source_dir,
+                    validation,
+                );
+            }
+            if let Some(internal) = targets.internal {
+                let config = result.normalize_rust_config(
+                    &internal.additional_derives,
+                    internal.additional_dependencies,
+                    source_dir,
+                    BridgeMode::Guest,
+                    validation,
+                );
+                result.add_targets(
+                    GuestLanguage::Rust,
+                    BridgeMode::Guest,
+                    internal.common.agents,
+                    Some(internal.common.tools),
+                    internal.common.output_dir,
+                    BridgeGeneratorConfig::Rust(config),
+                    source_dir,
+                    validation,
+                );
+            }
+        }
+
+        result
+    }
+
+    fn normalize_rust_config(
+        &self,
+        derive_rules: &[String],
+        dependencies: BTreeMap<String, app_raw::RustBridgeDependency>,
+        source_dir: &Path,
+        mode: BridgeMode,
+        validation: &mut ValidationBuilder,
+    ) -> crate::bridge_gen::rust::RustBridgeGeneratorConfig {
+        match crate::bridge_gen::rust::RustBridgeGeneratorConfig::from_manifest(
+            derive_rules,
+            dependencies,
+            source_dir,
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                validation.with_context(
+                    vec![
+                        ("bridge SDK language", GuestLanguage::Rust.to_string()),
+                        ("bridge SDK mode", mode.to_string()),
+                    ],
+                    |validation| validation.add_error(format!("{error:#}")),
+                );
+                Default::default()
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_targets(
+        &mut self,
+        language: GuestLanguage,
+        mode: BridgeMode,
+        agents: app_raw::LenientTokenList,
+        tools: Option<app_raw::LenientTokenList>,
+        output_dir: Option<String>,
+        generator_config: BridgeGeneratorConfig,
+        source_dir: &Path,
+        validation: &mut ValidationBuilder,
+    ) {
+        let agent_targets = agents.clone().into_vec();
+        let non_unique_targets = agent_targets
+            .iter()
+            .counts()
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .collect::<Vec<_>>();
+
+        validation.with_context(
+            vec![
+                ("bridge SDK language", language.to_string()),
+                ("bridge SDK mode", mode.to_string()),
+            ],
+            |validation| {
+                if !non_unique_targets.is_empty() {
+                    validation.add_error(format!(
+                        "Duplicated bridge SDK agent targets: {}",
+                        non_unique_targets
+                            .iter()
+                            .map(|(target, _)| target.log_color_error_highlight())
+                            .join(", ")
+                    ));
+                }
+                if agent_targets.len() > 1 && agent_targets.iter().any(|target| target == "*") {
+                    validation.add_warn(format!(
+                        "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
+                        agent_targets
+                            .iter()
+                            .map(|target| target.log_color_highlight())
+                            .join(", ")
+                    ));
+                }
+                if generator_config.is_configured() && agents.is_empty() {
+                    validation.add_error(format!(
+                        "Rust {} bridge additionalDerives/additionalDependencies require an agent selection",
+                        match mode {
+                            BridgeMode::External => "external",
+                            BridgeMode::Guest => "internal",
+                        }
+                    ));
+                }
+                if !agents.is_empty()
+                    && let Some(error) = BridgeSdkTargetKind::Agent.support_error(mode, language)
+                {
+                    validation.add_error(error);
+                }
+                if tools.as_ref().is_some_and(|tools| !tools.is_empty())
+                    && let Some(error) = BridgeSdkTargetKind::Tool.support_error(mode, language)
+                {
+                    validation.add_error(error);
+                }
+            },
+        );
+
+        self.targets.insert(
+            (language, mode),
+            BridgeSdkTargets {
+                agents,
+                tools,
+                output_dir: output_dir.map(|output_dir| {
+                    fs::absolute_lexical_path_from_base_dir(Path::new(&output_dir), source_dir)
+                }),
+                generator_config,
+            },
+        );
+    }
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
@@ -638,7 +886,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
     resource_definition_defaults:
         BTreeMap<EnvironmentName, BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>>,
-    bridge_sdks: WithSource<app_raw::BridgeSdks>,
+    bridge_sdks: WithSource<BridgeSdks>,
 }
 
 /// Resolves the cargo target directory for the cargo project rooted at `manifest_dir`.
@@ -935,6 +1183,7 @@ impl Application {
             .any(|(_, _, targets)| {
                 let matchers = targets
                     .tools
+                    .as_ref()
                     .map(|tools| tools.clone().into_set())
                     .unwrap_or_default();
                 (matchers.contains("*") && !remote_release_names.is_empty())
@@ -976,6 +1225,7 @@ impl Application {
             for (_, _, targets) in self.bridge_sdks().for_all_used_modes() {
                 for matcher in targets
                     .tools
+                    .as_ref()
                     .map(|tools| tools.clone().into_set())
                     .unwrap_or_default()
                 {
@@ -1533,7 +1783,7 @@ impl Application {
             .unwrap_or_default()
     }
 
-    pub fn bridge_sdks(&self) -> &app_raw::BridgeSdks {
+    pub fn bridge_sdks(&self) -> &BridgeSdks {
         &self.bridge_sdks.value
     }
 
@@ -1547,27 +1797,16 @@ impl Application {
         language: GuestLanguage,
         mode: BridgeMode,
     ) -> PathBuf {
-        let output_dir = match mode {
-            BridgeMode::External => self
-                .bridge_sdks
-                .value
-                .for_language(language)
-                .and_then(|sdk| sdk.external.as_ref())
-                .and_then(|sdk| sdk.output_dir.as_ref()),
-            BridgeMode::Guest => self
-                .bridge_sdks
-                .value
-                .for_language(language)
-                .and_then(|sdk| sdk.internal.as_ref())
-                .and_then(|sdk| sdk.output_dir.as_ref()),
-        };
+        let output_dir = self
+            .bridge_sdks
+            .value
+            .get(language, mode)
+            .and_then(|targets| targets.output_dir.as_ref());
 
         match output_dir {
-            Some(output_dir) => self
-                .bridge_sdks
-                .source
-                .join(output_dir)
-                .join(bridge_client_directory_name(agent_type_name, mode)),
+            Some(output_dir) => {
+                output_dir.join(bridge_client_directory_name(agent_type_name, mode))
+            }
             None => match mode {
                 BridgeMode::External => {
                     self.temp_dir().join("bridge-sdk").join(language.id()).join(
@@ -1605,16 +1844,11 @@ impl Application {
         let output_dir = self
             .bridge_sdks
             .value
-            .for_language(language)
-            .and_then(|sdk| sdk.internal.as_ref())
-            .and_then(|sdk| sdk.output_dir.as_ref());
+            .get(language, BridgeMode::Guest)
+            .and_then(|targets| targets.output_dir.as_ref());
 
         match output_dir {
-            Some(output_dir) => self
-                .bridge_sdks
-                .source
-                .join(output_dir)
-                .join(tool_bridge_client_directory_name(tool_name)),
+            Some(output_dir) => output_dir.join(tool_bridge_client_directory_name(tool_name)),
             None => self.dependency_tool_bridge_sdk_dir(tool_name, language),
         }
     }
@@ -3381,13 +3615,11 @@ impl ComponentProperties {
             initial_card: merged.initial_card.value().clone(),
         };
 
-        for (name, value) in [("componentWasm", &properties.component_wasm)] {
-            if value.is_empty() {
-                validation.add_error(format!(
-                    "Property {} is empty or undefined",
-                    name.log_color_highlight()
-                ));
-            }
+        if properties.component_wasm.is_empty() {
+            validation.add_error(format!(
+                "Property {} is empty or undefined",
+                "componentWasm".log_color_highlight()
+            ));
         }
 
         properties
@@ -3726,10 +3958,10 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdkTargetKind,
-        ComponentDependency, ComponentLayer, ComponentLayerApplyContext, ComponentLayerId,
-        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetSelector,
-        ComponentProperties, PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
+        APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdks, ComponentDependency,
+        ComponentLayer, ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
+        ComponentLayerPropertiesKind, ComponentPresetSelector, ComponentProperties,
+        PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::error::StoreGetValueError;
@@ -4145,7 +4377,7 @@ mod app_builder {
             WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
         >,
 
-        bridge_sdks: WithSource<app_raw::BridgeSdks>,
+        bridge_sdks: WithSource<BridgeSdks>,
 
         agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
 
@@ -4680,65 +4912,10 @@ mod app_builder {
                         && self
                             .add_entity_source(UniqueSourceCheckedEntityKey::Bridge, app_source_dir)
                         {
-                            self.bridge_sdks =
-                                WithSource::new(app_source_dir.to_path_buf(), bridge);
-
-                            for (target_language, bridge_mode, sdk_targets) in
-                                self.bridge_sdks.value.for_all_used_modes()
-                            {
-                                let agent_targets = sdk_targets.agents.clone().into_vec();
-                                let non_unique_targets = agent_targets.iter()
-                                    .counts()
-                                    .into_iter()
-                                    .filter(|(_, count)| *count > 1)
-                                    .collect::<Vec<_>>();
-
-                                validation.with_context(
-                                    vec![
-                                        ("bridge SDK language", target_language.to_string()),
-                                        ("bridge SDK mode", bridge_mode.to_string()),
-                                    ],
-                                    |validation| {
-                                        if !non_unique_targets.is_empty() {
-                                            validation.add_error(format!(
-                                                "Duplicated bridge SDK agent targets: {}",
-                                                non_unique_targets
-                                                    .iter()
-                                                    .map(|(target, _)| target
-                                                        .log_color_error_highlight())
-                                                    .join(", ")
-                                            ));
-                                        }
-
-                                        if agent_targets.len() > 1 && agent_targets.iter().any(|t| t == "*") {
-                                            validation.add_warn(format!(
-                                                "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
-                                                agent_targets
-                                                    .iter()
-                                                    .map(|target| target.log_color_highlight())
-                                                    .join(", ")
-                                            ));
-                                        }
-
-                                        if !agent_targets.is_empty()
-                                            && let Some(error) = BridgeSdkTargetKind::Agent
-                                                .support_error(bridge_mode, target_language)
-                                        {
-                                            validation.add_error(error);
-                                        }
-
-                                        if sdk_targets
-                                            .tools
-                                            .is_some_and(|tools| !tools.is_empty())
-                                            && let Some(error) = BridgeSdkTargetKind::Tool
-                                                .support_error(bridge_mode, target_language)
-                                        {
-                                            validation.add_error(error);
-                                        }
-
-                                    },
-                                );
-                            }
+                            self.bridge_sdks = WithSource::new(
+                                app_source_dir.to_path_buf(),
+                                BridgeSdks::from_raw(bridge, app_source_dir, validation),
+                            );
                         }
                 });
         }
@@ -6878,10 +7055,120 @@ mod test {
             )
         );
 
-        let used_modes = app.bridge_sdks().for_all_used_modes();
+        let used_modes = app.bridge_sdks().for_all_used_modes().collect::<Vec<_>>();
         assert_eq!(used_modes.len(), 1);
         assert_eq!(used_modes[0].0, crate::model::language::GuestLanguage::Rust);
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn rust_bridge_configuration_requires_agents_for_both_modes() {
+        for mode in ["external", "internal"] {
+            let errors = load_app_errors(&format!(
+                r#"
+app: configured-{mode}
+environments:
+  local:
+    server: local
+components:
+  app:main:
+    componentWasm: main.wasm
+bridge:
+  rust:
+    {mode}:
+      additionalDerives: [".*=Clone"]
+"#,
+            ));
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains("require an agent selection")),
+                "{mode}: {errors:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_bridge_manifest_is_normalized_during_application_ingestion() {
+        let (app, app_tmp_dir) = load_app_for_env(
+            indoc! {r#"
+                app: normalized-rust-bridge
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:main:
+                    componentWasm: main.wasm
+                bridge:
+                  rust:
+                    external:
+                      agents: [Counter]
+                      outputDir: generated/rust
+                      additionalDerives: ["^Counter=Eq"]
+                      additionalDependencies:
+                        custom-derive: { path: derive-fixture }
+            "#},
+            "local",
+            &[],
+        );
+        let targets = app
+            .bridge_sdks()
+            .get(GuestLanguage::Rust, BridgeMode::External)
+            .unwrap();
+        let expected_output_dir = app_tmp_dir.path().join("generated/rust");
+
+        assert_eq!(
+            targets.output_dir.as_deref(),
+            Some(expected_output_dir.as_path())
+        );
+        let config = serde_json::to_string(targets.generator_config.rust().unwrap()).unwrap();
+        assert!(config.contains("^Counter"), "{config}");
+        let expected_dependency = app_tmp_dir
+            .path()
+            .join("derive-fixture")
+            .to_string_lossy()
+            .into_owned();
+        assert!(config.contains(&expected_dependency), "{config}");
+    }
+
+    #[test]
+    fn output_only_bridge_entry_is_retained_as_a_custom_generation_default() {
+        let (app, app_tmp_dir) = load_app_for_env(
+            indoc! {r#"
+                app: output-only-rust-bridge
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:main:
+                    componentWasm: main.wasm
+                bridge:
+                  rust:
+                    external:
+                      outputDir: generated/rust
+            "#},
+            "local",
+            &[],
+        );
+        let targets = app
+            .bridge_sdks()
+            .get(GuestLanguage::Rust, BridgeMode::External)
+            .unwrap();
+        let expected_output_dir = app_tmp_dir.path().join("generated/rust");
+        assert_eq!(
+            targets.output_dir.as_deref(),
+            Some(expected_output_dir.as_path())
+        );
+        assert_eq!(app.bridge_sdks().for_all_used_modes().count(), 0);
+
+        let agent_name = AgentTypeName("ShoppingCart".into());
+        assert_eq!(
+            app.bridge_sdk_dir(&agent_name, GuestLanguage::Rust, BridgeMode::External),
+            expected_output_dir.join(bridge_client_directory_name(
+                &agent_name,
+                BridgeMode::External,
+            ))
+        );
     }
 
     #[test]
@@ -6914,7 +7201,7 @@ mod test {
             )
         );
 
-        let used_modes = app.bridge_sdks().for_all_used_modes();
+        let used_modes = app.bridge_sdks().for_all_used_modes().collect::<Vec<_>>();
         assert_eq!(used_modes.len(), 1);
         assert_eq!(
             used_modes[0].0,

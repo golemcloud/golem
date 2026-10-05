@@ -651,7 +651,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: IdempotencyKey,
@@ -2127,7 +2127,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: IdempotencyKey,
@@ -2848,8 +2848,6 @@ mod one_shot_session_tests {
     };
     use futures::stream;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-    use golem_api_grpc::proto::golem::common::Empty;
-    use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::worker::{
         AgentId, IdempotencyKey, InvocationAccepted, InvocationFailure, InvocationFailureKind,
         InvocationRequest, InvocationResponse, InvocationSessionCompletion,
@@ -2858,6 +2856,8 @@ mod one_shot_session_tests {
     };
     use golem_common::model::AgentFingerprint;
     use golem_common::model::oplog::{AgentError, OplogIndex};
+    use golem_schema::proto::golem::common::Empty;
+    use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
     use tonic::Status;
@@ -3210,7 +3210,6 @@ mod rejection_mapping_tests {
         validate_agent_enumeration_count,
     };
     use futures::{Stream, StreamExt, stream};
-    use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::shardmanager::{
         IpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry, ShardId,
         ip_address,
@@ -3232,6 +3231,7 @@ mod rejection_mapping_tests {
     use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
     use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
+    use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
     use golem_service_base::clients::shard_manager::{
         BatchRenewalEntry, QuotaError, ShardLease, ShardLeaseError, ShardManager,
         ShardManagerError, ShardRegistration,
@@ -3611,7 +3611,7 @@ mod rejection_mapping_tests {
                 .push(freshness_disposition);
             let routing_miss = self
                 .routing_misses
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                     left.checked_sub(1)
                 })
                 .is_ok();
@@ -3934,7 +3934,7 @@ mod delete_reply_tests {
     fn success() -> workerexecutor::v1::DeleteWorkerResponse {
         workerexecutor::v1::DeleteWorkerResponse {
             result: Some(workerexecutor::v1::delete_worker_response::Result::Success(
-                golem_api_grpc::proto::golem::common::Empty {},
+                golem_schema::proto::golem::common::Empty {},
             )),
         }
     }

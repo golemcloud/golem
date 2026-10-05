@@ -39,6 +39,7 @@ use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 use serde::{Deserialize, Serialize};
 
+pub mod argv;
 pub mod canonical;
 pub mod compatibility;
 pub mod constraints;

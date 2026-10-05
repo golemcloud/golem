@@ -89,7 +89,7 @@ pub async fn invoke_tool(
         ErrorData::invalid_params(format!("Failed to extract method parameters: {}", e), None)
     })?;
 
-    let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+    let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
         method_parameters.try_into().map_err(|error| {
             ErrorData::internal_error(format!("Failed to encode method parameters: {error}"), None)
         })?;

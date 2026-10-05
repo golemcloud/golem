@@ -1,0 +1,1598 @@
+{
+ "cases": {
+  "gram trap debug BASH_COMMAND": {
+   "script": "588bc10487f430b1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "> echo one\none\n> x=2\n> trap - DEBUG\n"
+   }
+  },
+  "gram trap debug LINENO in handler": {
+   "script": "34e4cf4b3ef3e90d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "line 2\na\nline 3\nb\nline 4\n"
+   }
+  },
+  "gram trap debug RETURN after a function": {
+   "script": "753a50e63684eeb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\n"
+   }
+  },
+  "gram trap debug RETURN after source": {
+   "script": "278f84f5f62d3510",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sourced\nret-src\n"
+   }
+  },
+  "gram trap debug RETURN not inherited without functrace": {
+   "script": "fce2efce4aaeaa8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\nafter\n"
+   }
+  },
+  "gram trap debug RETURN set inside the function persists": {
+   "script": "3f36ed69a81990da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ret-f\nafter\n"
+   }
+  },
+  "gram trap debug RETURN status": {
+   "script": "a14d2db6c77fe568",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ret 0\nafter 4\n"
+   }
+  },
+  "gram trap debug RETURN with functrace": {
+   "script": "86afe7c4da8f3be4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\nret\n"
+   }
+  },
+  "gram trap debug before arithmetic and conditional": {
+   "script": "a5c442b33a7b1eb1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "> (( 1 ))\n> [[ -n x ]]\n> trap - DEBUG\n"
+   }
+  },
+  "gram trap debug before compound commands": {
+   "script": "7ebbe96f651de8ba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "> for i in 1\n> :\n> true\n> :\n> trap - DEBUG\n"
+   }
+  },
+  "gram trap debug counts simple commands": {
+   "script": "a09545b25b425ca9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nn=3\n"
+   }
+  },
+  "gram trap debug handler status": {
+   "script": "9b7eefdcdc9b208b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "still-runs\n"
+   }
+  },
+  "gram trap debug in a pipeline": {
+   "script": "3fe38d21cd0eeee4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dbg echo p\ndbg cat\np\ndbg trap - DEBUG\n"
+   }
+  },
+  "gram trap debug in a subshell": {
+   "script": "517a8f2cc06977ad",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub\ndbg\n"
+   }
+  },
+  "gram trap debug inherited with functrace": {
+   "script": "dcac78ad7eef9b82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dbg f\ndbg f\ndbg echo in-f\nin-f\ndbg trap - DEBUG\n"
+   }
+  },
+  "gram trap debug not inherited by functions": {
+   "script": "7c643d35b4802db5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dbg\nin-f\ndbg\n"
+   }
+  },
+  "gram trap debug trap -p DEBUG": {
+   "script": "c1808c9c2cc7498e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\ntrap -- 'echo d' DEBUG\nd\n"
+   }
+  },
+  "gram trap err BASH_COMMAND in handler": {
+   "script": "fcb980bd5b9d2b80",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cmd=false\n"
+   }
+  },
+  "gram trap err at and list head": {
+   "script": "e6a52319060a0df6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "gram trap err at and list tail": {
+   "script": "62849ad647a32658",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at arithmetic": {
+   "script": "39902bed43ae2998",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at command not found": {
+   "script": "158f0b3508da9b70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=127 line=1\nafter\n"
+   }
+  },
+  "gram trap err at command substitution": {
+   "script": "ebe5a988f9389239",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at command substitution with errtrace": {
+   "script": "e2f81cdb5196bf51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at conditional": {
+   "script": "8a7bd80e3fcd9f81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at failed redirect": {
+   "script": "d445c73961c3d4d3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/no/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at function": {
+   "script": "57fae2b914d5d9d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\nafter\n"
+   }
+  },
+  "gram trap err at function with errtrace": {
+   "script": "333ee4a5d8cd07bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nin-f\nafter\n"
+   }
+  },
+  "gram trap err at group": {
+   "script": "b46df5f9fc1ed4a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at if condition": {
+   "script": "1656da0e22a3eb04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "gram trap err at negated": {
+   "script": "6eaf7e8b29351c7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "gram trap err at or list": {
+   "script": "6102b67b5e18df80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at pipefail": {
+   "script": "7428c03a65f7697c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at pipeline": {
+   "script": "dee804ce97c834de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at return nonzero": {
+   "script": "1171f5ab691f7aef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=3 line=1\nafter\n"
+   }
+  },
+  "gram trap err at simple command": {
+   "script": "c4e4317aa2a6b7f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at subshell": {
+   "script": "8c82d3bba754f781",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ERR status=1 line=1\nafter\n"
+   }
+  },
+  "gram trap err at while condition": {
+   "script": "9054f525f6e5e456",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "gram trap err case body": {
+   "script": "0dc655d090fc9f80",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\n"
+   }
+  },
+  "gram trap err handler failing does not recurse": {
+   "script": "c23053c9942ebade",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\nafter\n"
+   }
+  },
+  "gram trap err in a subshell": {
+   "script": "4782880eb48a1bc5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-sub\n"
+   }
+  },
+  "gram trap err inherited with set -o errtrace": {
+   "script": "0acf1a1100ba73ee",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\nerr\n"
+   }
+  },
+  "gram trap err loop body": {
+   "script": "51001a2ed7ae3cdb",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err\nerr\n"
+   }
+  },
+  "gram trap err not inherited by a function without -E": {
+   "script": "685d20ab172189c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-f\nafter\n"
+   }
+  },
+  "gram trap err reset": {
+   "script": "0455f9c2a6524613",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after\n"
+   }
+  },
+  "gram trap err set in a function": {
+   "script": "44f36551255c2450",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f-err\nafter\n"
+   }
+  },
+  "gram trap err trap -p ERR": {
+   "script": "56a4169cf467f117",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo e' ERR\n"
+   }
+  },
+  "gram trap err with errexit": {
+   "script": "30efc6a8759a3e3b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "err-trap\n"
+   }
+  },
+  "gram trap exit SIGEXIT name": {
+   "script": "14b7ad8a9bcec759",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: SIGEXIT: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram trap exit echo at end of script": {
+   "script": "dbf6f9062d6dba6b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nexit trap status=0\n"
+   }
+  },
+  "gram trap exit echo at errexit": {
+   "script": "82bd21a93541d866",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nexit trap status=1\n"
+   }
+  },
+  "gram trap exit echo at error operator": {
+   "script": "5dce01edb6a5ae39",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: u_zz: gone\n"
+   },
+   "stdout": {
+    "text": "body\nexit trap status=127\n"
+   }
+  },
+  "gram trap exit echo at exec builtin": {
+   "script": "13d9f96844711f15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap exit echo at exit 3": {
+   "script": "993deb14891941ed",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nexit trap status=3\n"
+   }
+  },
+  "gram trap exit echo at exit in a function": {
+   "script": "c109c61e5affb8b1",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exit trap status=4\n"
+   }
+  },
+  "gram trap exit echo at failing last command": {
+   "script": "a6d53c29e390e0a0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nexit trap status=1\n"
+   }
+  },
+  "gram trap exit echo at kill TERM to self": {
+   "script": "c2806cd014ab0a91",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exit trap status=0\n"
+   }
+  },
+  "gram trap exit echo at nounset": {
+   "script": "794d0fff66a6525f",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined_zz: unbound variable\n"
+   },
+   "stdout": {
+    "text": "body\nexit trap status=127\n"
+   }
+  },
+  "gram trap exit echo at return at top level": {
+   "script": "ef417ec5fb911b0b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: return: can only `return' from a function or sourced script\n"
+   },
+   "stdout": {
+    "text": "after\nexit trap status=0\n"
+   }
+  },
+  "gram trap exit exit in handler at exec builtin": {
+   "script": "ff10b89a0f6574d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap exit exit in handler at exit 3": {
+   "script": "9f2fa46ea8ec6bb5",
+   "status": 9,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nhandler\n"
+   }
+  },
+  "gram trap exit exit in handler at exit in a function": {
+   "script": "320a81e302cda53a",
+   "status": 9,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "handler\n"
+   }
+  },
+  "gram trap exit exit trap after a syntax error in eval": {
+   "script": "43164647f230d72c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: eval: line 2: syntax error: unexpected end of file from `if' command on line 1\n"
+   },
+   "stdout": {
+    "text": "after\nexit-trap\n"
+   }
+  },
+  "gram trap exit exit trap and background job": {
+   "script": "d827881b23b3c52c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bg\nexit-trap\n"
+   }
+  },
+  "gram trap exit exit trap and errexit inside handler": {
+   "script": "40c75d373fac3e13",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram trap exit exit trap in a sourced file": {
+   "script": "ca444af81349c658",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nsrc-exit\n"
+   }
+  },
+  "gram trap exit exit trap with set -u error in handler": {
+   "script": "35bf3329e77cf516",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: undefined_zz: unbound variable\n"
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram trap exit failing handler at exec builtin": {
+   "script": "20d2a08d7fb0bc33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap exit failing handler at exit 3": {
+   "script": "76e3f0b7f54cc069",
+   "status": 3,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nhandler\n"
+   }
+  },
+  "gram trap exit failing handler at exit in a function": {
+   "script": "b6f6b5a7986b86c9",
+   "status": 4,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "handler\n"
+   }
+  },
+  "gram trap exit handler changes status only with exit": {
+   "script": "946eeaf59d62d415",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap exit handler defines and calls a function": {
+   "script": "6b97188dc2b79c5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\ng\n"
+   }
+  },
+  "gram trap exit handler expands early with double quotes": {
+   "script": "a53fa92fbc2a8583",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "early\n"
+   }
+  },
+  "gram trap exit handler expands late": {
+   "script": "433937630697744b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "late\n"
+   }
+  },
+  "gram trap exit handler invoking exit trap again": {
+   "script": "a2c3f12a629c2579",
+   "status": 2,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "once\n"
+   }
+  },
+  "gram trap exit handler output order": {
+   "script": "72a9fb14c0f95745",
+   "status": 0,
+   "stderr": {
+    "text": "err\n"
+   },
+   "stdout": {
+    "text": "body\nhandler\n"
+   }
+  },
+  "gram trap exit handler sees the exit status": {
+   "script": "71f1cdce400b4e2b",
+   "status": 5,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=5\n"
+   }
+  },
+  "gram trap exit handler with a here-document": {
+   "script": "e6a6ec10e47847b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nfrom trap\n"
+   }
+  },
+  "gram trap exit handler with multiple commands": {
+   "script": "6af7e63035c18e4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "gram trap exit handler with quotes": {
+   "script": "bdd7a8a176690aa7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "single double\n"
+   }
+  },
+  "gram trap exit ignore with empty string": {
+   "script": "e399092a65ea8941",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram trap exit in a command substitution": {
+   "script": "1612b3517f5b380f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[in\ncs-exit]\n"
+   }
+  },
+  "gram trap exit in a function stays global": {
+   "script": "15f28ddef89d380d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "after-f\nfrom-f\n"
+   }
+  },
+  "gram trap exit in a pipeline stage": {
+   "script": "4243edca60776358",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "pipe-exit\nafter\n"
+   }
+  },
+  "gram trap exit in a subshell runs at subshell end": {
+   "script": "dde5725e42637132",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-sub\nsub-exit\nafter\n"
+   }
+  },
+  "gram trap exit invalid signal name": {
+   "script": "ab6fc9a63aec5589",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: NOSUCH: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram trap exit invalid signal number": {
+   "script": "531e03d958253249",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: 999: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram trap exit lower case name": {
+   "script": "04aa25fd5803e971",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nlower\n"
+   }
+  },
+  "gram trap exit missing handler": {
+   "script": "5c22eb64d7217d0e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: trap: -x: invalid option\ntrap: usage: trap [-Plp] [[action] signal_spec ...]\n"
+   },
+   "stdout": {
+    "text": "status=0\nstatus=2\n"
+   }
+  },
+  "gram trap exit not inherited by a subshell": {
+   "script": "0de053914c1e8267",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-sub\nafter\nmain-exit\n"
+   }
+  },
+  "gram trap exit numeric zero": {
+   "script": "2051a740f3b006a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nzero\n"
+   }
+  },
+  "gram trap exit reads a variable at error operator": {
+   "script": "4dad7cf1952e7559",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: u_zz: gone\n"
+   },
+   "stdout": {
+    "text": "body\nv=set\n"
+   }
+  },
+  "gram trap exit reads a variable at failing last command": {
+   "script": "afb2d2d53f269d79",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\nv=set\n"
+   }
+  },
+  "gram trap exit reads a variable at kill TERM to self": {
+   "script": "e5c732ab632beb06",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "v=set\n"
+   }
+  },
+  "gram trap exit replaced": {
+   "script": "95652dcc239e6824",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "second\n"
+   }
+  },
+  "gram trap exit reset with dash": {
+   "script": "d8347721cd0bc17c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram trap exit several signals at once": {
+   "script": "90e86312ba18d61a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo multi' SIGTERM\nmulti\n"
+   }
+  },
+  "gram trap exit trap -- form": {
+   "script": "f63565586973b25b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dashdash\n"
+   }
+  },
+  "gram trap exit trap -p EXIT": {
+   "script": "d367a026422e2665",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo it'\\''s' EXIT\n"
+   }
+  },
+  "gram trap exit trap -p all": {
+   "script": "a7af1870c314a22c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo e' EXIT\ntrap -- 'echo r' RETURN\n"
+   }
+  },
+  "gram trap exit trap -p of an ignored signal": {
+   "script": "e3a3fa3d3fd6909a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- '' SIGTERM\n"
+   }
+  },
+  "gram trap exit trap -p of an unset trap": {
+   "script": "99afa948b227e6fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram trap exit trap with a numeric first argument resets": {
+   "script": "eec5525d3a489d48",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "body\n"
+   }
+  },
+  "gram trap exit trap with no arguments lists": {
+   "script": "9d7db9310aa2a98d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo x' EXIT\n"
+   }
+  },
+  "gram trap exit trap with one argument resets": {
+   "script": "b1f69620b7b17ed3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram trap signal CHLD trap": {
+   "script": "0c563e17ace1f4de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "chld\ndone\n"
+   }
+  },
+  "gram trap signal USR1 trap": {
+   "script": "e72b7b7b0a73f40b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "usr1\nafter\n"
+   }
+  },
+  "gram trap signal caught HUP via kill -SIG": {
+   "script": "bdc93ce4d239f8f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught HUP\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught HUP via kill -n": {
+   "script": "c8493d72f01d10f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught HUP\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught HUP via kill -s": {
+   "script": "5032de8ce3f2efb0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught HUP\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught INT via kill -SIG": {
+   "script": "cbb818d9da7be125",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught INT\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught INT via kill -n": {
+   "script": "87a83dc6a667f397",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught INT\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught INT via kill -s": {
+   "script": "7740ccd2ca8b4221",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught INT\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught TERM via kill -SIG": {
+   "script": "4bc13dbf13106ff7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught TERM\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught TERM via kill -n": {
+   "script": "ea16e5d5f663a058",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught TERM\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught TERM via kill -s": {
+   "script": "8f3cac895f590fa9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught TERM\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught TERM via kill default": {
+   "script": "217fb1186d146d07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "caught TERM\nafter status=0\n"
+   }
+  },
+  "gram trap signal caught in a subshell": {
+   "script": "599f5c4179401139",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub-caught\nsub-after\nstatus=0\n"
+   }
+  },
+  "gram trap signal caught is reset in a subshell": {
+   "script": "1b0037c594f3ef8d",
+   "status": 0,
+   "stderr": {
+    "text": "Terminated                 ( kill -TERM $BASHPID; echo not )\n"
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "gram trap signal default HUP via kill -SIG": {
+   "script": "c530dc75ad5cafa3",
+   "status": 129,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default HUP via kill -n": {
+   "script": "6857aed3582cbd21",
+   "status": 129,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default HUP via kill -s": {
+   "script": "14dac1da608e80b5",
+   "status": 129,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default INT via kill -SIG": {
+   "script": "bdc0d9b7cea82cd8",
+   "status": 130,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default INT via kill -n": {
+   "script": "675386ec5781aad4",
+   "status": 130,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default INT via kill -s": {
+   "script": "4f3fd56f4e97026d",
+   "status": 130,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default TERM via kill -SIG": {
+   "script": "b60ac7aac616cd93",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default TERM via kill -n": {
+   "script": "a9bdc5696f393ced",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default TERM via kill -s": {
+   "script": "0e4e69b19f250780",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default TERM via kill default": {
+   "script": "3298fb9523fe49e0",
+   "status": 143,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram trap signal default in a subshell": {
+   "script": "dae00f5e1baf4ca6",
+   "status": 0,
+   "stderr": {
+    "text": "Terminated                 ( kill -TERM $BASHPID; echo not )\n"
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "gram trap signal handler exits": {
+   "script": "e7df9e8012cf00dc",
+   "status": 7,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bye\n"
+   }
+  },
+  "gram trap signal ignored HUP via kill -SIG": {
+   "script": "cba67c9901ee0872",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored HUP via kill -n": {
+   "script": "94e9d009d0870422",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored HUP via kill -s": {
+   "script": "6775e440faef49eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored INT via kill -SIG": {
+   "script": "0a0a5e8e3247b013",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored INT via kill -n": {
+   "script": "9c63be8c5239a7dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored INT via kill -s": {
+   "script": "9fa301b70dad4539",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored TERM via kill -SIG": {
+   "script": "83e616a3fe1a1a40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored TERM via kill -n": {
+   "script": "7fe828e194fea6b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored TERM via kill -s": {
+   "script": "bddd12f56222292f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored TERM via kill default": {
+   "script": "4638ad6ca2c88577",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived status=0\n"
+   }
+  },
+  "gram trap signal ignored inherited by a subshell": {
+   "script": "90457933c2bf2488",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sub-survived\nstatus=0\n"
+   }
+  },
+  "gram trap signal kill -0 self": {
+   "script": "759d83b9c321ebb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "gram trap signal kill -l numbers": {
+   "script": "7c7d63625d398915",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "HUP\nINT\nTERM\nKILL\nINT\n"
+   }
+  },
+  "gram trap signal kill a background job with TERM": {
+   "script": "f0c796ca72dd3788",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "gram trap signal kill a background job with a trap inside": {
+   "script": "3424aef07aa01e20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "job-caught\nstatus=3\n"
+   }
+  },
+  "gram trap signal kill with a bad signal": {
+   "script": "77cc0d7879e35623",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: kill: NOSUCH: invalid signal specification\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram trap signal kill with no arguments": {
+   "script": "258960d9bbbb49ff",
+   "status": 0,
+   "stderr": {
+    "text": "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram trap signal signal and EXIT trap order": {
+   "script": "d5f4c02f2a273a50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "term-trap\nafter\nexit-trap\n"
+   }
+  },
+  "gram trap signal signal during a loop": {
+   "script": "a0ead32954b53164",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\ncaught\n"
+   }
+  },
+  "gram trap signal spec 1": {
+   "script": "536a0e128dd4081c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo \"handler 1\"' SIGHUP\n"
+   }
+  },
+  "gram trap signal spec 15": {
+   "script": "fa6fbf2d8299c65c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo \"handler 15\"' SIGTERM\n"
+   }
+  },
+  "gram trap signal spec 2": {
+   "script": "06ce05adc03d88a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo \"handler 2\"' SIGINT\n"
+   }
+  },
+  "gram trap signal spec SIGHUP": {
+   "script": "2a558bc6a1d6d3f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo \"handler SIGHUP\"' SIGHUP\n"
+   }
+  },
+  "gram trap signal spec SIGINT": {
+   "script": "2fb159d2f275f382",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo \"handler SIGINT\"' SIGINT\n"
+   }
+  },
+  "gram trap signal spec SIGTERM": {
+   "script": "e416e9dfaae9b978",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo \"handler SIGTERM\"' SIGTERM\n"
+   }
+  },
+  "gram trap signal spec sigterm": {
+   "script": "6cbcc9e17464adbd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo \"handler sigterm\"' SIGTERM\n"
+   }
+  },
+  "gram trap signal trap -p in a command substitution": {
+   "script": "648f61be5eeb8c53",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[trap -- 'echo main' SIGTERM]\n"
+   }
+  },
+  "gram trap signal trap -p in a subshell shows caught traps": {
+   "script": "039fa56d3d878f95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo main' SIGTERM\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

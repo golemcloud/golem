@@ -1,0 +1,1188 @@
+{
+ "cases": {
+  "PIPE handler precedes ERR and errexit": {
+   "script": "02d132b7598bd4c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 pipes=1 0\npipe\nordered\nonce\nabsent\n"
+   }
+  },
+  "PIPE handler recursion is suppressed": {
+   "script": "df6ba42c0949de25",
+   "status": 1,
+   "stderr": {
+    "text": "cat: /tmp/pipe-once: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "x\nstatus=139 pipes=139 0\n"
+   }
+  },
+  "background ignores interrupt": {
+   "script": "28f3a6a58156c3e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\nstatus=0\n"
+   }
+  },
+  "background output and wait": {
+   "script": "644965ae0f1d353b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "start\njob\nend\n"
+   }
+  },
+  "background pipeline last stage": {
+   "script": "1425af3edc7114bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "bashpid differs inside a job": {
+   "script": "4b3022cf2e6be695",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "differs\n"
+   }
+  },
+  "cat byte formatting": {
+   "script": "f08f03711bbaa07f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     1\ta$\n     2\t$\n     3\t^I^M$\n"
+   }
+  },
+  "caught PIPE preserves failed status": {
+   "script": "2b3aeced69adbc01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nhandler:1\ncontinued\n"
+   }
+  },
+  "caught SIGPIPE handler exits 23": {
+   "script": "736501388757cf42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=23 pipes=23 0\nhandler:1\n"
+   }
+  },
+  "caught term runs inside job": {
+   "script": "d2fb14b756333531",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cleanup\nstatus=3\n"
+   }
+  },
+  "closed diagnostic stream keeps ignored status": {
+   "script": "943bf059799f8ab8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n1\n"
+   }
+  },
+  "closed diagnostic stream still delivers caught PIPE": {
+   "script": "5bbe1df3e17c408d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xstatus=23 pipes=23 0\nhandler:1\n"
+   }
+  },
+  "command directories": {
+   "script": "12dfeb57aad29e69",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\n/tmp/b\n/\n"
+   }
+  },
+  "completion after reader exit then fresh input": {
+   "script": "713d2ffba8b8037b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\ncat: /tmp/probe-completed: No such file or directory\nbash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127 pipes=127 0\ndone\n"
+   }
+  },
+  "cut null records": {
+   "script": "37d03a4122524a8f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\u0000d\u0000"
+   }
+  },
+  "delayed completion stays command scoped": {
+   "script": "d15f89cfffe3e29d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\ncat: /tmp/probe-completed: No such file or directory\nbash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "begin\nsurvived\ndone\n"
+   }
+  },
+  "early grep": {
+   "script": "0aebd3655ac9e7cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "early jq": {
+   "script": "aa514ab936171f2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\"ø\"\n"
+   }
+  },
+  "early pipefail": {
+   "script": "5a31ef5c4ab276d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n141 141 141 0\n"
+   }
+  },
+  "early sed": {
+   "script": "4c104e49d3734a89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "early xargs": {
+   "script": "481c0d31589a5054",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: echo: terminated by signal 13\n"
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "endless copy": {
+   "script": "d7ff4a5f1e911728",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "execution-only tool after yield": {
+   "script": "4876f21c4f3df30a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "failed builtin write kills only its stage": {
+   "script": "910ed2bb495db0ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xstatus=141 pipes=141 0\nabsent\n"
+   }
+  },
+  "failed nested pipeline leaves group alive": {
+   "script": "8b35a5e6b7c7b98c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nsurvived\n"
+   }
+  },
+  "failed utility write leaves group alive": {
+   "script": "4e5508e7f69b5ee6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " survived\n"
+   }
+  },
+  "finite pipefail": {
+   "script": "896819d9214c9610",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "freshstatus=0 0 0 0\n"
+   }
+  },
+  "following commands": {
+   "script": "072d8d2d8b346bde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nfresh\nafter\n"
+   }
+  },
+  "foreground file follow": {
+   "script": "266a6d75af5a3a45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "initial\nappended\ndone\n"
+   }
+  },
+  "formatted printf repeated": {
+   "script": "23fe6728d81d97b3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]:0001\n[b]:0002\n"
+   }
+  },
+  "function shares caught PIPE process": {
+   "script": "5ba6303a4d9128f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nhandler:1\ncontinued\n"
+   }
+  },
+  "functions and loops": {
+   "script": "d47b67464ad36b24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nafter\n"
+   }
+  },
+  "grep whole records": {
+   "script": "c20d41d80737732d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "here string": {
+   "script": "6f5fcd43b664e554",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "he"
+   }
+  },
+  "ignored PIPE cat status": {
+   "script": "81c08d4c41ec7e4d",
+   "status": 0,
+   "stderr": {
+    "text": "cat: write error: Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n"
+   }
+  },
+  "ignored PIPE cut status": {
+   "script": "9ce357bac7a7b764",
+   "status": 0,
+   "stderr": {
+    "text": "cut: write error: Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n"
+   }
+  },
+  "ignored PIPE grep status": {
+   "script": "4515c25c107f4da1",
+   "status": 0,
+   "stderr": {
+    "text": "grep: write error: Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=2 pipes=2 0\n"
+   }
+  },
+  "ignored PIPE head status": {
+   "script": "0e4c4706243ccd23",
+   "status": 0,
+   "stderr": {
+    "text": "head: error writing 'standard output': Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n"
+   }
+  },
+  "ignored PIPE is inherited": {
+   "script": "5bf49a04c5261494",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\ncontinued\n"
+   }
+  },
+  "ignored PIPE jq status": {
+   "script": "22d833d70208e597",
+   "status": 0,
+   "stderr": {
+    "text": "jq: error: writing output failed: Broken pipe\n"
+   },
+   "stdout": {
+    "text": "\"\nstatus=2 pipes=2 0\n"
+   }
+  },
+  "ignored PIPE sed status": {
+   "script": "bdb4eb7de5af05fb",
+   "status": 0,
+   "stderr": {
+    "text": "sed: couldn't write 1000000 items to stdout: Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=4 pipes=4 0\n"
+   }
+  },
+  "ignored PIPE sort status": {
+   "script": "bf7cbe6468e890b2",
+   "status": 0,
+   "stderr": {
+    "text": "sort: write failed: 'standard output': Broken pipe\nsort: write error\n"
+   },
+   "stdout": {
+    "text": " \nstatus=2 pipes=2 0\n"
+   }
+  },
+  "ignored PIPE tail status": {
+   "script": "5381b703c40586a8",
+   "status": 0,
+   "stderr": {
+    "text": "tail: error writing 'standard output': Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n"
+   }
+  },
+  "ignored PIPE tee default": {
+   "script": "1507f8e4aa34a949",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=0 pipes=0 0\n1000001\n"
+   }
+  },
+  "ignored PIPE tee exit": {
+   "script": "f8d961b234886c52",
+   "status": 0,
+   "stderr": {
+    "text": "tee: 'standard output': Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\nearly\n"
+   }
+  },
+  "ignored PIPE tee exit-nopipe": {
+   "script": "3c9fab80d26645c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=0 pipes=0 0\n1000001\n"
+   }
+  },
+  "ignored PIPE tee p": {
+   "script": "547b123c0b1acc22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=0 pipes=0 0\n1000001\n"
+   }
+  },
+  "ignored PIPE tee warn": {
+   "script": "ce9a7c7333c1f768",
+   "status": 0,
+   "stderr": {
+    "text": "tee: 'standard output': Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n1000001\n"
+   }
+  },
+  "ignored PIPE tee warn-nopipe": {
+   "script": "a162f8c73871369a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=0 pipes=0 0\n1000001\n"
+   }
+  },
+  "ignored PIPE tool completion after reader exit": {
+   "script": "c44659b1708fd0e3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\ncat: /tmp/probe-completed: No such file or directory\nbash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127 pipes=127 0\ndone\n"
+   }
+  },
+  "ignored PIPE tr status": {
+   "script": "34979621737be980",
+   "status": 0,
+   "stderr": {
+    "text": "tr: write error: Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n"
+   }
+  },
+  "ignored PIPE uniq status": {
+   "script": "ebf845ab3578e17d",
+   "status": 0,
+   "stderr": {
+    "text": "uniq: write error: Broken pipe\n"
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n"
+   }
+  },
+  "inherited caught PIPE is displayed but inert": {
+   "script": "8332ca3a2b7ae7ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=141 pipes=141 0\ntrap -- 'echo bad >/tmp/inherited-handler' SIGPIPE\ninert\n"
+   }
+  },
+  "input process substitution": {
+   "script": "b578c56c6b7b6839",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "side-effectinput\n"
+   }
+  },
+  "jobs lists running jobs": {
+   "script": "41a8fa17e2217cf8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "jq successive values": {
+   "script": "d5a25bdc45073d9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n2\ntrue\nnull\n\"ø\"\n{\n  \"x\": 1\n}\n"
+   }
+  },
+  "kill default term": {
+   "script": "aaac67f9136bc9df",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "kill hangup and kill": {
+   "script": "37eecfb018326eac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a=129\nb=137\n"
+   }
+  },
+  "kill unknown pid": {
+   "script": "245d3038244d2df9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "kill zero probes liveness": {
+   "script": "4d4d408674cf5c61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "alive\ngone\n"
+   }
+  },
+  "large here document": {
+   "script": "93aaaa4e56993c80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xxxxxxxxxx"
+   }
+  },
+  "large record": {
+   "script": "07d1a26b495992bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n"
+   }
+  },
+  "large substitution": {
+   "script": "e501a24327548c60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100000\n"
+   }
+  },
+  "last background pid is a stable number": {
+   "script": "a0eba2a64bc4973d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "lastpipe": {
+   "script": "f702106065542185",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hé\n"
+   }
+  },
+  "lastpipe trap mutation persists": {
+   "script": "2d1dbb54cfc1ee8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "trap -- 'echo lastpipe' SIGPIPE\n"
+   }
+  },
+  "leftover job ignoring hangup is killed": {
+   "script": "940e6e568c2b2b44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "started\n"
+   }
+  },
+  "leftover job is stopped at the end": {
+   "script": "68540005dcc670a3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "started\n"
+   }
+  },
+  "legacy stdin rejects endless pipe": {
+   "script": "7e3fd6303d2697d7",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: legacy-stdin: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "legacy stdin rejects finite pipe": {
+   "script": "3e41d138dd2c2b28",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: legacy-stdin: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "legacy stdin rejects oversized pipe": {
+   "script": "a527ad3c5d7dc480",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: legacy-stdin: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "legacy stdin rejects pipe at EOF": {
+   "script": "dadb43d6f857bf3f",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: legacy-stdin: command not found\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "local stderr": {
+   "script": "853102f79fe82c61",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nerr\n"
+   }
+  },
+  "mapfile": {
+   "script": "125a86e660c64dc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllø\nsecond\n"
+   }
+  },
+  "merged local stderr": {
+   "script": "689f0325d3ff279e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nerr\n"
+   }
+  },
+  "multiple incremental filters": {
+   "script": "77c0061409c68699",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "z\n"
+   }
+  },
+  "negative head count": {
+   "script": "0d49d5a5e34ea3ea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "nested substitution": {
+   "script": "a028421addd711c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "numeric printf status": {
+   "script": "138b0118b1efbdb6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: printf: bad: invalid number\n"
+   },
+   "stdout": {
+    "text": "0 2\nstatus=1\nafter\n"
+   }
+  },
+  "numeric signal 13 handler exits 23": {
+   "script": "62f37965641e62fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=23 pipes=23 0\nhandler:1\n"
+   }
+  },
+  "output process substitution": {
+   "script": "a12670947b02f274",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "side-effectoutput\n"
+   }
+  },
+  "oversized trap display drains asynchronously": {
+   "script": "8622f80137d12e74",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "100019\n"
+   }
+  },
+  "parent traps are not inherited by jobs": {
+   "script": "d61ff92ad18cbc90",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=143\n"
+   }
+  },
+  "pending tool and progressing consumer": {
+   "script": "a286e5182be6c4c3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "before=1\n\n"
+   }
+  },
+  "pipe ampersand precedence": {
+   "script": "5fe198b7aa2884cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "out\nerr\n"
+   }
+  },
+  "pipefail": {
+   "script": "dc13e4b18c0c1e38",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 0 1 0\n"
+   }
+  },
+  "reader close preserves later effects": {
+   "script": "4414191155749cea",
+   "status": 0,
+   "stderr": {
+    "text": "diagnostic\n"
+   },
+   "stdout": {
+    "text": "xsurvived\n"
+   }
+  },
+  "redirected producer": {
+   "script": "3822d40db513922a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "hi\n"
+   }
+  },
+  "reset PIPE restores default": {
+   "script": "d16a1905176d566a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nstatus=141 pipes=141 0\nreset\n"
+   }
+  },
+  "sed last address": {
+   "script": "f7fd54346d757b5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c"
+   }
+  },
+  "sequential reads": {
+   "script": "1c0b8480e2e2acb4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "héllø:second\n"
+   }
+  },
+  "shell pid is stable in subshells": {
+   "script": "e853349fb9c9a129",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "same\n"
+   }
+  },
+  "stateful translation": {
+   "script": "76fef201e348b22c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xyz\n"
+   }
+  },
+  "stateful unique groups": {
+   "script": "14a5cb91a839e648",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "      2 a\n      1 b\n      2 c\n"
+   }
+  },
+  "subshell isolation": {
+   "script": "5a4b6e03a6c7ad5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner\nouter\n"
+   }
+  },
+  "subshell resets caught PIPE": {
+   "script": "17156522486c419d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\nsub=141\ncontinued\ninert\n"
+   }
+  },
+  "substitution has its own PIPE process": {
+   "script": "679b0fcb3e4a39bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\ninert\n"
+   }
+  },
+  "success status array": {
+   "script": "01b4c1348d49dcb9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 0 1 0\n"
+   }
+  },
+  "tail from start": {
+   "script": "c6961bd3007d3188",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "tail zero exits early": {
+   "script": "5f95b1cf3cf53589",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "tee exit survives closed diagnostic stream": {
+   "script": "14217c3a483336d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\nearly\n"
+   }
+  },
+  "tee handles broken pipe": {
+   "script": "ea4685b7acf68bfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 100001\n"
+   }
+  },
+  "tee policy does not leak to later writer": {
+   "script": "ff07c5b1d2ce0880",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \ntee=0 pipes=0 0\nx\nlater=141 pipes=141 0\n1000001\n"
+   }
+  },
+  "tee warn survives closed diagnostic stream": {
+   "script": "14031f8e612654ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " \nstatus=1 pipes=1 0\n1000001\n"
+   }
+  },
+  "tool context in nested substitution": {
+   "script": "c11f97249fc7a623",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "\n"
+   }
+  },
+  "tool failure after output preserves status": {
+   "script": "91b30b3e32468ed6",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "status=127 127 0\n"
+   }
+  },
+  "tool named exit code": {
+   "script": "7c376e0763b84577",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\nbash: line 1: probe-tool: command not found\n"
+   }
+  },
+  "trap signal listing handles backpressure": {
+   "script": "6f85dc51851f8adf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 4) SIGILL\t 5) SIGTRAP\nstatus=141 pipes=141 141 0\nabsent\n"
+   }
+  },
+  "unconsumed stdin": {
+   "script": "7702930bea871fd6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "unsupported workflows refuse immediately": {
+   "script": "9829dd019a06bb84",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "refused\n"
+   }
+  },
+  "unterminated tail": {
+   "script": "a2e93763416c3b20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nc"
+   }
+  },
+  "wait next": {
+   "script": "d3646bf53065c3b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "first=5\nsecond=4\n"
+   }
+  },
+  "wait pid returns job status": {
+   "script": "60d997de3ac84bbc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=7\n"
+   }
+  },
+  "wait unknown pid": {
+   "script": "3709dd084fdc8f72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=127\n"
+   }
+  },
+  "xargs reports child SIGPIPE provenance": {
+   "script": "199cd40a94aeebd4",
+   "status": 0,
+   "stderr": {
+    "text": "xargs: echo: terminated by signal 13\n"
+   },
+   "stdout": {
+    "text": "x\nstatus=125 pipes=141 125 0\n"
+   }
+  },
+  "xargs treats explicit 141 as ordinary failure": {
+   "script": "747ba41bdd1aee5c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=123 pipes=0 123\n"
+   }
+  },
+  "yielding timeout": {
+   "script": "fe67a3370139c190",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=142\n"
+   }
+  },
+  "yielding tool input": {
+   "script": "273e6cb4389739a0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: probe-tool: command not found\n"
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

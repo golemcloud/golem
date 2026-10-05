@@ -949,7 +949,11 @@ impl SandboxFilesystem {
     pub(crate) async fn observe_allocation(
         &self,
     ) -> Result<Option<FilesystemAllocation>, FilesystemStorageError> {
-        let QuotaAuthority::Project { project_id, .. } = self.quota_authority else {
+        let QuotaAuthority::Project {
+            project_id: _project_id,
+            ..
+        } = self.quota_authority
+        else {
             return Ok(None);
         };
         #[cfg(target_os = "linux")]
@@ -959,7 +963,7 @@ impl SandboxFilesystem {
             execute_native(
                 NativeStorageProfile::KnownLocal,
                 NativeOperation::Quota,
-                move || xfs::project_allocation(&volume, project_id),
+                move || xfs::project_allocation(&volume, _project_id),
             )
             .await
             .map_err(|error| {
@@ -980,11 +984,11 @@ impl SandboxFilesystem {
 
     pub(crate) async fn install_limits(
         &self,
-        limits: FilesystemLimits,
+        _limits: FilesystemLimits,
     ) -> Result<InstalledLimits, FilesystemStorageError> {
         let QuotaAuthority::Project {
-            project_id,
-            filesystem_block_bytes,
+            project_id: _project_id,
+            filesystem_block_bytes: _filesystem_block_bytes,
         } = self.quota_authority
         else {
             return Err(FilesystemStorageError::verification(
@@ -1002,11 +1006,11 @@ impl SandboxFilesystem {
                 move || {
                     xfs::install_project_limits(
                         &volume,
-                        project_id,
-                        filesystem_block_bytes,
-                        limits,
+                        _project_id,
+                        _filesystem_block_bytes,
+                        _limits,
                     )?;
-                    xfs::project_allocation(&volume, project_id)
+                    xfs::project_allocation(&volume, _project_id)
                 },
             )
             .await
@@ -1020,7 +1024,10 @@ impl SandboxFilesystem {
             .map_err(|error| {
                 FilesystemStorageError::io("install managed XFS project limits", &root, error)
             })?;
-            Ok(InstalledLimits { limits, allocation })
+            Ok(InstalledLimits {
+                limits: _limits,
+                allocation,
+            })
         }
         #[cfg(not(target_os = "linux"))]
         unreachable!("managed XFS is unavailable on this platform");
@@ -1082,12 +1089,16 @@ fn copy_file_blocking(
             unmanaged::copy_file(materialization_root, source, target, read_only)
         }
         FileCopyMode::Reflink => {
-            let QuotaAuthority::Project { project_id, .. } = quota_authority else {
+            let QuotaAuthority::Project {
+                project_id: _project_id,
+                ..
+            } = quota_authority
+            else {
                 unreachable!("reflink copy requires project quota authority")
             };
             #[cfg(target_os = "linux")]
             {
-                xfs::reflink_file(materialization_root, project_id, source, target, read_only)
+                xfs::reflink_file(materialization_root, _project_id, source, target, read_only)
             }
             #[cfg(not(target_os = "linux"))]
             unreachable!("managed XFS is unavailable on this platform");
@@ -1098,7 +1109,7 @@ fn copy_file_blocking(
 fn copy_file_at_blocking(
     copy_mode: FileCopyMode,
     quota_authority: QuotaAuthority,
-    materialization_root: &Path,
+    _materialization_root: &Path,
     source: &Path,
     destination_directory: &cap_std::fs::Dir,
     destination: &Path,
@@ -1109,14 +1120,18 @@ fn copy_file_at_blocking(
             unmanaged::copy_file_at(destination_directory, source, destination, read_only)
         }
         FileCopyMode::Reflink => {
-            let QuotaAuthority::Project { project_id, .. } = quota_authority else {
+            let QuotaAuthority::Project {
+                project_id: _project_id,
+                ..
+            } = quota_authority
+            else {
                 unreachable!("reflink copy requires project quota authority")
             };
             #[cfg(target_os = "linux")]
             {
                 xfs::reflink_file_at(
-                    materialization_root,
-                    project_id,
+                    _materialization_root,
+                    _project_id,
                     destination_directory,
                     source,
                     destination,

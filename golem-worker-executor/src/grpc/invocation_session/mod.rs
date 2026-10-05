@@ -213,7 +213,7 @@ struct AcceptedInvocation {
 struct TransportStreamId(u64);
 
 pub(crate) fn decode_invocation_input(
-    input: golem_api_grpc::proto::golem::schema::SchemaValue,
+    input: golem_schema::proto::golem::schema::SchemaValue,
 ) -> Result<SchemaValue, String> {
     decode_recursive_stream_value(input, |stream_id, _| {
         Ok(SchemaValueStream::from_host_endpoint(TransportStreamId(
@@ -1207,7 +1207,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Ok(()) => {
                         let _ = responses.send(InvocationResponse {
                             response: Some(invocation_response::Response::Finished(InvocationSessionCompletion {
-                                outcome: Some(invocation_session_completion::Outcome::Success(golem::common::Empty {})),
+                                outcome: Some(invocation_session_completion::Outcome::Success(golem_schema::proto::golem::common::Empty {})),
                             })),
                         }).await;
                     }
@@ -1598,7 +1598,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     response: Some(invocation_response::Response::Finished(
                         InvocationSessionCompletion {
                             outcome: Some(invocation_session_completion::Outcome::Success(
-                                golem::common::Empty {},
+                                golem_schema::proto::golem::common::Empty {},
                             )),
                         },
                     )),
@@ -1683,7 +1683,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             },
             _ => (
                 Some(invocation_session_result::Result::NoResult(
-                    golem::common::Empty {},
+                    golem_schema::proto::golem::common::Empty {},
                 )),
                 Vec::new(),
             ),
@@ -1721,7 +1721,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 response: Some(invocation_response::Response::Finished(
                     InvocationSessionCompletion {
                         outcome: Some(invocation_session_completion::Outcome::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         )),
                     },
                 )),
@@ -2223,7 +2223,9 @@ async fn send_resumed_finished(
     result: Result<(), Vec<u8>>,
 ) {
     let outcome = match result {
-        Ok(()) => invocation_session_completion::Outcome::Success(golem::common::Empty {}),
+        Ok(()) => invocation_session_completion::Outcome::Success(
+            golem_schema::proto::golem::common::Empty {},
+        ),
         Err(details) => invocation_session_completion::Outcome::Failure(InvocationFailure {
             kind: InvocationFailureKind::Execution as i32,
             code: "persisted-invocation-failure".to_string(),
@@ -2618,7 +2620,7 @@ pub(crate) fn build_durable_streaming_request(
     }
     let mut input_graph = graph.clone();
     input_graph.root = input_root;
-    let invocation_value = golem::schema::TypedSchemaValue {
+    let invocation_value = golem_schema::proto::golem::schema::TypedSchemaValue {
         graph: Some(input_graph.into()),
         value: Some(canonical_input),
     }
@@ -2696,7 +2698,7 @@ pub(crate) fn build_durable_streaming_request(
 fn resumed_input_schema(
     prepared: &golem_common::model::durable_stream::StreamSessionPreparedRecord,
 ) -> Result<(SchemaGraph, Vec<(u64, SchemaType)>), WorkerExecutorError> {
-    let typed = golem::schema::TypedSchemaValue::decode(
+    let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(
         prepared.attempt.invocation.invocation_value.as_slice(),
     )
     .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
@@ -2903,7 +2905,7 @@ fn effective_session_identity(
 }
 
 fn require_expected_callee_fingerprint(
-    expected: Option<golem_api_grpc::proto::golem::common::Uuid>,
+    expected: Option<golem_schema::proto::golem::common::Uuid>,
     actual: golem_common::model::AgentFingerprint,
 ) -> Result<(), WorkerExecutorError> {
     let expected = expected.ok_or_else(|| {
@@ -3472,10 +3474,7 @@ mod freshness_tests {
     use golem_api_grpc::proto::golem::auth::{
         AuthCtx, AuthEffectiveSurface, UserAuthCtx, auth_ctx,
     };
-    use golem_api_grpc::proto::golem::common::{AccountId, Uuid};
-    use golem_api_grpc::proto::golem::schema::{
-        BinaryValue, SchemaValue as ProtoSchemaValue, schema_value as proto_schema_value,
-    };
+    use golem_api_grpc::proto::golem::common::AccountId;
     use golem_api_grpc::proto::golem::worker::{InvocationRejectionReason, InvocationStart};
     use golem_common::base_model::Empty;
     use golem_common::base_model::agent::Snapshotting;
@@ -3498,6 +3497,10 @@ mod freshness_tests {
     use golem_common::schema::agent::{
         AgentConstructorSchema, AgentMethodSchema, AgentTypeSchema, InputSchema, NamedField,
         OutputSchema,
+    };
+    use golem_schema::proto::golem::common::Uuid;
+    use golem_schema::proto::golem::schema::{
+        BinaryValue, SchemaValue as ProtoSchemaValue, schema_value as proto_schema_value,
     };
     use golem_schema::schema::schema_value::{ResultValuePayload, UnionValuePayload};
     use golem_schema::schema::{
@@ -4368,7 +4371,7 @@ mod freshness_tests {
                 (55, SchemaType::bool()),
             ]
         );
-        let canonical = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(
+        let canonical = golem_schema::proto::golem::schema::TypedSchemaValue::decode(
             built.attempt.invocation.invocation_value.as_slice(),
         )
         .unwrap()

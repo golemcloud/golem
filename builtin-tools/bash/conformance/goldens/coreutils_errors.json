@@ -1,0 +1,478 @@
+{
+ "cases": {
+  "coreutils errors: b2sum missing file": {
+   "script": "ae0775121ef887cc",
+   "status": 0,
+   "stderr": {
+    "text": "b2sum: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: base32 missing file": {
+   "script": "e9de8c29f4e5815b",
+   "status": 0,
+   "stderr": {
+    "text": "base32: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: base64 invalid input": {
+   "script": "b590b64c25a62fa9",
+   "status": 0,
+   "stderr": {
+    "text": "base64: invalid input\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: basenc without an encoding": {
+   "script": "3e410aed7f8b0327",
+   "status": 0,
+   "stderr": {
+    "text": "basenc: missing encoding type\nTry 'basenc --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: cksum missing file": {
+   "script": "bb38829ea4ded0ba",
+   "status": 0,
+   "stderr": {
+    "text": "cksum: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: comm missing file": {
+   "script": "5d4a600952e53fc4",
+   "status": 0,
+   "stderr": {
+    "text": "comm: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: csplit missing file": {
+   "script": "477e5d0d630158ca",
+   "status": 0,
+   "stderr": {
+    "text": "csplit: cannot open '/nope' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: date invalid date": {
+   "script": "0ef17ac00025deb8",
+   "status": 0,
+   "stderr": {
+    "text": "date: invalid date ‘not a date’\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: env unknown option": {
+   "script": "aea0addb3d698da2",
+   "status": 0,
+   "stderr": {
+    "text": "env: unrecognized option '--bogus'\nTry 'env --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=125\n"
+   }
+  },
+  "coreutils errors: env unknown option with a command keeps the shell alive": {
+   "script": "f83d02da3f9e5a0b",
+   "status": 0,
+   "stderr": {
+    "text": "env: unrecognized option '--bogus'\nTry 'env --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=125\nsurvived\n"
+   }
+  },
+  "coreutils errors: env unset needs a name": {
+   "script": "bb1983fcbd61410d",
+   "status": 0,
+   "stderr": {
+    "text": "env: option requires an argument -- 'u'\nTry 'env --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=125\n"
+   }
+  },
+  "coreutils errors: expand missing file": {
+   "script": "bafacf9031832653",
+   "status": 0,
+   "stderr": {
+    "text": "expand: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: expr false result": {
+   "script": "4a1dd1be859b6ddd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nstatus=1\n"
+   }
+  },
+  "coreutils errors: expr non-integer": {
+   "script": "45409fa88298d8ca",
+   "status": 0,
+   "stderr": {
+    "text": "expr: non-integer argument\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "coreutils errors: expr syntax error": {
+   "script": "56750002651b7525",
+   "status": 0,
+   "stderr": {
+    "text": "expr: syntax error: missing argument after ‘+’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "coreutils errors: factor invalid number": {
+   "script": "8a48d0fb42abe3c4",
+   "status": 0,
+   "stderr": {
+    "text": "factor: ‘x’ is not a valid positive integer\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: fmt missing file": {
+   "script": "6dec18e6d9415cfd",
+   "status": 0,
+   "stderr": {
+    "text": "fmt: cannot open '/nope' for reading: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: fold invalid width": {
+   "script": "590398085bac9f1e",
+   "status": 0,
+   "stderr": {
+    "text": "fold: invalid number of columns: ‘0x’\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: fold missing file": {
+   "script": "2cde503d8187980d",
+   "status": 0,
+   "stderr": {
+    "text": "fold: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: link missing operand": {
+   "script": "97d2512554fb814f",
+   "status": 0,
+   "stderr": {
+    "text": "link: missing operand after ‘/tmp’\nTry 'link --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: md5sum missing file": {
+   "script": "8f2d56c1fbf70f4e",
+   "status": 0,
+   "stderr": {
+    "text": "md5sum: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: mktemp in a missing directory": {
+   "script": "abb1038d04f02cdf",
+   "status": 0,
+   "stderr": {
+    "text": "mktemp: failed to create file via template ‘/nope/XXXXXX’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: mktemp unknown option keeps the shell alive": {
+   "script": "a0bfc8eb10f5e8d5",
+   "status": 0,
+   "stderr": {
+    "text": "mktemp: unrecognized option '--bogus'\nTry 'mktemp --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\nsurvived\n"
+   }
+  },
+  "coreutils errors: mv into a directory": {
+   "script": "6a8be4fe1f381622",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "y"
+   }
+  },
+  "coreutils errors: mv missing source": {
+   "script": "cf9526445931691e",
+   "status": 0,
+   "stderr": {
+    "text": "mv: cannot stat '/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: mv one operand keeps the shell alive": {
+   "script": "5f968b8719bd7adf",
+   "status": 0,
+   "stderr": {
+    "text": "mv: missing destination file operand after '/tmp'\nTry 'mv --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\nsurvived\n"
+   }
+  },
+  "coreutils errors: mv renames a file": {
+   "script": "ac2e30cf9ff2723d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xstatus=2\n"
+   }
+  },
+  "coreutils errors: nl missing file": {
+   "script": "379305a0809276a3",
+   "status": 0,
+   "stderr": {
+    "text": "nl: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: numfmt invalid number": {
+   "script": "d732ba26f1bd7f7b",
+   "status": 0,
+   "stderr": {
+    "text": "numfmt: invalid number: ‘x’\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "coreutils errors: paste missing file": {
+   "script": "a08ab08652067ac5",
+   "status": 0,
+   "stderr": {
+    "text": "paste: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: readlink on a regular file": {
+   "script": "5515408cd0f2f242",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: realpath -e missing path": {
+   "script": "7a12a73b42bdd980",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: /nope/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: rm directory without -r": {
+   "script": "c5a8d2f7b1b7896f",
+   "status": 0,
+   "stderr": {
+    "text": "rm: cannot remove '/tmp/rd': Is a directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: rmdir missing directory": {
+   "script": "dd22b1729e462be8",
+   "status": 0,
+   "stderr": {
+    "text": "rmdir: failed to remove '/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: rmdir non-empty directory": {
+   "script": "dc934d1dcacc4c59",
+   "status": 0,
+   "stderr": {
+    "text": "rmdir: failed to remove '/tmp/d': Directory not empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: sha1sum missing file": {
+   "script": "ae1e53e794d7d440",
+   "status": 0,
+   "stderr": {
+    "text": "sha1sum: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: sha256sum check reports a mismatch": {
+   "script": "549136be026a00eb",
+   "status": 0,
+   "stderr": {
+    "text": "sha256sum: WARNING: 1 computed checksum did NOT match\n"
+   },
+   "stdout": {
+    "text": "/tmp/c: FAILED\nstatus=1\n"
+   }
+  },
+  "coreutils errors: sha256sum missing file": {
+   "script": "ba2ff76c973e5774",
+   "status": 0,
+   "stderr": {
+    "text": "sha256sum: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: sha512sum missing file": {
+   "script": "3adb815287868b75",
+   "status": 0,
+   "stderr": {
+    "text": "sha512sum: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: shuf missing file": {
+   "script": "cef3fd22b4919d93",
+   "status": 0,
+   "stderr": {
+    "text": "shuf: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: touch invalid date": {
+   "script": "5962877d22b07c82",
+   "status": 0,
+   "stderr": {
+    "text": "touch: invalid date format ‘not a date’\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: truncate without a size": {
+   "script": "4c2fc6c65d0be47f",
+   "status": 0,
+   "stderr": {
+    "text": "truncate: you must specify either ‘--size’ or ‘--reference’\nTry 'truncate --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: tsort missing file": {
+   "script": "7741131330182f75",
+   "status": 0,
+   "stderr": {
+    "text": "tsort: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: tsort odd token count": {
+   "script": "c085558b8ed2693f",
+   "status": 0,
+   "stderr": {
+    "text": "tsort: -: input contains an odd number of tokens\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: unexpand missing file": {
+   "script": "bf2dac69ca5c8f42",
+   "status": 0,
+   "stderr": {
+    "text": "unexpand: /nope: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "coreutils errors: uniq unknown option keeps the shell alive": {
+   "script": "458aa82f1c07c153",
+   "status": 0,
+   "stderr": {
+    "text": "uniq: unrecognized option '--bogus'\nTry 'uniq --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=1\nsurvived\n"
+   }
+  },
+  "coreutils errors: unlink missing file": {
+   "script": "61519d4556c9f59e",
+   "status": 0,
+   "stderr": {
+    "text": "unlink: cannot unlink '/nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

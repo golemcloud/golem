@@ -7,7 +7,7 @@ import {
   HttpServerRequest,
   HttpServerRespondable,
   HttpServerResponse,
-} from "effect/unstable/http"
+} from "effect/http"
 import { __resetAgents, defineAgent } from "../src/Agent.js"
 import * as GolemRouter from "../src/HttpRouter.js"
 import * as Http from "../src/Http.js"

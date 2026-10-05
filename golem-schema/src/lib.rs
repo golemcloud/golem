@@ -42,5 +42,32 @@ pub mod http;
 pub mod model;
 pub mod schema;
 
+/// Protobuf messages of the schema and tool model, generated from this crate's `proto` directory.
+#[cfg(feature = "protobuf")]
+#[allow(clippy::large_enum_variant)]
+pub mod proto {
+    use uuid::Uuid;
+
+    include!(concat!(env!("OUT_DIR"), "/mod.rs"));
+
+    impl From<Uuid> for golem::common::Uuid {
+        fn from(value: Uuid) -> Self {
+            let (high_bits, low_bits) = value.as_u64_pair();
+            golem::common::Uuid {
+                high_bits,
+                low_bits,
+            }
+        }
+    }
+
+    impl From<golem::common::Uuid> for Uuid {
+        fn from(value: golem::common::Uuid) -> Self {
+            let high_bits = value.high_bits;
+            let low_bits = value.low_bits;
+            Uuid::from_u64_pair(high_bits, low_bits)
+        }
+    }
+}
+
 pub use model::*;
 pub use schema::*;

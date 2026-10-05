@@ -3724,6 +3724,8 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "desert_rust",
+ "golem-schema",
+ "heck",
  "miette",
  "prost 0.14.4",
  "prost-types",
@@ -3762,6 +3764,7 @@ dependencies = [
  "dotenvy",
  "expectrl",
  "fd-lock",
+ "flate2",
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",
@@ -3978,6 +3981,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "http 1.5.0",
  "humantime-serde",
@@ -4076,6 +4080,7 @@ dependencies = [
  "conditional-trait-gen",
  "console-subscriber",
  "desert_rust",
+ "fd-lock",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -4086,6 +4091,7 @@ dependencies = [
  "golem-service-base",
  "golem-worker-executor-test-utils",
  "heck",
+ "hex",
  "http 1.5.0",
  "http-body-util",
  "humantime-serde",
@@ -4113,10 +4119,12 @@ dependencies = [
  "reqwest 0.13.4",
  "rustls 0.23.43",
  "sanitize-filename",
+ "semver",
  "serde",
  "serde_json",
  "serde_with",
  "serde_yaml",
+ "sha2 0.10.9",
  "sqlx",
  "strum",
  "strum_macros",
@@ -4168,14 +4176,17 @@ dependencies = [
  "chrono",
  "criterion",
  "desert_rust",
- "golem-api-grpc",
  "golem-schema-derive",
  "mac_address",
+ "miette",
  "nonempty-collections",
  "num-bigint",
  "poem",
  "poem-openapi",
  "proptest",
+ "prost 0.14.4",
+ "prost-build",
+ "protox",
  "regex",
  "rust_decimal",
  "serde",
@@ -4301,6 +4312,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-schema",
  "golem-service-base",
  "golem-test-framework",
  "http 1.5.0",
@@ -4354,6 +4366,7 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "heck",
+ "hex",
  "humantime-serde",
  "itertools 0.14.0",
  "jsonwebtoken",
@@ -11700,9 +11713,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.4"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7b7f29a189990cbe819e7b44c9af6d2f06d0e16e0c56eeccf63feb85d21b4d6"
+checksum = "8755b5e1f2a500d592a85460823f382c4ef4b153e6c43cc10ff0c0dbda326eb0"
 dependencies = [
  "anyhow",
  "camino",
