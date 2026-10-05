@@ -3,18 +3,35 @@ import { fileURLToPath } from "node:url"
 import { sharedEffectRuntime } from "./shared-effect.mjs"
 import { staticContracts } from "./static-contracts.mjs"
 
-const sdkSource = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/src")
+const sdkSource = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/component")
 const entry = "\0golem-effect-component"
 const packageName = "@golemcloud/effect-golem"
 const publicEntries = new Map([
   [packageName, "index.js"],
-  [`${packageName}/HttpRouter`, "internal/component/HttpRouter.js"],
+  [`${packageName}/HttpRouter`, "HttpRouter.js"],
   [`${packageName}/middleware`, "Middleware.js"],
+  [`${packageName}/ai`, "Ai.js"],
   [`${packageName}/sqlite`, "Sqlite/SqliteClient.js"],
   [`${packageName}/postgres`, "Postgres/PgClient.js"],
   [`${packageName}/mysql`, "Mysql/MySqlClient.js"],
   [`${packageName}/ignite2`, "Ignite/IgniteClient.js"],
 ])
+const privateSubpath =
+  /^(?:internal|host|Sqlite\/internal|Postgres\/internal|Mysql\/internal|Ignite\/internal)\//
+const packageEntry = (source) => {
+  const explicit = publicEntries.get(source)
+  if (explicit) return explicit
+  if (!source.startsWith(packageName + "/")) return undefined
+  const subpath = source.slice(packageName.length + 1)
+  if (
+    subpath.includes("\\") ||
+    subpath.split("/").some((part) => part === "" || part === "." || part === "..")
+  )
+    throw new Error(`Invalid ${packageName} component subpath: ${subpath}`)
+  return subpath === "build" || subpath === "agent-guest" || privateSubpath.test(subpath)
+    ? undefined
+    : `${subpath}.js`
+}
 
 const normalizePlugins = async (plugins) => {
   const normalized = []
@@ -50,10 +67,10 @@ export async function componentConfiguration(rollup, optionsFactory) {
     resolveId(source) {
       if (source === packageName)
         return {
-          id: join(sdkSource, "internal/component/index.js"),
+          id: join(sdkSource, "index.js"),
           moduleSideEffects: false,
         }
-      const path = publicEntries.get(source)
+      const path = packageEntry(source)
       if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
       if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }
       return null

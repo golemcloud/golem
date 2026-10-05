@@ -22,7 +22,7 @@ import { componentConfiguration } from "../build/component.mjs"
 import config from "../vitest.config.js"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const sdk = resolve(root, "dist/src")
+const sdk = resolve(root, "dist/component")
 const httpContract = resolve(root, "../http-contract")
 const exports = [
   "golemAgent200Guest",
@@ -48,20 +48,17 @@ const sourcePlugin = () => ({
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
       }).outputText
     if (!id.startsWith(sdk + "/")) return null
-    const component = resolve(sdk, "internal/component")
-    if (id === resolve(component, "index.js") || id === resolve(component, "HttpRouter.js")) {
-      const name = id.endsWith("/index.js") ? "index" : "HttpRouter"
+    if (id === resolve(sdk, "index.js")) {
+      const name = "index"
       let output = ts.transpileModule(readFileSync(resolve(root, `src/${name}.ts`), "utf8"), {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
       }).outputText
-      if (name === "index")
-        output = output.replace(
-          /^export \{ (?:guest as golemAgent200Guest|toolGuest as golemTool010Guest|toolMiddlewareGuest)[^\n]*\n/gm,
-          "",
-        )
-      return output.replace(/from "\.\/(?!HttpRouter\.js")/g, 'from "../../')
+      output = output.replace(
+        /^export \{ (?:guest as golemAgent200Guest|toolGuest as golemTool010Guest|toolMiddlewareGuest)[^\n]*\n/gm,
+        "",
+      )
+      return output
     }
-    if (id.startsWith(component + "/")) return null
     const source = id.replace(sdk, resolve(root, "src")).replace(/\.js$/, ".ts")
     if (!existsSync(source)) return null
     return ts.transpileModule(readFileSync(source, "utf8"), {
@@ -123,12 +120,29 @@ const build = async (fixture: string, execute = true) => {
 }
 
 describe("capability-sensitive component exports", () => {
+  it("keeps supported public subpath imports inside the modular component graph", async () => {
+    const { modules, capabilities } = await build("agent-subpath", false)
+    expect(capabilities.agents).toBe(true)
+    expect(modules).not.toContain(resolve(root, "dist/index.mjs"))
+  }, 30000)
+
+  it("rejects private subpath imports", async () => {
+    await expect(build("private-subpath", false)).rejects.toThrow()
+  }, 30000)
+
+  it.each(["private-traversal", "private-empty-root", "private-empty-adapter"])(
+    "rejects noncanonical %s imports",
+    async (fixture) => {
+      await expect(build(fixture, false)).rejects.toThrow("Invalid @golemcloud/effect-golem")
+    },
+    30000,
+  )
+
   it.each(["router-root-first", "router-subpath-first"])(
     "%s shares one HTTP router module between root and subpath imports",
     async (fixture) => {
       const { modules } = await build(fixture, false)
-      expect(modules).toContain("internal/component/HttpRouter.js")
-      expect(modules).not.toContain("HttpRouter.js")
+      expect(modules).toContain("HttpRouter.js")
     },
     30000,
   )
