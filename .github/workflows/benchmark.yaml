@@ -44,13 +44,6 @@ jobs:
       - name: Build benchmark test components
         run: cargo make build-benchmark-components
 
-      - name: Checkout benchmark results repository
-        uses: actions/checkout@v5
-        with:
-          repository: 'golemcloud/benchmark-results'
-          token: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
-          path: benchmark-results
-
       # The suite exits non-zero when any benchmark recorded failed attempts,
       # after the results JSON has been written. The results are committed
       # either way; the last step turns the recorded failures into a red run.
@@ -60,8 +53,10 @@ jobs:
         run: |
           cargo run --profile benchmarks -p integration-tests --bin benchmarks '--' \
             --primary-only \
+            --retain-details \
+            --retain-selected-zero-counts \
             suite \
-            --add-to-json benchmark-results/results/results.json \
+            --save-to-json "$RUNNER_TEMP/github-actions-benchmark-results.json" \
             --runner-id github-actions-blacksmith-32vcpu \
             --runner-label "GitHub Actions (Blacksmith 32 vCPU)" \
             --source-repository "$GITHUB_REPOSITORY" \
@@ -70,13 +65,25 @@ jobs:
             integration-tests/benchmark_suites/ci.yaml \
             spawned
 
-      - name: Commit results
-        run: |
-          cd benchmark-results
-          git config user.name  'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add results/results.json
-          git diff --staged --quiet || (git commit -m "Appended new benchmark results" && git push)
+      - name: Validate and publish results
+        env:
+          BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
+          GOLEM_BENCHMARK_RESULTS_INPUT: ${{ runner.temp }}/github-actions-benchmark-results.json
+          GOLEM_BENCHMARK_RESULTS_ANALYSIS: ${{ runner.temp }}/github-actions-benchmark-analysis.json
+          GOLEM_BENCHMARK_PUBLISH_DIR: ${{ runner.temp }}/benchmark-results-publish
+          GOLEM_BENCHMARK_RUNNER_ID: github-actions-blacksmith-32vcpu
+        run: cargo make publish-benchmark-results
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-results-attempt${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/github-actions-benchmark-results.json
+            ${{ runner.temp }}/github-actions-benchmark-analysis.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Fail on recorded benchmark failures
         if: steps.benchmark.outcome != 'success'
