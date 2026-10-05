@@ -503,7 +503,8 @@ where
         parent_start,
         activation,
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(active_agent.primary().get_wallet_cards().await?);
     let body = active_agent.start_entity_invocation(
         parent_id.clone(),
         scope,
@@ -2371,7 +2372,8 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
         root_start,
         activation,
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(active_agent.primary().get_wallet_cards().await?);
     let (body_started, body_started_rx) = tokio::sync::oneshot::channel();
     let (release_body, release_body_rx) = tokio::sync::oneshot::channel();
     let body = active_agent.start_entity_invocation(
@@ -2482,6 +2484,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
     let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let authority_wallet = active_agent.primary().get_wallet_cards().await?;
     let live_scope = invocation_scope(
         &owner_id,
         &entity,
@@ -2489,7 +2492,8 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         parent_start,
         activation.clone(),
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(authority_wallet.clone());
     let live_principal = principal.clone();
     let live = active_agent.start_entity_invocation(
         parent_id.clone(),
@@ -2554,7 +2558,8 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         parent_start,
         activation,
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(authority_wallet);
     let replay = active_agent.start_entity_invocation(
         parent_id.clone(),
         replay_scope,
@@ -2711,6 +2716,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         .next();
     let root_id = OwnerInvocationId::Agent(root_start);
     let root = lane.enter_primary(root_start)?.acquire().await?;
+    let authority_wallet = active_agent.primary().get_wallet_cards().await?;
 
     let first_scope = invocation_scope(
         &owner_id,
@@ -2719,7 +2725,8 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         root_start,
         activation.clone(),
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(authority_wallet.clone());
     let first = active_agent.start_entity_invocation(
         root_id.clone(),
         first_scope,
@@ -2760,7 +2767,8 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         Principal::Agent(AgentPrincipal {
             agent_id: owner_id.agent_id.clone(),
         }),
-    );
+    )
+    .with_authority_wallet(authority_wallet.clone());
     let second = active_agent.start_entity_invocation(
         root_id.clone(),
         second_scope,
@@ -2780,7 +2788,8 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         Principal::Agent(AgentPrincipal {
             agent_id: owner_id.agent_id.clone(),
         }),
-    );
+    )
+    .with_authority_wallet(authority_wallet);
     let conflicting = active_agent.start_entity_invocation(
         root_id.clone(),
         conflict_scope,

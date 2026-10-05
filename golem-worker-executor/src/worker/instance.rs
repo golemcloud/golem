@@ -821,6 +821,10 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 component_metadata.component_size,
             )
             .await;
+        let authority_wallet = match scope {
+            Some(scope) => scope.authority_wallet().to_vec(),
+            None => owner.get_wallet_cards().await?,
+        };
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
@@ -835,9 +839,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 self.owner_component_metadata
                     .clone()
                     .expect("Entity instance host must pin its owner component metadata"),
-                scope
-                    .map(|scope| scope.authority_wallet().to_vec())
-                    .unwrap_or_default(),
+                authority_wallet,
             )
             .await?;
         if let Some(scope) = scope {
