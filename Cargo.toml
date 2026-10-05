@@ -154,7 +154,7 @@ im = "15.1.0"
 include_dir = "0.7.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
 indoc = "2.0.6"
-inquire = { version = "0.7.5", default-features = false, features = ["crossterm", "fuzzy"] }
+inquire = { version = "0.9.4", default-features = false, features = ["crossterm", "fuzzy"] }
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
@@ -197,7 +197,7 @@ opentelemetry = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
 opentelemetry-prometheus-text-exporter = "=0.2.0"
 opentelemetry_sdk = { version = "0.30.0", default-features = false, features = ["trace", "metrics", "internal-logs"] }
-phf = { version = "0.11.3", features = ["macros"] }
+phf = { version = "0.12.1", features = ["macros"] }
 pin-project = "1.1.10"
 pgvector = { version = "=0.4.1", features = ["sqlx", "halfvec"] }
 poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry", "prometheus", "requestid", "test", ] }
@@ -245,12 +245,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0.219"
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_json_path = "0.7.1"
-serde_with = "3.5.0"
+serde_with = "3.24.0"
 serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
 shadow-rs = { version = "1.2.0", default-features = false, features = ["build"] }
 shell-words = "1.1.0"
-shlex = "1.3.0"
+shlex = "2.0.1"
 similar = "2.7.0"
 spdx = "0.10.8"
 sqlparser = { version = "=0.62.0", features = ["visitor"] }
@@ -315,26 +315,26 @@ version-compare = "0.2.0"
 walkdir = "2.5.0"
 warp = "0.3.7"
 wasip2 = "1.0.2"
-wasm-encoder = "0.248.0"
-wasm-metadata = { version = "0.248.0", features = ["oci"] }
+wasm-encoder = "0.251.0"
+wasm-metadata = { version = "0.251.0", features = ["oci"] }
 wasm-rquickjs = { version = "0.4.7", features = ["optimize", "use-golem-wasmtime"] }
-wasm-wave = "0.248"
-wasmparser = "0.248.0"
-wasmprinter = "0.248.0"
+wasm-wave = "0.251"
+wasmparser = "0.251.0"
+wasmprinter = "0.251.0"
 wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
 wasmtime-wasi = { version = "=46.0.1", default-features = false, features = ["p2", "p3"] }
 wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
 wat = "1.248.0"
-wax = "0.6.0"
+wax = "0.7.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console"] }
 which = "8.0.0"
 wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0" }
 wit-bindgen-rust = "0.58.0"
-wit-component = "0.248"
-wit-encoder = "0.248"
-wit-parser = "0.248"
+wit-component = "0.251"
+wit-encoder = "0.251"
+wit-parser = "0.251"
 x509-certificate = "0.23.1"
 zstd = "0.13"
 
