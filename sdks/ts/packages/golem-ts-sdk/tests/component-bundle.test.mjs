@@ -209,16 +209,25 @@ describe('static component exports', () => {
     expect(generated).toEqual(proxy);
     expect(generated).toEqual({
       result: {
-        artifactId: 18446744073709551614n,
-        digest: 'deadbeef',
-        labels: new Map([
-          ['tier', 'gold'],
-          ['team', 'runtime'],
-        ]),
-        warnings: ['unsigned metadata'],
+        status: 'fulfilled',
+        value: {
+          artifactId: 18446744073709551614n,
+          digest: 'deadbeef',
+          labels: new Map([
+            ['tier', 'gold'],
+            ['team', 'runtime'],
+          ]),
+          warnings: ['unsigned metadata'],
+        },
       },
-      stdout: new TextEncoder().encode('compiled 2 inputs\n'),
-      stderr: Uint8Array.of(0, 1, 2),
+      stdout: {
+        status: 'fulfilled',
+        value: new TextEncoder().encode('compiled 2 inputs\n'),
+      },
+      stderr: {
+        status: 'fulfilled',
+        value: Uint8Array.of(0, 1, 2),
+      },
     });
     expect(
       conformance.observations.map(({ path, stdout, stderr }) => ({ path, stdout, stderr })),

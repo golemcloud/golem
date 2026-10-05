@@ -1475,18 +1475,19 @@ async fn shipped_audit_sink_deduplicates_crash_after_commit_and_keeps_pinned_pol
         .into_typed()?;
     assert_eq!(result, "leaf(logical-call)");
 
-    let attempts = sink.attempts.lock().unwrap();
-    assert_eq!(
-        attempts.len(),
-        2,
-        "delivery attempt repeats after the crash"
-    );
-    assert_eq!(attempts[0].0, attempts[1].0, "logical key is replay-stable");
-    assert_eq!(
-        attempts[1].1["occurrenceLabel"], "pinned-before-crash",
-        "reconstruction uses the admitted policy occurrence"
-    );
-    drop(attempts);
+    {
+        let attempts = sink.attempts.lock().unwrap();
+        assert_eq!(
+            attempts.len(),
+            2,
+            "delivery attempt repeats after the crash"
+        );
+        assert_eq!(attempts[0].0, attempts[1].0, "logical key is replay-stable");
+        assert_eq!(
+            attempts[1].1["occurrenceLabel"], "pinned-before-crash",
+            "reconstruction uses the admitted policy occurrence"
+        );
+    }
     assert_eq!(
         sink.committed.lock().unwrap().len(),
         1,

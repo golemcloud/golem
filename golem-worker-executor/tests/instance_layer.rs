@@ -3374,17 +3374,17 @@ async fn entity_agent_config_uses_owner_component_declarations(
     let expected_owner_component_revision = owner_component.revision;
     let expected_entity_component_id = entity_component.id;
     let expected_entity_component_revision = entity_component.revision;
-    let foo = CanonicalAgentConfigPath(vec!["foo".to_string()]);
+    let foo_path = CanonicalAgentConfigPath(vec!["foo".to_string()]);
     let cases = [
         (ConfigKeyScope::All, "foo", SchemaType::s32(), true),
         (
-            ConfigKeyScope::Keys(BTreeSet::from([foo.clone()])),
+            ConfigKeyScope::Keys(BTreeSet::from([foo_path.clone()])),
             "foo",
             SchemaType::s32(),
             true,
         ),
         (
-            ConfigKeyScope::Keys(BTreeSet::from([foo])),
+            ConfigKeyScope::Keys(BTreeSet::from([foo_path])),
             "bar",
             SchemaType::string(),
             false,

@@ -502,22 +502,23 @@ async fn audit_3_crash_after_sink_commit_retries_same_key_deduplicates_and_repla
         .into_typed()?;
     assert_eq!(result, "leaf(logical-call)");
 
-    let attempts = sink.attempts.lock().unwrap();
-    assert_eq!(
-        attempts.len(),
-        2,
-        "delivery retries after the ambiguous crash"
-    );
-    assert_eq!(
-        attempts[0].0, attempts[1].0,
-        "replay preserves record identity"
-    );
-    assert_eq!(
-        attempts[0].1, attempts[1].1,
-        "replay preserves record contents"
-    );
-    assert_eq!(attempts[1].1["occurrenceLabel"], "pinned-before-crash");
-    drop(attempts);
+    {
+        let attempts = sink.attempts.lock().unwrap();
+        assert_eq!(
+            attempts.len(),
+            2,
+            "delivery retries after the ambiguous crash"
+        );
+        assert_eq!(
+            attempts[0].0, attempts[1].0,
+            "replay preserves record identity"
+        );
+        assert_eq!(
+            attempts[0].1, attempts[1].1,
+            "replay preserves record contents"
+        );
+        assert_eq!(attempts[1].1["occurrenceLabel"], "pinned-before-crash");
+    }
     assert_eq!(
         sink.committed.lock().unwrap().len(),
         1,
