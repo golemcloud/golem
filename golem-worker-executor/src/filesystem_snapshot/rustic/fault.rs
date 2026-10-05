@@ -194,15 +194,26 @@ fn is_permanent(error: &(dyn Error + 'static)) -> bool {
             .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
 }
 
-/// Gives how a run ends after a blob call that the store made without rustic failed with `error`.
-pub(super) fn storage_end(error: &anyhow::Error) -> RunEnd {
-    match call_failure(error) {
+/// Tells whether a write whose try failed with `failure` can still land: every failure but one that
+/// no try can change.
+pub(super) fn may_land(failure: CallFailure) -> bool {
+    failure != CallFailure::Permanent
+}
+
+/// Gives how a run ends after a blob call whose last try failed with `failure`.
+pub(super) fn run_end(failure: CallFailure) -> RunEnd {
+    match failure {
         CallFailure::Cancelled => RunEnd::Cancelled,
         CallFailure::Permanent => RunEnd::Permanent,
         CallFailure::LeaseExpired | CallFailure::TimedOut | CallFailure::Failed => {
             RunEnd::CallFailed
         }
     }
+}
+
+/// Gives how a run ends after a blob call that the store made without rustic failed with `error`.
+pub(super) fn storage_end(error: &anyhow::Error) -> RunEnd {
+    run_end(call_failure(error))
 }
 
 /// Gives how a run ends after a step of rustic failed with `error`, when the error came from a
@@ -397,8 +408,8 @@ fn chain<'a>(error: &'a (dyn Error + 'static)) -> impl Iterator<Item = &'a (dyn 
 mod tests {
     use super::{
         BlobCallFailed, CallFailure, ConfigExists, FileMissing, LeaseExpired, OperationCancelled,
-        call_failure, is_config_exists, is_index_missing, is_pack_missing, missing_blob,
-        missing_file_path, rustic_storage_end, storage_end,
+        call_failure, is_config_exists, is_index_missing, is_pack_missing, may_land, missing_blob,
+        missing_file_path, run_end, rustic_storage_end, storage_end,
     };
     use crate::filesystem_snapshot::rustic::runs::RunEnd;
     use golem_service_base::storage::blob::{BlobMissingError, BlobNameError, BlobRangeError};
@@ -471,6 +482,33 @@ mod tests {
                 CallFailure::TimedOut,
                 CallFailure::Failed,
                 CallFailure::Failed,
+            ]
+        );
+    }
+
+    const EVERY_FAILURE: [CallFailure; 5] = [
+        CallFailure::Cancelled,
+        CallFailure::LeaseExpired,
+        CallFailure::Permanent,
+        CallFailure::TimedOut,
+        CallFailure::Failed,
+    ];
+
+    #[test]
+    fn a_write_can_still_land_after_every_failure_but_a_permanent_one() {
+        assert_eq!(EVERY_FAILURE.map(may_land), [true, true, false, true, true]);
+    }
+
+    #[test]
+    fn each_failure_of_a_last_try_ends_a_run_by_its_class() {
+        assert_eq!(
+            EVERY_FAILURE.map(run_end),
+            [
+                RunEnd::Cancelled,
+                RunEnd::CallFailed,
+                RunEnd::Permanent,
+                RunEnd::CallFailed,
+                RunEnd::CallFailed,
             ]
         );
     }

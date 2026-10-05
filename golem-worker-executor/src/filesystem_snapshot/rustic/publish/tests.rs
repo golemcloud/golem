@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::super::files::SnapshotFiles;
+use super::super::files::{LateWrites, SnapshotFiles, lands_by};
 use super::super::runs::{RunEnd, now};
 use super::super::tests::files_of;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
@@ -48,7 +48,12 @@ fn staged() -> StagedSnapshot {
 fn files(
     script: impl Fn(usize) -> Script + Send + Sync + 'static,
     deadline: Duration,
-) -> (SnapshotFiles, Arc<ScriptedBlobStorage>, SnapshotFiles) {
+) -> (
+    SnapshotFiles,
+    Arc<ScriptedBlobStorage>,
+    SnapshotFiles,
+    Arc<LateWrites>,
+) {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let tries = std::sync::atomic::AtomicUsize::new(0);
     let storage = ScriptedBlobStorage::new(inner.clone(), move |op_label, _| match op_label {
@@ -67,7 +72,13 @@ fn files(
         )
         .with_tries(super::super::files::IN_CALL_TRIES)
     };
-    (over(storage.clone()), storage, over(inner))
+    let late = Arc::new(LateWrites::default());
+    (
+        over(storage.clone()).recording(late.clone()),
+        storage,
+        over(inner),
+        late,
+    )
 }
 
 /// Gives the content of the snapshot file, when the storage below the script holds it.
@@ -75,23 +86,24 @@ async fn stored(inner: &SnapshotFiles) -> Option<Vec<u8>> {
     inner.get("test", Path::new(SNAPSHOT_PATH)).await.unwrap()
 }
 
-/// Gives what a publish gave without its failure.
-fn shape(published: &Published) -> (Option<RunEnd>, bool) {
+/// Gives what a publish gave without its failure, and whether a try of it can still land.
+fn shape(published: &Published, late: &LateWrites) -> (Option<RunEnd>, bool) {
+    let can_land = late.latest().is_some();
     match published {
-        Published::Written => (None, false),
-        Published::NotWritten { end, late, .. } => (Some(*end), late.is_some()),
+        Published::Written => (None, can_land),
+        Published::NotWritten { end, .. } => (Some(*end), can_land),
     }
 }
 
 #[test]
 #[timeout("60s")]
 async fn a_publish_writes_the_staged_file() {
-    let (files, _, inner) = files(|_| Script::Pass, Duration::from_secs(2));
+    let (files, _, inner, late) = files(|_| Script::Pass, Duration::from_secs(2));
 
     let published = publish(&files, &staged(), None, &CancellationToken::new()).await;
 
     assert_eq!(
-        (shape(&published), stored(&inner).await),
+        (shape(&published, &late), stored(&inner).await),
         ((None, false), Some(b"snapshot".to_vec()))
     );
 }
@@ -99,21 +111,26 @@ async fn a_publish_writes_the_staged_file() {
 #[test]
 #[timeout("60s")]
 async fn a_publish_of_a_file_that_is_there_succeeds_and_keeps_the_file() {
-    let (files, _, inner) = files(|_| Script::Pass, Duration::from_secs(2));
+    let (files, _, inner, late) = files(|_| Script::Pass, Duration::from_secs(2));
 
     let first = publish(&files, &staged(), None, &CancellationToken::new()).await;
     let second = publish(&files, &staged(), None, &CancellationToken::new()).await;
 
     assert_eq!(
-        (shape(&first), shape(&second), stored(&inner).await),
+        (
+            shape(&first, &late),
+            shape(&second, &late),
+            stored(&inner).await
+        ),
         ((None, false), (None, false), Some(b"snapshot".to_vec()))
     );
 }
 
 #[test]
 #[timeout("60s")]
-async fn a_try_whose_answer_was_lost_is_followed_by_a_try_that_counts_the_landed_file_as_written() {
-    let (files, storage, inner) = files(
+async fn a_try_whose_answer_was_lost_is_recorded_and_a_later_try_counts_the_landed_file_as_written()
+{
+    let (files, storage, inner, late) = files(
         |tried| match tried {
             1 => Script::LoseTheAnswer,
             _ => Script::AnswerAlreadyExists,
@@ -125,32 +142,31 @@ async fn a_try_whose_answer_was_lost_is_followed_by_a_try_that_counts_the_landed
 
     assert_eq!(
         (
-            shape(&published),
+            shape(&published, &late),
             stored(&inner).await,
             storage.calls().len()
         ),
-        ((None, false), Some(b"snapshot".to_vec()), 2)
+        // The lost try is recorded although a later try counts the file as written: it can
+        // still land, and the save waits for it.
+        ((None, true), Some(b"snapshot".to_vec()), 2)
     );
 }
 
 #[test]
 #[timeout("60s")]
 async fn a_publish_whose_tries_all_lose_their_answer_keeps_the_file_and_gives_a_late_window() {
-    let (files, storage, inner) = files(|_| Script::LoseTheAnswer, Duration::from_secs(2));
+    let (files, storage, inner, late) = files(|_| Script::LoseTheAnswer, Duration::from_secs(2));
     let started = now();
 
     let published = publish(&files, &staged(), None, &CancellationToken::new()).await;
-    let late = match &published {
-        Published::NotWritten { late, .. } => *late,
-        Published::Written => None,
-    };
+    let until = lands_by(late.latest(), Duration::from_secs(2));
 
     assert_eq!(
         (
-            shape(&published),
+            shape(&published, &late),
             stored(&inner).await,
             storage.calls().len(),
-            late.is_some_and(|late| late >= started + Duration::from_secs(2)),
+            until.is_some_and(|until| until >= started + Duration::from_secs(2)),
         ),
         (
             (Some(RunEnd::CallFailed), true),
@@ -164,7 +180,7 @@ async fn a_publish_whose_tries_all_lose_their_answer_keeps_the_file_and_gives_a_
 #[test]
 #[timeout("60s")]
 async fn a_publish_whose_cancel_fired_sends_no_try() {
-    let (files, storage, inner) = files(|_| Script::Pass, Duration::from_secs(2));
+    let (files, storage, inner, late) = files(|_| Script::Pass, Duration::from_secs(2));
     let cancel = CancellationToken::new();
     cancel.cancel();
 
@@ -172,7 +188,7 @@ async fn a_publish_whose_cancel_fired_sends_no_try() {
 
     assert_eq!(
         (
-            shape(&published),
+            shape(&published, &late),
             stored(&inner).await,
             storage.calls().len()
         ),
@@ -183,14 +199,14 @@ async fn a_publish_whose_cancel_fired_sends_no_try() {
 #[test]
 #[timeout("60s")]
 async fn a_publish_with_no_time_before_the_bound_sends_no_try() {
-    let (files, storage, inner) = files(|_| Script::Pass, Duration::from_secs(2));
+    let (files, storage, inner, late) = files(|_| Script::Pass, Duration::from_secs(2));
     let bound = now() + Duration::from_secs(2);
 
     let published = publish(&files, &staged(), Some(bound), &CancellationToken::new()).await;
 
     assert_eq!(
         (
-            shape(&published),
+            shape(&published, &late),
             stored(&inner).await,
             storage.calls().len()
         ),
@@ -291,7 +307,7 @@ fn a_stage_keeps_one_file_until_it_is_taken() {
 async fn a_stop_of_the_tries_ends_the_wait_between_two_tries_of_a_publish() {
     // The first try is refused, and the tries stop 20 ms into the wait of 250 ms before the next
     // try. The publish ends then, with no second try.
-    let (files, storage, _) = files(|_| Script::Refuse, Duration::from_secs(2));
+    let (files, storage, _, late) = files(|_| Script::Refuse, Duration::from_secs(2));
     let retry_stop = CancellationToken::new();
     let files = files.with_retry_stop(retry_stop.clone());
     tokio::spawn(async move {
@@ -304,7 +320,7 @@ async fn a_stop_of_the_tries_ends_the_wait_between_two_tries_of_a_publish() {
 
     assert_eq!(
         (
-            shape(&published),
+            shape(&published, &late),
             storage.calls().len(),
             now().duration_since(started) < Duration::from_millis(200)
         ),

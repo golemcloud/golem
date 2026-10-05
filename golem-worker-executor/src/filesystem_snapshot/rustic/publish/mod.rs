@@ -25,9 +25,9 @@
 //! such a read after the first slot of the save, so a save lands every index file and its snapshot
 //! file before it.
 
-use super::fault::CallFailure;
-use super::files::{CallAgain, SnapshotFiles, call_again};
-use super::runs::{RunEnd, now};
+use super::fault::run_end;
+use super::files::{NotAnswered, SnapshotFiles, Unanswered};
+use super::runs::RunEnd;
 use bytes::Bytes;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -134,128 +134,41 @@ pub(super) enum Published {
         /// How the run of the save ends.
         end: RunEnd,
         failure: anyhow::Error,
-        /// The instant after which a try that ended without an answer has landed or never lands.
-        late: Option<Instant>,
     },
-}
-
-/// The state of a publish between its tries.
-struct Trying {
-    tried: u32,
-    spent: Duration,
-    /// The end of the last try that ended without an answer.
-    lost: Option<Instant>,
 }
 
 /// Writes the staged file only when its path has no blob, which makes the snapshot visible. The
 /// name is the hash of the content, so a blob at the path is this file, and `AlreadyExists` after
 /// a try whose answer was lost counts as written. The publish has the tries of a blob call, each
-/// cut by [`publish_try`] at `bound`, and it checks `cancel` before each try. The wait between two
+/// cut by [`publish_try`] at `bound`, and no try starts once `cancel` fires. The wait between two
 /// tries ends at a cancel of the operation of `files` or a stop of its tries. A try that ended
-/// without an answer is not undone: [`Published::NotWritten`] gives the instant after which it has
-/// landed or never lands.
+/// without an answer is not undone: the late writes of `files` record it.
 pub(super) async fn publish(
     files: &SnapshotFiles,
     staged: &StagedSnapshot,
     bound: Option<Instant>,
     cancel: &CancellationToken,
 ) -> Published {
-    let deadline = files.deadline();
-    let late = |lost: Option<Instant>| lost.map(|ended| ended + deadline);
-    let tries = futures::stream::unfold(
-        Some(Trying {
-            tried: 1,
-            spent: Duration::ZERO,
-            lost: None,
-        }),
-        |state| async move {
-            let trying = state?;
-            if cancel.is_cancelled() {
-                return Some((
-                    Some(Published::NotWritten {
-                        end: RunEnd::Cancelled,
-                        failure: anyhow::anyhow!(
-                            "the save of the filesystem snapshot was cancelled before its publish"
-                        ),
-                        late: late(trying.lost),
-                    }),
-                    None,
-                ));
-            }
-            let started = now();
-            let Some(cut) = publish_try(started, trying.spent, bound, deadline) else {
-                return Some((
-                    Some(Published::NotWritten {
-                        end: RunEnd::BoundPassed,
-                        failure: anyhow::anyhow!(
-                            "the publish of the filesystem snapshot has no time left for a try"
-                        ),
-                        late: late(trying.lost),
-                    }),
-                    None,
-                ));
-            };
-            let written = files
-                .put_if_absent_once_within("publish", &staged.path, &staged.content, cut)
-                .await;
-            let ended = now();
-            let error = match written {
-                Ok(_) => return Some((Some(Published::Written), None)),
-                Err(error) => error,
-            };
-            let failure = super::fault::call_failure(&error);
-            let lost = if failure == CallFailure::Permanent {
-                trying.lost
-            } else {
-                Some(ended)
-            };
-            let spent = trying.spent + ended.saturating_duration_since(started);
-            match call_again(trying.tried, files.tries(), failure, spent, deadline) {
-                CallAgain::After { wait, .. } if files.wait_between_tries(wait).await => Some((
-                    None,
-                    Some(Trying {
-                        tried: trying.tried + 1,
-                        spent,
-                        lost,
-                    }),
-                )),
-                CallAgain::After { .. } => Some((
-                    Some(Published::NotWritten {
-                        end: RunEnd::Cancelled,
-                        failure: error.context(
-                            "the publish of the filesystem snapshot stopped between two tries",
-                        ),
-                        late: late(lost),
-                    }),
-                    None,
-                )),
-                CallAgain::End => Some((
-                    Some(Published::NotWritten {
-                        end: match failure {
-                            CallFailure::Permanent => RunEnd::Permanent,
-                            CallFailure::Cancelled => RunEnd::Cancelled,
-                            CallFailure::LeaseExpired
-                            | CallFailure::TimedOut
-                            | CallFailure::Failed => RunEnd::CallFailed,
-                        },
-                        failure: error,
-                        late: late(lost),
-                    }),
-                    None,
-                )),
-            }
+    match files
+        .put_if_absent_bounded(
+            "publish",
+            &staged.path,
+            &staged.content,
+            |start| publish_try(start.now, start.spent, bound, start.deadline),
+            cancel,
+        )
+        .await
+    {
+        Ok(_) => Published::Written,
+        Err(NotAnswered { error, why }) => Published::NotWritten {
+            end: match why {
+                Unanswered::Failed(failure) => run_end(failure),
+                Unanswered::NoTimeLeft => RunEnd::BoundPassed,
+                Unanswered::Stopped => RunEnd::Cancelled,
+            },
+            failure: error,
         },
-    );
-    futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter_map(
-        tries,
-        |published| async move { published }
-    )))
-    .await
-    .unwrap_or(Published::NotWritten {
-        end: RunEnd::CallFailed,
-        failure: anyhow::anyhow!("the publish of the filesystem snapshot ended without an answer"),
-        late: None,
-    })
+    }
 }
 
 #[cfg(test)]

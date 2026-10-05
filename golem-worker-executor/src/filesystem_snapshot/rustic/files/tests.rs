@@ -16,7 +16,8 @@ use super::super::fault::{CallFailure, LeaseExpired, OperationCancelled};
 use super::super::tests::polled_until;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{
-    CallAgain, IN_CALL_TRIES, IN_CALL_WAITS, LateWrites, Lease, SnapshotFiles, call_again, extended,
+    BeforeTry, CallAgain, IN_CALL_TRIES, IN_CALL_WAITS, LateWrites, Lease, SnapshotFiles,
+    Unanswered, before_try, call_again, extended, lands_by, later,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::BlobStorageNamespace;
@@ -451,10 +452,140 @@ async fn a_write_whose_try_ended_without_an_answer_is_late_also_when_a_later_try
     assert!(written.is_ok(), "{written:?}");
     assert!(read.is_err(), "{read:?}");
     assert_eq!(
-        (
-            late.until(DEADLINE).is_some(),
-            read_only.until(DEADLINE).is_some()
-        ),
+        (late.latest().is_some(), read_only.latest().is_some()),
         (true, false)
+    );
+}
+
+#[test]
+fn a_refusal_before_a_try_comes_in_a_fixed_order_and_only_a_try_has_a_cut() {
+    let cut = Some(Duration::from_secs(1));
+
+    assert_eq!(
+        [
+            before_try(true, true, true, None),
+            before_try(false, true, true, None),
+            before_try(false, false, true, None),
+            before_try(false, false, true, cut),
+            before_try(false, false, false, None),
+            before_try(false, false, false, cut),
+            before_try(true, false, false, cut),
+            before_try(false, true, false, cut),
+        ],
+        [
+            BeforeTry::LeaseOut,
+            BeforeTry::Cancelled,
+            BeforeTry::Stop,
+            BeforeTry::Stop,
+            BeforeTry::NoTimeLeft,
+            BeforeTry::Try(Duration::from_secs(1)),
+            BeforeTry::LeaseOut,
+            BeforeTry::Cancelled,
+        ]
+    );
+}
+
+#[test]
+fn the_latest_late_try_is_kept_and_lands_one_deadline_after_its_end() {
+    let t = Instant::now();
+    let second = Duration::from_secs(1);
+
+    assert_eq!(
+        (
+            later(None, t),
+            later(Some(t + second), t),
+            later(Some(t), t + second),
+            lands_by(None, DEADLINE),
+            lands_by(Some(t), DEADLINE),
+        ),
+        (t, t + second, t + second, None, Some(t + DEADLINE))
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_write_that_the_cancel_refused_before_its_try_records_nothing() {
+    let storage = passing();
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let late = Arc::new(LateWrites::default());
+    let files = files_over(storage.clone(), cancel, TaskTracker::new()).recording(late.clone());
+
+    let written = files.put("test", Path::new("a"), b"a").await;
+
+    assert_eq!(
+        (
+            written.map_err(|error| error.is::<OperationCancelled>()),
+            late.latest(),
+            storage.calls().len()
+        ),
+        (Err(true), None, 0)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_bounded_write_whose_stop_fires_between_its_tries_stops_after_one_try() {
+    // The first try is refused with an answer. The stop fires during the wait before the second
+    // try, so the second try does not start.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Refuse);
+    let files = files_over(
+        storage.clone(),
+        CancellationToken::new(),
+        TaskTracker::new(),
+    )
+    .with_tries(3);
+    let stop = CancellationToken::new();
+    let stopping = {
+        let stop = stop.clone();
+        async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            stop.cancel();
+        }
+    };
+
+    let (written, ()) = tokio::join!(
+        files.put_if_absent_bounded(
+            "test",
+            Path::new("a"),
+            b"a",
+            |start| Some(start.deadline.saturating_sub(start.spent)),
+            &stop,
+        ),
+        stopping
+    );
+
+    assert_eq!(
+        (
+            written.map(|_| ()).map_err(|not_answered| not_answered.why),
+            storage.calls().len()
+        ),
+        (Err(Unanswered::Stopped), 1)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_bounded_write_whose_stop_and_whose_lack_of_time_hold_at_once_stops() {
+    let storage = passing();
+    let files = files_over(
+        storage.clone(),
+        CancellationToken::new(),
+        TaskTracker::new(),
+    );
+    let stop = CancellationToken::new();
+    stop.cancel();
+
+    let written = files
+        .put_if_absent_bounded("test", Path::new("a"), b"a", |_| None, &stop)
+        .await;
+
+    assert_eq!(
+        (
+            written.map(|_| ()).map_err(|not_answered| not_answered.why),
+            storage.calls().len()
+        ),
+        (Err(Unanswered::Stopped), 0)
     );
 }

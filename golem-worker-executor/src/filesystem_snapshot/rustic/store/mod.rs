@@ -31,7 +31,7 @@ use super::fault::{
     is_storage_failure, missing_blob, missing_file_path, restore_error, rustic_storage_end,
     save_fault, storage_end,
 };
-use super::files::{LateWrites, SnapshotFiles};
+use super::files::{LateWrites, SnapshotFiles, lands_by};
 use super::priority::LowPriority;
 use super::prune::{
     Percent, PrunePolicy, belongs_to_ledger, due_prune, read_ledger, record_freed, refresh_period,
@@ -784,17 +784,23 @@ impl RusticSnapshotStore {
             Err(error) => return save_failure(error),
         };
         let bound = self.policy.index_read_bound(t0);
-        match publish(&self.files(work, scope, &self.root), &staged, bound, cancel).await {
+        let publish_late = Arc::new(LateWrites::default());
+        let files = self
+            .files(work, scope, &self.root)
+            .recording(publish_late.clone());
+        match publish(&files, &staged, bound, cancel).await {
             Published::Written => Ran::Answered(Ok(info)),
-            Published::NotWritten { end, failure, late } => Ran::Ended(Ended {
+            Published::NotWritten { end, failure } => Ran::Ended(Ended {
                 end,
                 failure,
-                late: late.map(|until| LateWrite {
-                    until,
-                    own: Some(OwnFile {
-                        path: staged.path.clone(),
-                        info,
-                    }),
+                late: lands_by(publish_late.latest(), self.policy.deadline).map(|until| {
+                    LateWrite {
+                        until,
+                        own: Some(OwnFile {
+                            path: staged.path.clone(),
+                            info,
+                        }),
+                    }
                 }),
             }),
         }
@@ -1051,15 +1057,14 @@ impl RusticSnapshotStore {
         )
         .await;
         match copied {
-            Ok(()) => match late.until(self.policy.deadline) {
+            Ok(()) => match lands_by(late.latest(), self.policy.deadline) {
                 Some(until) => Ran::AnsweredAfter(Ok(()), LateWrite { until, own: None }),
                 None => Ran::Answered(Ok(())),
             },
             Err(error) => Ran::Ended(Ended {
                 end: copy_end(&error),
                 failure: error.into_failure(),
-                late: late
-                    .until(self.policy.deadline)
+                late: lands_by(late.latest(), self.policy.deadline)
                     .map(|until| LateWrite { until, own: None }),
             }),
         }
