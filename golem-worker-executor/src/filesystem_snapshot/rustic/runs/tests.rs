@@ -15,7 +15,7 @@
 use super::super::scope::CopyError;
 use super::{
     Answers, Checked, Ended, Kind, Late, LateWrite, MOST_RACE_RUNS, NextRun, OwnFile, Ran, RunEnd,
-    RunOutcome, RunSeen, Settle, Settled, Shell, copy_end, jitter, next_run, run_delay,
+    RunOutcome, RunSeen, Settle, Settled, Shell, Stand, copy_end, jitter, next_run, run_delay,
 };
 use crate::filesystem_snapshot::{Failed, RunSlots, Slot, SnapshotInfo, Withdrawal};
 use futures::future::BoxFuture;
@@ -45,14 +45,14 @@ fn info() -> SnapshotInfo {
     }
 }
 
-/// What a call of `kind` saw after a run that ended with `end`, with nothing else.
-fn seen(kind: Kind, end: RunEnd, now: Instant) -> RunSeen {
+/// What a call of `kind` saw when it stood at `stand`, with nothing else.
+fn seen(kind: Kind, stand: Stand, now: Instant) -> RunSeen {
     RunSeen {
         kind,
-        failed_runs: u32::from(end == RunEnd::CallFailed),
-        races: u32::from(end == RunEnd::RaceRunAgain),
-        ran: end == RunEnd::CallFailed,
-        end,
+        failed_runs: u32::from(stand == Stand::Ended(RunEnd::CallFailed)),
+        races: u32::from(stand == Stand::Ended(RunEnd::RaceRunAgain)),
+        ran: stand == Stand::Ended(RunEnd::CallFailed),
+        stand,
         late: None,
         withdrawn: None,
         shut_down: false,
@@ -76,72 +76,73 @@ fn each_row_of_next_run_decides_in_its_fixed_order() {
             // 0: an answer with a late write waits for it.
             decide(RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Copy, RunEnd::Answered, now)
+                ..seen(Kind::Copy, Stand::Answered, now)
             }),
             // 1: an answer comes first, also with a late write and a shutdown.
             decide(RunSeen {
                 late: late(until, None),
                 shut_down: true,
-                ..seen(Kind::Save, RunEnd::Answered, now)
+                ..seen(Kind::Save, Stand::Answered, now)
             }),
             // 2: a shutdown does not wait for a write that can still land.
             decide(RunSeen {
                 late: late(until, None),
                 withdrawn: Some(Withdrawal::Deadline),
                 shut_down: true,
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             // 3: a late write of a save is waited for and checked, before a withdrawal and a
             // cancel.
             decide(RunSeen {
                 late: late(until, None),
                 withdrawn: Some(Withdrawal::Stopped),
-                ..seen(Kind::Save, RunEnd::Cancelled, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::Cancelled), now)
             }),
             // 3: a late write of a copy is waited for, before every terminal row.
             decide(RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Copy, RunEnd::Permanent, now)
+                ..seen(Kind::Copy, Stand::Ended(RunEnd::Permanent), now)
             }),
             // 4 to 6: the check decides, before a withdrawal.
             decide(RunSeen {
                 late: late(until, Some(Checked::Found(info()))),
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 late: late(until, Some(Checked::Other)),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 late: late(until, Some(Checked::Unreadable)),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             // 7 to 9: a withdrawal.
             decide(RunSeen {
                 withdrawn: Some(Withdrawal::Stopped),
-                ..seen(Kind::Delete, RunEnd::CallFailed, now)
+                ..seen(Kind::Delete, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Save, RunEnd::NotRun, now)
+                ..seen(Kind::Save, Stand::NotRun, now)
             }),
-            // 10: a cancel.
-            decide(seen(Kind::Save, RunEnd::Cancelled, now)),
+            // 10: a cancel, in a run or at a take or a wait of the shell.
+            decide(seen(Kind::Save, Stand::Ended(RunEnd::Cancelled), now)),
+            decide(seen(Kind::Save, Stand::Cancelled, now)),
             // 11: a failed call runs again after the wait of the retries.
-            decide(seen(Kind::Delete, RunEnd::CallFailed, now)),
+            decide(seen(Kind::Delete, Stand::Ended(RunEnd::CallFailed), now)),
             // 12: other failures.
-            decide(seen(Kind::Save, RunEnd::Permanent, now)),
-            decide(seen(Kind::Save, RunEnd::BoundPassed, now)),
+            decide(seen(Kind::Save, Stand::Ended(RunEnd::Permanent), now)),
+            decide(seen(Kind::Save, Stand::Ended(RunEnd::BoundPassed), now)),
             // 13 and 14: races.
-            decide(seen(Kind::Restore, RunEnd::RaceRunAgain, now)),
+            decide(seen(Kind::Restore, Stand::Ended(RunEnd::RaceRunAgain), now)),
             decide(RunSeen {
                 races: MOST_RACE_RUNS,
-                ..seen(Kind::Restore, RunEnd::RaceRunAgain, now)
+                ..seen(Kind::Restore, Stand::Ended(RunEnd::RaceRunAgain), now)
             }),
         ],
         [
@@ -163,6 +164,7 @@ fn each_row_of_next_run_decides_in_its_fixed_order() {
             NextRun::Answer(RunOutcome::FailedWithLast),
             NextRun::Answer(RunOutcome::Stopped(Withdrawal::Deadline)),
             NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped)),
+            NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped)),
             NextRun::WaitThenRun {
                 until: now + Duration::from_secs(2),
                 after_failure: true
@@ -182,22 +184,22 @@ fn a_granted_slot_starts_its_run_only_before_the_end_of_the_backup_and_after_a_s
 
     assert_eq!(
         [
-            decide(seen(Kind::Save, RunEnd::SlotTaken, now)),
+            decide(seen(Kind::Save, Stand::SlotTaken, now)),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_millis(1)),
-                ..seen(Kind::Save, RunEnd::SlotTaken, now)
+                ..seen(Kind::Save, Stand::SlotTaken, now)
             }),
             decide(RunSeen {
                 backup_end: Some(now),
-                ..seen(Kind::Save, RunEnd::SlotTaken, now)
+                ..seen(Kind::Save, Stand::SlotTaken, now)
             }),
             decide(RunSeen {
                 shut_down: true,
-                ..seen(Kind::Save, RunEnd::SlotTaken, now)
+                ..seen(Kind::Save, Stand::SlotTaken, now)
             }),
             decide(RunSeen {
                 late: late(now + Duration::from_secs(60), None),
-                ..seen(Kind::Delete, RunEnd::SlotTaken, now)
+                ..seen(Kind::Delete, Stand::SlotTaken, now)
             }),
         ],
         [
@@ -220,27 +222,27 @@ fn a_failed_call_runs_again_only_within_the_retries_and_when_its_wait_ends_befor
         [
             decide(RunSeen {
                 failed_runs: 4,
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 failed_runs: 5,
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_millis(2001)),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_secs(2)),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now + Duration::from_millis(1)),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
             decide(RunSeen {
                 backup_end: Some(now),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             }),
         ],
         [
@@ -271,16 +273,16 @@ fn only_the_wait_after_a_failed_run_tells_the_limiter() {
 
     assert_eq!(
         [
-            seen(Kind::Save, RunEnd::CallFailed, now),
+            seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now),
             RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Save, RunEnd::CallFailed, now)
+                ..seen(Kind::Save, Stand::Ended(RunEnd::CallFailed), now)
             },
             RunSeen {
                 late: late(until, None),
-                ..seen(Kind::Copy, RunEnd::CallFailed, now)
+                ..seen(Kind::Copy, Stand::Ended(RunEnd::CallFailed), now)
             },
-            seen(Kind::Restore, RunEnd::RaceRunAgain, now),
+            seen(Kind::Restore, Stand::Ended(RunEnd::RaceRunAgain), now),
         ]
         .map(|seen| after_failure(next_run(&seen, &retry(), 0.0))),
         [Some(true), None, Some(false), None]
@@ -298,18 +300,18 @@ fn a_deadline_after_a_race_run_and_no_failed_run_gives_no_slot_and_after_races_t
             decide(RunSeen {
                 races: 2,
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Restore, RunEnd::NotRun, now)
+                ..seen(Kind::Restore, Stand::NotRun, now)
             }),
             decide(RunSeen {
                 races: 2,
                 failed_runs: 1,
                 ran: true,
                 withdrawn: Some(Withdrawal::Deadline),
-                ..seen(Kind::Restore, RunEnd::NotRun, now)
+                ..seen(Kind::Restore, Stand::NotRun, now)
             }),
             decide(RunSeen {
                 races: 3,
-                ..seen(Kind::Restore, RunEnd::CallFailed, now)
+                ..seen(Kind::Restore, Stand::Ended(RunEnd::CallFailed), now)
             }),
         ],
         [

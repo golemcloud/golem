@@ -51,11 +51,9 @@ pub(super) enum Kind {
     Stat,
 }
 
-/// How a run ended.
+/// How a run ended without an answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RunEnd {
-    /// The run gives the answer of the call.
-    Answered,
     /// A storage call of the run failed after its tries.
     CallFailed,
     /// A storage call gave a failure that no try can fix, or the work gave an error that no new
@@ -67,8 +65,20 @@ pub(super) enum RunEnd {
     BoundPassed,
     /// The cancel of the save fired, or the store shut down.
     Cancelled,
-    /// No run started: the limiter withdrew the call at the take.
+}
+
+/// Where a call stands after its last step: how its last run ended, or what its last take or wait
+/// gave. Only the shell makes the states that are not the end of a run, so a run cannot give one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Stand {
+    /// A run gave the answer of the call.
+    Answered,
+    /// A run ended without an answer.
+    Ended(RunEnd),
+    /// No run started: the limiter withdrew the call at the take, or the store shut down.
     NotRun,
+    /// The cancel of the save fired at a take or during a wait.
+    Cancelled,
     /// The slot of a new run was granted, and the run has not started.
     SlotTaken,
 }
@@ -105,8 +115,8 @@ pub(super) struct RunSeen {
     pub(super) races: u32,
     /// Whether a run of the call ended with a storage failure.
     pub(super) ran: bool,
-    /// How the last run ended.
-    pub(super) end: RunEnd,
+    /// Where the call stands after its last step.
+    pub(super) stand: Stand,
     pub(super) late: Option<Late>,
     /// A withdrawal that came at a take or during a wait.
     pub(super) withdrawn: Option<Withdrawal>,
@@ -176,17 +186,17 @@ pub(super) enum RunOutcome {
 /// 13. and 14. A race runs again at once, at most [`MOST_RACE_RUNS`] times.
 pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> NextRun {
     let late = seen.late.map(|late| (late.until, late.checked));
-    match (seen.end, late, seen.withdrawn) {
-        (RunEnd::Answered, Some((until, None)), _) if !seen.shut_down => NextRun::WaitThenRun {
+    match (seen.stand, late, seen.withdrawn) {
+        (Stand::Answered, Some((until, None)), _) if !seen.shut_down => NextRun::WaitThenRun {
             until,
             after_failure: false,
         },
-        (RunEnd::Answered, _, _) => NextRun::Answer(RunOutcome::AsTheRunSaid),
+        (Stand::Answered, _, _) => NextRun::Answer(RunOutcome::AsTheRunSaid),
         _ if seen.shut_down => NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped)),
-        (RunEnd::SlotTaken, _, _) if seen.backup_end.is_some_and(|end| seen.now >= end) => {
+        (Stand::SlotTaken, _, _) if seen.backup_end.is_some_and(|end| seen.now >= end) => {
             NextRun::Answer(RunOutcome::TooLate)
         }
-        (RunEnd::SlotTaken, _, _) => NextRun::Start,
+        (Stand::SlotTaken, _, _) => NextRun::Start,
         (_, Some((until, None)), _) => match seen.kind {
             Kind::Save => NextRun::WaitThenCheck(until),
             Kind::Restore
@@ -208,8 +218,10 @@ pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> Next
                 WithdrawnCall::Stopped(cause) => RunOutcome::Stopped(cause),
             })
         }
-        (RunEnd::Cancelled, _, None) => NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped)),
-        (RunEnd::CallFailed, _, None) => {
+        (Stand::Cancelled | Stand::Ended(RunEnd::Cancelled), _, None) => {
+            NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped))
+        }
+        (Stand::Ended(RunEnd::CallFailed), _, None) => {
             match run_delay(retry, seen.failed_runs, jitter)
                 .filter(|delay| seen.backup_end.is_none_or(|end| seen.now + *delay < end))
             {
@@ -220,9 +232,12 @@ pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> Next
                 None => NextRun::Answer(RunOutcome::FailedWithLast),
             }
         }
-        (RunEnd::RaceRunAgain, _, None) if seen.races < MOST_RACE_RUNS => NextRun::RunNow,
+        (Stand::Ended(RunEnd::RaceRunAgain), _, None) if seen.races < MOST_RACE_RUNS => {
+            NextRun::RunNow
+        }
         (
-            RunEnd::RaceRunAgain | RunEnd::Permanent | RunEnd::BoundPassed | RunEnd::NotRun,
+            Stand::Ended(RunEnd::RaceRunAgain | RunEnd::Permanent | RunEnd::BoundPassed)
+            | Stand::NotRun,
             _,
             None,
         ) => NextRun::Answer(RunOutcome::FailedWithLast),
@@ -302,7 +317,7 @@ pub(super) fn answered_after<T>(answer: T, until: Option<Instant>) -> Ran<T> {
 /// A run that ended without an answer.
 #[derive(Debug)]
 pub(super) struct Ended {
-    /// How the run ended. It is never `Answered`.
+    /// How the run ended.
     pub(super) end: RunEnd,
     /// The failure of the run.
     pub(super) failure: anyhow::Error,
@@ -373,7 +388,7 @@ struct Calling<T> {
     failed_runs: u32,
     races: u32,
     ran: bool,
-    end: RunEnd,
+    stand: Stand,
     late: Option<Late>,
     /// The file that the own-name check of the late write looks for.
     own: Option<OwnFile>,
@@ -418,7 +433,7 @@ impl Shell<'_> {
             failed_runs: 0,
             races: 0,
             ran: false,
-            end: RunEnd::NotRun,
+            stand: Stand::NotRun,
             late: None,
             own: None,
             last_failure: None,
@@ -478,17 +493,17 @@ impl Shell<'_> {
         match taken {
             Taken::ShutDown => {
                 calling.shut_down = true;
-                calling.end = RunEnd::NotRun;
+                calling.stand = Stand::NotRun;
             }
-            Taken::Cancelled => calling.end = RunEnd::Cancelled,
+            Taken::Cancelled => calling.stand = Stand::Cancelled,
             Taken::Withdrawn(cause) => {
                 calling.withdrawn = Some(cause);
-                calling.end = RunEnd::NotRun;
+                calling.stand = Stand::NotRun;
             }
             Taken::Slot(slot) => {
                 calling.t0.get_or_insert_with(now);
                 calling.slot = Some(slot);
-                calling.end = RunEnd::SlotTaken;
+                calling.stand = Stand::SlotTaken;
             }
         }
         calling
@@ -528,11 +543,11 @@ impl Shell<'_> {
         };
         match ran {
             Ran::Answered(answer) => {
-                calling.end = RunEnd::Answered;
+                calling.stand = Stand::Answered;
                 calling.answer = Some(answer);
             }
             Ran::AnsweredAfter(answer, late) => {
-                calling.end = RunEnd::Answered;
+                calling.stand = Stand::Answered;
                 calling.answer = Some(answer);
                 calling.late = Some(Late {
                     until: late.until,
@@ -540,7 +555,7 @@ impl Shell<'_> {
                 });
             }
             Ran::Ended(ended) => {
-                calling.end = ended.end;
+                calling.stand = Stand::Ended(ended.end);
                 calling.failed_runs += u32::from(ended.end == RunEnd::CallFailed);
                 calling.races += u32::from(ended.end == RunEnd::RaceRunAgain);
                 calling.ran |= matches!(ended.end, RunEnd::CallFailed | RunEnd::Permanent);
@@ -553,7 +568,7 @@ impl Shell<'_> {
             }
             // A settle gives what the run gave, never a second settle.
             Ran::Settling(_) => {
-                calling.end = RunEnd::Permanent;
+                calling.stand = Stand::Ended(RunEnd::Permanent);
                 calling.last_failure = Some(anyhow::anyhow!(
                     "the settle of a filesystem snapshot run gave another settle"
                 ));
@@ -578,7 +593,7 @@ impl Shell<'_> {
             failed_runs: calling.failed_runs,
             races: calling.races,
             ran: calling.ran,
-            end: calling.end,
+            stand: calling.stand,
             late: calling.late,
             withdrawn: calling.withdrawn,
             shut_down: calling.shut_down || self.root.is_cancelled(),
@@ -602,7 +617,7 @@ impl Shell<'_> {
                         Ok((calling, Step::Decide))
                     }
                     () = cancelled(self.cancel) => {
-                        calling.end = RunEnd::Cancelled;
+                        calling.stand = Stand::Cancelled;
                         Ok((calling, Step::Decide))
                     }
                     cause = self.slots.withdrawn() => {
