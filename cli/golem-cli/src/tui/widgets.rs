@@ -85,6 +85,33 @@ pub(super) struct FieldRow<'a> {
     pub label_width: usize,
 }
 
+pub(super) struct ActionButton<'a> {
+    pub label: &'a str,
+    pub selected: bool,
+}
+
+impl ActionButton<'_> {
+    pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
+        let style = if self.selected {
+            Style::default()
+                .fg(visual.selection_text)
+                .bg(visual.selection_background)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(visual.accent_hover)
+                .bg(visual.overlay_background)
+                .add_modifier(Modifier::BOLD)
+        };
+        Line::from(vec![
+            Span::styled("[ ", style),
+            Span::styled(self.label.to_string(), style),
+            Span::styled(" ]", style),
+        ])
+        .alignment(Alignment::Center)
+    }
+}
+
 impl FieldRow<'_> {
     pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
         Line::from(vec![
@@ -2141,6 +2168,17 @@ impl OverlayFrame<'_> {
         lines: Vec<Line<'static>>,
         visual: &TuiVisualStyle,
     ) {
+        self.render_aligned(frame, area, lines, Alignment::Center, visual);
+    }
+
+    pub fn render_aligned(
+        self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        lines: Vec<Line<'static>>,
+        alignment: Alignment,
+        visual: &TuiVisualStyle,
+    ) {
         let surface = Style::default()
             .fg(visual.text)
             .bg(visual.overlay_background);
@@ -2148,7 +2186,7 @@ impl OverlayFrame<'_> {
         frame.render_widget(
             Paragraph::new(lines)
                 .style(surface)
-                .alignment(Alignment::Center)
+                .alignment(alignment)
                 .wrap(Wrap { trim: false }),
             content_area,
         );

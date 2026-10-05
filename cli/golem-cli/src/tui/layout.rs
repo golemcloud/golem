@@ -118,6 +118,10 @@ pub(super) enum RegionKind {
     ContextPickerRow(usize),
     ContextConfirm,
     ContextCancel,
+    PaletteAll,
+    PaletteContext,
+    QuitReturn,
+    QuitForce,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -634,6 +638,46 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 ),
             });
         }
+        InteractionMode::Palette => {
+            let area = adaptive_data_popup_rect(input.area, 36, 10);
+            let content = Rect {
+                x: area.x.saturating_add(2),
+                y: area.y.saturating_add(2),
+                width: area.width.saturating_sub(4),
+                height: area.height.saturating_sub(4),
+            };
+            let half = content.width / 2;
+            regions.push(Region {
+                kind: RegionKind::PaletteAll,
+                area: Rect::new(content.x, content.y, half, content.height.min(1)),
+            });
+            regions.push(Region {
+                kind: RegionKind::PaletteContext,
+                area: Rect::new(
+                    content.x.saturating_add(half),
+                    content.y,
+                    content.width.saturating_sub(half),
+                    content.height.min(1),
+                ),
+            });
+        }
+        InteractionMode::QuitBlocked => {
+            let area = content_popup_rect(input.area, 58, 12);
+            let content = Rect {
+                x: area.x.saturating_add(2),
+                y: area.y.saturating_add(2),
+                width: area.width.saturating_sub(4),
+                height: area.height.saturating_sub(4),
+            };
+            regions.push(Region {
+                kind: RegionKind::QuitReturn,
+                area: Rect::new(content.x, content.y.saturating_add(4), content.width, 1),
+            });
+            regions.push(Region {
+                kind: RegionKind::QuitForce,
+                area: Rect::new(content.x, content.y.saturating_add(5), content.width, 1),
+            });
+        }
         _ => {}
     }
 }
@@ -657,6 +701,15 @@ pub(super) fn adaptive_data_popup_rect(
         dimension(area.width, minimum_width),
         dimension(area.height, minimum_height),
     )
+}
+
+pub(super) fn content_popup_rect(area: Rect, width: u16, height: u16) -> Rect {
+    if area.width <= 2 || area.height <= 2 {
+        return area;
+    }
+    let maximum_width = area.width.saturating_sub(2);
+    let maximum_height = area.height.saturating_sub(2);
+    centered(area, width.min(maximum_width), height.min(maximum_height))
 }
 
 pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -866,5 +919,32 @@ mod tests {
         input.context_picker_selected = 2;
         let snapshot = compute(input);
         assert!(snapshot.region(RegionKind::ContextPickerRow(2)).is_some());
+    }
+
+    #[test]
+    fn content_popup_uses_requested_size_until_the_terminal_clamps_it() {
+        assert_eq!(
+            content_popup_rect(Rect::new(0, 0, 120, 40), 58, 12),
+            Rect::new(31, 14, 58, 12)
+        );
+        assert_eq!(
+            content_popup_rect(Rect::new(0, 0, 40, 8), 58, 12),
+            Rect::new(1, 1, 38, 6)
+        );
+    }
+
+    #[test]
+    fn palette_and_quit_actions_have_modal_hit_regions() {
+        let mut palette = input();
+        palette.mode = InteractionMode::Palette;
+        let palette = compute(palette);
+        assert!(palette.region(RegionKind::PaletteAll).is_some());
+        assert!(palette.region(RegionKind::PaletteContext).is_some());
+
+        let mut quit = input();
+        quit.mode = InteractionMode::QuitBlocked;
+        let quit = compute(quit);
+        assert!(quit.region(RegionKind::QuitReturn).is_some());
+        assert!(quit.region(RegionKind::QuitForce).is_some());
     }
 }

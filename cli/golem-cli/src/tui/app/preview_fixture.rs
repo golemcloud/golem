@@ -64,6 +64,7 @@ fn preview_app() -> TuiApp {
         dev_focus: DevView::Repl,
         mode: ModeStack::default(),
         leader: LeaderState::default(),
+        quit_choice: QuitChoice::default(),
         help_scroll: 0,
         help_content_height: Cell::new(0),
         help_viewport_height: Cell::new(0),

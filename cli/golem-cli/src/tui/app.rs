@@ -43,7 +43,8 @@ use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextT
 use crate::tui::input::encode_key_for_pty;
 use crate::tui::interaction::{InteractionMode, ModeStack};
 use crate::tui::layout::{
-    self, DragTarget, LayoutInput, RegionKind, TuiLayoutState, UiGeometry, adaptive_data_popup_rect,
+    self, DragTarget, LayoutInput, RegionKind, TuiLayoutState, UiGeometry,
+    adaptive_data_popup_rect, content_popup_rect,
 };
 use crate::tui::navigation::{DevView, Workspace};
 use crate::tui::nested_cli::{
@@ -54,14 +55,14 @@ use crate::tui::terminal_screen::TerminalScreen;
 use crate::tui::visual::active_style;
 use crate::tui::visual::{TuiVisualStyle, with_style};
 use crate::tui::widgets::{
-    CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandRow, ContextHeader,
-    ContextPair, CursorCollectionState, DecisionTableRow, FieldRow, HelpRow, JsonDocument, KeyHint,
-    Notice, NoticeKind, OverlayFrame, PaneChrome, PaneEnding, PaneFocus, PaneHeader,
-    PaneHeaderStatus, PaneLayout, PaneScrollbarSlot, PaneStatusTone, PaneTable, PaneTableCell,
-    PaneTableCellSpan, PaneTableColumn, PaneTableState, ScrollableDocument, SearchInput,
-    SectionHeading, SelectableRow, ShortcutRow, StatusKind, StatusMarker, WorkspaceItem,
-    WorkspaceSelector, fit, pane_table_virtual_width, render_scrollbar, responsive_table_columns,
-    shortcut_line,
+    ActionButton, CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandRow,
+    ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow, HelpRow,
+    JsonDocument, KeyHint, Notice, NoticeKind, OverlayFrame, PaneChrome, PaneEnding, PaneFocus,
+    PaneHeader, PaneHeaderStatus, PaneLayout, PaneScrollbarSlot, PaneStatusTone, PaneTable,
+    PaneTableCell, PaneTableCellSpan, PaneTableColumn, PaneTableState, ScrollableDocument,
+    SearchInput, SectionHeading, SelectableRow, ShortcutRow, StatusKind, StatusMarker,
+    WorkspaceItem, WorkspaceSelector, fit, pane_table_virtual_width, render_scrollbar,
+    responsive_table_columns, shortcut_line,
 };
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -113,6 +114,7 @@ pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow
     app.refresh_agents(Some(&event_tx));
 
     terminal.draw(|frame| render(frame, &app))?;
+    app.sync_nested_session_sizes();
 
     while !app.should_quit {
         let Some(event) = event_rx.recv().await else {
@@ -133,13 +135,14 @@ pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow
             }
             TuiEvent::AuthPromptFinished => {
                 app.handle_event(TuiEvent::AuthPromptFinished, &event_tx);
-                if let Err(error) = terminal
+                let redraw = terminal
                     .resume()
-                    .and_then(|_| terminal.draw(|frame| render(frame, &app)))
-                {
+                    .and_then(|_| terminal.draw(|frame| render(frame, &app)));
+                if let Err(error) = redraw {
                     terminal.restore_for_exit();
                     return Err(error);
                 }
+                app.sync_nested_session_sizes();
             }
             TuiEvent::Terminal(_)
                 if app
@@ -150,6 +153,7 @@ pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow
                 app.handle_event(event, &event_tx);
                 if app.auth_prompt.is_none() {
                     terminal.draw(|frame| render(frame, &app))?;
+                    app.sync_nested_session_sizes();
                 }
             }
         }
@@ -332,6 +336,7 @@ struct TuiApp {
     dev_focus: DevView,
     mode: ModeStack,
     leader: LeaderState,
+    quit_choice: QuitChoice,
     help_scroll: usize,
     help_content_height: Cell<usize>,
     help_viewport_height: Cell<usize>,
@@ -394,6 +399,7 @@ impl TuiApp {
             dev_focus: DevView::BuildDeploy,
             mode: ModeStack::default(),
             leader: LeaderState::default(),
+            quit_choice: QuitChoice::default(),
             help_scroll: 0,
             help_content_height: Cell::new(0),
             help_viewport_height: Cell::new(0),
@@ -542,8 +548,7 @@ impl TuiApp {
                 self.handle_agent_dataset_filter_key(key, event_tx)
             }
             InteractionMode::AgentColumns => self.handle_agent_columns_key(key),
-            InteractionMode::CommandInteraction => self.handle_command_interaction_key(key),
-            InteractionMode::Repl => self.handle_repl_key(key),
+            InteractionMode::TerminalInput => self.handle_terminal_input_key(key),
             InteractionMode::TerminalScrollback => self.handle_terminal_scrollback_key(key),
         }
     }
@@ -558,6 +563,23 @@ impl TuiApp {
             }
             KeyCode::Esc if matches!(self.ops_subject, OpsSubject::Agent(_)) => {
                 self.ops_subject = OpsSubject::Root(OpsRootSubject::Agents)
+            }
+            KeyCode::Enter if self.focused_terminal_is_running() => self.enter_terminal_input(),
+            KeyCode::PageUp if self.active_workspace == Workspace::Dev => {
+                self.scroll_terminal_up(10);
+                self.mode.push(InteractionMode::TerminalScrollback);
+            }
+            KeyCode::PageDown if self.active_workspace == Workspace::Dev => {
+                self.scroll_terminal_down(10);
+                self.mode.push(InteractionMode::TerminalScrollback);
+            }
+            KeyCode::Home if self.active_workspace == Workspace::Dev => {
+                self.scroll_terminal_top();
+                self.mode.push(InteractionMode::TerminalScrollback);
+            }
+            KeyCode::End if self.active_workspace == Workspace::Dev => {
+                self.scroll_terminal_bottom();
+                self.mode.push(InteractionMode::TerminalScrollback);
             }
             KeyCode::Enter if self.agent_list_focused() => self.open_selected_agent(),
             KeyCode::Up if self.ops_document_focused() => self.scroll_agent_details_up(1),
@@ -687,6 +709,8 @@ impl TuiApp {
                 self.close_palette();
             }
             KeyCode::Backspace => self.palette.backspace(),
+            KeyCode::Left => self.set_palette_scope(self.palette.scope.previous()),
+            KeyCode::Right => self.set_palette_scope(self.palette.scope.next()),
             KeyCode::Down | KeyCode::Tab => {
                 let action_count = self.filtered_actions().len();
                 self.palette.next(action_count);
@@ -880,11 +904,6 @@ impl TuiApp {
             return;
         }
         if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if self.mode.previous() == Some(InteractionMode::Repl) {
-                if let Some(runtime) = self.repl.run.runtime.as_mut() {
-                    let _ = runtime.write_all(&[24]);
-                }
-            }
             self.close_leader();
             return;
         }
@@ -986,6 +1005,30 @@ impl TuiApp {
             }
             return;
         }
+        if self.mode == InteractionMode::Palette {
+            let action_count = self.filtered_actions().len();
+            match mouse.kind {
+                MouseEventKind::ScrollUp => self.palette.previous(action_count),
+                MouseEventKind::ScrollDown => self.palette.next(action_count),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.click_region(mouse.column, mouse.row, event_tx)
+                }
+                _ => {}
+            }
+            return;
+        }
+        if self.mode == InteractionMode::QuitBlocked {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                self.click_region(mouse.column, mouse.row, event_tx);
+            }
+            return;
+        }
+        if matches!(
+            self.mode.current(),
+            InteractionMode::CommandForm | InteractionMode::SessionForm
+        ) {
+            return;
+        }
         match mouse.kind {
             MouseEventKind::ScrollUp => {
                 self.scroll_region_under_pointer(mouse.column, mouse.row, 3, true)
@@ -1019,7 +1062,7 @@ impl TuiApp {
             Some(RegionKind::DevViewBody(DevView::BuildDeploy)) => {
                 if up {
                     self.scroll_output_up_by(amount);
-                    self.mode.replace(InteractionMode::TerminalScrollback);
+                    self.mode.push(InteractionMode::TerminalScrollback);
                 } else {
                     self.scroll_output_down_by(amount);
                 }
@@ -1027,7 +1070,7 @@ impl TuiApp {
             Some(RegionKind::DevViewBody(DevView::Server)) => {
                 if up {
                     self.scroll_server_up_by(amount);
-                    self.mode.replace(InteractionMode::TerminalScrollback);
+                    self.mode.push(InteractionMode::TerminalScrollback);
                 } else {
                     self.scroll_server_down_by(amount);
                 }
@@ -1035,7 +1078,7 @@ impl TuiApp {
             Some(RegionKind::DevViewBody(DevView::Repl)) => {
                 if up {
                     self.repl.run.screen.scroll_up(amount);
-                    self.mode.replace(InteractionMode::TerminalScrollback);
+                    self.mode.push(InteractionMode::TerminalScrollback);
                 } else {
                     self.repl.run.screen.scroll_down(amount);
                 }
@@ -1099,12 +1142,44 @@ impl TuiApp {
 
     fn click_region(&mut self, x: u16, y: u16, event_tx: Option<&TuiEventSender>) {
         let hit = self.geometry.hit_test(x, y);
+        if self.mode == InteractionMode::Palette {
+            match hit {
+                Some(RegionKind::PaletteAll) => self.set_palette_scope(PaletteScope::All),
+                Some(RegionKind::PaletteContext) => self.set_palette_scope(PaletteScope::Context),
+                _ => {}
+            }
+            return;
+        }
+        if self.mode == InteractionMode::QuitBlocked {
+            match hit {
+                Some(RegionKind::QuitReturn) => {
+                    self.quit_choice = QuitChoice::Return;
+                    self.close_transient_mode();
+                }
+                Some(RegionKind::QuitForce) => {
+                    self.quit_choice = QuitChoice::ForceQuit;
+                    self.should_quit = true;
+                }
+                _ => {}
+            }
+            return;
+        }
         match hit {
             Some(RegionKind::Workspace(Workspace::Ops)) => self.open_ops_workspace(event_tx),
             Some(RegionKind::Workspace(workspace)) => self.active_workspace = workspace,
-            Some(RegionKind::DevViewTitle(view)) | Some(RegionKind::DevViewBody(view)) => {
+            Some(RegionKind::DevViewTitle(view)) => {
                 self.active_workspace = Workspace::Dev;
                 self.dev_focus = view;
+                self.mode.replace(InteractionMode::Normal);
+            }
+            Some(RegionKind::DevViewBody(view)) => {
+                self.active_workspace = Workspace::Dev;
+                self.dev_focus = view;
+                if self.focused_terminal_is_running() {
+                    self.enter_terminal_input();
+                } else {
+                    self.mode.replace(InteractionMode::Normal);
+                }
             }
             Some(RegionKind::OpsList) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::List;
@@ -1365,10 +1440,6 @@ impl TuiApp {
                 self.close_palette();
                 self.focus_repl();
             }
-            ActionId::LeaveRepl => {
-                self.palette.reset();
-                self.mode.replace(InteractionMode::Normal);
-            }
             ActionId::StopRepl => {
                 self.close_palette();
                 self.stop_repl();
@@ -1482,7 +1553,12 @@ impl TuiApp {
                 self.mode.push(InteractionMode::Palette);
             }
         }
+        self.set_palette_scope(scope);
+    }
+
+    fn set_palette_scope(&mut self, scope: PaletteScope) {
         self.palette.scope = scope;
+        self.palette.selected = 0;
     }
 
     fn open_jobs_palette(&mut self) {
@@ -1520,12 +1596,34 @@ impl TuiApp {
     }
 
     fn default_mode(&self) -> InteractionMode {
-        if self.dev_panel_focused(DevView::BuildDeploy) && self.command_is_running() {
-            InteractionMode::CommandInteraction
-        } else if self.dev_panel_focused(DevView::Repl) && self.repl.is_running() {
-            InteractionMode::Repl
-        } else {
-            InteractionMode::Normal
+        InteractionMode::Normal
+    }
+
+    fn focused_nested_cli_target(&self) -> Option<NestedCliTarget> {
+        if self.active_workspace != Workspace::Dev {
+            return None;
+        }
+        match self.dev_focus {
+            DevView::BuildDeploy if self.command_is_running() => Some(NestedCliTarget::Command),
+            DevView::Server if self.server.run.is_running() => Some(NestedCliTarget::Server),
+            DevView::Repl if self.repl.is_running() => Some(NestedCliTarget::Repl),
+            _ => None,
+        }
+    }
+
+    fn focused_terminal_is_running(&self) -> bool {
+        self.focused_nested_cli_target().is_some()
+    }
+
+    fn terminal_input_owns(&self, target: NestedCliTarget) -> bool {
+        self.mode == InteractionMode::TerminalInput
+            && self.focused_nested_cli_target() == Some(target)
+    }
+
+    fn enter_terminal_input(&mut self) {
+        if self.focused_terminal_is_running() {
+            self.scroll_terminal_bottom();
+            self.mode.replace(InteractionMode::TerminalInput);
         }
     }
 
@@ -1685,13 +1783,21 @@ impl TuiApp {
     }
 
     fn handle_quit_blocked_key(&mut self, key: KeyEvent) {
-        if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-            self.close_transient_mode();
+        match key.code {
+            KeyCode::Esc => self.close_transient_mode(),
+            KeyCode::Left | KeyCode::BackTab => self.quit_choice = self.quit_choice.previous(),
+            KeyCode::Right | KeyCode::Tab => self.quit_choice = self.quit_choice.next(),
+            KeyCode::Enter => match self.quit_choice {
+                QuitChoice::Return => self.close_transient_mode(),
+                QuitChoice::ForceQuit => self.should_quit = true,
+            },
+            _ => {}
         }
     }
 
     fn request_quit(&mut self) {
         if self.has_active_work() {
+            self.quit_choice = QuitChoice::Return;
             self.mode.push(InteractionMode::QuitBlocked);
         } else {
             self.should_quit = true;
@@ -2734,33 +2840,49 @@ impl TuiApp {
         self.refresh_agents(event_tx);
     }
 
-    fn handle_command_interaction_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => self.cancel_or_force_kill_command(),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cancel_or_force_kill_command();
-            }
-            KeyCode::PageUp => {
-                self.scroll_output_up();
-                self.mode.replace(InteractionMode::TerminalScrollback);
-            }
-            KeyCode::PageDown => self.scroll_output_down(),
-            KeyCode::Home => self.scroll_output_top(),
-            KeyCode::End => self.scroll_output_bottom(),
-            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_palette(PaletteScope::All);
-            }
-            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => self.open_help(),
-            _ => {
-                if let Some(bytes) = encode_key_for_pty(key)
-                    && let Some(run) = self.command_run.as_mut()
-                    && let Some(runtime) = run.runtime.as_mut()
-                    && let Err(error) = runtime.write_all(&bytes)
-                {
-                    run.terminal
-                        .feed_local_line(format!("failed to send input: {error:#}"));
-                }
-            }
+    fn handle_terminal_input_key(&mut self, key: KeyEvent) {
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.mode.replace(InteractionMode::Normal);
+            return;
+        }
+
+        let Some(target) = self.focused_nested_cli_target() else {
+            self.mode.replace(InteractionMode::Normal);
+            return;
+        };
+        if let Some(bytes) = encode_key_for_pty(key) {
+            self.write_terminal_input(target, &bytes);
+        }
+    }
+
+    fn write_terminal_input(&mut self, target: NestedCliTarget, bytes: &[u8]) {
+        let result = match target {
+            NestedCliTarget::Command => self
+                .command_run
+                .as_mut()
+                .and_then(|run| run.runtime.as_mut())
+                .map(|runtime| runtime.write_all(bytes)),
+            NestedCliTarget::Server => self
+                .server
+                .run
+                .runtime
+                .as_mut()
+                .map(|runtime| runtime.write_all(bytes)),
+            NestedCliTarget::Repl => self
+                .repl
+                .run
+                .runtime
+                .as_mut()
+                .map(|runtime| runtime.write_all(bytes)),
+        };
+        let Some(Err(error)) = result else {
+            return;
+        };
+        let message = format!("failed to send input: {error:#}");
+        match target {
+            NestedCliTarget::Command => self.append_local_command_line(message),
+            NestedCliTarget::Server => self.server.run.terminal.feed_local_line(message),
+            NestedCliTarget::Repl => self.repl.run.last_error = Some(message),
         }
     }
 
@@ -2894,7 +3016,7 @@ impl TuiApp {
         let command_id = self.next_command_id;
         self.next_command_id += 1;
         self.open_dev_workspace(DevView::BuildDeploy);
-        self.mode.replace(InteractionMode::CommandInteraction);
+        self.mode.replace(InteractionMode::TerminalInput);
         self.command_run = Some(CommandRun::new(
             command_id,
             kind,
@@ -2963,13 +3085,7 @@ impl TuiApp {
             CommandKind::Clean => vec!["clean".to_string()],
         };
         if kind == CommandKind::Build {
-            const STEPS: [&str; 4] = ["check", "build", "add-metadata", "gen-bridge"];
-            for (enabled, step) in values.build_steps.into_iter().zip(STEPS) {
-                if enabled {
-                    args.extend(["--step".to_string(), step.to_string()]);
-                }
-            }
-            if values.skip_check && !values.build_steps.into_iter().any(|enabled| enabled) {
+            if values.skip_check {
                 args.push("--skip-check".to_string());
             }
         }
@@ -3052,11 +3168,12 @@ impl TuiApp {
             });
         }
         self.trim_completed_job_capacity();
-        if self.mode == InteractionMode::CommandInteraction
+        if (self.mode == InteractionMode::TerminalInput
+            && self.dev_panel_focused(DevView::BuildDeploy))
             || (self.mode == InteractionMode::TerminalScrollback
                 && self.dev_focus == DevView::BuildDeploy)
         {
-            self.mode.replace(InteractionMode::Normal);
+            self.mode.reset(InteractionMode::Normal);
         }
         self.resume_pending_context_switch_if_ready(Some(event_tx));
     }
@@ -3185,44 +3302,51 @@ impl TuiApp {
             agent_details_visible: self.ops_agents_focused() && self.agents.detail_visible,
             layout: self.layout.clone(),
         });
-        self.geometry.update(snapshot.clone());
-        if let Some(run) = self.command_run.as_mut()
-            && let Some(area) = snapshot.region(RegionKind::DevViewBody(DevView::BuildDeploy))
-        {
-            let (pty_cols, pty_rows) = pty_size_for_region(area);
-            run.terminal.resize(pty_rows, pty_cols);
-            if let Some(runtime) = run.runtime.as_mut() {
-                let _ = runtime.resize(pty_cols, pty_rows);
-            }
-        }
-        if let Some(area) = snapshot.region(RegionKind::DevViewBody(DevView::Server)) {
-            let (pty_cols, pty_rows) = pty_size_for_region(area);
-            self.server.run.terminal.resize(pty_rows, pty_cols);
-            if let Some(runtime) = self.server.run.runtime.as_mut() {
-                let _ = runtime.resize(pty_cols, pty_rows);
-            }
-        }
-        if let Some(area) = snapshot.region(RegionKind::DevViewBody(DevView::Repl)) {
-            let (pty_cols, pty_rows) = pty_size_for_region(area);
-            self.repl.run.screen.resize(pty_rows, pty_cols);
-            if let Some(runtime) = self.repl.run.runtime.as_mut() {
-                let _ = runtime.resize(pty_cols, pty_rows);
-            }
-        }
+        self.geometry.update(snapshot);
+        self.sync_nested_session_sizes();
     }
 
-    fn scroll_output_up(&mut self) {
-        self.scroll_output_up_by(10);
+    fn sync_nested_session_sizes(&mut self) {
+        if let Some(area) = self
+            .geometry
+            .region(RegionKind::DevViewBody(DevView::BuildDeploy))
+            && let Some(run) = self.command_run.as_mut()
+        {
+            let (cols, rows) = pty_size_for_region(area);
+            if run.terminal.size() != (rows, cols) {
+                run.terminal.resize(rows, cols);
+                if let Some(runtime) = run.runtime.as_mut() {
+                    let _ = runtime.resize(cols, rows);
+                }
+            }
+        }
+        if let Some(area) = self
+            .geometry
+            .region(RegionKind::DevViewBody(DevView::Server))
+        {
+            let (cols, rows) = pty_size_for_region(area);
+            if self.server.run.terminal.size() != (rows, cols) {
+                self.server.run.terminal.resize(rows, cols);
+                if let Some(runtime) = self.server.run.runtime.as_mut() {
+                    let _ = runtime.resize(cols, rows);
+                }
+            }
+        }
+        if let Some(area) = self.geometry.region(RegionKind::DevViewBody(DevView::Repl)) {
+            let (cols, rows) = pty_size_for_region(area);
+            if self.repl.run.screen.size() != (rows, cols) {
+                self.repl.run.screen.resize(rows, cols);
+                if let Some(runtime) = self.repl.run.runtime.as_mut() {
+                    let _ = runtime.resize(cols, rows);
+                }
+            }
+        }
     }
 
     fn scroll_output_up_by(&mut self, amount: usize) {
         if let Some(run) = self.command_run.as_mut() {
             run.terminal.scroll_up(amount);
         }
-    }
-
-    fn scroll_output_down(&mut self) {
-        self.scroll_output_down_by(10);
     }
 
     fn scroll_output_down_by(&mut self, amount: usize) {
@@ -3343,7 +3467,7 @@ impl TuiApp {
             KeyCode::Down | KeyCode::Tab => form.set_selected((form.selected() + 1) % count),
             KeyCode::BackTab => form.set_selected((form.selected() + count - 1) % count),
             KeyCode::Char(' ') | KeyCode::Enter => {
-                if form.selected() + 1 == count {
+                if form.selected() == 0 {
                     self.launch_session_form(event_tx);
                 } else {
                     update_session_form_field(form);
@@ -3431,6 +3555,7 @@ impl TuiApp {
             .and_then(|path| std::fs::metadata(path).ok())
             .and_then(|metadata| metadata.modified().ok());
         self.open_dev_workspace(DevView::Server);
+        self.mode.replace(InteractionMode::TerminalInput);
         self.server.run = ServerRun::new(
             self.server.next_id,
             clean,
@@ -3461,6 +3586,7 @@ impl TuiApp {
                     .terminal
                     .feed_local_line(format!("failed to prepare server: {error:#}"));
                 self.server.run.status = ServerStatus::Failed;
+                self.mode.replace(InteractionMode::Normal);
                 return;
             }
         };
@@ -3481,6 +3607,7 @@ impl TuiApp {
                     .terminal
                     .feed_local_line(format!("failed to start server: {error:#}"));
                 self.server.run.status = ServerStatus::Failed;
+                self.mode.replace(InteractionMode::Normal);
             }
         }
     }
@@ -3565,6 +3692,13 @@ impl TuiApp {
                 }
             });
 
+        if (self.mode == InteractionMode::TerminalInput && self.dev_panel_focused(DevView::Server))
+            || (self.mode == InteractionMode::TerminalScrollback
+                && self.dev_focus == DevView::Server)
+        {
+            self.mode.reset(InteractionMode::Normal);
+        }
+
         if let Some(values) = pending_restart {
             self.start_server_with_values(values, Some(event_tx));
         }
@@ -3606,7 +3740,7 @@ impl TuiApp {
             return;
         }
         if self.repl.is_running() {
-            self.mode.replace(InteractionMode::Repl);
+            self.enter_terminal_input();
             return;
         }
 
@@ -3630,7 +3764,7 @@ impl TuiApp {
             screen_cols,
             self.selected_target.context.short_label(),
         );
-        self.mode.replace(InteractionMode::Repl);
+        self.mode.replace(InteractionMode::TerminalInput);
         self.repl
             .run
             .screen
@@ -3699,27 +3833,7 @@ impl TuiApp {
     fn focus_repl(&mut self) {
         self.open_dev_workspace(DevView::Repl);
         if self.repl.is_running() {
-            self.mode.replace(InteractionMode::Repl);
-        }
-    }
-
-    fn handle_repl_key(&mut self, key: KeyEvent) {
-        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.open_leader();
-            return;
-        }
-
-        if key.code == KeyCode::PageUp {
-            self.repl.run.screen.scroll_up(10);
-            self.mode.replace(InteractionMode::TerminalScrollback);
-            return;
-        }
-
-        if let Some(bytes) = encode_key_for_pty(key)
-            && let Some(runtime) = self.repl.run.runtime.as_mut()
-            && let Err(error) = runtime.write_all(&bytes)
-        {
-            self.repl.run.last_error = Some(format!("failed to send REPL input: {error:#}"));
+            self.enter_terminal_input();
         }
     }
 
@@ -3735,7 +3849,7 @@ impl TuiApp {
         match key.code {
             KeyCode::Esc => {
                 self.scroll_terminal_bottom();
-                self.restore_default_mode();
+                self.close_transient_mode();
             }
             KeyCode::Up => self.scroll_terminal_up(1),
             KeyCode::Down => self.scroll_terminal_down(1),
@@ -3812,7 +3926,7 @@ impl TuiApp {
             .as_bytes(),
         );
         let pending_restart = self.pending_repl_restart.take();
-        if self.mode.contains(InteractionMode::Repl)
+        if (self.mode == InteractionMode::TerminalInput && self.dev_panel_focused(DevView::Repl))
             || (self.mode == InteractionMode::TerminalScrollback && self.dev_focus == DevView::Repl)
         {
             self.mode.reset(InteractionMode::Normal);
@@ -3879,6 +3993,26 @@ enum LeaderGroup {
     #[default]
     Workspaces,
     Views,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum QuitChoice {
+    #[default]
+    Return,
+    ForceQuit,
+}
+
+impl QuitChoice {
+    fn next(self) -> Self {
+        match self {
+            Self::Return => Self::ForceQuit,
+            Self::ForceQuit => Self::Return,
+        }
+    }
+
+    fn previous(self) -> Self {
+        self.next()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -3966,7 +4100,6 @@ impl PostDeployPolicy {
 
 #[derive(Debug, Clone, Default)]
 struct CommandFormValues {
-    build_steps: [bool; 4],
     skip_check: bool,
     force_build: bool,
     full_diff: bool,
@@ -4006,7 +4139,7 @@ impl CommandReviewForm {
 
     fn field_count(&self) -> usize {
         match self.kind {
-            CommandKind::Build => 8,
+            CommandKind::Build => 4,
             CommandKind::Plan | CommandKind::Deploy => 7,
             CommandKind::Clean => 2,
         }
@@ -4014,11 +4147,11 @@ impl CommandReviewForm {
 }
 
 fn command_form_is_launch(form: &CommandReviewForm) -> bool {
-    form.selected + 1 == form.field_count()
+    form.selected == 0
 }
 
 fn command_form_text_value_mut(form: &mut CommandReviewForm) -> &mut String {
-    if form.selected == 3 {
+    if form.selected == 4 {
         &mut form.values.rollback_revision
     } else {
         &mut form.values.rollback_version
@@ -4028,39 +4161,28 @@ fn command_form_text_value_mut(form: &mut CommandReviewForm) -> &mut String {
 fn update_command_form_field(form: &mut CommandReviewForm) {
     match form.kind {
         CommandKind::Build => match form.selected {
-            0..=3 => {
-                form.values.build_steps[form.selected] = !form.values.build_steps[form.selected];
-                if form.values.build_steps[form.selected] {
-                    form.values.skip_check = false;
-                }
-            }
-            4 => {
-                form.values.skip_check = !form.values.skip_check;
-                if form.values.skip_check {
-                    form.values.build_steps = [false; 4];
-                }
-            }
-            5 => form.values.force_build = !form.values.force_build,
-            6 => form.values.yes = !form.values.yes,
+            1 => form.values.skip_check = !form.values.skip_check,
+            2 => form.values.force_build = !form.values.force_build,
+            3 => form.values.yes = !form.values.yes,
             _ => {}
         },
         CommandKind::Plan | CommandKind::Deploy => match form.selected {
-            0 => form.values.full_diff = !form.values.full_diff,
-            1 => form.values.force_build = !form.values.force_build,
-            2 => {
+            1 => form.values.full_diff = !form.values.full_diff,
+            2 => form.values.force_build = !form.values.force_build,
+            3 => {
                 form.values.rollback_revision.clear();
                 form.editing = true;
             }
-            3 => {
+            4 => {
                 form.values.rollback_version.clear();
                 form.editing = true;
             }
-            4 => form.values.post_deploy = form.values.post_deploy.next(),
-            5 => form.values.yes = !form.values.yes,
+            5 => form.values.post_deploy = form.values.post_deploy.next(),
+            6 => form.values.yes = !form.values.yes,
             _ => {}
         },
         CommandKind::Clean => {
-            if form.selected == 0 {
+            if form.selected == 1 {
                 form.values.yes = !form.values.yes;
             }
         }
@@ -5001,13 +5123,13 @@ impl SessionReviewForm {
 
 fn server_form_text_mut(values: &mut ServerFormValues, selected: usize) -> &mut String {
     match selected {
-        0 => &mut values.system_memory_override,
-        1 => &mut values.router_address,
-        2 => &mut values.router_port,
-        3 => &mut values.custom_request_port,
-        4 => &mut values.mcp_port,
-        5 => &mut values.ports_file,
-        6 => &mut values.data_dir,
+        1 => &mut values.system_memory_override,
+        2 => &mut values.router_address,
+        3 => &mut values.router_port,
+        4 => &mut values.custom_request_port,
+        5 => &mut values.mcp_port,
+        6 => &mut values.ports_file,
+        7 => &mut values.data_dir,
         _ => &mut values.agent_filesystem_root,
     }
 }
@@ -5020,19 +5142,19 @@ fn update_session_form_field(form: &mut SessionReviewForm) {
             editing,
             ..
         } => match *selected {
-            0..=7 => *editing = true,
-            8 => values.clean = !values.clean,
-            9 => values.yes = !values.yes,
+            1..=8 => *editing = true,
+            9 => values.clean = !values.clean,
+            10 => values.yes = !values.yes,
             _ => {}
         },
         SessionReviewForm::Repl {
             values, selected, ..
         } => match *selected {
-            0 => {}
-            1 => values.stream_logs = !values.stream_logs,
-            2 => values.auto_imports = !values.auto_imports,
-            3 => values.post_deploy = values.post_deploy.next(),
-            4 => values.yes = !values.yes,
+            0 | 1 => {}
+            2 => values.stream_logs = !values.stream_logs,
+            3 => values.auto_imports = !values.auto_imports,
+            4 => values.post_deploy = values.post_deploy.next(),
+            5 => values.yes = !values.yes,
             _ => {}
         },
     }
@@ -5411,6 +5533,19 @@ enum PaletteScope {
     #[default]
     All,
     Context,
+}
+
+impl PaletteScope {
+    fn next(self) -> Self {
+        match self {
+            Self::All => Self::Context,
+            Self::Context => Self::All,
+        }
+    }
+
+    fn previous(self) -> Self {
+        self.next()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -6264,7 +6399,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
 
     match app.mode.current() {
         InteractionMode::Normal => {}
-        InteractionMode::Leader => render_leader_hint(frame, app),
+        InteractionMode::Leader => {}
         InteractionMode::Layout => {}
         InteractionMode::Jobs => render_jobs(frame, app),
         InteractionMode::QuitBlocked => render_quit_blocked(frame, app),
@@ -6275,8 +6410,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         InteractionMode::AgentColumns => render_agent_columns(frame, app),
         InteractionMode::CommandForm => render_command_form(frame, app),
         InteractionMode::SessionForm => render_session_form(frame, app),
-        InteractionMode::CommandInteraction => {}
-        InteractionMode::Repl => {}
+        InteractionMode::TerminalInput => {}
         InteractionMode::TerminalScrollback => {}
         InteractionMode::Palette => render_palette(frame, app),
         InteractionMode::Help => render_help(frame, app),
@@ -7020,6 +7154,51 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
     .render(frame, rows[0], &theme());
 
+    if app.mode == InteractionMode::Leader {
+        let items = leader_key_hints(app);
+        for (index, row) in rows.iter().enumerate().skip(1) {
+            ShortcutRow {
+                items: if index == 1 { &items } else { &[] },
+                active: true,
+                left_glyph: if index + 1 == rows.len() {
+                    "└"
+                } else {
+                    "│"
+                },
+                fallback: None,
+            }
+            .render(frame, *row, &theme());
+        }
+        return;
+    }
+
+    if app.mode == InteractionMode::TerminalInput {
+        let items = [
+            KeyHint {
+                key: "ctrl+x",
+                label: "TUI control",
+            },
+            KeyHint {
+                key: "all other keys",
+                label: "Nested CLI",
+            },
+        ];
+        for (index, row) in rows.iter().enumerate().skip(1) {
+            ShortcutRow {
+                items: if index == 1 { &items } else { &[] },
+                active: true,
+                left_glyph: if index + 1 == rows.len() {
+                    "└"
+                } else {
+                    "│"
+                },
+                fallback: Some(items[0]),
+            }
+            .render(frame, *row, &theme());
+        }
+        return;
+    }
+
     let global = [
         KeyHint {
             key: "ctrl+x",
@@ -7027,7 +7206,7 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         },
         KeyHint {
             key: "ctrl+p",
-            label: "All actions",
+            label: "Commands",
         },
         KeyHint {
             key: "ctrl+h",
@@ -7059,7 +7238,7 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             },
             KeyHint {
                 key: "ctrl+x a",
-                label: "Actions",
+                label: "Commands",
             },
         ];
         let ops = [
@@ -7081,7 +7260,7 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             },
             KeyHint {
                 key: "ctrl+x a",
-                label: "Actions",
+                label: "Commands",
             },
         ];
         let layout_mode = [
@@ -7388,14 +7567,18 @@ fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .areas(area);
 
     frame.render_widget(
-        Paragraph::new(repl_status_line(&app.repl, app.mode.current())).style(surface_style()),
+        Paragraph::new(repl_status_line(
+            &app.repl,
+            terminal_input_label(app, NestedCliTarget::Repl),
+        ))
+        .style(surface_style()),
         summary_area,
     );
 
-    let terminal_content = terminal_content_area(terminal_area, &app.repl.run.screen);
+    let terminal_content = terminal_content_area(terminal_area);
     let lines = if app.repl.run.status == ReplStatus::Stopped && app.repl.run.exit_code.is_none() {
         vec![prefixed_line(
-            "Open Actions with ctrl+x a to start `golem repl`.",
+            "Open Commands with ctrl+x a to start `golem repl`.",
         )]
     } else {
         repl_screen_lines(&app.repl.run, terminal_content.height as usize)
@@ -7407,17 +7590,12 @@ fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     );
     render_output_scrollbar(frame, terminal_area, &app.repl.run.screen);
 
-    if app.mode == InteractionMode::Repl
-        && let Some(cursor) = app
-            .repl
-            .run
-            .screen
-            .cursor_position(Position::new(terminal_content.x, terminal_content.y))
-        && cursor.x < terminal_content.right()
-        && cursor.y < terminal_content.bottom()
-    {
-        frame.set_cursor_position(cursor);
-    }
+    render_terminal_cursor(
+        frame,
+        terminal_content,
+        &app.repl.run.screen,
+        app.terminal_input_owns(NestedCliTarget::Repl),
+    );
 }
 
 fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -7428,8 +7606,12 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .areas(area);
 
     frame.render_widget(
-        Paragraph::new(server_status_line(&app.server, app.server.available))
-            .style(surface_style()),
+        Paragraph::new(server_status_line(
+            &app.server,
+            app.server.available,
+            terminal_input_label(app, NestedCliTarget::Server),
+        ))
+        .style(surface_style()),
         summary_area,
     );
 
@@ -7444,7 +7626,7 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     } else {
         render_output_lines(&app.server.run.terminal, output_area.height as usize)
     };
-    let output_content = terminal_content_area(output_area, &app.server.run.terminal);
+    let output_content = terminal_content_area(output_area);
     frame.render_widget(
         Paragraph::new(output_lines)
             .style(surface_style())
@@ -7452,6 +7634,12 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         output_content,
     );
     render_output_scrollbar(frame, output_area, &app.server.run.terminal);
+    render_terminal_cursor(
+        frame,
+        output_content,
+        &app.server.run.terminal,
+        app.terminal_input_owns(NestedCliTarget::Server),
+    );
 }
 
 fn surface_style() -> Style {
@@ -7553,13 +7741,14 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
     push_raw_help(&mut lines, width, "ctrl+x w", "Workspaces");
     push_raw_help(&mut lines, width, "ctrl+x v", "Views");
     push_raw_help(&mut lines, width, "ctrl+x l", "Layout mode");
-    push_raw_help(&mut lines, width, "ctrl+x a", "Context actions");
+    push_raw_help(&mut lines, width, "ctrl+x a", "Commands · Context");
     push_raw_help(&mut lines, width, "ctrl+x j", "Jobs");
     push_raw_help(&mut lines, width, "ctrl+x e", "Context");
 
     push_section_break(&mut lines, width, "Palette");
     push_raw_help(&mut lines, width, "type", "Filter commands");
     push_raw_help(&mut lines, width, "up / down", "Move selection");
+    push_raw_help(&mut lines, width, "left / right", "Switch All / Context");
     push_raw_help(&mut lines, width, "enter", "Execute selected action");
     push_raw_help(&mut lines, width, "esc / ctrl+c", "Close palette");
 
@@ -7574,11 +7763,18 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         );
         push_raw_help(&mut lines, width, "pageup", "Enter terminal scrollback");
         push_raw_help(&mut lines, width, "mouse wheel", "Scroll terminal history");
+        push_raw_help(&mut lines, width, "ctrl+x", "Return CLI input to the TUI");
+        push_raw_help(
+            &mut lines,
+            width,
+            "enter / click",
+            "Give a running pane input to the CLI",
+        );
         push_raw_help(
             &mut lines,
             width,
             "esc",
-            "Return from scrollback to live input",
+            "Return from scrollback to the prior input owner",
         );
     } else if app.ops_view == OpsView::Metrics {
         push_section_break(&mut lines, width, "Metrics");
@@ -7719,19 +7915,13 @@ fn push_raw_help(
     );
 }
 
-fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp) {
-    let area = Rect {
-        x: frame.area().x,
-        y: frame.area().y + frame.area().height.saturating_sub(2),
-        width: frame.area().width,
-        height: 1,
-    };
+fn leader_key_hints(app: &TuiApp) -> Vec<KeyHint<'static>> {
     let entries: &[(&str, &str)] = match app.leader.group {
         None => &[
             ("w", "Workspaces"),
             ("v", "Views"),
             ("l", "Layout"),
-            ("a", "Actions"),
+            ("a", "Commands"),
             ("j", "Jobs"),
             ("e", "Context"),
         ],
@@ -7743,34 +7933,22 @@ fn render_leader_hint(frame: &mut Frame<'_>, app: &TuiApp) {
         }
         Some(LeaderGroup::Views) => &[("o", "Overview"), ("a", "Activity"), ("m", "Metrics")],
     };
-    let items = entries
+    entries
         .iter()
         .map(|(key, label)| KeyHint { key, label })
-        .collect::<Vec<_>>();
-    ShortcutRow {
-        items: &items,
-        active: true,
-        left_glyph: "│",
-        fallback: None,
-    }
-    .render(frame, area, &theme());
+        .collect()
 }
 
 fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     frame.render_widget(Paragraph::new("").style(surface_style()), area);
-    let has_input = show_command_input(app);
-    let [summary_area, output_area, input_area] = Layout::default()
+    let [summary_area, output_area] = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
 
     let run = app.command_run.as_ref();
     let summary = match run {
-        Some(run) => command_status_line(run),
+        Some(run) => command_status_line(run, terminal_input_label(app, NestedCliTarget::Command)),
         None => status_summary_line(
             StatusKind::Idle,
             "idle".to_string(),
@@ -7788,8 +7966,8 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .map(|run| render_output_lines(&run.terminal, output_area.height as usize))
         .unwrap_or_else(|| vec![prefixed_line("Output will appear here.")]);
     let output_content = run
-        .map(|run| terminal_content_area(output_area, &run.terminal))
-        .unwrap_or(output_area);
+        .map(|_| terminal_content_area(output_area))
+        .unwrap_or_else(|| terminal_content_area(output_area));
     frame.render_widget(
         Paragraph::new(output_lines)
             .style(surface_style())
@@ -7798,26 +7976,13 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     );
     if let Some(run) = run {
         render_output_scrollbar(frame, output_area, &run.terminal);
-    }
-
-    if has_input {
-        let prompt = "stdin ";
-        frame.render_widget(
-            Paragraph::new(Line::from(prompt)).style(surface_style()),
-            input_area,
+        render_terminal_cursor(
+            frame,
+            output_content,
+            &run.terminal,
+            app.terminal_input_owns(NestedCliTarget::Command),
         );
-        frame.set_cursor_position((input_area.x + prompt.len() as u16, input_area.y));
     }
-}
-
-fn show_command_input(app: &TuiApp) -> bool {
-    app.mode == InteractionMode::CommandInteraction
-        && app.command_run.as_ref().is_some_and(|run| {
-            matches!(
-                run.status,
-                CommandStatus::Running | CommandStatus::Cancelling
-            ) && !run.options.yes
-        })
 }
 
 fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &TerminalScreen) {
@@ -7842,12 +8007,27 @@ fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &TerminalS
     );
 }
 
-fn terminal_content_area(area: Rect, output: &TerminalScreen) -> Rect {
+fn terminal_content_area(area: Rect) -> Rect {
     Rect {
-        width: area.width.saturating_sub(u16::from(
-            output.max_scrollback() > 0 && area.width > 0 && area.height > 0,
-        )),
+        width: area
+            .width
+            .saturating_sub(u16::from(area.width > 0 && area.height > 0)),
         ..area
+    }
+}
+
+fn render_terminal_cursor(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    screen: &TerminalScreen,
+    active: bool,
+) {
+    if active
+        && let Some(cursor) = screen.cursor_position(Position::new(area.x, area.y))
+        && cursor.x < area.right()
+        && cursor.y < area.bottom()
+    {
+        frame.set_cursor_position(cursor);
     }
 }
 
@@ -7864,12 +8044,12 @@ fn output_scrollbar_position(total: usize, visible_height: usize, scroll_offset:
     top_line.saturating_mul(total.saturating_sub(1)) / max_top_line
 }
 
-fn command_status_line(run: &CommandRun) -> Line<'static> {
+fn command_status_line(run: &CommandRun, input: &'static str) -> Line<'static> {
     let hint = if matches!(
         run.status,
         CommandStatus::Running | CommandStatus::Cancelling
     ) {
-        "esc / ctrl+c cancel"
+        "ctrl+c cancel · ctrl+x → TUI"
     } else {
         "ctrl+x a run again"
     };
@@ -7877,6 +8057,7 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
         command_status_kind(run.status),
         command_status_display(run),
         &[
+            ("input", input.to_string()),
             ("job", run.kind.title().to_string()),
             ("yes", flag_state(run.options.yes).to_string()),
             ("reset", flag_state(run.options.reset).to_string()),
@@ -7887,7 +8068,11 @@ fn command_status_line(run: &CommandRun) -> Line<'static> {
     )
 }
 
-fn server_status_line(server: &LocalServerService, local_server_available: bool) -> Line<'static> {
+fn server_status_line(
+    server: &LocalServerService,
+    local_server_available: bool,
+    input: &'static str,
+) -> Line<'static> {
     let run = &server.run;
     let clean = run.clean;
     let ports = run.bound_ports.as_ref().map_or_else(
@@ -7903,6 +8088,7 @@ fn server_status_line(server: &LocalServerService, local_server_available: bool)
         server_status_kind(run.status),
         server_status_display(run),
         &[
+            ("input", input.to_string()),
             ("session", "server".to_string()),
             ("clean", flag_state(clean).to_string()),
             ("ports", ports.trim_start_matches("ports: ").to_string()),
@@ -7916,16 +8102,17 @@ fn server_status_line(server: &LocalServerService, local_server_available: bool)
     )
 }
 
-fn repl_status_line(repl: &ReplState, mode: InteractionMode) -> Line<'static> {
+fn repl_status_line(repl: &ReplState, input: &'static str) -> Line<'static> {
     let run = &repl.run;
     status_summary_line(
         repl_status_kind(run.status),
         run.status.title().to_string(),
         &[
+            ("input", input.to_string()),
             ("session", "repl".to_string()),
             ("command", command_display(&run.args)),
             ("context", run.launch_context.clone()),
-            ("action", repl_mode_hint(run, mode).to_string()),
+            ("action", repl_mode_hint(run).to_string()),
         ],
     )
 }
@@ -7938,12 +8125,30 @@ fn repl_status_kind(status: ReplStatus) -> StatusKind {
     }
 }
 
-fn repl_mode_hint(run: &ReplRun, mode: InteractionMode) -> &'static str {
-    match mode {
-        InteractionMode::Repl => "ctrl+x q leave  ctrl+x k stop",
-        InteractionMode::Leader => "ctrl+x ctrl+x send literal ctrl+x",
-        _ if run.is_running() => "ctrl+x a focus / stop",
+fn repl_mode_hint(run: &ReplRun) -> &'static str {
+    match run.is_running() {
+        true => "ctrl+x → TUI",
         _ => "ctrl+x a start",
+    }
+}
+
+fn terminal_input_label(app: &TuiApp, target: NestedCliTarget) -> &'static str {
+    if app.mode == InteractionMode::TerminalScrollback && app.dev_focus == target_dev_view(target) {
+        "TUI · scrollback"
+    } else if app.terminal_input_owns(target) {
+        "CLI · ctrl+x → TUI"
+    } else if app.focused_nested_cli_target() == Some(target) {
+        "TUI · enter → CLI"
+    } else {
+        "TUI"
+    }
+}
+
+fn target_dev_view(target: NestedCliTarget) -> DevView {
+    match target {
+        NestedCliTarget::Command => DevView::BuildDeploy,
+        NestedCliTarget::Server => DevView::Server,
+        NestedCliTarget::Repl => DevView::Repl,
     }
 }
 
@@ -8519,10 +8724,14 @@ fn render_command_form(frame: &mut Frame<'_>, app: &TuiApp) {
     let Some(form) = app.command_form.as_ref() else {
         return;
     };
-    let area = adaptive_data_popup_rect(frame.area(), 58, 16);
-    let content = OverlayFrame::content_area(area);
     let mut fields = command_form_rows(form);
     let mut lines = vec![
+        ActionButton {
+            label: "Run",
+            selected: form.selected == 0,
+        }
+        .line(&theme()),
+        Line::default(),
         Notice {
             kind: if form.kind == CommandKind::Clean
                 || form.values.post_deploy == PostDeployPolicy::Reset
@@ -8553,13 +8762,16 @@ fn render_command_form(frame: &mut Frame<'_>, app: &TuiApp) {
         lines.push(
             SelectableRow {
                 label: &text,
-                selected: index == form.selected,
+                selected: index + 1 == form.selected,
                 unavailable: false,
             }
-            .line(content.width as usize, &theme()),
+            .line(54, &theme()),
         );
     }
     lines.push(Line::default());
+    let desired_content_height = lines.len() as u16 + 1;
+    let area = content_popup_rect(frame.area(), 62, desired_content_height.saturating_add(4));
+    let content = OverlayFrame::content_area(area);
     let footer = shortcut_line(
         &[
             KeyHint {
@@ -8582,10 +8794,11 @@ fn render_command_form(frame: &mut Frame<'_>, app: &TuiApp) {
     OverlayFrame {
         title: Some(&title),
     }
-    .render(
+    .render_aligned(
         frame,
         area,
         overlay_lines_with_footer(lines, footer, content.height),
+        Alignment::Left,
         &theme(),
     );
 }
@@ -8599,22 +8812,11 @@ fn command_form_rows(form: &CommandReviewForm) -> Vec<(String, String)> {
         }
     };
     match form.kind {
-        CommandKind::Build => ["check", "build", "add-metadata", "gen-bridge"]
-            .into_iter()
-            .enumerate()
-            .map(|(index, step)| {
-                (
-                    format!("step {step}"),
-                    toggle(form.values.build_steps[index]),
-                )
-            })
-            .chain([
-                ("skip check".to_string(), toggle(form.values.skip_check)),
-                ("force build".to_string(), toggle(form.values.force_build)),
-                ("--yes".to_string(), toggle(form.values.yes)),
-                ("Run".to_string(), "nested CLI PTY".to_string()),
-            ])
-            .collect(),
+        CommandKind::Build => vec![
+            ("skip check".to_string(), toggle(form.values.skip_check)),
+            ("force build".to_string(), toggle(form.values.force_build)),
+            ("--yes".to_string(), toggle(form.values.yes)),
+        ],
         CommandKind::Plan | CommandKind::Deploy => vec![
             ("full diff".to_string(), toggle(form.values.full_diff)),
             ("force build".to_string(), toggle(form.values.force_build)),
@@ -8639,12 +8841,8 @@ fn command_form_rows(form: &CommandReviewForm) -> Vec<(String, String)> {
                 form.values.post_deploy.label().to_string(),
             ),
             ("--yes".to_string(), toggle(form.values.yes)),
-            ("Run".to_string(), "nested CLI PTY".to_string()),
         ],
-        CommandKind::Clean => vec![
-            ("--yes".to_string(), toggle(form.values.yes)),
-            ("Run".to_string(), "nested CLI PTY".to_string()),
-        ],
+        CommandKind::Clean => vec![("--yes".to_string(), toggle(form.values.yes))],
     }
 }
 
@@ -8652,8 +8850,6 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
     let Some(form) = app.session_form.as_ref() else {
         return;
     };
-    let area = adaptive_data_popup_rect(frame.area(), 64, 18);
-    let content = OverlayFrame::content_area(area);
     let (title, notice, error, fields) = match form {
         SessionReviewForm::Server {
             values,
@@ -8666,7 +8862,7 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
             } else {
                 "Review Server start"
             },
-            "Running is established only after the process stays alive and rewrites a parseable ports file.",
+            "Starts the local server in a nested CLI PTY.",
             error.as_deref(),
             server_form_rows(values),
         ),
@@ -8678,12 +8874,18 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
             } else {
                 "Review REPL start"
             },
-            "Starts the real interactive nested CLI in a persistent PTY.",
+            "Starts the interactive REPL in a persistent nested CLI PTY.",
             None,
             repl_form_rows(values),
         ),
     };
     let mut lines = vec![
+        ActionButton {
+            label: "Run",
+            selected: form.selected() == 0,
+        }
+        .line(&theme()),
+        Line::default(),
         Notice {
             kind: NoticeKind::Info,
             message: notice,
@@ -8706,13 +8908,16 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
         lines.push(
             SelectableRow {
                 label: &text,
-                selected: index == form.selected(),
+                selected: index + 1 == form.selected(),
                 unavailable: false,
             }
-            .line(content.width as usize, &theme()),
+            .line(60, &theme()),
         );
     }
     lines.push(Line::default());
+    let desired_content_height = lines.len() as u16 + 1;
+    let area = content_popup_rect(frame.area(), 68, desired_content_height.saturating_add(4));
+    let content = OverlayFrame::content_area(area);
     let footer = shortcut_line(
         &[
             KeyHint {
@@ -8731,10 +8936,11 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
         &theme(),
         Alignment::Center,
     );
-    OverlayFrame { title: Some(title) }.render(
+    OverlayFrame { title: Some(title) }.render_aligned(
         frame,
         area,
         overlay_lines_with_footer(lines, footer, content.height),
+        Alignment::Left,
         &theme(),
     );
 }
@@ -8773,7 +8979,6 @@ fn server_form_rows(values: &ServerFormValues) -> Vec<(String, String)> {
             "--yes".to_string(),
             if values.yes { "[x]" } else { "[ ]" }.to_string(),
         ),
-        ("Run".to_string(), "nested CLI PTY".to_string()),
     ]
 }
 
@@ -8796,7 +9001,6 @@ fn repl_form_rows(values: &ReplFormValues) -> Vec<(String, String)> {
             "--yes".to_string(),
             if values.yes { "[x]" } else { "[ ]" }.to_string(),
         ),
-        ("Run".to_string(), "nested CLI PTY".to_string()),
     ]
 }
 
@@ -8869,7 +9073,6 @@ fn render_jobs(frame: &mut Frame<'_>, app: &TuiApp) {
 }
 
 fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
-    let area = centered_rect_fixed(64, 9, frame.area());
     let mut active = Vec::new();
     if app.command_is_running() {
         active.push("finite Job");
@@ -8880,10 +9083,7 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
     if app.repl.is_running() {
         active.push("REPL");
     }
-    let message = format!(
-        "Quit is blocked while TUI-owned work is active: {}.",
-        active.join(", ")
-    );
+    let message = format!("Still running: {}.", active.join(", "));
     let lines = vec![
         Notice {
             kind: NoticeKind::Warning,
@@ -8893,23 +9093,45 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
         Line::default(),
         Notice {
             kind: NoticeKind::Info,
-            message: "Stop the active work from its view, then quit again.",
+            message: "Force quit stops all TUI-owned processes.",
+        }
+        .line(&theme()),
+        Line::default(),
+        ActionButton {
+            label: "Return",
+            selected: app.quit_choice == QuitChoice::Return,
+        }
+        .line(&theme()),
+        ActionButton {
+            label: "Force quit",
+            selected: app.quit_choice == QuitChoice::ForceQuit,
         }
         .line(&theme()),
         Line::default(),
         shortcut_line(
-            &[KeyHint {
-                key: "enter / esc",
-                label: "Return",
-            }],
+            &[
+                KeyHint {
+                    key: "←/→ / tab",
+                    label: "Choose",
+                },
+                KeyHint {
+                    key: "enter",
+                    label: "Confirm",
+                },
+                KeyHint {
+                    key: "esc",
+                    label: "Return",
+                },
+            ],
             &theme(),
             Alignment::Center,
         ),
     ];
+    let area = content_popup_rect(frame.area(), 58, lines.len() as u16 + 4);
     OverlayFrame {
-        title: Some("Active work prevents quit"),
+        title: Some("Quit with active work"),
     }
-    .render(frame, area, lines, &theme());
+    .render_aligned(frame, area, lines, Alignment::Left, &theme());
 }
 
 fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
@@ -9021,8 +9243,8 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
                 label: "Run",
             },
             KeyHint {
-                key: "ctrl+p / ctrl+x a",
-                label: "Scope",
+                key: "←/→",
+                label: "All / Context",
             },
             KeyHint {
                 key: "esc",
@@ -9133,7 +9355,6 @@ enum ActionId {
     SelectOpsServer,
     StartOrFocusRepl,
     FocusRepl,
-    LeaveRepl,
     StopRepl,
     RestartRepl,
     OpenPalette,
@@ -9171,7 +9392,6 @@ enum ActionSurface {
     Leader,
     Agents,
     Repl,
-    ReplLeader,
     System,
 }
 
@@ -9182,7 +9402,6 @@ impl ActionSurface {
             Self::Leader => "Leader",
             Self::Agents => "Agents",
             Self::Repl => "REPL",
-            Self::ReplLeader => "REPL Leader",
             Self::System => "System",
         }
     }
@@ -9351,7 +9570,7 @@ impl ActionAvailability {
     }
 }
 
-const ACTIONS: [ActionDefinition; 35] = [
+const ACTIONS: [ActionDefinition; 34] = [
     ActionDefinition {
         id: ActionId::Plan,
         label: "Plan",
@@ -9633,22 +9852,12 @@ const ACTIONS: [ActionDefinition; 35] = [
         palette_visible: false,
     },
     ActionDefinition {
-        id: ActionId::LeaveRepl,
-        label: "Leave REPL Mode",
-        description: "Return keyboard input to the TUI",
-        shortcut: None,
-        category: ActionCategory::Repl,
-        scope: ActionSurface::ReplLeader,
-        execution_kind: ActionExecution::Internal,
-        palette_visible: true,
-    },
-    ActionDefinition {
         id: ActionId::StopRepl,
         label: "Stop REPL",
         description: "Send ctrl+c to the embedded REPL",
         shortcut: None,
         category: ActionCategory::Repl,
-        scope: ActionSurface::ReplLeader,
+        scope: ActionSurface::Repl,
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -9658,14 +9867,14 @@ const ACTIONS: [ActionDefinition; 35] = [
         description: "Restart the embedded REPL",
         shortcut: None,
         category: ActionCategory::Repl,
-        scope: ActionSurface::ReplLeader,
+        scope: ActionSurface::Repl,
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
     ActionDefinition {
         id: ActionId::OpenPalette,
-        label: "Open Palette",
-        description: "Open the command palette",
+        label: "Open Commands",
+        description: "Open the searchable command overlay",
         shortcut: Some("ctrl+p"),
         category: ActionCategory::System,
         scope: ActionSurface::System,
@@ -10080,7 +10289,7 @@ mod tests {
         assert!(frame.contains("Views"), "{frame}");
         assert!(frame.contains("Layout"), "{frame}");
         assert!(frame.contains("Context"), "{frame}");
-        assert!(frame.contains("Actions"), "{frame}");
+        assert!(frame.contains("Commands"), "{frame}");
         assert!(frame.contains("Jobs"), "{frame}");
     }
 
@@ -10310,7 +10519,7 @@ mod tests {
         let footer = render_app_text_at(&app, 120, 30);
 
         assert!(footer.contains("ctrl+x Menu"), "{footer}");
-        assert!(footer.contains("ctrl+p All actions"), "{footer}");
+        assert!(footer.contains("ctrl+p Commands"), "{footer}");
         assert!(footer.contains("ctrl+h Help"), "{footer}");
         assert!(!footer.contains("ctrl+x b"), "{footer}");
     }
@@ -10336,7 +10545,7 @@ mod tests {
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         driver.assert_visible(&app, "Context");
-        driver.assert_visible(&app, "Actions");
+        driver.assert_visible(&app, "Commands");
 
         app.handle_key(key(KeyCode::Char('a')));
         driver.assert_visible(&app, "Toggle Agent Auto Refresh");
@@ -10569,6 +10778,49 @@ mod tests {
         app.handle_key(modified_key(KeyCode::Char('q'), KeyModifiers::CONTROL));
 
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn active_work_quit_defaults_to_return_and_requires_explicit_force() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.start_command(CommandKind::Build, None);
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(modified_key(KeyCode::Char('q'), KeyModifiers::CONTROL));
+
+        assert_eq!(app.mode, InteractionMode::QuitBlocked);
+        assert_eq!(app.quit_choice, QuitChoice::Return);
+        assert!(!app.should_quit);
+
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.quit_choice, QuitChoice::ForceQuit);
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn nested_terminal_keeps_all_keys_except_ctrl_x() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.start_command(CommandKind::Build, None);
+
+        app.handle_key(key(KeyCode::Tab));
+        app.handle_key(modified_key(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, InteractionMode::TerminalInput);
+        assert_eq!(
+            app.command_run.as_ref().map(|run| run.status),
+            Some(CommandStatus::Running)
+        );
+
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, InteractionMode::Normal);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.mode, InteractionMode::TerminalInput);
     }
 
     #[test]
@@ -11850,22 +12102,47 @@ mod tests {
             app.handle_palette_key(key(KeyCode::Char(character)), None);
         }
 
-        app.handle_palette_key(
-            modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL),
-            None,
-        );
-        app.handle_leader_key(key(KeyCode::Char('a')), None);
+        app.handle_palette_key(key(KeyCode::Right), None);
 
         assert_eq!(app.mode, InteractionMode::Palette);
         assert_eq!(app.palette.scope, PaletteScope::Context);
         assert_eq!(app.palette.query, "agent");
 
-        app.handle_palette_key(
-            modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL),
-            None,
-        );
+        app.handle_palette_key(key(KeyCode::Left), None);
         assert_eq!(app.palette.scope, PaletteScope::All);
         assert_eq!(app.palette.query, "agent");
+    }
+
+    #[test]
+    fn palette_scope_tabs_are_mouse_selectable() {
+        let mut app = test_app();
+        app.open_palette(PaletteScope::All);
+        render_app_text_at(&app, 120, 32);
+        let context = snapshot_region(&app, RegionKind::PaletteContext);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                context.x,
+                context.y,
+            ),
+            None,
+        );
+
+        assert_eq!(app.palette.scope, PaletteScope::Context);
+        assert_eq!(app.mode, InteractionMode::Palette);
+    }
+
+    #[test]
+    fn leader_replaces_every_footer_shortcut_row() {
+        let mut app = test_app();
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+
+        let frame = render_app_text_at(&app, 120, 30);
+
+        assert!(frame.contains("Workspaces"), "{frame}");
+        assert!(!frame.contains("ctrl+p"), "{frame}");
+        assert!(!frame.contains("ctrl+h"), "{frame}");
     }
 
     #[test]
@@ -12100,6 +12377,62 @@ mod tests {
     }
 
     #[test]
+    fn review_forms_start_on_run_and_hide_internal_build_steps() {
+        let mut app = test_app();
+        app.open_command_form(CommandKind::Build);
+
+        let frame = render_app_text_at(&app, 120, 32);
+
+        assert_eq!(app.command_form.as_ref().map(|form| form.selected), Some(0));
+        assert!(frame.contains("[ Run ]"), "{frame}");
+        assert!(!frame.contains("step check"), "{frame}");
+        assert!(frame.contains("skip check"), "{frame}");
+    }
+
+    #[test]
+    fn review_and_quit_dialogs_render_at_supported_extremes() {
+        for (width, height) in [(120, 32), (64, 16), (40, 8), (1, 1)] {
+            let mut command = test_app();
+            command.open_command_form(CommandKind::Build);
+            render_app_text_at(&command, width, height);
+
+            let mut session = test_app();
+            session.open_repl_form(false);
+            render_app_text_at(&session, width, height);
+
+            let mut quit = test_app();
+            quit.command_run = Some(CommandRun::new(
+                1,
+                CommandKind::Build,
+                vec!["build".to_string()],
+                CommandOptions::default(),
+                "sample-app:local".to_string(),
+            ));
+            quit.request_quit();
+            render_app_text_at(&quit, width, height);
+        }
+    }
+
+    #[test]
+    fn rendered_layout_drives_exact_nested_terminal_size() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.start_command(CommandKind::Build, None);
+
+        render_app_text_at(&app, 120, 32);
+        app.sync_nested_session_sizes();
+
+        let area = snapshot_region(&app, RegionKind::DevViewBody(DevView::BuildDeploy));
+        let (cols, rows) = pty_size_for_region(area);
+        assert_eq!(
+            app.command_run.as_ref().map(|run| run.terminal.size()),
+            Some((rows, cols))
+        );
+    }
+
+    #[test]
     fn production_shell_omits_legacy_command_status() {
         let mut app = test_app();
 
@@ -12216,7 +12549,7 @@ mod tests {
             app.append_command_output(format!("line {index}\r\n").as_bytes());
         }
 
-        app.scroll_output_up();
+        app.scroll_output_up_by(10);
         assert_eq!(
             app.command_run
                 .as_ref()
@@ -12242,7 +12575,7 @@ mod tests {
     }
 
     #[test]
-    fn command_page_up_enters_explicit_scrollback_and_escape_returns_live() {
+    fn tui_control_page_up_enters_scrollback_and_escape_returns_to_tui() {
         let mut app = test_app();
         app.active_workspace = Workspace::Dev;
         app.dev_primary = DevView::BuildDeploy;
@@ -12257,23 +12590,25 @@ mod tests {
         for index in 0..30 {
             app.append_command_output(format!("line {index}\r\n").as_bytes());
         }
-        app.mode.replace(InteractionMode::CommandInteraction);
+        app.mode.replace(InteractionMode::TerminalInput);
 
-        app.handle_command_interaction_key(key(KeyCode::PageUp));
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, InteractionMode::Normal);
+        app.handle_key(key(KeyCode::PageUp));
         assert_eq!(app.mode, InteractionMode::TerminalScrollback);
         assert!(app.command_run.as_ref().unwrap().terminal.scrollback() > 0);
 
         app.handle_key(key(KeyCode::Esc));
-        assert_eq!(app.mode, InteractionMode::CommandInteraction);
+        assert_eq!(app.mode, InteractionMode::Normal);
         assert_eq!(app.command_run.as_ref().unwrap().terminal.scrollback(), 0);
     }
 
     #[test]
-    fn esc_cancels_then_force_kills_running_command() {
+    fn command_stop_action_cancels_then_force_kills_running_command() {
         let mut app = test_app();
 
         app.start_command(CommandKind::Build, None);
-        app.handle_command_interaction_key(key(KeyCode::Esc));
+        app.cancel_or_force_kill_command();
         app.command_run.as_mut().unwrap().stop_requested_at =
             Some(Instant::now() - FORCE_STOP_DELAY);
         assert_eq!(
@@ -12281,7 +12616,7 @@ mod tests {
             Some(CommandStatus::Cancelling)
         );
 
-        app.handle_command_interaction_key(key(KeyCode::Esc));
+        app.cancel_or_force_kill_command();
         assert_eq!(
             app.command_run.as_ref().map(|run| run.status),
             Some(CommandStatus::Killed)
@@ -12344,7 +12679,9 @@ mod tests {
         assert!(frame.contains("( Ops )"), "{frame}");
         assert!(frame.contains("Server"), "{frame}");
         assert_eq!(
-            frame.matches("○ stopped · session server").count(),
+            frame
+                .matches("○ stopped · input TUI · session server")
+                .count(),
             1,
             "{frame}"
         );
@@ -12373,7 +12710,6 @@ mod tests {
     fn reviewed_dev_commands_build_exact_nested_cli_arguments() {
         let app = test_app();
         let build = CommandFormValues {
-            build_steps: [true, false, true, false],
             skip_check: true,
             force_build: true,
             yes: true,
@@ -12381,15 +12717,7 @@ mod tests {
         };
         assert_eq!(
             app.command_args(CommandKind::Build, &build),
-            vec![
-                "build",
-                "--step",
-                "check",
-                "--step",
-                "add-metadata",
-                "--force-build",
-                "--yes",
-            ]
+            vec!["build", "--skip-check", "--force-build", "--yes",]
         );
 
         let plan = CommandFormValues {
@@ -13002,6 +13330,7 @@ mod tests {
             dev_focus: DevView::Repl,
             mode: ModeStack::default(),
             leader: LeaderState::default(),
+            quit_choice: QuitChoice::default(),
             help_scroll: 0,
             help_content_height: Cell::new(0),
             help_viewport_height: Cell::new(0),

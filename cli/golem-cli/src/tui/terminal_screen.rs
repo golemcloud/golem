@@ -46,6 +46,10 @@ impl TerminalScreen {
         self.update_max_scrollback();
     }
 
+    pub fn size(&self) -> (u16, u16) {
+        self.parser.screen().size()
+    }
+
     pub fn scroll_up(&mut self, rows: usize) {
         let offset = self.parser.screen().scrollback().saturating_add(rows);
         self.parser.screen_mut().set_scrollback(offset);

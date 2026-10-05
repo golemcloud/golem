@@ -28,8 +28,7 @@ pub(super) enum InteractionMode {
     AgentColumns,
     CommandForm,
     SessionForm,
-    CommandInteraction,
-    Repl,
+    TerminalInput,
     TerminalScrollback,
 }
 
@@ -86,6 +85,7 @@ impl ModeStack {
         self.modes.push(mode);
     }
 
+    #[cfg(test)]
     pub(super) fn contains(&self, mode: InteractionMode) -> bool {
         self.modes.contains(&mode)
     }
@@ -126,9 +126,9 @@ mod tests {
         modes.push(InteractionMode::Palette);
         modes.push(InteractionMode::Leader);
 
-        modes.reset(InteractionMode::Repl);
+        modes.reset(InteractionMode::TerminalInput);
 
-        assert_eq!(modes.current(), InteractionMode::Repl);
+        assert_eq!(modes.current(), InteractionMode::TerminalInput);
         assert!(!modes.contains(InteractionMode::Palette));
     }
 }
