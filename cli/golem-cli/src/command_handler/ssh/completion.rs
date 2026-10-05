@@ -15,7 +15,7 @@
 //! Tab completion for the prompt: command names and remote paths, fetched from the agent with
 //! short helper scripts and remembered for as long as they can be trusted.
 
-use super::syntax::{Position, cursor_word};
+use super::syntax::{Position, cursor_word, is_reserved_word};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -33,14 +33,40 @@ pub trait Fetch: Send + Sync {
 struct View {
     cwd: String,
     commands: Option<Arc<BTreeSet<String>>>,
+    /// The names of the tools bound to the agent, once they are known.
+    tools: Arc<BTreeSet<String>>,
     /// Directory listings by the directory part as typed: `""`, `"sub/"`, `"/tmp/"`.
     listings: HashMap<String, Arc<Vec<String>>>,
+}
+
+/// What a completion is. The block look's list shows it beside the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Keyword,
+    /// A tool bound to the agent.
+    Tool,
+    Command,
+    Directory,
+    File,
+}
+
+impl Kind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::Keyword => "keyword",
+            Kind::Tool => "tool",
+            Kind::Command => "command",
+            Kind::Directory => "dir",
+            Kind::File => "file",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     /// The text that replaces `start..end` of the line.
     pub value: String,
+    pub kind: Kind,
     pub start: usize,
     pub end: usize,
     /// False after a directory, so the next Tab continues inside it.
@@ -74,6 +100,11 @@ impl Completions {
         let mut view = self.view();
         view.cwd = cwd.to_string();
         view.listings.clear();
+    }
+
+    /// Names the tools bound to the agent, which complete as commands.
+    pub fn set_tools(&self, names: impl IntoIterator<Item = String>) {
+        self.view().tools = Arc::new(names.into_iter().collect());
     }
 
     /// The agent's command names, when they have been fetched.
@@ -116,8 +147,9 @@ impl Completions {
         let Some(word) = cursor_word(line, cursor) else {
             return Vec::new();
         };
-        let candidate = |value: String, append_space: bool| Candidate {
+        let candidate = |value: String, kind: Kind, append_space: bool| Candidate {
             value,
+            kind,
             start: word.start,
             end: cursor,
             append_space,
@@ -126,10 +158,20 @@ impl Completions {
             let Some(commands) = self.load_commands() else {
                 return Vec::new();
             };
+            let tools = self.view().tools.clone();
             return commands
                 .iter()
                 .filter(|name| name.starts_with(&word.text))
-                .map(|name| candidate(name.clone(), true))
+                .map(|name| {
+                    let kind = if is_reserved_word(name) {
+                        Kind::Keyword
+                    } else if tools.contains(name) {
+                        Kind::Tool
+                    } else {
+                        Kind::Command
+                    };
+                    candidate(name.clone(), kind, true)
+                })
                 .collect();
         }
         let directory = word
@@ -144,7 +186,15 @@ impl Completions {
             .iter()
             .filter(|entry| entry.starts_with(&word.text))
             .filter(|entry| hidden || !entry[directory.len()..].starts_with('.'))
-            .map(|entry| candidate(escape_word(entry), !entry.ends_with('/')))
+            .map(|entry| {
+                let directory = entry.ends_with('/');
+                let kind = if directory {
+                    Kind::Directory
+                } else {
+                    Kind::File
+                };
+                candidate(escape_word(entry), kind, !directory)
+            })
             .collect()
     }
 }
@@ -181,7 +231,7 @@ pub fn escape_word(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{COMMANDS_SCRIPT, Completions, Fetch, escape_word, listing_script};
+    use super::{COMMANDS_SCRIPT, Completions, Fetch, Kind, escape_word, listing_script};
     use std::sync::{Arc, Mutex};
     use test_r::test;
 
@@ -274,6 +324,45 @@ mod tests {
             vec![("/tmp/my\\ file".to_string(), true)]
         );
         assert_eq!(agent.calls().len(), 1);
+    }
+
+    #[test]
+    fn every_completion_says_what_it_is() {
+        let listing = listing_script("");
+        let agent = Agent::answering(&[
+            (COMMANDS_SCRIPT, Some("fi\nfile\nfind\nfixture\n")),
+            (listing.as_str(), Some("notes.txt\nsrc/\n")),
+        ]);
+        let completions = Completions::new(agent, "");
+        let kinds = |line: &str| -> Vec<Kind> {
+            completions
+                .complete(line, line.len())
+                .into_iter()
+                .map(|candidate| candidate.kind)
+                .collect()
+        };
+        // Until the agent's tools are known, a tool reads as any other command.
+        assert_eq!(
+            kinds("fi"),
+            vec![Kind::Keyword, Kind::Command, Kind::Command, Kind::Command]
+        );
+        completions.set_tools(["fixture".to_string()]);
+        assert_eq!(
+            kinds("fi"),
+            vec![Kind::Keyword, Kind::Command, Kind::Command, Kind::Tool]
+        );
+        assert_eq!(kinds("cat "), vec![Kind::File, Kind::Directory]);
+        assert_eq!(
+            [
+                Kind::Keyword,
+                Kind::Tool,
+                Kind::Command,
+                Kind::Directory,
+                Kind::File
+            ]
+            .map(Kind::label),
+            ["keyword", "tool", "command", "dir", "file"]
+        );
     }
 
     #[test]

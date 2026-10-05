@@ -780,7 +780,8 @@ pub enum GolemCliSubcommand {
     /// in does; it is passed as `--cwd` to the next one. Anything that must last belongs in the
     /// agent's files. Waiting at the prompt holds no invocation open on the agent.
     ///
-    /// The prompt continues unfinished input on a new line, completes command names and paths
+    /// With colours on, the prompt shows the agent's status, type and name, the directory, the
+    /// git branch and the last result as coloured blocks. It continues unfinished input on a new line, completes command names and paths
     /// on the agent with Tab, and keeps a history per agent. `help` explains the session and
     /// `tools` lists the tools bound to the agent. Leave with `exit`, `exit N` or Ctrl+D.
     /// Ctrl+C clears the line; while a command runs it stops waiting for it, and the command
@@ -810,6 +811,16 @@ pub enum GolemCliSubcommand {
         /// Seconds each command may run before the tool stops it; defaults to the tool's limit
         #[arg(long, value_name = "SECONDS")]
         timeout: Option<u32>,
+        /// Join the prompt's coloured blocks with points and show the git branch behind a branch
+        /// glyph. This needs a font with Powerline glyphs, such as a Nerd Font, so it is the
+        /// default only in terminals that draw those glyphs themselves (kitty, WezTerm, Ghostty).
+        /// `GOLEM_SSH_POWERLINE=1` in the environment does the same for every session
+        #[arg(long, conflicts_with = "no_powerline")]
+        powerline: bool,
+        /// Draw the blocks with straight edges and the word `git`, which every font shows.
+        /// `GOLEM_SSH_POWERLINE=0` does the same for every session
+        #[arg(long)]
+        no_powerline: bool,
     },
     /// Deploy application
     #[command(after_help = crate::command_examples::DEPLOY)]

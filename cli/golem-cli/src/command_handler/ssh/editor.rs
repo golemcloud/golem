@@ -20,17 +20,19 @@ use super::highlight::{Paint, paints};
 use super::history::SessionHistory;
 use super::syntax::is_complete;
 use reedline::{
-    Color, ColumnarMenu, Completer, CompletionResult, DefaultHinter, Emacs, Highlighter, KeyCode,
-    KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch,
+    Color, ColumnarMenu, Completer, CompletionResult, DefaultHinter, Emacs, Highlighter, IdeMenu,
+    KeyCode, KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch,
     PromptHistorySearchStatus, Reedline, ReedlineEvent, ReedlineMenu, Span, StyledText, Suggestion,
     ValidationResult, Validator, default_emacs_keybindings,
 };
 use std::borrow::Cow;
+use unicode_width::UnicodeWidthStr;
 
 const COMPLETION_MENU: &str = "completion_menu";
 
-/// Builds the editor. It paints on stderr. Enter continues unfinished input on a new line,
-/// Tab completes from the agent, and typed text is coloured when `colorize` is set.
+/// Builds the editor. It paints on stderr. Enter continues unfinished input on a new line and
+/// Tab completes from the agent. With `colorize` the session has the block look: typed text is
+/// coloured and the completions are a bordered list that says what each one is.
 pub fn build(colorize: bool, history: SessionHistory, completions: Completions) -> Reedline {
     let mut keybindings = default_emacs_keybindings();
     keybindings.add_binding(
@@ -52,10 +54,11 @@ pub fn build(colorize: bool, history: SessionHistory, completions: Completions) 
             DefaultHinter::default().with_style(Color::DarkGray.normal()),
         ))
         .with_validator(Box::new(Finished))
-        .with_completer(Box::new(FromAgent(completions.clone())))
-        .with_menu(ReedlineMenu::EngineCompleter(Box::new(
-            ColumnarMenu::default().with_name(COMPLETION_MENU),
-        )))
+        .with_completer(Box::new(FromAgent {
+            completions: completions.clone(),
+            kinds: colorize,
+        }))
+        .with_menu(completion_menu(colorize))
         .with_quick_completions(true)
         .with_partial_completions(true)
         .with_edit_mode(Box::new(Emacs::new(keybindings)))
@@ -64,6 +67,30 @@ pub fn build(colorize: bool, history: SessionHistory, completions: Completions) 
         editor.with_highlighter(Box::new(Coloured(completions)))
     } else {
         editor.with_highlighter(Box::new(Uncoloured))
+    }
+}
+
+/// The list Tab opens. Neither has a marker: the prompt stays as it is while the list is open.
+fn completion_menu(blocks: bool) -> ReedlineMenu {
+    if blocks {
+        let selected = Color::Black.on(Color::Green);
+        ReedlineMenu::EngineCompleter(Box::new(
+            IdeMenu::default()
+                .with_name(COMPLETION_MENU)
+                .with_marker("")
+                .with_default_border()
+                .with_padding(1)
+                .with_text_style(Color::Default.normal())
+                .with_match_text_style(Color::Default.bold())
+                .with_selected_text_style(selected)
+                .with_selected_match_text_style(selected.bold()),
+        ))
+    } else {
+        ReedlineMenu::EngineCompleter(Box::new(
+            ColumnarMenu::default()
+                .with_name(COMPLETION_MENU)
+                .with_marker(""),
+        ))
     }
 }
 
@@ -80,21 +107,46 @@ impl Validator for Finished {
     }
 }
 
-struct FromAgent(Completions);
+struct FromAgent {
+    completions: Completions,
+    /// Whether the list says what each completion is.
+    kinds: bool,
+}
 
 impl Completer for FromAgent {
     fn complete(&mut self, line: &str, position: usize) -> CompletionResult {
-        let suggestions: Vec<Suggestion> = self
-            .0
-            .complete(line, position)
+        let candidates = self.completions.complete(line, position);
+        let width = candidates
+            .iter()
+            .map(|candidate| candidate.value.width())
+            .max()
+            .unwrap_or(0);
+        let mut suggestions: Vec<Suggestion> = candidates
             .into_iter()
             .map(|candidate| Suggestion {
+                // The names in one column, what each one is in the next.
+                display_override: self.kinds.then(|| {
+                    format!(
+                        "{}{}  {}",
+                        candidate.value,
+                        " ".repeat(width - candidate.value.width()),
+                        candidate.kind.label()
+                    )
+                }),
                 value: candidate.value,
                 span: Span::new(candidate.start, candidate.end),
                 append_whitespace: candidate.append_space,
                 ..Suggestion::default()
             })
             .collect();
+        if suggestions.is_empty() {
+            // With nothing to offer the menu would announce "NO RECORDS FOUND". One suggestion
+            // that inserts nothing makes Tab do nothing instead.
+            suggestions.push(Suggestion {
+                span: Span::new(position, position),
+                ..Suggestion::default()
+            });
+        }
         CompletionResult::fresh(suggestions)
     }
 }
@@ -133,16 +185,35 @@ impl Highlighter for Uncoloured {
     }
 }
 
-/// The prompt text before the first line, and a dim marker before each continued line.
-pub struct SshPrompt(pub String);
+/// What the editor draws around the text being typed.
+pub struct SshPrompt {
+    /// Everything before the typed text, which starts after its last line.
+    pub left: String,
+    /// Kept at the right edge of the first line for as long as the typed text leaves it room.
+    pub right: String,
+    /// Starts each continued line.
+    pub continuation: &'static str,
+}
+
+impl SshPrompt {
+    /// One line of text and a dot before each continued line: the prompt without the block
+    /// look.
+    pub fn plain(text: String) -> Self {
+        Self {
+            left: text,
+            right: String::new(),
+            continuation: "\u{b7} ",
+        }
+    }
+}
 
 impl Prompt for SshPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.0)
+        Cow::Borrowed(&self.left)
     }
 
     fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Borrowed("")
+        Cow::Borrowed(&self.right)
     }
 
     fn render_prompt_indicator(&self, _mode: PromptEditMode) -> Cow<'_, str> {
@@ -150,7 +221,7 @@ impl Prompt for SshPrompt {
     }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
-        Cow::Borrowed("\u{b7} ")
+        Cow::Borrowed(self.continuation)
     }
 
     fn render_prompt_history_search_indicator(
@@ -170,9 +241,9 @@ impl Prompt for SshPrompt {
 
 #[cfg(test)]
 mod tests {
-    use super::{Coloured, Finished, FromAgent};
+    use super::{Coloured, Finished, FromAgent, SshPrompt};
     use crate::command_handler::ssh::completion::{COMMANDS_SCRIPT, Completions, Fetch};
-    use reedline::{Completer, Highlighter, ValidationResult, Validator};
+    use reedline::{Completer, Highlighter, Prompt, Suggestion, ValidationResult, Validator};
     use std::sync::Arc;
     use test_r::test;
 
@@ -180,7 +251,14 @@ mod tests {
 
     impl Fetch for Agent {
         fn run(&self, _cwd: &str, script: &str) -> Option<String> {
-            (script == COMMANDS_SCRIPT).then(|| "grep\nls\n".to_string())
+            (script == COMMANDS_SCRIPT).then(|| "for\ngrep\nls\nlsof\n".to_string())
+        }
+    }
+
+    fn completer(kinds: bool) -> FromAgent {
+        FromAgent {
+            completions: Completions::new(Arc::new(Agent), ""),
+            kinds,
         }
     }
 
@@ -198,13 +276,67 @@ mod tests {
 
     #[test]
     fn tab_replaces_the_word_under_the_cursor() {
-        let mut completer = FromAgent(Completions::new(Arc::new(Agent), ""));
+        let mut completer = completer(false);
         let result = completer.complete("ls | gr", 7);
         let suggestions = result.suggestions();
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].value, "grep");
         assert_eq!((suggestions[0].span.start, suggestions[0].span.end), (5, 7));
         assert!(suggestions[0].append_whitespace);
+    }
+
+    #[test]
+    fn tab_with_nothing_to_offer_changes_nothing() {
+        let mut completer = completer(true);
+        for (line, position) in [("zzz", 3), ("echo 'ab", 8)] {
+            let result = completer.complete(line, position);
+            let suggestions = result.suggestions();
+            assert_eq!(suggestions.len(), 1, "{line:?}");
+            assert_eq!(suggestions[0].value, "");
+            assert_eq!(suggestions[0].display_value(), "");
+            assert_eq!(
+                (suggestions[0].span.start, suggestions[0].span.end),
+                (position, position)
+            );
+            assert!(!suggestions[0].append_whitespace);
+        }
+    }
+
+    #[test]
+    fn the_block_list_names_the_kind_beside_each_completion() {
+        let mut blocks = completer(true);
+        let result = blocks.complete("l", 1);
+        let shown: Vec<&str> = result
+            .suggestions()
+            .iter()
+            .map(Suggestion::display_value)
+            .collect();
+        assert_eq!(shown, ["ls    command", "lsof  command"]);
+        // What Tab inserts is the name alone.
+        assert_eq!(result.suggestions()[0].value, "ls");
+        let result = blocks.complete("fo", 2);
+        assert_eq!(result.suggestions()[0].display_value(), "for  keyword");
+
+        let mut plain = completer(false);
+        let result = plain.complete("l", 1);
+        assert_eq!(result.suggestions()[0].display_override, None);
+    }
+
+    #[test]
+    fn the_prompt_draws_what_it_is_given() {
+        let plain = SshPrompt::plain("agent \u{276f} ".to_string());
+        assert_eq!(plain.render_prompt_left(), "agent \u{276f} ");
+        assert_eq!(plain.render_prompt_right(), "");
+        assert_eq!(plain.render_prompt_multiline_indicator(), "\u{b7} ");
+
+        let blocks = SshPrompt {
+            left: "blocks\n> ".to_string(),
+            right: "result".to_string(),
+            continuation: "| ",
+        };
+        assert_eq!(blocks.render_prompt_left(), "blocks\n> ");
+        assert_eq!(blocks.render_prompt_right(), "result");
+        assert_eq!(blocks.render_prompt_multiline_indicator(), "| ");
     }
 
     #[test]

@@ -79,6 +79,14 @@ pub fn scan(input: &str) -> Scan {
     scanner.finish()
 }
 
+/// Whether bash reads `word` as a reserved word where a command starts.
+pub fn is_reserved_word(word: &str) -> bool {
+    matches!(
+        scan(word).tokens.as_slice(),
+        [Token { kind: TokenKind::Reserved, start: 0, end }] if *end == word.len()
+    )
+}
+
 /// Whether Enter should submit `input`, rather than continue it on a new line.
 pub fn is_complete(input: &str) -> bool {
     scan(input).complete
@@ -92,12 +100,14 @@ pub fn cursor_word(input: &str, cursor: usize) -> Option<CursorWord> {
     if !scan.plain_end {
         return None;
     }
-    if let Some(&Token {
-        kind: TokenKind::Word { command },
-        start,
-        end,
-    }) = scan.tokens.last()
+    if let Some(&Token { kind, start, end }) = scan.tokens.last()
         && end == cursor
+        && let Some(command) = match kind {
+            TokenKind::Word { command } => Some(command),
+            // A reserved word may be the start of a longer command name: `fi` of `find`.
+            TokenKind::Reserved => Some(true),
+            _ => None,
+        }
     {
         let text = &prefix[start..end];
         let special = text.starts_with('~')
@@ -1036,8 +1046,22 @@ enum Dollar {
 
 #[cfg(test)]
 mod tests {
-    use super::{CursorWord, Position, TokenKind, cursor_word, is_complete, scan};
+    use super::{
+        CursorWord, Position, TokenKind, cursor_word, is_complete, is_reserved_word, scan,
+    };
     use test_r::test;
+
+    #[test]
+    fn reserved_words_are_told_from_command_names() {
+        for word in [
+            "if", "fi", "for", "done", "case", "esac", "while", "{", "[[",
+        ] {
+            assert!(is_reserved_word(word), "{word}");
+        }
+        for word in ["find", "fixture", "file", "format", "fi x", ""] {
+            assert!(!is_reserved_word(word), "{word:?}");
+        }
+    }
 
     #[test]
     fn finished_input_is_submitted() {
@@ -1337,6 +1361,10 @@ mod tests {
         assert_eq!(word("if tr"), Some((3, "tr".to_string(), Command)));
         assert_eq!(word("echo $(da"), Some((7, "da".to_string(), Command)));
         assert_eq!(word("./scr"), Some((0, "./scr".to_string(), Command)));
+        // A reserved word may be the start of a longer command name: `fi` of `find`.
+        assert_eq!(word("fi"), Some((0, "fi".to_string(), Command)));
+        assert_eq!(word("ls; do"), Some((4, "do".to_string(), Command)));
+        assert_eq!(word("if"), Some((0, "if".to_string(), Command)));
         // The middle of a line: only the text before the cursor counts.
         assert_eq!(
             cursor_word("ls /tm rest", 6).map(|word| word.text),

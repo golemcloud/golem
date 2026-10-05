@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The line shown while a command runs: a spinner, the elapsed time and how to stop waiting.
+//! The line shown while a command runs: the elapsed time and how to stop waiting, as a block
+//! line with colours and behind a spinner without.
+
+use super::look;
 
 use std::io::Write;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -41,16 +44,14 @@ pub const ERASE: &str = "\r\x1b[2K";
 
 /// One redraw of the line. It returns to the start of the line and clears what was there.
 pub fn frame(tick: usize, elapsed: Duration, colorize: bool) -> String {
-    let spinner = FRAMES[tick % FRAMES.len()];
-    let text = format!(
-        "running\u{2026} {}s \u{b7} Ctrl+C to stop waiting",
-        elapsed.as_secs()
-    );
     if colorize {
-        format!("\r\x1b[36m{spinner}\x1b[0m \x1b[2m{text}\x1b[0m\x1b[K")
-    } else {
-        format!("\r{spinner} {text}\x1b[K")
+        return format!("\r{}\x1b[K", look::running(elapsed));
     }
+    let spinner = FRAMES[tick % FRAMES.len()];
+    format!(
+        "\r{spinner} running\u{2026} {}s \u{b7} Ctrl+C to stop waiting\x1b[K",
+        elapsed.as_secs()
+    )
 }
 
 /// Draws the indicator from its own thread until dropped, then erases it.
@@ -135,9 +136,10 @@ mod tests {
             frame(0, Duration::from_millis(12_900), false),
             "\r\u{28fe} running\u{2026} 12s \u{b7} Ctrl+C to stop waiting\x1b[K"
         );
+        // With colours it is the block look's line.
         assert_eq!(
             frame(9, Duration::from_secs(1), true),
-            "\r\x1b[36m\u{28fd}\x1b[0m \x1b[2mrunning\u{2026} 1s \u{b7} Ctrl+C to stop waiting\x1b[0m\x1b[K"
+            "\r\x1b[1;43;30m RUNNING \x1b[0m\x1b[1;100;97m 1.0s \x1b[0m \x1b[2mctrl+c stops waiting\x1b[0m\x1b[K"
         );
     }
 

@@ -332,11 +332,18 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     tool,
                     cwd,
                     timeout,
+                    powerline,
+                    no_powerline,
                 } => {
+                    let powerline = match (powerline, no_powerline) {
+                        (true, _) => Some(true),
+                        (_, true) => Some(false),
+                        _ => None,
+                    };
                     ctx.get_or_init()
                         .await?
                         .ssh_handler()
-                        .cmd_ssh(agent_id, command, tool, cwd, timeout)
+                        .cmd_ssh(agent_id, command, tool, cwd, timeout, powerline)
                         .await
                 }
                 GolemCliSubcommand::Deploy {

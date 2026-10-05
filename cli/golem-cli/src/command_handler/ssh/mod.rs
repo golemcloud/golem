@@ -22,8 +22,10 @@
 mod completion;
 mod contract;
 mod editor;
+mod git;
 mod highlight;
 mod history;
+mod look;
 mod progress;
 mod syntax;
 
@@ -32,10 +34,11 @@ use self::contract::{
     BashResult, CallFailure, CancelOutcome, InputMode, LocalCommand, NOT_RUN_EXIT, Outcome,
     PromptPart, banner, check_run_contract, classify_cancel, classify_invoke_error, decode_result,
     dimmed, exit_code, global_args, help_text, input_mode, interrupted_message, local_command,
-    lookup_command, prompt, run_argv, strip_cursor_reports, tools_listing,
+    lookup_command, prompt, run_argv, strip_cursor_reports, time_limit, tools_listing,
 };
 use self::editor::SshPrompt;
 use self::history::{SessionHistory, history_file};
+use self::look::{Edges, Readiness};
 use self::progress::Ticker;
 use crate::command_handler::Handlers;
 use crate::command_handler::tool::ToolOwner;
@@ -51,7 +54,7 @@ use anyhow::anyhow;
 use golem_client::api::WorkerClient;
 use golem_client::model::NativeToolInvocationMode;
 use golem_common::base_model::tool::ToolName;
-use golem_common::model::IdempotencyKey;
+use golem_common::model::{AgentStatus, IdempotencyKey};
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_common::schema::tool::Tool;
 use golem_schema::tool::argv::{self, ParsedToolArguments};
@@ -59,6 +62,7 @@ use reedline::{Color, Reedline, Signal};
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines, Stdin};
 use tracing::debug;
 
@@ -94,6 +98,13 @@ const HELPER_WAIT: Duration = Duration::from_secs(3);
 
 /// How long Ctrl+C waits for the answer to its cancel request.
 const CANCEL_WAIT: Duration = Duration::from_secs(5);
+
+/// Set to `1` or `0`, it chooses pointed or straight edges for the prompt's blocks in every
+/// session, without `--powerline` or `--no-powerline`.
+const POWERLINE_VARIABLE: &str = "GOLEM_SSH_POWERLINE";
+
+/// How long a prompt waits to learn what the agent is doing before it is drawn without that.
+const STATUS_WAIT: Duration = Duration::from_secs(1);
 
 /// How long the request that takes a timed-out helper script out of the agent's queue may
 /// take before the editor moves on without its answer.
@@ -201,6 +212,7 @@ impl SshCommandHandler {
         tool: ToolName,
         cwd: Option<String>,
         timeout: Option<u32>,
+        powerline: Option<bool>,
     ) -> anyhow::Result<()> {
         // Only the script's output may reach stdout. Without a terminal to talk to (with `-c` or
         // piped input), the CLI's own messages are held back until something fails.
@@ -227,7 +239,19 @@ impl SshCommandHandler {
 
         let status = match command {
             Some(script) => self.run_once(&session, &script).await,
-            None => self.run_interactive(&mut session).await?,
+            None => {
+                // The command line first, then the standing choice in the environment.
+                let asked = powerline.or_else(|| {
+                    std::env::var(POWERLINE_VARIABLE)
+                        .ok()
+                        .and_then(|value| look::powerline_setting(&value))
+                });
+                let edges = Edges::choose(
+                    asked,
+                    look::draws_powerline(|name| std::env::var(name).ok()),
+                );
+                self.run_interactive(&mut session, edges).await?
+            }
         };
         match status {
             0 => Ok(()),
@@ -322,20 +346,24 @@ impl SshCommandHandler {
                 exit_code(Outcome::NotRun)
             }
             Submission::Interrupted(outcome) => {
-                self.report_interrupted(session, &key, &outcome);
+                self.report_interrupted(session, &key, &outcome, false);
                 exit_code(Outcome::Interrupted)
             }
         }
     }
 
-    async fn run_interactive(&self, session: &mut Session) -> anyhow::Result<u8> {
+    async fn run_interactive(&self, session: &mut Session, edges: Edges) -> anyhow::Result<u8> {
         let mode = input_mode(
             std::io::stdin().is_terminal(),
             std::io::stdout().is_terminal(),
         );
         let terminal = mode != InputMode::Lines;
+        // With colours the session has the block look.
         let colorize = terminal && self.ctx.should_colorize();
-        if terminal {
+        let styled = colorize && std::io::stderr().is_terminal();
+        if styled {
+            log_preformatted(look::banner(&session.agent, &session.tool));
+        } else if terminal {
             logln(banner(&session.agent, &session.tool));
         }
         let completions = Completions::new(Arc::new(self.fetcher(session)), &session.cwd);
@@ -347,6 +375,19 @@ impl SshCommandHandler {
                 tokio::task::spawn_blocking(move || {
                     loader.load_commands();
                 });
+                if colorize {
+                    // The list of completions marks the agent's tools among the command names.
+                    let tool_handler = self.ctx.tool_handler();
+                    let owner = session.owner.clone();
+                    let known = completions.clone();
+                    tokio::spawn(async move {
+                        if let Ok(tools) = tool_handler.registered_tools(&owner).await {
+                            known.set_tools(tools.iter().filter_map(|tool| {
+                                tool.commands.nodes.first().map(|root| root.name.clone())
+                            }));
+                        }
+                    });
+                }
                 Input::Editor(Some(Box::new(editor::build(
                     colorize,
                     self.history(session),
@@ -361,13 +402,60 @@ impl SshCommandHandler {
         let show_progress = mode == InputMode::Editor
             && std::io::stderr().is_terminal()
             && crossterm::terminal::size().is_ok_and(|(columns, _)| progress::fits(columns));
-        let dim_stderr = colorize && std::io::stderr().is_terminal();
 
         let mut last_status = 0;
+        let mut last_elapsed = None;
+        let mut branch: Option<String> = None;
+        // A command has run since the branch was read, so it may be another one now.
+        let mut branch_stale = true;
         loop {
-            let prompt = prompt(&session.agent, &session.cwd, last_status, |part, text| {
+            let line = prompt(&session.agent, &session.cwd, last_status, |part, text| {
                 paint(colorize, part, text)
             });
+            let editor = if colorize && input.is_editor() {
+                let (readiness, queue) = self.agent_state(session).await;
+                // The branch is read with a command on the agent, so only when the agent has git
+                // and would run the command at once.
+                if branch_stale
+                    && readiness == Readiness::Ready
+                    && !session.cwd.is_empty()
+                    && completions
+                        .commands()
+                        .is_some_and(|commands| commands.contains("git"))
+                {
+                    let fetcher = self.fetcher(session);
+                    let cwd = session.cwd.clone();
+                    branch = tokio::task::spawn_blocking(move || git::branch(&fetcher, &cwd))
+                        .await
+                        .unwrap_or(None);
+                    branch_stale = false;
+                }
+                let columns =
+                    crossterm::terminal::size().map_or(80, |(columns, _)| usize::from(columns));
+                SshPrompt {
+                    left: format!(
+                        "{}\n{}",
+                        look::context(
+                            readiness,
+                            &session.agent,
+                            &session.cwd,
+                            branch.as_deref(),
+                            edges,
+                            columns,
+                        ),
+                        look::marker(last_status == 0)
+                    ),
+                    right: look::result(last_status, last_elapsed, queue, edges),
+                    continuation: look::CONTINUATION,
+                }
+            } else {
+                SshPrompt::plain(line.clone())
+            };
+            let prompt = PromptText {
+                editor,
+                line,
+                spaced: colorize,
+            };
             let line = match input.read(prompt).await? {
                 ReadLine::Line(line) => line,
                 ReadLine::Cancelled => continue,
@@ -392,12 +480,15 @@ impl SshCommandHandler {
 
             let key = IdempotencyKey::fresh();
             let ticker = show_progress.then(|| Ticker::start(colorize));
+            let started = Instant::now();
             let submission = self.submit(session, &line, &key).await;
             // Erased before anything else is written.
             drop(ticker);
+            last_elapsed = Some(started.elapsed());
+            branch_stale = true;
             match submission {
                 Submission::Completed(result) => {
-                    write_output(&result, dim_stderr);
+                    write_output(&result, styled);
                     if terminal {
                         end_line(&result, colorize);
                     }
@@ -426,7 +517,7 @@ impl SshCommandHandler {
                     last_status = exit_code(Outcome::NotRun);
                 }
                 Submission::Interrupted(outcome) => {
-                    self.report_interrupted(session, &key, &outcome);
+                    self.report_interrupted(session, &key, &outcome, styled);
                     if !terminal {
                         return Ok(exit_code(Outcome::Interrupted));
                     }
@@ -439,6 +530,29 @@ impl SshCommandHandler {
                 history_failed = true;
                 log_warn(format!("the command history could not be saved: {error}"));
             }
+        }
+    }
+
+    /// What Golem says the agent is doing and how many commands wait on it. A read of the
+    /// agent's metadata, not a call on the agent.
+    async fn agent_state(&self, session: &Session) -> (Readiness, u64) {
+        let Some(agent) = &session.owner.agent_id else {
+            return (Readiness::Unknown, 0);
+        };
+        let lookup = async {
+            let clients = self.ctx.golem_clients().await.ok()?;
+            clients
+                .worker
+                .get_worker_metadata(&agent.component_id.0, &agent.agent_id)
+                .await
+                .ok()
+        };
+        match tokio::time::timeout(STATUS_WAIT, lookup).await {
+            Ok(Some(metadata)) => (
+                readiness(&metadata.status),
+                metadata.pending_invocation_count,
+            ),
+            _ => (Readiness::Unknown, 0),
         }
     }
 
@@ -548,13 +662,27 @@ impl SshCommandHandler {
         }
     }
 
-    fn report_interrupted(&self, session: &Session, key: &IdempotencyKey, outcome: &CancelOutcome) {
+    fn report_interrupted(
+        &self,
+        session: &Session,
+        key: &IdempotencyKey,
+        outcome: &CancelOutcome,
+        styled: bool,
+    ) {
         set_log_output(Output::Stderr);
-        logln(interrupted_message(
-            outcome,
-            &session.agent,
-            session.timeout,
-        ));
+        match outcome {
+            CancelOutcome::Cancelled if styled => log_preformatted(look::cancelled()),
+            CancelOutcome::Running { error } if styled => log_preformatted(look::detached(
+                &session.agent,
+                &time_limit(session.timeout),
+                error.as_deref(),
+            )),
+            _ => logln(interrupted_message(
+                outcome,
+                &session.agent,
+                session.timeout,
+            )),
+        }
         if matches!(outcome, CancelOutcome::Running { .. }) {
             self.report_lookup(session, key);
         }
@@ -730,6 +858,18 @@ fn paint(colorize: bool, part: PromptPart, text: &str) -> String {
     .to_string()
 }
 
+/// What an agent's status means for the next command.
+fn readiness(status: &AgentStatus) -> Readiness {
+    match status {
+        AgentStatus::Idle => Readiness::Ready,
+        AgentStatus::Running
+        | AgentStatus::Suspended
+        | AgentStatus::Interrupted
+        | AgentStatus::Retrying => Readiness::Busy,
+        AgentStatus::Failed | AgentStatus::Exited => Readiness::Failed,
+    }
+}
+
 enum Input {
     /// A terminal: the editor, taken out while a blocking read runs.
     Editor(Option<Box<Reedline>>),
@@ -738,6 +878,16 @@ enum Input {
         lines: Lines<BufReader<Stdin>>,
         prompt: bool,
     },
+}
+
+/// The prompt of one read.
+struct PromptText {
+    /// What the line editor draws.
+    editor: SshPrompt,
+    /// The prompt as one line, for input without the editor.
+    line: String,
+    /// Whether an empty line sets the editor's prompt apart from what is above it.
+    spaced: bool,
 }
 
 enum ReadLine {
@@ -756,6 +906,10 @@ impl Input {
         }
     }
 
+    fn is_editor(&self) -> bool {
+        matches!(self, Input::Editor(_))
+    }
+
     /// Writes the editor's history to its file.
     fn sync_history(&mut self) -> std::io::Result<()> {
         match self {
@@ -764,14 +918,21 @@ impl Input {
         }
     }
 
-    async fn read(&mut self, prompt: String) -> anyhow::Result<ReadLine> {
+    async fn read(&mut self, prompt: PromptText) -> anyhow::Result<ReadLine> {
+        let PromptText {
+            editor: shown,
+            line: prompt,
+            spaced,
+        } = prompt;
         if let Input::Editor(slot) = self {
             let mut editor = slot
                 .take()
                 .expect("the editor is returned after every read");
-            let prompt = prompt.clone();
+            if spaced {
+                let _ = writeln!(std::io::stderr().lock());
+            }
             let (editor, signal) = tokio::task::spawn_blocking(move || {
-                let signal = editor.read_line(&SshPrompt(prompt));
+                let signal = editor.read_line(&shown);
                 (editor, signal)
             })
             .await?;
@@ -811,7 +972,7 @@ impl Input {
 
 #[cfg(test)]
 mod tests {
-    use super::within;
+    use super::{Readiness, readiness, within};
     use crate::command::{GolemCliCommand, GolemCliSubcommand};
     use clap::Parser;
     use std::cell::Cell;
@@ -840,6 +1001,22 @@ mod tests {
         }));
         assert_eq!(prompt, Some(7));
         assert!(!gave_up.get());
+    }
+
+    #[test]
+    fn an_agents_status_says_whether_the_next_command_can_run() {
+        use golem_common::model::AgentStatus;
+        for (status, expected) in [
+            (AgentStatus::Idle, Readiness::Ready),
+            (AgentStatus::Running, Readiness::Busy),
+            (AgentStatus::Suspended, Readiness::Busy),
+            (AgentStatus::Interrupted, Readiness::Busy),
+            (AgentStatus::Retrying, Readiness::Busy),
+            (AgentStatus::Failed, Readiness::Failed),
+            (AgentStatus::Exited, Readiness::Failed),
+        ] {
+            assert_eq!(readiness(&status), expected, "{status:?}");
+        }
     }
 
     #[test]

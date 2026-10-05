@@ -484,15 +484,20 @@ pub fn interrupted_message(outcome: &CancelOutcome, agent: &str, timeout: Option
                 .as_ref()
                 .map(|error| format!("The cancel request failed: {error}. "))
                 .unwrap_or_default();
-            let limit = match timeout {
-                Some(seconds) => format!("its time limit ({seconds} s)"),
-                None => "the tool's time limit".to_string(),
-            };
+            let limit = time_limit(timeout);
             format!(
                 "{failed}Stopped waiting. The command is still running on {agent} and stops at \
                  {limit} at the latest. Your next command will wait behind it."
             )
         }
+    }
+}
+
+/// When a command left running stops at the latest, as the notices after Ctrl+C put it.
+pub fn time_limit(timeout: Option<u32>) -> String {
+    match timeout {
+        Some(seconds) => format!("its time limit ({seconds} s)"),
+        None => "the tool's time limit".to_string(),
     }
 }
 
@@ -570,7 +575,7 @@ mod tests {
         NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract, classify_cancel,
         classify_invoke_error, decode_result, dimmed, exit_code, global_args, help_text,
         input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv,
-        strip_cursor_reports, tools_listing,
+        strip_cursor_reports, time_limit, tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
     use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
@@ -1108,6 +1113,12 @@ mod tests {
                 error: Some("connection refused".to_string())
             }
         );
+    }
+
+    #[test]
+    fn the_time_limit_names_the_session_limit_or_the_tools() {
+        assert_eq!(time_limit(Some(30)), "its time limit (30 s)");
+        assert_eq!(time_limit(None), "the tool's time limit");
     }
 
     #[test]
