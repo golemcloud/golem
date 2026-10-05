@@ -89,8 +89,8 @@ pub(super) struct State {
     /// The work of each agent that can write its snapshots and has not ended: store calls, also
     /// those whose caller stopped waiting, and the source holds of forks.
     busy: HashMap<AgentSnapshots, NonZeroU32>,
-    /// The agents whose save runs now.
-    save_running: HashSet<AgentSnapshots>,
+    /// The save mark of each agent: the job whose save call may start a run now.
+    save_running: HashMap<AgentSnapshots, JobId>,
     /// The agents that a worker of the pool takes next, oldest first. An agent can be here when it
     /// is no longer ready, and `take_ready` skips it.
     ready: VecDeque<AgentSnapshots>,
@@ -171,6 +171,9 @@ enum RunPhase {
     /// A run failed, and the store call waits for its next run. No write of the call can still
     /// land, and the call runs nothing now.
     WaitingAfterFailure,
+    /// The store call waits until its writes that can still land have landed or can no longer
+    /// land. It holds no slot, and it starts no run and no write until a new grant.
+    WaitingForLateWrites,
 }
 
 /// Clean-up work of one agent.
@@ -203,8 +206,11 @@ struct Cleanup {
 /// What a store call does, for the count of the work of its agents.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CallKind {
-    /// A save. Only one save of an agent runs at a time.
-    Save,
+    /// A save of the upload of the job `job`. At most one save call of an agent holds the save
+    /// mark, and only that call can start a run. A save call loses the mark when an admission
+    /// replaces its job; it then starts no run and no write, and ends after the waits and the
+    /// check of its writes that can still land.
+    Save { job: JobId },
     /// A copy into the agent `to`. It counts on both agents.
     Copy { to: AgentSnapshots },
     /// Any other call that writes.
@@ -292,6 +298,7 @@ enum Transition {
     Replace,
     RunGranted,
     RunFailed,
+    RunWaitingForLateWrites,
     Decide,
     End,
     StartWait,
@@ -316,6 +323,7 @@ fn wakes(transition: Transition) -> bool {
         Transition::Decide
         | Transition::Replace
         | Transition::RunFailed
+        | Transition::RunWaitingForLateWrites
         | Transition::End
         | Transition::RequestNames
         | Transition::RequestAll
@@ -403,10 +411,11 @@ pub(super) fn keeps_files(mode: AgentMode) -> bool {
 
 /// Admits a job of `kind` with `name` for `agent`, in the order room, delete of all snapshots,
 /// running job. `stop` stops the job, `retention_stop` stops its deletes after its save, and `room`
-/// tells whether the volume has room for a capture. A periodic job that waits for its next run
-/// after a failed run and has not decided is replaced: the old job leaves the state, its decision
-/// is `Replaced` for the starts that wait for it, and the answer gives its stop, which the caller
-/// cancels. Any other running job refuses the admission with `UploadInFlight`. Gives the next state
+/// tells whether the volume has room for a capture. A periodic job that has not decided, whose
+/// store call still holds the save mark, and that waits for its next run after a failed run or
+/// waits for its late writes, is replaced: the old job leaves the state, its save call loses the
+/// save mark, its decision is `Replaced` for the starts that wait for it, and the answer gives its
+/// stop, which the caller cancels. Any other running job refuses the admission with `UploadInFlight`. Gives the next state
 /// and the job, or the refusal.
 pub(super) fn admit(
     mut state: State,
@@ -421,7 +430,10 @@ pub(super) fn admit(
         id: job.id,
         retention_stop: job.retention_stop.clone(),
     });
-    let replaceable = state.jobs.get(agent).is_some_and(replaceable);
+    let replaceable = state
+        .jobs
+        .get(agent)
+        .is_some_and(|job| replaceable(&state, agent, job));
     let skip = if !room {
         Some(SnapshotSkip::VolumeUnderPressure)
     } else if all_requested(&state, agent) {
@@ -434,10 +446,12 @@ pub(super) fn admit(
     if let Some(skip) = skip {
         return Next::of(Transition::Admit, state, Err(Refusal { skip, running }));
     }
-    let replaced = state
-        .jobs
-        .remove(agent)
-        .map(|old| ended_with(&mut state, agent, old, JobDecision::Replaced));
+    let replaced = state.jobs.remove(agent).map(|old| {
+        if state.save_running.get(agent) == Some(&old.id) {
+            state.save_running.remove(agent);
+        }
+        ended_with(&mut state, agent, old, JobDecision::Replaced)
+    });
     state.last_job += 1;
     let id = state.last_job;
     state.jobs.insert(
@@ -492,12 +506,17 @@ pub(super) fn revert_ended(mut state: State, agent: &AgentSnapshots) -> Next<()>
     Next::of(Transition::RevertEnded, state, ())
 }
 
-/// Whether an admission replaces `job`: a periodic job that waits for its next run after a failed
-/// run and has not decided.
-fn replaceable(job: &Job) -> bool {
+/// Whether an admission replaces `job`, the job of `agent`: a periodic job that has not decided,
+/// whose store call still holds the save mark, and that waits for its next run after a failed run
+/// or waits for its late writes. A job whose call has returned is never replaced.
+fn replaceable(state: &State, agent: &AgentSnapshots, job: &Job) -> bool {
     job.kind == SnapshotKind::Periodic
-        && job.run_phase == RunPhase::WaitingAfterFailure
+        && matches!(
+            job.run_phase,
+            RunPhase::WaitingAfterFailure | RunPhase::WaitingForLateWrites
+        )
         && !matches!(job.phase, JobPhase::Decided(_))
+        && state.save_running.get(agent) == Some(&job.id)
 }
 
 /// Keeps the decision of a job that left the state while starts wait for it, and gives its stop.
@@ -546,6 +565,19 @@ pub(super) fn run_failed(mut state: State, agent: &AgentSnapshots, id: JobId) ->
     Next::of(Transition::RunFailed, state, ())
 }
 
+/// The store call of the job `id` waits until its writes that can still land have landed or can
+/// no longer land. A report of a job that is no longer live changes nothing.
+pub(super) fn run_waiting_for_late_writes(
+    mut state: State,
+    agent: &AgentSnapshots,
+    id: JobId,
+) -> Next<()> {
+    if let Some(job) = live(&mut state, agent, id) {
+        job.run_phase = RunPhase::WaitingForLateWrites;
+    }
+    Next::of(Transition::RunWaitingForLateWrites, state, ())
+}
+
 /// Whether the deletes of the job of `agent` after its save are stopped, when a job runs.
 #[cfg(test)]
 pub(super) fn job_retention_stopped(state: &State, agent: &AgentSnapshots) -> Option<bool> {
@@ -569,7 +601,7 @@ pub(super) fn is_replaceable(state: &State, agent: &AgentSnapshots, id: JobId) -
     state
         .jobs
         .get(agent)
-        .is_some_and(|job| job.id == id && replaceable(job))
+        .is_some_and(|job| job.id == id && replaceable(state, agent, job))
 }
 
 /// The job `id` decided. The first decision stays.
@@ -979,7 +1011,7 @@ pub(super) fn all_requested(state: &State, agent: &AgentSnapshots) -> bool {
 
 /// Whether a save of `agent` runs now.
 pub(super) fn save_running(state: &State, agent: &AgentSnapshots) -> bool {
-    state.save_running.contains(agent)
+    state.save_running.contains_key(agent)
 }
 
 /// The number of open store calls and fork holds of `agent`.
@@ -999,11 +1031,19 @@ pub(super) fn cleanups_lost_at_shutdown(state: &State) -> usize {
             .count()
 }
 
-/// Begins a store call of `kind` for `agent`. A save is refused while another save of the agent
-/// runs. The call counts on `agent`, and a copy also on the agent that it copies into.
+/// Begins a store call of `kind` for `agent`. A save is refused while another save call of the
+/// agent holds the save mark; a save that begins takes the mark. The call counts on `agent`, and a
+/// copy also on the agent that it copies into.
 pub(super) fn begin_call(mut state: State, agent: &AgentSnapshots, kind: &CallKind) -> Next<bool> {
     let begun = match kind {
-        CallKind::Save => state.save_running.insert(agent.clone()),
+        CallKind::Save { job } => {
+            if state.save_running.contains_key(agent) {
+                false
+            } else {
+                state.save_running.insert(agent.clone(), *job);
+                true
+            }
+        }
         CallKind::Copy { .. } | CallKind::Other => true,
     };
     if begun {
@@ -1015,8 +1055,8 @@ pub(super) fn begin_call(mut state: State, agent: &AgentSnapshots, kind: &CallKi
     Next::of(Transition::BeginCall, state, begun)
 }
 
-/// A store call of `kind` for `agent` ended. Its counts end, and a save frees the agent for the
-/// next save.
+/// A store call of `kind` for `agent` ended. Its counts end, and a save gives the save mark back
+/// when it still holds it.
 pub(super) fn store_call_ended(
     mut state: State,
     agent: &AgentSnapshots,
@@ -1024,8 +1064,10 @@ pub(super) fn store_call_ended(
 ) -> Next<()> {
     state.busy = with_one_less(state.busy, agent);
     match kind {
-        CallKind::Save => {
-            state.save_running.remove(agent);
+        CallKind::Save { job } => {
+            if state.save_running.get(agent) == Some(job) {
+                state.save_running.remove(agent);
+            }
         }
         CallKind::Copy { to } => {
             state.busy = with_one_less(state.busy, to);
@@ -1186,8 +1228,7 @@ pub(super) fn store_check(
 pub(super) enum UpdateAdmit {
     /// It fails with the refusal.
     Refuse,
-    /// It waits until the job is gone or waits for its next run after a failed run, then asks
-    /// again. With `stop_deletes`, it first stops the deletes of the running job.
+    /// It waits until the job is gone or an admission can replace it, then asks again. With `stop_deletes`, it first stops the deletes of the running job.
     WaitForEndOrFailure {
         running: RunningJob,
         stop_deletes: bool,
@@ -1195,8 +1236,8 @@ pub(super) enum UpdateAdmit {
 }
 
 /// What a manual update does after an admission gave `refusal`. Only a job that runs makes it
-/// wait: a periodic job that an admission replaces once it waits after a failed run, or a job that
-/// ends after its deletes, such as the job of an earlier manual update in its retention. The
+/// wait: a periodic job that an admission replaces once its store call waits after a failed run or
+/// waits for its late writes, or a job that ends after its deletes, such as the job of an earlier manual update in its retention. The
 /// update refuses when its deadline passed or the service shuts down. It stops the deletes of a
 /// running job once: not again for the job `stopped` whose deletes an earlier ask stopped.
 pub(super) fn update_admission(
@@ -1305,7 +1346,12 @@ mod tests {
         step(state, |state| super::run_granted(state, agent, id))
     }
 
+    /// The save call of the job `id` holds the save mark, as the call that runs the job's save
+    /// does, and its run failed: the call waits for its next run.
     fn failed_run(state: &mut State, agent: &AgentSnapshots, id: JobId) {
+        if !state.save_running.contains_key(agent) {
+            begin(state, agent, &CallKind::Save { job: id });
+        }
         step(state, |state| super::run_failed(state, agent, id))
     }
 
@@ -1520,9 +1566,15 @@ mod tests {
         let held = take(&mut state).is_none();
 
         admitted(&mut state, &agent, &second);
+        // The save call of the replaced job runs on as a tail until it returns.
+        let while_the_tail_runs = take(&mut state).is_none();
+        ended_call(&mut state, &agent, &CallKind::Save { job: old });
         let taken = take(&mut state).map(|(taken, _)| taken);
 
-        assert_eq!((held, taken), (true, Some(agent)));
+        assert_eq!(
+            (held, while_the_tail_runs, taken),
+            (true, true, Some(agent))
+        );
     }
 
     #[test]
@@ -1777,6 +1829,7 @@ mod tests {
                 .wakes(),
                 super::run_granted(fresh(), &agent, 1).wakes(),
                 super::run_failed(fresh(), &agent, 1).wakes(),
+                super::run_waiting_for_late_writes(fresh(), &agent, 1).wakes(),
                 replacing(&agent, &name).wakes(),
                 super::decide(fresh(), &agent, 1, JobDecision::Stopped).wakes(),
                 end(fresh(), &agent, 1).wakes(),
@@ -1808,8 +1861,8 @@ mod tests {
                     .wakes(),
             ],
             [
-                false, false, true, true, true, true, false, false, true, true, false, true, false,
-                true, false, false, true, false, false
+                false, false, true, true, true, true, true, false, false, true, true, false, true,
+                false, true, false, false, true, false, false
             ]
         );
     }
@@ -2217,13 +2270,13 @@ mod tests {
         let agent = agent_snapshots("tail");
         let name = FilesystemSnapshotName::periodic();
         let id = admitted(&mut state, &agent, &name);
-        assert!(begin(&mut state, &agent, &CallKind::Save));
+        assert!(begin(&mut state, &agent, &CallKind::Save { job: 0 }));
 
         let stop = delete_all_snapshots(&mut state, &agent);
         end_job(&mut state, &agent, id);
         let while_the_save_runs = take(&mut state);
-        let second_save = begin(&mut state, &agent, &CallKind::Save);
-        ended_call(&mut state, &agent, &CallKind::Save);
+        let second_save = begin(&mut state, &agent, &CallKind::Save { job: 0 });
+        ended_call(&mut state, &agent, &CallKind::Save { job: 0 });
         let after = take(&mut state).map(|(_, work)| work);
 
         assert!(stop.is_some());
@@ -2257,16 +2310,145 @@ mod tests {
         assert!(state.busy.is_empty());
     }
 
+    /// The phase of the store call of a job in the table of [`replaceable`].
+    #[derive(Clone, Copy, Debug)]
+    enum Call {
+        NotWaiting,
+        AfterFailure,
+        ForLateWrites,
+    }
+
+    /// Who holds the save mark of the agent in the table of [`replaceable`].
+    #[derive(Clone, Copy, Debug)]
+    enum Mark {
+        Own,
+        Other,
+        Free,
+    }
+
+    /// Whether an admission replaces a job of `kind` whose run phase is `call`, which decided when
+    /// `decided`, while `mark` holds the save mark.
+    fn replaceable_case(kind: SnapshotKind, call: Call, decided: bool, mark: Mark) -> bool {
+        let mut state = State::default();
+        let agent = agent_snapshots("replaceable");
+        let name = FilesystemSnapshotName::periodic();
+        let id = admit_kind(
+            &mut state,
+            &agent,
+            &name,
+            kind,
+            CancellationToken::new(),
+            CancellationToken::new(),
+            true,
+        )
+        .unwrap()
+        .id;
+        saving(&mut state, &agent, id);
+        match call {
+            Call::NotWaiting => {}
+            Call::AfterFailure => step(&mut state, |state| super::run_failed(state, &agent, id)),
+            Call::ForLateWrites => step(&mut state, |state| {
+                run_waiting_for_late_writes(state, &agent, id)
+            }),
+        }
+        if decided {
+            decide(&mut state, &agent, id, JobDecision::SaveFailed);
+        }
+        match mark {
+            Mark::Own => assert!(begin(&mut state, &agent, &CallKind::Save { job: id })),
+            Mark::Other => assert!(begin(&mut state, &agent, &CallKind::Save { job: id + 1 })),
+            Mark::Free => {}
+        }
+        is_replaceable(&state, &agent, id)
+    }
+
+    #[test]
+    fn only_a_periodic_job_whose_live_call_waits_and_that_has_not_decided_is_replaceable() {
+        let cases = [SnapshotKind::Periodic, SnapshotKind::Update]
+            .into_iter()
+            .flat_map(|kind| {
+                [Call::NotWaiting, Call::AfterFailure, Call::ForLateWrites]
+                    .into_iter()
+                    .flat_map(move |call| {
+                        [false, true].into_iter().flat_map(move |decided| {
+                            [Mark::Own, Mark::Other, Mark::Free]
+                                .into_iter()
+                                .map(move |mark| (kind, call, decided, mark))
+                        })
+                    })
+            })
+            .map(|(kind, call, decided, mark)| {
+                let replaceable = replaceable_case(kind, call, decided, mark);
+                let expected = kind == SnapshotKind::Periodic
+                    && matches!(call, Call::AfterFailure | Call::ForLateWrites)
+                    && !decided
+                    && matches!(mark, Mark::Own);
+                (
+                    format!("{kind:?} {call:?} decided={decided} {mark:?}"),
+                    replaceable == expected,
+                )
+            })
+            .filter(|(_, right)| !right)
+            .map(|(case, _)| case)
+            .collect::<Vec<_>>();
+
+        assert_eq!(cases, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_replacement_frees_the_save_mark_of_the_old_call_and_its_end_leaves_the_new_mark() {
+        let mut state = State::default();
+        let agent = agent_snapshots("replaced-tail");
+        let old = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+        saving(&mut state, &agent, old);
+        assert!(begin(&mut state, &agent, &CallKind::Save { job: old }));
+        step(&mut state, |state| {
+            run_waiting_for_late_writes(state, &agent, old)
+        });
+
+        let new = admitted(&mut state, &agent, &FilesystemSnapshotName::periodic());
+        let new_save = begin(&mut state, &agent, &CallKind::Save { job: new });
+        let busy_with_both = busy(&state, &agent);
+        let old_run_granted = granted(&mut state, &agent, old);
+        ended_call(&mut state, &agent, &CallKind::Save { job: old });
+        let after_the_tail = (
+            state.save_running.get(&agent).copied(),
+            busy(&state, &agent),
+        );
+        step(&mut state, |state| {
+            run_waiting_for_late_writes(state, &agent, old)
+        });
+        saving(&mut state, &agent, new);
+        step(&mut state, |state| {
+            run_waiting_for_late_writes(state, &agent, new)
+        });
+        let new_replaceable_while_its_call_lives = is_replaceable(&state, &agent, new);
+        ended_call(&mut state, &agent, &CallKind::Save { job: new });
+        let new_replaceable_after_its_call = is_replaceable(&state, &agent, new);
+
+        assert_eq!(
+            (
+                new_save,
+                busy_with_both,
+                old_run_granted,
+                after_the_tail,
+                new_replaceable_while_its_call_lives,
+                new_replaceable_after_its_call,
+            ),
+            (true, 2, false, (Some(new), 1), true, false)
+        );
+    }
+
     #[test]
     fn a_second_save_of_an_agent_is_refused_while_the_first_runs() {
         let mut state = State::default();
         let agent = agent_snapshots("one-save");
 
-        let first = begin(&mut state, &agent, &CallKind::Save);
-        let second = begin(&mut state, &agent, &CallKind::Save);
+        let first = begin(&mut state, &agent, &CallKind::Save { job: 0 });
+        let second = begin(&mut state, &agent, &CallKind::Save { job: 0 });
         let other = begin(&mut state, &agent, &CallKind::Other);
         let running = save_running(&state, &agent);
-        ended_call(&mut state, &agent, &CallKind::Save);
+        ended_call(&mut state, &agent, &CallKind::Save { job: 0 });
         let after = (save_running(&state, &agent), busy(&state, &agent));
 
         assert_eq!((first, second, other, running), (true, false, true, true));
@@ -2567,7 +2749,7 @@ mod tests {
                     Step::BeginCall(agent, to, save) => {
                         let kind = match (to, save) {
                             (Some(to), _) => CallKind::Copy { to: agents[to].clone() },
-                            (None, true) => CallKind::Save,
+                            (None, true) => CallKind::Save { job: 0 },
                             (None, false) => CallKind::Other,
                         };
                         if begin(&mut state, &agents[agent], &kind) {

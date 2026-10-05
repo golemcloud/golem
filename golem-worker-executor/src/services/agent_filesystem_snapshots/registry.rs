@@ -237,6 +237,11 @@ impl JobTicket {
     pub(super) fn agent(&self) -> &AgentSnapshots {
         &self.agent
     }
+
+    /// The number of the job.
+    pub(super) fn id(&self) -> JobId {
+        self.id
+    }
 }
 
 impl Drop for JobTicket {
@@ -265,6 +270,13 @@ impl JobRuns {
     pub(super) fn failed(&self) {
         self.registry
             .apply(|state| rules::run_failed(state, &self.agent, self.id));
+    }
+
+    /// The store call of the upload waits until its writes that can still land have landed or
+    /// can no longer land.
+    pub(super) fn waiting_for_late_writes(&self) {
+        self.registry
+            .apply(|state| rules::run_waiting_for_late_writes(state, &self.agent, self.id));
     }
 }
 

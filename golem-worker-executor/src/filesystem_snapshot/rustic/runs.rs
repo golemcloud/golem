@@ -560,6 +560,7 @@ impl Shell<'_> {
                 until,
                 after_failure: false,
             } => {
+                self.slots.waiting_for_late_writes();
                 tokio::select! {
                     biased;
                     () = self.root.cancelled() => calling.shut_down = true,
@@ -571,6 +572,7 @@ impl Shell<'_> {
                 Ok((calling, Step::Decide))
             }
             NextRun::WaitThenCheck(until) => {
+                self.slots.waiting_for_late_writes();
                 let own = calling.own.clone();
                 let checked = tokio::select! {
                     biased;

@@ -65,6 +65,9 @@ struct ScriptedStore {
     late_publish_never_lands: std::sync::atomic::AtomicBool,
     /// When set, the wait of a call for a late publish waits for it.
     late_gate: Mutex<Option<Arc<Gate>>>,
+    /// Whether a run that answers at once still reports a wait for late writes, as a stale report
+    /// would. The call returns at once after it.
+    reports_late_on_success: std::sync::atomic::AtomicBool,
     /// The number of calls that wait for a late publish now.
     late_waits: AtomicUsize,
     /// Whether the store was shut down.
@@ -262,9 +265,17 @@ impl ScriptedStore {
                 let ran = run().await.into();
                 drop(slot);
                 let ran = match ran {
-                    ScriptedRun::Answered(answer) => Ok(answer),
+                    ScriptedRun::Answered(answer) => {
+                        if self.reports_late_on_success.load(Ordering::SeqCst) {
+                            slots.waiting_for_late_writes();
+                        }
+                        Ok(answer)
+                    }
                     ScriptedRun::Failed(failure) => Err(failure),
                     ScriptedRun::Late { failure, landed } => {
+                        // The call waits for a write that can still land, as the shell of the
+                        // store reports it before its waits.
+                        slots.waiting_for_late_writes();
                         self.late_waits.fetch_add(1, Ordering::SeqCst);
                         let gate = self.late_gate.lock().unwrap().clone();
                         if let Some(gate) = gate {
@@ -3899,8 +3910,16 @@ fn a_manual_update_stops_the_deletes_of_the_running_job_before_it_waits_for_the_
     })
 }
 
+/// The number of store calls that count on `agent` now.
+fn busy_of(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) -> u32 {
+    snapshots.core.as_ref().map_or(0, |core| {
+        core.registry.read(|state| rules::busy(state, agent))
+    })
+}
+
 #[test]
-fn a_save_waiting_for_a_late_publish_is_not_replaced_and_confirms_when_the_publish_landed() {
+fn a_save_waiting_for_a_late_publish_is_replaced_by_a_periodic_admission_and_its_tail_keeps_the_agent_busy()
+ {
     paused(async {
         let store = store_with_runs(3);
         store.failing_saves.store(1, Ordering::SeqCst);
@@ -3908,10 +3927,47 @@ fn a_save_waiting_for_a_late_publish_is_not_replaced_and_confirms_when_the_publi
         let late = Arc::new(Gate::default());
         *store.late_gate.lock().unwrap() = Some(Arc::clone(&late));
         let snapshots = Arc::new(service(&store, settings(4, 4)));
-        let agent = agent_snapshots("late-publish-not-replaced");
+        let agent = agent_snapshots("late-publish-replaced");
         let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-        let old = submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
         late.wait_reached(1).await;
+        // The new save is held, so the test reads the counts while both calls live.
+        let held = store.hold_saves_of(&agent);
+
+        let new = submit(&snapshots, &agent, b"new", confirmer(&confirm)).await;
+        held.wait_reached(1).await;
+        let while_both_live = (
+            store.runs_started.load(Ordering::SeqCst),
+            busy_of(&snapshots, &agent),
+        );
+        late.open();
+        eventually(|| store.late_waits.load(Ordering::SeqCst) == 0).await;
+        eventually(|| busy_of(&snapshots, &agent) == 1).await;
+        held.open();
+        ended(&snapshots, &agent).await;
+
+        assert_eq!(
+            (
+                while_both_live,
+                confirm.names(),
+                busy_of(&snapshots, &agent)
+            ),
+            ((2, 2), vec![new], 0)
+        );
+    })
+}
+
+#[test]
+fn a_clean_save_is_not_replaced_while_its_job_confirms_although_a_stale_report_came() {
+    paused(async {
+        let store = Arc::new(ScriptedStore::default());
+        store.reports_late_on_success.store(true, Ordering::SeqCst);
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
+        let agent = agent_snapshots("clean-save-not-replaced");
+        let confirming = Arc::new(Gate::default());
+        let confirm = ScriptedConfirmer::answering_after(ConfirmOutcome::Confirmed, &confirming);
+        let old = submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        confirming.wait_reached(1).await;
 
         let periodic = snapshots
             .admit_periodic(&agent, AgentMode::Durable)
@@ -3928,27 +3984,115 @@ fn a_save_waiting_for_a_late_publish_is_not_replaced_and_confirms_when_the_publi
         };
         tokio::time::sleep(Duration::from_secs(5)).await;
         let update_waited = !updating.is_finished();
-        let waited_after_failure = waits_after_failure(&snapshots, &agent);
-        late.open();
+        confirming.open();
         let updated = updating.await.unwrap();
 
         assert_eq!(
+            (periodic, update_waited, updated, confirm.names()),
+            (Some(SnapshotSkip::UploadInFlight), true, true, vec![old])
+        );
+    })
+}
+
+#[test]
+fn a_job_replaced_before_its_stop_is_cancelled_writes_no_confirmation() {
+    paused(async {
+        let store = store_with_runs(3);
+        store.failing_saves.store(1, Ordering::SeqCst);
+        store.publish_before_failing.store(true, Ordering::SeqCst);
+        let late = Arc::new(Gate::default());
+        *store.late_gate.lock().unwrap() = Some(Arc::clone(&late));
+        let snapshots = Arc::new(service(&store, settings(4, 4)));
+        let agent = agent_snapshots("replaced-without-a-stop");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        submit(&snapshots, &agent, b"old", confirmer(&confirm)).await;
+        late.wait_reached(1).await;
+        let core = snapshots.core.as_ref().unwrap();
+
+        // The replacement as `Core::admit` makes it, without the cancel of the replaced stop that
+        // follows it there: the old call ends and answers `Saved` with its stop not cancelled.
+        let (_new, replaced) = registry::JobTicket::admit(
+            &core.registry,
+            &agent,
+            &FilesystemSnapshotName::periodic(),
+            SnapshotKind::Periodic,
+            CancellationToken::new(),
+            true,
+        )
+        .unwrap();
+        late.open();
+        eventually(|| store.late_waits.load(Ordering::SeqCst) == 0).await;
+        eventually(|| busy_of(&snapshots, &agent) == 0).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        assert_eq!(
             (
-                periodic,
-                waited_after_failure,
-                update_waited,
-                updated,
-                confirm.names(),
-                store.runs_started.load(Ordering::SeqCst),
+                replaced.is_some_and(|stop| !stop.is_cancelled()),
+                confirm.names()
             ),
-            (
-                Some(SnapshotSkip::UploadInFlight),
-                false,
-                true,
-                true,
-                vec![old],
-                1
+            (true, Vec::new())
+        );
+    })
+}
+
+#[test]
+fn a_manual_update_replaces_a_periodic_save_that_waits_out_a_late_write_and_a_delete_all_waits_for_that_write()
+ {
+    paused(async {
+        let store = store_with_runs(3);
+        store.failing_saves.store(1, Ordering::SeqCst);
+        store.publish_before_failing.store(true, Ordering::SeqCst);
+        let late = Arc::new(Gate::default());
+        *store.late_gate.lock().unwrap() = Some(Arc::clone(&late));
+        let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+            confirmation_wait: Duration::from_secs(5),
+            ..values(4, 4)
+        })
+        .unwrap();
+        let snapshots = Arc::new(service(&store, settings));
+        let agent = agent_snapshots("update-replaces-a-late-save");
+        let confirm = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        submit(&snapshots, &agent, b"periodic", confirmer(&confirm)).await;
+        late.wait_reached(1).await;
+
+        let started = tokio::time::Instant::now();
+        let admission = snapshots
+            .admit_update(&agent, AgentMode::Durable, no_interrupt())
+            .await
+            .unwrap();
+        let saved = admission
+            .upload_now(
+                capture(b"update", &Arc::new(AtomicUsize::new(0))),
+                no_interrupt(),
+                no_lost_shard(),
             )
+            .await;
+        let update_took = started.elapsed();
+        let update_saved = saved.is_ok();
+        // The update's job ends with its retention, so only the tail of the replaced call counts
+        // on the agent from here.
+        drop(saved);
+        eventually(|| {
+            snapshots
+                .core
+                .as_ref()
+                .is_some_and(|core| core.registry.read(|state| rules::is_free(state, &agent)))
+        })
+        .await;
+        snapshots.delete_all_snapshots(&agent, AgentMode::Durable);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let deletes_while_the_tail_waits = store.all_deletes.load(Ordering::SeqCst);
+        late.open();
+        eventually(|| store.all_deletes.load(Ordering::SeqCst) == 1).await;
+
+        assert!(update_saved);
+        assert!(
+            update_took < Duration::from_secs(5),
+            "the update took {update_took:?}"
+        );
+        assert_eq!(
+            (confirm.names(), deletes_while_the_tail_waits),
+            (Vec::new(), 0)
         );
     })
 }

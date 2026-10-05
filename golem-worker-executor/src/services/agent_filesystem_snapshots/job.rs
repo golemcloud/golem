@@ -101,7 +101,9 @@ pub(super) async fn run_job(
         }
     };
     crate::metrics::filesystem_snapshots::record_uploaded_bytes(kind.label(), info.bytes);
-    if ticket.stop_requested() {
+    // A job that an admission replaced writes no confirmation, also when its stop is not
+    // cancelled yet: the replacement came before its save call ended, so the registry shows it.
+    if ticket.stop_requested() || ticket.replaced() {
         return;
     }
     let confirmation = tokio::select! {

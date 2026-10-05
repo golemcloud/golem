@@ -463,6 +463,10 @@ impl RunSlots for Recording {
     fn waiting_after_failure(&self) {
         self.events.lock().unwrap().push("waiting after failure");
     }
+
+    fn waiting_for_late_writes(&self) {
+        self.events.lock().unwrap().push("waiting for late writes");
+    }
 }
 
 fn answers() -> Answers<Result<SnapshotInfo, &'static str>> {
@@ -510,7 +514,8 @@ fn paused<T>(test: impl Future<Output = T>) -> T {
 }
 
 #[test]
-fn the_shell_tells_its_limiter_only_before_a_wait_for_the_next_run_after_a_failed_run() {
+fn the_shell_tells_its_limiter_before_a_wait_for_late_writes_and_before_a_wait_after_a_failed_run()
+{
     paused(async {
         let slots = Recording::new();
         let root = CancellationToken::new();
@@ -561,6 +566,7 @@ fn the_shell_tells_its_limiter_only_before_a_wait_for_the_next_run_after_a_faile
                 Ok(info()),
                 vec![
                     "take now",
+                    "waiting for late writes",
                     "waiting after failure",
                     "take",
                     "waiting after failure",

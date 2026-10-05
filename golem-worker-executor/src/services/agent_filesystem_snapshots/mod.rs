@@ -621,12 +621,13 @@ impl AgentFilesystemSnapshots {
     /// Asks for an upload of a manual-update snapshot of the agent `agent` in `mode`. When a job of
     /// the agent runs, a periodic upload or an update job, the call stops the deletes that the
     /// running job makes after its save, and waits until the job is gone or an admission can
-    /// replace it: a periodic job that waits for its next run after a failed run and has not
-    /// decided. Then it asks again, and an admission replaces such a job. So the update waits for
-    /// at most the one run in flight, a write of that run that can still land, and the
-    /// confirmation of the running job. The whole wait of
-    /// the update, here and in its upload, ends `confirmation_wait` after this call started: that
+    /// replace it: a periodic job that has not decided, whose store call still holds the save
+    /// mark, and that waits for its next run after a failed run or waits for its late writes.
+    /// Then it asks again, and an admission replaces such a job. So the update waits for at most
+    /// the one run in flight and the confirmation of the running job. The waits of this call, and
+    /// the waits for a slot of the upload, end `confirmation_wait` after this call started: that
     /// is the deadline of the admission, and the admission at the deadline gives its refusal. A
+    /// run of the upload that started before then runs to its end. A
     /// shutdown ends the wait like the deadline does, and a terminal interrupt that `interrupt`
     /// reports ends it with [`UpdateAdmitted::Interrupted`]. An agent that keeps no files gets
     /// [`UpdateAdmitted::WithoutName`], as a disabled service gives.

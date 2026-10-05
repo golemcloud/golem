@@ -19,8 +19,10 @@
 //! returns, also when its caller stops waiting for it. The store takes a slot of the limiter of
 //! each call for each run of the call; the limiter of this module withdraws a call at a stop, and
 //! at the deadline of a manual update. A stop ends only waits. Only a shutdown drops a call. The
-//! slots of the store operations, the rule of one save at a time for each agent, the discard of a
-//! capture, the cancel of a save on a lost shard, and the order of the shutdown are hidden here.
+//! slots of the store operations, the rule that only one save call of an agent can start a run at
+//! a time while a replaced save call that only waits for its late writes runs on as a tail, the
+//! discard of a capture, the cancel of a save on a lost shard, and the order of the shutdown are
+//! hidden here.
 //! Each decision is a private pure function.
 
 use super::CapturedTree;
@@ -357,6 +359,12 @@ impl RunSlots for ServiceSlots {
             runs.failed();
         }
     }
+
+    fn waiting_for_late_writes(&self) {
+        if let Grant::Saving(runs) = &self.on_grant {
+            runs.waiting_for_late_writes();
+        }
+    }
 }
 
 /// The store, and all that a call to it needs.
@@ -521,6 +529,7 @@ impl StoreCalls {
                 );
                 match self.save_call(
                     agent,
+                    job.id(),
                     slots,
                     name,
                     directory,
@@ -528,7 +537,8 @@ impl StoreCalls {
                     cancel.clone(),
                 ) {
                     Some(handle) => self.await_save(run, handle, cancel, job, stops).await,
-                    // Another save of the agent started first: the upload waits for that save.
+                    // Another save call of the agent holds the save mark: the upload waits until
+                    // the mark is free.
                     None => (None, run),
                 }
             }
@@ -537,11 +547,13 @@ impl StoreCalls {
     }
 
     /// Starts a save of the tree in `directory` under `name` with `parent`, with the limiter
-    /// `slots` and with `cancel` as the cancel of the save in the store. Gives `None` when another
-    /// save of the agent runs.
+    /// `slots` and with `cancel` as the cancel of the save in the store, as the save of the job
+    /// `job`. Gives `None` when another save call of the agent holds the save mark.
+    #[allow(clippy::too_many_arguments)]
     fn save_call(
         &self,
         agent: &AgentSnapshots,
+        job: rules::JobId,
         slots: ServiceSlots,
         name: &SnapshotName,
         directory: Arc<Path>,
@@ -549,7 +561,7 @@ impl StoreCalls {
         cancel: CancellationToken,
     ) -> Option<JoinHandle<CallResult<Result<SnapshotInfo, SaveError>>>> {
         let (store, agent_of_call, name) = (Arc::clone(&self.store), agent.clone(), name.clone());
-        self.store_call_with(agent, CallKind::Save, move || {
+        self.store_call_with(agent, CallKind::Save { job }, move || {
             async move {
                 let parent = parent
                     .as_deref()
@@ -716,8 +728,9 @@ impl StoreCalls {
     /// Runs `op`, a store operation of `agent`, in a task of the jobs. The begin transition and
     /// the spawn happen in this function with no await between them, and the end transition is
     /// the last statement of the task, so no return path of a caller can leave a count or the
-    /// save flag set. A caller that stops waiting for the handle does not end the call. When
-    /// another save of the agent runs, a save does not begin, and the function gives `None`.
+    /// save mark set. A caller that stops waiting for the handle does not end the call. When
+    /// another save call of the agent holds the save mark, a save does not begin, and the function
+    /// gives `None`.
     fn store_call_with<T: Send + 'static>(
         &self,
         agent: &AgentSnapshots,
@@ -847,7 +860,7 @@ struct UploadRun {
 
 /// What an upload sees before its next step.
 struct UploadSeen {
-    /// Whether a save of the agent runs now.
+    /// Whether a save call of the agent holds the save mark now.
     save_running: bool,
     /// Whether a stop of the job, of the caller or a lost shard came.
     stopped: bool,
@@ -1178,6 +1191,10 @@ mod tests {
         )
         .unwrap_or_else(|_| panic!("the first job is admitted"));
         assert!(job.runs().granted());
+        // The save call of the job holds the save mark while it waits after its failed run.
+        assert!(registry.apply(|state| {
+            rules::begin_call(state, &agent, &rules::CallKind::Save { job: job.id() })
+        }));
         job.runs().failed();
         (agent, job)
     }

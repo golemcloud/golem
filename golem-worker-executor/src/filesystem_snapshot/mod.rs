@@ -174,6 +174,11 @@ pub(crate) trait RunSlots: Send + Sync {
     /// The call waits for its next run after a run that failed, and no write of the call can
     /// still land.
     fn waiting_after_failure(&self) {}
+
+    /// The call only waits until its writes that can still land have landed or can no longer
+    /// land. It holds no slot. It starts no run and no write until the limiter grants it a new
+    /// slot.
+    fn waiting_for_late_writes(&self) {}
 }
 
 /// A slot of a [`RunSlots`]. When it drops, it goes back to the limiter.

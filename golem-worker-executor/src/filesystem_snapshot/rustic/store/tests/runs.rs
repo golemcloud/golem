@@ -56,6 +56,7 @@ struct SharedSlots {
     live: Arc<AtomicUsize>,
     most: Arc<AtomicUsize>,
     failed_waits: Arc<AtomicUsize>,
+    late_waits: Arc<AtomicUsize>,
 }
 
 impl SharedSlots {
@@ -66,7 +67,13 @@ impl SharedSlots {
             live: Arc::default(),
             most: Arc::default(),
             failed_waits: Arc::default(),
+            late_waits: Arc::default(),
         }
+    }
+
+    /// The waits for late writes that the store reported.
+    fn late_waits(&self) -> usize {
+        self.late_waits.load(Ordering::SeqCst)
     }
 
     /// The takes, the slots that live now, the most slots that lived at once, and the waits after
@@ -116,6 +123,10 @@ impl RunSlots for SharedSlots {
 
     fn waiting_after_failure(&self) {
         self.failed_waits.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn waiting_for_late_writes(&self) {
+        self.late_waits.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -337,6 +348,49 @@ async fn a_new_run_after_a_publish_began_answers_saved_when_the_publish_landed_l
         ),
         (3, 1, (1, 0, 1, 0), 1, Some(listing(tree.path())))
     );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_save_reports_its_wait_for_a_late_publish_and_a_clean_save_reports_nothing() {
+    // The first publish try lands and loses its answer, and the later tries are refused, so the
+    // call waits for the try before it checks its own name. The limiter hears of that wait, so the
+    // service can replace the job of the call while it only waits.
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let storage = scripted_publish(inner.clone(), |tried| match tried {
+        1 => Script::LoseTheAnswer,
+        _ => Script::Refuse,
+    });
+    let store = store(storage.clone(), late_policy());
+    let (late_scope, clean_scope) = (new_scope(), new_scope());
+    let tree = fixture_tree();
+    let (late_slots, clean_slots) = (SharedSlots::new(1), SharedSlots::new(1));
+
+    let late_saved = store
+        .save(
+            &late_scope,
+            &name("p-late"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &late_slots,
+        )
+        .await;
+    let clean_store = super::store(Arc::new(InMemoryBlobStorage::new()), late_policy());
+    let clean_saved = clean_store
+        .save(
+            &clean_scope,
+            &name("p-clean"),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &clean_slots,
+        )
+        .await;
+
+    assert!(late_saved.is_ok(), "{late_saved:?}");
+    assert!(clean_saved.is_ok(), "{clean_saved:?}");
+    assert_eq!((late_slots.late_waits(), clean_slots.late_waits()), (1, 0));
 }
 
 #[test]
