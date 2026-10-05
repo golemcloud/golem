@@ -40,7 +40,7 @@ use super::prune::{
 use super::publish::{
     PublishBound, Published, SnapshotStage, StagedSnapshot, backup_end, index_read_bound, publish,
 };
-use super::reload::{self, Found, Observed, Outcome, Reread, Step};
+use super::reload::{self, Found, Learned, Observed, Outcome, Reread, Step};
 use super::runs::{
     Answers, Checked, Ended, Kind, LateWrite, OwnFile, Ran, RunEnd, Settle, Settled, Shell,
     answered_after, copy_end,
@@ -1513,15 +1513,14 @@ impl RestoreRun {
                 }
                 Stepped::Observed(observed) => observed,
             };
-            let step = reload::next_step(&observed, &restoring.listed, &restoring.missed);
-            match (&observed, step) {
-                (Observed::IndexFileMissing(path), Step::LoadAgain) => {
-                    restoring.missed.insert(path.clone());
+            let (step, learned) =
+                reload::next_step(&observed, &restoring.listed, &restoring.missed);
+            match learned {
+                Learned::Nothing => {}
+                Learned::Missed(path) => {
+                    restoring.missed.insert(path);
                 }
-                (Observed::IndexListedAgain(names), Step::LoadAgain) => {
-                    restoring.listed.extend(names.iter().cloned());
-                }
-                _ => {}
+                Learned::Listed(names) => restoring.listed.extend(names),
             }
             match step {
                 Step::Check => ControlFlow::Continue(self.check_and_write(&mut restoring)),

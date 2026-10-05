@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::super::runs::RunEnd;
-use super::{Found, Lookup, Observed, Outcome, Reread, Step, next_step};
+use super::{Found, Learned, Lookup, Observed, Outcome, Reread, Step, next_step};
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use std::path::Path;
@@ -24,7 +24,7 @@ fn paths(names: &[&str]) -> HashSet<Box<Path>> {
 }
 
 #[test]
-fn each_observation_gives_its_step() {
+fn each_observation_gives_its_step_and_what_the_run_learns() {
     let listed = paths(&["index/a", "index/b"]);
     let missed = paths(&["index/a"]);
     let step = |observed: Observed| next_step(&observed, &listed, &missed);
@@ -61,33 +61,39 @@ fn each_observation_gives_its_step() {
             step(Observed::Cancelled),
         ],
         [
-            Step::Check,
-            Step::Answer(Outcome::NotFound),
-            Step::Answer(Outcome::Corrupt),
-            Step::Answer(Outcome::NotFound),
-            Step::LoadAgain,
-            Step::ReadSnapshotsAgain(Reread::Ghost),
-            Step::ListIndexAgain,
-            Step::LoadAgain,
-            Step::ReadSnapshotsAgain(Reread::Check),
-            Step::ReadSnapshotsAgain(Reread::Check),
-            Step::ReadSnapshotsAgain(Reread::Pack),
-            Step::ReadSnapshotsAgain(Reread::Pack),
-            Step::Answer(Outcome::NotFound),
-            Step::Answer(Outcome::Corrupt),
-            Step::RunEnded(RunEnd::CallFailed),
-            Step::ReadMarked,
-            Step::LoadIndexAgain,
-            Step::Answer(Outcome::MarkedOnly),
-            Step::Answer(Outcome::Corrupt),
-            Step::ClearAndEnd(RunEnd::RaceRunAgain),
-            Step::Answer(Outcome::Corrupt),
-            Step::RunEnded(RunEnd::CallFailed),
-            Step::ClearAndEnd(RunEnd::CallFailed),
-            Step::Answer(Outcome::Corrupt),
-            Step::RunEnded(RunEnd::Permanent),
-            Step::Answer(Outcome::Destination),
-            Step::RunEnded(RunEnd::Cancelled),
+            (Step::Check, Learned::Nothing),
+            (Step::Answer(Outcome::NotFound), Learned::Nothing),
+            (Step::Answer(Outcome::Corrupt), Learned::Nothing),
+            (Step::Answer(Outcome::NotFound), Learned::Nothing),
+            (
+                Step::LoadAgain,
+                Learned::Missed(Path::new("index/b").into())
+            ),
+            (Step::ReadSnapshotsAgain(Reread::Ghost), Learned::Nothing),
+            (Step::ListIndexAgain, Learned::Nothing),
+            (
+                Step::LoadAgain,
+                Learned::Listed(paths(&["index/a", "index/c"]))
+            ),
+            (Step::ReadSnapshotsAgain(Reread::Check), Learned::Nothing),
+            (Step::ReadSnapshotsAgain(Reread::Check), Learned::Nothing),
+            (Step::ReadSnapshotsAgain(Reread::Pack), Learned::Nothing),
+            (Step::ReadSnapshotsAgain(Reread::Pack), Learned::Nothing),
+            (Step::Answer(Outcome::NotFound), Learned::Nothing),
+            (Step::Answer(Outcome::Corrupt), Learned::Nothing),
+            (Step::RunEnded(RunEnd::CallFailed), Learned::Nothing),
+            (Step::ReadMarked, Learned::Nothing),
+            (Step::LoadIndexAgain, Learned::Nothing),
+            (Step::Answer(Outcome::MarkedOnly), Learned::Nothing),
+            (Step::Answer(Outcome::Corrupt), Learned::Nothing),
+            (Step::ClearAndEnd(RunEnd::RaceRunAgain), Learned::Nothing),
+            (Step::Answer(Outcome::Corrupt), Learned::Nothing),
+            (Step::RunEnded(RunEnd::CallFailed), Learned::Nothing),
+            (Step::ClearAndEnd(RunEnd::CallFailed), Learned::Nothing),
+            (Step::Answer(Outcome::Corrupt), Learned::Nothing),
+            (Step::RunEnded(RunEnd::Permanent), Learned::Nothing),
+            (Step::Answer(Outcome::Destination), Learned::Nothing),
+            (Step::RunEnded(RunEnd::Cancelled), Learned::Nothing),
         ]
     );
 }

@@ -108,6 +108,18 @@ pub(super) enum Step {
     Answer(Outcome),
 }
 
+/// What a step adds to the index files that the run knows about. The run applies it before the
+/// step.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum Learned {
+    #[default]
+    Nothing,
+    /// A load found this listed index file gone, the first time.
+    Missed(Box<Path>),
+    /// A new listing gave these index files, and some of them are new.
+    Listed(HashSet<Box<Path>>),
+}
+
 /// The answer of a restore that a step gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
@@ -118,29 +130,40 @@ pub(super) enum Outcome {
     Destination,
 }
 
-/// Gives the next step after `observed`. `listed` holds each index file that a listing of the run
-/// gave, and `missed` each index file that a load of the run found gone. Each missing index file
-/// was listed, because rustic reads only listed files, so a load runs again only for a file that
-/// was not missed before; a file that is missed twice is a ghost.
+/// Gives the next step after `observed`, and what the run learns about its index files before it
+/// takes the step. `listed` holds each index file that a listing of the run gave, and `missed`
+/// each index file that a load of the run found gone. Each missing index file was listed, because
+/// rustic reads only listed files, so a load runs again only for a file that was not missed
+/// before, and the run then counts the file as missed; a file that is missed twice is a ghost. A
+/// new listing that gives a file that the run did not list loads again, and the run then counts
+/// the files of that listing as listed.
 pub(super) fn next_step(
     observed: &Observed,
     listed: &HashSet<Box<Path>>,
     missed: &HashSet<Box<Path>>,
-) -> Step {
+) -> (Step, Learned) {
+    match observed {
+        Observed::IndexFileMissing(path) if !missed.contains(path) => {
+            (Step::LoadAgain, Learned::Missed(path.clone()))
+        }
+        Observed::IndexListedAgain(names) if names.iter().any(|name| !listed.contains(name)) => {
+            (Step::LoadAgain, Learned::Listed(names.clone()))
+        }
+        observed => (step_after(observed), Learned::Nothing),
+    }
+}
+
+/// Gives the next step after `observed`, for an observation that teaches the run nothing new
+/// about its index files.
+fn step_after(observed: &Observed) -> Step {
     match observed {
         Observed::Loaded(Lookup::Found) => Step::Check,
         Observed::Loaded(Lookup::Missing) | Observed::ConfigMissing => {
             Step::Answer(Outcome::NotFound)
         }
         Observed::Loaded(Lookup::Corrupt) => Step::Answer(Outcome::Corrupt),
-        Observed::IndexFileMissing(path) if missed.contains(path) => {
-            Step::ReadSnapshotsAgain(Reread::Ghost)
-        }
-        Observed::IndexFileMissing(_) => Step::LoadAgain,
+        Observed::IndexFileMissing(_) => Step::ReadSnapshotsAgain(Reread::Ghost),
         Observed::CheckFailed => Step::ListIndexAgain,
-        Observed::IndexListedAgain(names) if names.iter().any(|name| !listed.contains(name)) => {
-            Step::LoadAgain
-        }
         Observed::IndexListedAgain(_) => Step::ReadSnapshotsAgain(Reread::Check),
         Observed::PackMissing { .. } => Step::ReadSnapshotsAgain(Reread::Pack),
         Observed::SnapshotsReadAgain {
