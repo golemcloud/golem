@@ -441,14 +441,21 @@ async fn a_new_run_after_a_publish_began_saves_again_when_it_never_landed() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn the_own_name_check_gives_name_in_use_for_another_file_with_the_label() {
     // The publish of the first save ends without an answer and lands nothing. During the wait,
     // another writer saves the same name, so the check finds a file with the name that is not
-    // the own one.
+    // the own one. The listing of the check waits at the gate until the other save returned, so
+    // the order does not depend on the speed of the host. The listing is cut one deadline after
+    // it began, and it begins one deadline after the last publish try, so the other save has two
+    // deadlines, 20 s, to save a tree of one file.
     let inner = Arc::new(InMemoryBlobStorage::new());
-    let storage = scripted_publish(inner.clone(), |_| Script::Refuse);
-    let store = store(storage.clone(), runs_policy(Duration::from_secs(2), 3));
+    let storage = ScriptedBlobStorage::new(inner.clone(), |op_label, _| match op_label {
+        "publish" => Script::Refuse,
+        "check_name" => Script::WaitForGate,
+        _ => Script::Pass,
+    });
+    let store = store(storage.clone(), runs_policy(Duration::from_secs(10), 3));
     let other = store_over(&inner);
     let scope = new_scope();
     let (tree, other_tree) = (fixture_tree(), one_file_tree("other writer"));
@@ -468,7 +475,7 @@ async fn the_own_name_check_gives_name_in_use_for_another_file_with_the_label() 
                 .await
         }
     }));
-    let refused = eventually(|| calls_of(&storage, "publish") == 3).await;
+    let refused = polled_until(REACH_LIMIT, || calls_of(&storage, "publish") == 3).await;
     let other_saved = other
         .save(
             &scope,
@@ -479,7 +486,8 @@ async fn the_own_name_check_gives_name_in_use_for_another_file_with_the_label() 
             &crate::filesystem_snapshot::Unlimited,
         )
         .await;
-    let saved = tokio::time::timeout(LIMIT, saving).await;
+    storage.open_gate();
+    let saved = tokio::time::timeout(REACH_LIMIT, saving).await;
 
     assert!(other_saved.is_ok(), "{other_saved:?}");
     assert!(
@@ -548,10 +556,11 @@ async fn a_lost_shard_cancel_after_the_publish_began_waits_and_checks() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_shutdown_during_the_wait_for_a_late_publish_answers_stopped_at_once() {
     // The publish ends without an answer, and the wait for it lasts one deadline of a minute. The
-    // shutdown ends the wait at once.
+    // shutdown ends the wait at once: the save answers and the shutdown returns within half the
+    // deadline, which a wait that the shutdown did not end cannot do.
     let inner = Arc::new(InMemoryBlobStorage::new());
     let storage = scripted_publish(inner.clone(), |_| Script::Refuse);
     let store = store(storage.clone(), runs_policy(LONG_DEADLINE, 1));
@@ -572,10 +581,12 @@ async fn a_shutdown_during_the_wait_for_a_late_publish_answers_stopped_at_once()
                 .await
         }
     }));
-    let refused = eventually(|| calls_of(&storage, "publish") == 1).await;
+    let refused = polled_until(REACH_LIMIT, || calls_of(&storage, "publish") == 1).await;
 
-    let stopped = tokio::time::timeout(LIMIT, store.shut_down()).await.is_ok();
-    let saved = tokio::time::timeout(LIMIT, saving).await;
+    let stopped = tokio::time::timeout(LONG_DEADLINE / 2, store.shut_down())
+        .await
+        .is_ok();
+    let saved = tokio::time::timeout(LONG_DEADLINE / 2, saving).await;
 
     assert!(
         matches!(saved, Ok(Ok(Err(SaveError::Stopped(Withdrawal::Stopped))))),
@@ -1419,7 +1430,14 @@ async fn a_save_whose_backup_passes_its_end_answers_failed_and_publishes_nothing
             &crate::filesystem_snapshot::Unlimited,
         )
         .await;
-    let answered = started.elapsed();
+    let answer = std::time::Instant::now();
+    let answered = answer.duration_since(started);
+    // Read before the test lists the blobs through the same storage.
+    let started_after_the_answer = storage
+        .events()
+        .iter()
+        .filter(|event| event.started > answer)
+        .count();
 
     assert!(
         matches!(
@@ -1429,18 +1447,18 @@ async fn a_save_whose_backup_passes_its_end_answers_failed_and_publishes_nothing
         ),
         "{saved:?}"
     );
-    // The cancel at the end of the backup can cut a pack write in flight. Such a write can still
-    // land, so the call then answers up to one deadline after the cut.
-    assert!(
-        answered >= Duration::from_millis(525) && answered < Duration::from_millis(2500),
-        "{answered:?}"
-    );
+    // The save answers no earlier than the end of its backup. How long the backup takes to stop
+    // after the cut depends on the speed of the host, so the test does not bound the answer from
+    // above; the save whose pack write is held past the end of its backup shows that the cut ends
+    // the backup. No blob call of the save starts after its answer.
+    assert!(answered >= Duration::from_millis(525), "{answered:?}");
     assert_eq!(
         (
             calls_of(&storage, "publish"),
-            blobs(&*storage, &scope.0, "snapshots/").await
+            blobs(&*storage, &scope.0, "snapshots/").await,
+            started_after_the_answer
         ),
-        (0, Vec::<String>::new())
+        (0, Vec::<String>::new(), 0)
     );
 }
 
@@ -2175,13 +2193,19 @@ async fn a_prune_that_rewrites_the_index_before_the_read_of_the_marked_packs_giv
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("240s")]
 async fn a_save_whose_pack_write_is_held_past_the_end_of_its_backup_answers_failed_while_the_write_is_held()
  {
-    // A grace period of 5.7 s and a deadline of 1 s put the end of the backup about 0.525 s after
-    // the first slot. The storage holds the first pack write at its gate until the test opens it,
-    // which is after the save answered. Only the cut of the run at the end of its backup can end
-    // the save while the write is held.
+    // The storage holds each pack write at its gate until the test opens it, which is after the
+    // save answered. A deadline of 40 s and a grace period of 220 s put the end of the backup 15 s
+    // after the first slot: late enough that the backup reaches its first pack write also on a
+    // busy host, and before half the deadline of a pack write that started after that slot. The
+    // cut of the run at the end of its backup ends a held write; without it, the write would end
+    // only at its own deadline. So each held write ends within half a deadline of its start,
+    // whatever the speed of the host. The save answers one deadline after the cut, when the cut
+    // write can no longer land.
+    let deadline = Duration::from_secs(40);
+    let grace = Duration::from_secs(220);
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
             if op_label == "write" && path.starts_with("data") {
@@ -2194,40 +2218,54 @@ async fn a_save_whose_pack_write_is_held_past_the_end_of_its_backup_answers_fail
         storage.clone(),
         StorePolicy {
             publish_bound: PublishBound::On,
-            ..policy(Duration::from_secs(1), NEVER, Duration::from_millis(5700))
+            ..policy(deadline, NEVER, grace)
         },
     );
     let scope = new_scope();
     let tree = fixture_tree();
     let started = std::time::Instant::now();
+    let backup_end = super::super::super::publish::backup_end(
+        super::super::super::publish::index_read_bound(
+            started,
+            grace,
+            deadline,
+            super::super::super::prune::refresh_period(grace, deadline),
+        ),
+        deadline,
+    )
+    .duration_since(started);
 
-    let saved = tokio::time::timeout(
-        Duration::from_secs(5),
-        store.save(
+    let saved = store
+        .save(
             &scope,
             &name("p-held"),
             tree.path(),
             None,
             crate::filesystem_snapshot::never_cancelled(),
             &crate::filesystem_snapshot::Unlimited,
-        ),
-    )
-    .await;
+        )
+        .await;
     let answered = started.elapsed();
+    let held = storage
+        .events()
+        .iter()
+        .filter(|event| event.op_label == "write" && event.path.starts_with("data"))
+        .map(|event| event.ended.duration_since(event.started))
+        .collect::<Vec<_>>();
     storage.open_gate();
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     assert!(
         matches!(
             &saved,
-            Ok(Err(SaveError::Failed(failed)))
+            Err(SaveError::Failed(failed))
                 if failed.cause().to_string().contains("longer than the filesystem snapshot store allows")
         ),
         "{saved:?}"
     );
+    assert!(answered >= backup_end, "{answered:?} before {backup_end:?}");
     assert!(
-        answered >= Duration::from_millis(525) && answered < Duration::from_millis(1500),
-        "{answered:?}"
+        !held.is_empty() && held.iter().all(|took| *took < deadline / 2),
+        "the held pack writes took {held:?}"
     );
     assert_eq!(
         (
@@ -2310,7 +2348,7 @@ fn scope_deletes(storage: &ScriptedBlobStorage) -> usize {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_delete_all_drains_before_it_takes_a_slot() {
     // The limiter has one slot. The first run of the save fails, and the save waits 500 ms
     // between its runs, without a slot. A delete of all snapshots that took the slot before its
@@ -2349,14 +2387,14 @@ async fn a_delete_all_drains_before_it_takes_a_slot() {
                 .await
         }
     }));
-    let waiting = eventually(|| slots.counts().3 == 1).await;
+    let waiting = polled_until(REACH_LIMIT, || slots.counts().3 == 1).await;
 
     let deleting_all = AbortOnDropHandle::new(tokio::spawn({
         let (store, scope, slots) = (store.clone(), scope.clone(), slots.clone());
         async move { store.delete_all(&scope, &slots).await }
     }));
-    let saved = tokio::time::timeout(LIMIT, saving).await;
-    let deleted_all = tokio::time::timeout(LIMIT, deleting_all).await;
+    let saved = tokio::time::timeout(REACH_LIMIT, saving).await;
+    let deleted_all = tokio::time::timeout(REACH_LIMIT, deleting_all).await;
 
     assert!(matches!(saved, Ok(Ok(Ok(_)))), "{saved:?}");
     assert!(matches!(deleted_all, Ok(Ok(Ok(())))), "{deleted_all:?}");
@@ -2622,16 +2660,20 @@ async fn a_save_whose_detached_pack_write_is_in_flight_when_the_backup_fails_ans
 }
 
 #[test]
-#[timeout("120s")]
+#[timeout("300s")]
 async fn a_save_whose_backup_meets_an_unreadable_file_answers_source_at_once() {
     // Every call passes. The last pack of the backup goes out after the run cancelled its token,
-    // and that refused try sends nothing, so it holds the answer for no deadline.
+    // and that refused try sends nothing, so it holds the answer for no deadline. A refused try
+    // that held the answer would hold it for one deadline after the try, so the answer would come
+    // more than one deadline after the start. The deadline of 90 s is far above the time of the
+    // backup, about 25 s when four copies of the tests run at once.
     let Some(tree) = large_tree_with_an_unreadable_file(16 << 20) else {
         return;
     };
+    let deadline = Duration::from_secs(90);
     let storage =
         ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
-    let store = store(storage, runs_policy(Duration::from_secs(30), 3));
+    let store = store(storage, runs_policy(deadline, 3));
     let started = std::time::Instant::now();
 
     let saved = store
@@ -2647,7 +2689,7 @@ async fn a_save_whose_backup_meets_an_unreadable_file_answers_source_at_once() {
     let took = started.elapsed();
 
     assert!(matches!(saved, Err(SaveError::Source(_))), "{saved:?}");
-    assert!(took < Duration::from_secs(15), "the save took {took:?}");
+    assert!(took < deadline, "the save took {took:?}");
 }
 
 #[test]

@@ -26,8 +26,8 @@ use super::super::publish::PublishBound;
 use super::super::runs::{OwnFile, Ran, RunEnd};
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::super::tests::{
-    backend_of, copy_flat_tree, entries, files_of, one_run, polled_until, publish_bound_for,
-    three_file_tree, wait_past_change_times,
+    REACH_LIMIT, backend_of, copy_flat_tree, entries, files_of, one_run, polled_until,
+    publish_bound_for, three_file_tree, wait_past_change_times,
 };
 use super::super::{PruneReport, PruneSettings, RepositoryKey, open_existing};
 use super::{
@@ -222,13 +222,6 @@ async fn freed<S: BlobStorage + 'static>(storage: &Arc<S>, scope: &AgentSnapshot
         .filter_map(|blob| parse_freed(blob.path.file_name()?.to_str()?))
         .fold(0, u64::saturating_add)
 }
-
-/// The longest time that a test waits for an operation to reach the call that a gate holds for
-/// it. The test uses it when another operation of the same storage runs next. A save, a forget or
-/// a prune runs on a blocking thread. A save or a prune also runs at nice 19. So on a busy host
-/// the first operation can take longer than [`LIMIT`] to reach its gate. Each test that waits this
-/// long has a timeout of 120 s, so the timeout covers its setup, this wait and its later steps.
-const REACH_LIMIT: Duration = Duration::from_secs(45);
 
 /// Waits until the condition holds, or until [`LIMIT`] ends. Gives whether the condition holds.
 async fn eventually(condition: impl Fn() -> bool) -> bool {

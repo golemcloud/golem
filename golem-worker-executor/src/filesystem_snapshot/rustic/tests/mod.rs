@@ -74,6 +74,15 @@ const SHORT_DEADLINE: Duration = Duration::from_millis(200);
 /// stop.
 const LIMIT: Duration = Duration::from_secs(10);
 
+/// The longest time that a test waits for an operation to reach a call, or to answer when only a
+/// store that never answers would take longer. A save, a forget or a prune runs on a blocking
+/// thread, and a save or a prune also runs at nice 19. So on a busy host, such as one that runs
+/// four copies of the tests at once, a save, a restore or a prune of the fixture tree can take
+/// longer than [`LIMIT`] before it reaches its first blob call or gives its answer. A wait to this limit ends as soon
+/// as its condition holds, so it costs no time on a quiet host. Each test that waits this long has
+/// a timeout of 120 s, which covers its setup, this wait and its later steps.
+pub(super) const REACH_LIMIT: Duration = Duration::from_secs(45);
+
 /// Gives the blobs of the namespace of the storage, with a tracker of their own. Their calls make
 /// one try, wait for at most the deadline, and stop when the token is cancelled.
 pub(super) fn files_of(
@@ -805,7 +814,7 @@ impl BlobStorageBackend for OverlapCountingStorage {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_threads_stop() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -815,8 +824,10 @@ async fn a_save_whose_pack_write_gets_no_answer_fails_with_no_snapshot_and_its_t
     let store = store(storage, SHORT_DEADLINE);
     let tree = fixture_tree();
 
+    // The held pack write never answers, so only the cut of its try at the deadline lets the save
+    // answer. The limit only tells a save that waits for the write from one that answers.
     let saved = tokio::time::timeout(
-        LIMIT,
+        REACH_LIMIT,
         store.save(
             &scope,
             &name("p-first"),
@@ -911,7 +922,7 @@ async fn a_save_cancelled_before_its_publish_publishes_nothing() {
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restores() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -936,7 +947,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
     });
 
     let saved = tokio::time::timeout(
-        LIMIT,
+        REACH_LIMIT,
         store.save(
             &scope,
             &name("p-first"),
@@ -948,7 +959,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
     )
     .await
     .map(|result| result.map(|_| ()).map_err(|error| format!("{error:#}")));
-    let opened = tokio::time::timeout(LIMIT, opener)
+    let opened = tokio::time::timeout(REACH_LIMIT, opener)
         .await
         .is_ok_and(|joined| joined.is_ok());
     let restored = store
@@ -967,7 +978,7 @@ async fn a_save_whose_pack_writes_answer_before_the_deadline_succeeds_and_restor
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -1001,7 +1012,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
         .collect::<Vec<_>>();
 
     let restored = tokio::time::timeout(
-        LIMIT,
+        REACH_LIMIT,
         store.restore(
             &scope,
             &name("p-first"),
@@ -1041,7 +1052,7 @@ async fn a_restore_whose_data_pack_reads_get_no_answer_fails_and_stops_its_threa
 }
 
 #[test]
-#[timeout("60s")]
+#[timeout("120s")]
 async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads() {
     let inner = Arc::new(InMemoryBlobStorage::new());
     let scope = new_scope();
@@ -1063,7 +1074,7 @@ async fn a_prune_whose_tree_pack_reads_get_no_answer_fails_and_stops_its_threads
     });
 
     let pruned = tokio::time::timeout(
-        LIMIT,
+        REACH_LIMIT,
         prune_with(
             storage,
             &scope,
