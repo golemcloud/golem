@@ -37,10 +37,15 @@ final class ScalaNativeToolSourceAgentImpl(name: String) extends ScalaNativeTool
       case Left(error)       => Future.successful(s"stream-start-error:$error")
       case Right(invocation) =>
         invocation.collect().map {
-          case Left(error)      => s"stream-error:$error"
-          case Right(collected) =>
-            val stdout = collected.stdout.fold("none")(_.iterator.map(_.toChar).mkString)
-            s"stream:$stdout:${collected.result.count.value}"
+          collected =>
+            val stdout = collected.stdout.fold(
+              error => s"stream-output-error:$error",
+              _.fold("none")(_.iterator.map(_.toChar).mkString)
+            )
+            collected.result.fold(
+              error => s"stream-error:$error",
+              result => s"stream:$stdout:${result.count.value}"
+            )
         }
     }
 

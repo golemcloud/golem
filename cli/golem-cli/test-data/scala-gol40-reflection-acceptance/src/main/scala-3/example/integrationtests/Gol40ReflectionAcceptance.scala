@@ -130,7 +130,7 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
       principal <- expectRight(named.principal())
       stream    <- named.streaming("shared-stream") match {
                   case Left(error)       => Future.failed(new IllegalStateException(error.toString))
-                  case Right(invocation) => expectRight(invocation.collect())
+                  case Right(invocation) => invocation.collect()
                 }
     } yield (nested, failure, principal, stream)
 
@@ -160,7 +160,7 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
       streamInvocation = streamCommand
                            .startJson(Json.Object("label" -> Json.String("shared-stream")))
                            .fold(error => throw new IllegalStateException(error.toString), identity)
-      stream <- expectRight(streamInvocation.collect())
+      stream <- streamInvocation.collect()
     } yield (nested, failure, principal, stream)
 
     (for {
@@ -179,9 +179,22 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
           error.name == "rejected" && error.payload.value.toString.contains("shared-error")
         case _ => false
       }
-      val generatedBytes        = generatedStream.stdout.toList.flatMap(_.toList.map(_.toInt))
-      val reflectedBytes        = reflectedStream.stdout.toList.flatMap(_.toList.map(_.toInt))
-      val reflectedStreamResult = reflectedStream.result.map(_.toString).getOrElse("")
+      val generatedBytes = generatedStream.stdout.fold(
+        error => throw new IllegalStateException(error.toString),
+        _.toList.flatMap(_.toList.map(_.toInt))
+      )
+      val reflectedBytes = reflectedStream.stdout.fold(
+        error => throw new IllegalStateException(error.toString),
+        _.toList.flatMap(_.toList.map(_.toInt))
+      )
+      val generatedStreamResult = generatedStream.result.fold(
+        error => throw new IllegalStateException(error.toString),
+        identity
+      )
+      val reflectedStreamResult = reflectedStream.result.fold(
+        error => throw new IllegalStateException(error.toString),
+        _.map(_.toString).getOrElse("")
+      )
       val expectedNested        = Gol40ReflectionOutput(
         path = "nested/inspect",
         label = "shared-prefix:asymmetric",
@@ -204,11 +217,11 @@ final class ScalaGol40ReflectionAcceptanceImpl(name: String) extends ScalaGol40R
         reflectedPrincipal = reflectedPrincipal,
         streamMatches = generatedBytes == List(0, 2, 5, 9, -1) &&
           reflectedBytes == generatedBytes &&
-          generatedStream.result == "streamed:shared-stream" &&
+          generatedStreamResult == "streamed:shared-stream" &&
           reflectedStreamResult.contains("streamed:shared-stream"),
         generatedStreamBytes = generatedBytes,
         reflectedStreamBytes = reflectedBytes,
-        generatedStreamResult = generatedStream.result,
+        generatedStreamResult = generatedStreamResult,
         reflectedStreamResult = reflectedStreamResult
       )
     })

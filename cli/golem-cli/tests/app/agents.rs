@@ -2924,8 +2924,11 @@ async fn rust_ambient_native_client_executes_through_golem() {
                         .await
                         .expect("start finite native stream")
                         .collect()
-                        .await
-                        .expect("collect finite native stream");
+                        .await;
+                    let stream_result = stream.result.expect("finite native stream result");
+                    let stream_stdout = stream.stdout
+                        .expect("collect finite native stdout")
+                        .expect("finite native stream omitted stdout");
                     let middleware = client
                         .middleware("input".into())
                         .await
@@ -2933,7 +2936,7 @@ async fn rust_ambient_native_client_executes_through_golem() {
                     vec![
                         format!("success:{}:{}:{}", success.value, success.count, success.agent_authorized),
                         format!("error:{error:?}"),
-                        format!("stream:{}:{}", String::from_utf8(stream.stdout.unwrap()).unwrap(), stream.result.count),
+                        format!("stream:{}:{}", String::from_utf8(stream_stdout).unwrap(), stream_result.count),
                         format!("middleware:{middleware}"),
                     ]
                 }

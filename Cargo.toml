@@ -326,6 +326,7 @@ wasmprinter = "0.248.0"
 wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
 wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
 wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
+wasmtime-wizer = { version = "=46.0.1", features = ["component-model", "wasmtime"] }
 wat = "1.248.0"
 wax = "0.6.0"
 webbrowser = "1.0.4"

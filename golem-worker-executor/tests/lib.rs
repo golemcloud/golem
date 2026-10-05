@@ -265,7 +265,7 @@ test_component!(
 test_component!(
     audit_middleware,
     "audit_middleware",
-    "../builtin-tools/audit-middleware",
+    "golem_audit_middleware_release",
     "golem:audit-middleware"
 );
 test_component!(

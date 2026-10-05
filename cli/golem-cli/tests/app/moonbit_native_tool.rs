@@ -139,19 +139,20 @@ async fn moonbit_ambient_native_client_executes_through_golem() {
               }
               let stream = match client.finite_stream("payload") {
                 Err(_) => abort("finite native stream failed to start")
-                Ok(invocation) =>
-                  match invocation.collect() {
-                    Err(_) => abort("finite native stream failed to collect")
-                    Ok(collected) => collected
-                  }
+                Ok(invocation) => invocation.collect()
               }
               let middleware = match client.middleware("input") {
                 Ok(value) => value
                 Err(_) => abort("native middleware invocation failed")
               }
               let stream_bytes = match stream.stdout {
-                Some(bytes) => bytes
-                None => abort("finite native stream omitted stdout")
+                Ok(Some(bytes)) => bytes
+                Ok(None) => abort("finite native stream omitted stdout")
+                Err(_) => abort("finite native stdout failed to collect")
+              }
+              let stream_result = match stream.result {
+                Ok(result) => result
+                Err(_) => abort("finite native stream result failed")
               }
               [
                 "success:" + structured.value + ":" +
@@ -159,7 +160,7 @@ async fn moonbit_ambient_native_client_executes_through_golem() {
                   structured.agent_authorized.to_string(),
                 supported_error,
                 "stream:" + @utf8.decode(stream_bytes) + ":" +
-                  stream.result.count.to_string(),
+                  stream_result.count.to_string(),
                 "middleware:" + middleware,
               ]
             }

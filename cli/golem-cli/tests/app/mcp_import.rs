@@ -548,10 +548,12 @@ async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() 
               try {
                 const invocation = CatalogLookupClient.newClient().catalog_lookup(includeHistory, itemId);
                 const collected = await invocation.collect();
-                const projected = JSON.stringify(collected.result, (_key, value) =>
+                if (collected.result.status === 'rejected') throw collected.result.reason;
+                if (collected.stdout.status === 'rejected') throw collected.stdout.reason;
+                const projected = JSON.stringify(collected.result.value, (_key, value) =>
                   typeof value === 'bigint' ? value.toString() : value,
                 );
-                return [projected, collected.stdout === undefined ? '' : new TextDecoder().decode(collected.stdout)];
+                return [projected, collected.stdout.value === undefined ? '' : new TextDecoder().decode(collected.stdout.value)];
               } catch (error) {
                 const failure = error as {
                   tag?: string;
@@ -877,7 +879,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                     let (limit, extras) = if query == "simple" { (None, vec![]) } else { (Some(3), vec![("region".into(), "west".into())]) };
                     let collected = BearerLookupClient::new().bearer_lookup(limit, query.into(), extras).await.unwrap().collect().await;
                     let result = collected.result.unwrap();
-                    let stdout = collected.stdout.unwrap().unwrap_or_default();
+                    let stdout = collected.stdout.expect("collect bearer stdout").unwrap_or_default();
                     if query == "resource" {
                         let BearerContent::Blocks(blocks) = &result.content else { panic!("expected resource blocks") };
                         let [BearerBlocks::EmbeddedResource(resource)] = blocks.as_slice() else { panic!("expected one embedded resource") };
@@ -903,7 +905,7 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                     let (limit, extras) = if query == "simple" { (None, vec![]) } else { (Some(3), vec![("region".into(), "west".into())]) };
                     let collected = BasicLookupClient::new().basic_lookup(limit, query.into(), extras).await.unwrap().collect().await;
                     let result = collected.result.unwrap();
-                    let stdout = collected.stdout.unwrap().unwrap_or_default();
+                    let stdout = collected.stdout.expect("collect basic stdout").unwrap_or_default();
                     if query == "resource" {
                         let BasicContent::Blocks(blocks) = &result.content else { panic!("expected resource blocks") };
                         let [BasicBlocks::EmbeddedResource(resource)] = blocks.as_slice() else { panic!("expected one embedded resource") };
@@ -1124,8 +1126,8 @@ async fn rust_mcp_clients_use_registry_credentials_and_replay_offline() {
                     .unwrap()
                     .collect()
                     .await
-                    .unwrap()
                     .result
+                    .unwrap()
                     .structured
                     .generation
             }"#,
@@ -1519,9 +1521,8 @@ fn write_roundtrip_consumer(ctx: &TestContext) {
                         .await
                         .unwrap()
                         .collect()
-                        .await
-                        .unwrap()
-                        .result;
+                        .await;
+                    let result = result.result.expect("projected render result");
                     self.results.push(format!(
                         "roundtrip:{}:{}:{}",
                         result.structured.id,
@@ -1532,7 +1533,7 @@ fn write_roundtrip_consumer(ctx: &TestContext) {
                         .artifact_touch("reject".into())
                         .await
                         .unwrap();
-                    match rejected.collect().await {
+                    match rejected.collect().await.result {
                             Ok(_) => panic!("rejected render unexpectedly succeeded"),
                             Err(_) => {}
                     }

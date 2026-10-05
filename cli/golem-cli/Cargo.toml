@@ -122,7 +122,10 @@ wax = { workspace = true }
 which = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
+wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
+wasmtime-wizer = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
 

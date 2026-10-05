@@ -30,15 +30,17 @@ final class ScalaToolSourceAgentImpl(name: String) extends ScalaToolSourceAgent 
       case Left(error)       => Future.successful(s"start-error:$error")
       case Right(invocation) =>
         invocation.collect().map {
-          case Left(error)      => s"error:$error"
-          case Right(collected) =>
-            val stdout = collected.stdout.fold("none")(bytes =>
+          collected =>
+            val stdout = collected.stdout.fold(error => s"error:$error", _.fold("none")(bytes =>
               bytes.map(byte => f"${byte & 0xff}%02x").mkString
-            )
-            val stderr = collected.stderr.fold("none")(bytes =>
+            ))
+            val stderr = collected.stderr.fold(error => s"error:$error", _.fold("none")(bytes =>
               bytes.map(byte => f"${byte & 0xff}%02x").mkString
+            ))
+            collected.result.fold(
+              error => s"error:$error",
+              result => s"result=$result;stdout=$stdout;stderr=$stderr"
             )
-            s"result=${collected.result};stdout=$stdout;stderr=$stderr"
         }
     }
 }

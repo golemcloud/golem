@@ -10,6 +10,7 @@ components:
     customCommands:
       copy:
         - command: cp golem-temp/agents/golem_audit_middleware_release.wasm ../audit-middleware.wasm
+        - command: cp golem-temp/agents/golem_audit_middleware_release.wasm ../../test-components/golem_audit_middleware_release.wasm
 
 tools:
   middleware:

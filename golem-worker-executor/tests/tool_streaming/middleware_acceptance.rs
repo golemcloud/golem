@@ -646,7 +646,7 @@ async fn shipped_audit_records_payload_free_success_error_and_stream_summaries(
     let audit_metadata = extract_component_metadata(
         &deps
             .component_directory
-            .join("../builtin-tools/audit-middleware.wasm"),
+            .join("golem_audit_middleware_release.wasm"),
         false,
         true,
     )
@@ -1223,7 +1223,7 @@ async fn shipped_audit_duplicate_occurrences_pass_opaque_secret_and_record_safe_
     let audit_metadata = extract_component_metadata(
         &deps
             .component_directory
-            .join("../builtin-tools/audit-middleware.wasm"),
+            .join("golem_audit_middleware_release.wasm"),
         false,
         true,
     )
@@ -1377,7 +1377,7 @@ async fn shipped_audit_sink_deduplicates_crash_after_commit_and_keeps_pinned_pol
     let audit_metadata = extract_component_metadata(
         &deps
             .component_directory
-            .join("../builtin-tools/audit-middleware.wasm"),
+            .join("golem_audit_middleware_release.wasm"),
         false,
         true,
     )

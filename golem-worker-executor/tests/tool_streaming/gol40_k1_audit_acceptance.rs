@@ -138,7 +138,7 @@ async fn gol40_k1_audit_deployment(
     let audit_metadata = extract_component_metadata(
         &deps
             .component_directory
-            .join("../builtin-tools/audit-middleware.wasm"),
+            .join("golem_audit_middleware_release.wasm"),
         false,
         true,
     )

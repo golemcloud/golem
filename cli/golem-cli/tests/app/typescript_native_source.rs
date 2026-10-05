@@ -119,13 +119,16 @@ async fn typescript_ambient_native_client_covers_contract_without_local_provider
               const streaming = client.finite_stream('payload');
               if (streaming.stdout === undefined) throw new Error('finite-stream omitted stdout');
               const collected = await streaming.collect();
-              if (collected.stdout === undefined) throw new Error('finite-stream omitted collected stdout');
-              const stdout = new TextDecoder().decode(collected.stdout);
+              if (collected.stdout.status === 'rejected') throw collected.stdout.reason;
+              if (collected.stdout.value === undefined) throw new Error('finite-stream omitted collected stdout');
+              if (collected.result.status === 'rejected') throw collected.result.reason;
+              const stdout = new TextDecoder().decode(collected.stdout.value);
+              const streamResult = collected.result.value;
               const middleware = await client.middleware('input');
               return [
                 `success:${structured.value}:${structured.count}:${structured.agentAuthorized}`,
                 supportedError,
-                `stream:${stdout}:${collected.result.count}:${collected.result.agentAuthorized}`,
+                `stream:${stdout}:${streamResult.count}:${streamResult.agentAuthorized}`,
                 `middleware:${middleware}`,
               ];
             },

@@ -212,7 +212,8 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
                 )) => return "middleware:" + message
                 Err(_) => return "start-error"
               }
-              match invocation.collect() {
+              let collected = invocation.collect()
+              match collected.result {
                 Err(@tool.ToolError::Tool(
                   @catalog.CatalogLookupError::McpToolError(message),
                 )) => "error:" + message
@@ -220,8 +221,7 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
                   @tool.RemoteToolError::ConstraintViolation(message),
                 )) => "middleware:" + message
                 Err(_) => "collect-error"
-                Ok(collected) => {
-                  let result = collected.result
+                Ok(result) => {
                   match query {
                     "streamed" => {
                       guard result.structured.answer == "stream-answer" &&
@@ -233,7 +233,7 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
                       ) else {
                         return "bad-stream-metadata"
                       }
-                      guard collected.stdout is Some(b"finite-stream") else {
+                      guard collected.stdout is Ok(Some(b"finite-stream")) else {
                         return "bad-stream-bytes"
                       }
                       "streamed:stream-answer:7:finite-stream"
@@ -249,7 +249,7 @@ async fn moonbit_mcp_client_projects_contract_and_runs_imported_middleware() {
                       ]) else {
                         return "bad-blocks"
                       }
-                      guard collected.stdout is Some(b"") else {
+                      guard collected.stdout is Ok(Some(b"")) else {
                         return "unexpected-stdout"
                       }
                       "blocks:left:right:blocks-answer:11"

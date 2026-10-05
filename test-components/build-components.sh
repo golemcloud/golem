@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming" "tool-runtime-bypass" "trapped-leaf-observer" "external-durable-streams")
+rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming" "tool-runtime-bypass" "trapped-leaf-observer" "external-durable-streams" "../builtin-tools/audit-middleware" "../builtin-tools/output-redaction")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
 effect_test_apps=("tool-streaming-effect")
 scala_test_apps=("tool-streaming-scala")
@@ -194,6 +194,7 @@ clean_current_app() {
   current_dir="$(pwd -P)"
   case "${current_dir}/" in
     "${REPO_ROOT}/test-components/"*) ;;
+    "${REPO_ROOT}/builtin-tools/audit-middleware/"|"${REPO_ROOT}/builtin-tools/output-redaction/") ;;
     *)
       echo "Warning: refusing to clean test component outside ${REPO_ROOT}/test-components: ${current_dir}" >&2
       if [ "$clean_only" = true ]; then
