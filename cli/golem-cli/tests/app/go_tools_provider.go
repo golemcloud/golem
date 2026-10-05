@@ -116,7 +116,7 @@ var Policy = Tool.Middleware[PolicyParams]("vcs-policy", golem.ToolMiddlewareSpe
 
 var _ = Policy.Handle(Commit, func(ctx *golem.ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
 	if a.Message == ctx.Parameters().Forbid {
-		return CommitResult{}, fmt.Errorf("message %q is forbidden by policy", a.Message)
+		return CommitResult{}, golem.ConstraintViolation("message %q is forbidden by policy", a.Message)
 	}
 	a.Message = "checked:" + a.Message
 	return Policy.Underlying(ctx, Commit).Forward(a)

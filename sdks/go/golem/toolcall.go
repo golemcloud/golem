@@ -121,8 +121,24 @@ type ToolCallError struct {
 // with [DecodeTypedValue]. A typed caller matches the case with its Match.
 func (e *ToolCallError) Payload() TypedValue { return e.payload }
 
+// InvalidInput rejects a tool invocation's arguments, from a command handler
+// or a middleware; the caller sees a [ToolCallInvalidInput] failure.
+func InvalidInput(format string, args ...any) error {
+	return &ToolCallError{Kind: ToolCallInvalidInput, Message: fmt.Sprintf(format, args...)}
+}
+
+// ConstraintViolation rejects a tool invocation that breaks a rule of the
+// command or of a middleware's policy; the caller sees a
+// [ToolCallConstraintViolation] failure.
+func ConstraintViolation(format string, args ...any) error {
+	return &ToolCallError{Kind: ToolCallConstraintViolation, Message: fmt.Sprintf(format, args...)}
+}
+
 func (e *ToolCallError) Error() string {
-	msg := fmt.Sprintf("golem: tool %s %s: %s", e.Tool, commandLabel(e.CommandPath), e.Kind)
+	msg := "golem: " + e.Kind.String()
+	if e.Tool != "" {
+		msg = fmt.Sprintf("golem: tool %s %s: %s", e.Tool, commandLabel(e.CommandPath), e.Kind)
+	}
 	if e.ErrorName != "" {
 		msg += " " + e.ErrorName
 	}

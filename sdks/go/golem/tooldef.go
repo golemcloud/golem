@@ -1183,12 +1183,35 @@ func (d *definitions) handlerError(ce *commandEntry, err error) types.ToolError 
 	return passThroughToolError(err)
 }
 
-// passThroughToolError keeps a failure that a called tool reported as its own
-// error, so the caller sees that error rather than a paraphrase of it.
+// passThroughToolError turns what a handler failed with into the wire error.
+// A failure a called tool reported as its own error is kept unchanged; a
+// rejection built with [InvalidInput] or [ConstraintViolation] keeps its kind;
+// a failure of the call itself is mapped as the other SDKs map it — denial,
+// cancellation and exhaustion become constraint violations, protocol and
+// internal failures an invalid result; anything else is an invalid result.
 func passThroughToolError(err error) types.ToolError {
 	var call *ToolCallError
-	if errors.As(err, &call) && call.wire != nil {
+	if !errors.As(err, &call) {
+		return types.MakeToolErrorInvalidResult(err.Error())
+	}
+	if call.wire != nil {
 		return *call.wire
+	}
+	switch call.Kind {
+	case ToolCallInvalidInput:
+		return types.MakeToolErrorInvalidInput(call.Message)
+	case ToolCallConstraintViolation, ToolCallDenied, ToolCallResourceExhausted:
+		return types.MakeToolErrorConstraintViolation(call.Message)
+	case ToolCallCancelled:
+		return types.MakeToolErrorConstraintViolation("underlying invocation was cancelled")
+	case ToolCallProtocolError:
+		return types.MakeToolErrorInvalidResult("protocol error: " + call.Message)
+	case ToolCallInternalError:
+		return types.MakeToolErrorInvalidResult("internal error: " + call.Message)
+	case ToolCallUnknownTool:
+		return types.MakeToolErrorInvalidToolName(call.Message)
+	case ToolCallUnknownCommand:
+		return types.MakeToolErrorInvalidCommandPath(slices.Clone(call.CommandPath))
 	}
 	return types.MakeToolErrorInvalidResult(err.Error())
 }

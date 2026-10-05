@@ -468,3 +468,50 @@ func TestAdapterDropsAnOutputItsCommandDoesNotDeclare(t *testing.T) {
 		t.Errorf("stdout %q", sink.written)
 	}
 }
+
+// TestMiddlewareRejectsAndPassesOnFailures — a middleware rejects a call with
+// the tool-level kinds, and a failure of the call beneath that has no
+// tool-level kind is mapped as the other SDKs map it.
+func TestMiddlewareRejectsAndPassesOnFailures(t *testing.T) {
+	v, r, d := newVcs(t)
+	guard := v.tool.Middleware[PolicyParams]("guard", ToolMiddlewareSpec{Version: "1.0.0"})
+	_ = guard.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+		switch a.Message {
+		case "":
+			return CommitResult{}, InvalidInput("a commit needs a message")
+		case ctx.Parameters().Block:
+			return CommitResult{}, ConstraintViolation("message %q is blocked", a.Message)
+		}
+		return guard.Underlying(ctx, v.commit).Forward(a)
+	})
+	denied := underlyingLayer{start: func([]string, types.TypedSchemaValue, io.Reader) (toolCall, error) {
+		return toolCall{
+			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+				e := types.MakeToolRpcErrorDenied("no grant for vcs")
+				return witTypes.None[types.TypedSchemaValue](), &e
+			},
+			cancel: func() {},
+		}, nil
+	}}
+	run := func(message string) types.ToolError {
+		t.Helper()
+		input := encodeArgs(t, v.commit.ce, func(a *CommitArgs) { a.Message = message; a.Paths = []string{"a"} })
+		res, _ := runMiddlewareFor(t, r, d, "guard", middlewareRun{
+			path: []string{"commit"}, input: input, params: mustTypedValue(t, PolicyParams{Block: "nope"}), under: denied,
+		})
+		if res.IsOk() {
+			t.Fatalf("%q succeeded", message)
+		}
+		return res.Err()
+	}
+
+	if e := run(""); e.Tag() != types.ToolErrorInvalidInput || e.InvalidInput() != "a commit needs a message" {
+		t.Errorf("an empty message gave %+v", e)
+	}
+	if e := run("nope"); e.Tag() != types.ToolErrorConstraintViolation || e.ConstraintViolation() != `message "nope" is blocked` {
+		t.Errorf("a blocked message gave %+v", e)
+	}
+	if e := run("fix"); e.Tag() != types.ToolErrorConstraintViolation || e.ConstraintViolation() != "no grant for vcs" {
+		t.Errorf("a denied call beneath gave %+v", e)
+	}
+}

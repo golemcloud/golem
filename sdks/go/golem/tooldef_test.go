@@ -876,3 +876,27 @@ func TestToolCallOutsideAComponentSaysSo(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+// TestAHandlerRejectsItsInput — a handler's rejection reaches a typed caller
+// with its kind and message.
+func TestAHandlerRejectsItsInput(t *testing.T) {
+	r, d := newToolRegistry(), newDefinitions()
+	tool := defineToolInto[Echo](r, d, "echo", ToolSpec{}, false)
+	say := tool.Command[EchoArgs, string]("say", func(a *EchoArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
+	_ = say.Handle(func(_ *ToolContext, a EchoArgs) (string, error) {
+		if strings.TrimSpace(a.Text) == "" {
+			return "", InvalidInput("nothing to say")
+		}
+		return a.Text, nil
+	})
+	loopback(t, r, d, AnonymousPrincipal{})
+
+	_, err := say.Call(func(a *EchoArgs) { a.Text = " " })
+	var ce *ToolCallError
+	if !errors.As(err, &ce) || ce.Kind != ToolCallInvalidInput || ce.Message != "nothing to say" {
+		t.Fatalf("a rejected call gave %v", err)
+	}
+	if got := InvalidInput("bad %d", 1).Error(); got != "golem: invalid input: bad 1" {
+		t.Errorf("a bare rejection reads %q", got)
+	}
+}

@@ -85,6 +85,7 @@ var _ = Greet.Handle(func(ctx *golem.ToolContext, a GreetArgs) (string, error) {
 Handlers can live in an `impl` package; blank-import it from `main.go`, the same as an agent's. A component can export tools without defining any agent.
 
 - Return a declared case with `ErrX.New(payload)` (`golem.Unit` for none). Returning a case the command did not list in `s.Raises` fails as an invalid result, and so does any other error or a panic.
+- Reject the call itself with `golem.InvalidInput(format, args...)` or `golem.ConstraintViolation(format, args...)`; the caller sees a `*golem.ToolCallError` of that kind.
 - Use `golem.Unit` as the result type for a command that returns nothing.
 
 ## Command Tree and Globals
