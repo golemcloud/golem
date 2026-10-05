@@ -374,9 +374,10 @@ mod tests {
     #[test]
     async fn each_stream_pass_validates_actual_size() {
         let archive = test_archive(&[("file.txt", b"contents")]).await;
-        patch_central_directory_u32(&archive, 24, 7);
         let reader = ComponentFilesArchiveReader::open(archive).await.unwrap();
-        let prepared = reader.stream(reader.entry(0).unwrap().unwrap(), 1024);
+        let mut entry = reader.entry(0).unwrap().unwrap();
+        entry.declared_size = 7;
+        let prepared = reader.stream(entry, 1024);
 
         for _ in 0..2 {
             let error = prepared
