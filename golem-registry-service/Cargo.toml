@@ -59,8 +59,6 @@ opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 poem = { workspace = true, features = [
-    "prometheus",
-    "opentelemetry",
     "cookie",
     "test",
 ] }
