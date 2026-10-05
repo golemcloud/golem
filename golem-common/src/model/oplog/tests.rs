@@ -2767,3 +2767,79 @@ mod scope_scan {
         assert!(scan(10, &entries));
     }
 }
+
+/// The serialized bytes of a filesystem snapshot name, of a successful update record that holds
+/// it, and of a pending update entry that holds it. The form on the wire must not change.
+const NAME_BYTES: &str =
+    "034c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
+const RECORD_BYTES: &str = "0300000000000000000700000000000000020000000000000005014c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
+const ENTRY_BYTES: &str = "030010000000000000000007000100000000000000000200050303010203306170706c69636174696f6e2f6f637465742d73747265616d014c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
+    let name = "p-00000000-0000-4000-8000-000000000001"
+        .parse::<FilesystemSnapshotName>()
+        .unwrap();
+    let record = crate::model::SuccessfulUpdateRecord {
+        timestamp: crate::model::Timestamp::from(7),
+        target_revision: ComponentRevision::new(2).unwrap(),
+        oplog_index: crate::model::OplogIndex::from_u64(5),
+        filesystem_snapshot: Some(name.clone()),
+    };
+    let entry = OplogEntry::PendingUpdate {
+        timestamp: crate::model::Timestamp::from(7),
+        description: crate::model::oplog::UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: crate::model::oplog::OplogPayload::Inline(Box::new(vec![1, 2, 3])),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(name.clone()),
+        },
+    };
+    let written = [
+        hex(&crate::serialization::serialize(&name).unwrap()),
+        hex(&crate::serialization::serialize(&record).unwrap()),
+        hex(&crate::serialization::serialize(&entry).unwrap()),
+    ];
+
+    assert_eq!(written, [NAME_BYTES, RECORD_BYTES, ENTRY_BYTES]);
+    assert_eq!(
+        crate::serialization::deserialize::<FilesystemSnapshotName>(&unhex(NAME_BYTES)).unwrap(),
+        name
+    );
+    assert_eq!(
+        crate::serialization::deserialize::<crate::model::SuccessfulUpdateRecord>(&unhex(
+            RECORD_BYTES
+        ))
+        .unwrap(),
+        record
+    );
+    assert_eq!(
+        hex(&crate::serialization::serialize(
+            &crate::serialization::deserialize::<OplogEntry>(&unhex(ENTRY_BYTES)).unwrap()
+        )
+        .unwrap()),
+        ENTRY_BYTES
+    );
+}
+
+#[test]
+fn a_cloned_filesystem_snapshot_name_shares_its_text() {
+    let name = FilesystemSnapshotName::periodic();
+    let clone = name.clone();
+
+    assert!(std::ptr::eq(
+        name.as_str().as_ptr(),
+        clone.as_str().as_ptr()
+    ));
+}
