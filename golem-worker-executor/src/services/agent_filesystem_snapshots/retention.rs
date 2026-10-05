@@ -17,6 +17,7 @@
 
 use crate::filesystem_snapshot::{SnapshotInfo, SnapshotName};
 use golem_common::model::oplog::FilesystemSnapshotName;
+use std::collections::HashSet;
 use std::time::Duration;
 
 /// The largest difference between the clocks of two executors that retention allows for. A
@@ -47,12 +48,13 @@ pub(super) fn victims(
     };
     let margin = u64::try_from(CLOCK_SKEW_MARGIN.as_millis()).unwrap_or(u64::MAX);
     let older_than = own_info.created_at.to_millis().saturating_sub(margin);
+    let kept = kept.iter().collect::<HashSet<&SnapshotName>>();
     let mut older = listing
         .iter()
         .filter(|(name, info)| {
-            name != own
+            name.as_str().starts_with(prefix)
+                && name != own
                 && !kept.contains(name)
-                && name.as_str().starts_with(prefix)
                 && info.created_at.to_millis() < older_than
         })
         .collect::<Vec<_>>();
