@@ -5635,7 +5635,10 @@ enum ForkPrefixEntry {
     Jump(u64, u64),
 }
 
-fn fork_prefix_entry(entry: &ForkPrefixEntry) -> OplogEntry {
+/// The oplog entry of `entry` at the position `position` of the prefix. A pending update targets
+/// the revision `position + 2`, so the revisions of the pending updates tell them apart.
+fn fork_prefix_entry(position: u64, entry: &ForkPrefixEntry) -> OplogEntry {
+    let target_revision = ComponentRevision::new(position + 2).unwrap();
     match entry {
         ForkPrefixEntry::Jump(start, length) => OplogEntry::Jump {
             timestamp: Timestamp::now_utc(),
@@ -5646,15 +5649,15 @@ fn fork_prefix_entry(entry: &ForkPrefixEntry) -> OplogEntry {
         },
         ForkPrefixEntry::SnapshotBased(named) => {
             OplogEntry::pending_update(UpdateDescription::SnapshotBased {
-                target_revision: ComponentRevision::new(2).unwrap(),
+                target_revision,
                 payload: OplogPayload::Inline(Box::new(vec![])),
                 mime_type: "application/octet-stream".to_string(),
                 filesystem_snapshot: named.then(FilesystemSnapshotName::update),
             })
         }
-        ForkPrefixEntry::Automatic => OplogEntry::pending_update(UpdateDescription::Automatic {
-            target_revision: ComponentRevision::new(2).unwrap(),
-        }),
+        ForkPrefixEntry::Automatic => {
+            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision })
+        }
         ForkPrefixEntry::Successful => OplogEntry::successful_update(
             ComponentRevision::new(2).unwrap(),
             100,
@@ -5688,7 +5691,7 @@ fn pending_update_name(
 
 proptest::proptest! {
     #[test]
-    fn the_fork_baseline_name_equals_the_fold(
+    fn the_fork_baseline_name_and_cancelled_updates_equal_the_fold(
         prefix in proptest::collection::vec(
             proptest::prop_oneof![
                 proptest::strategy::Strategy::prop_map(proptest::bool::ANY, ForkPrefixEntry::SnapshotBased),
@@ -5704,7 +5707,7 @@ proptest::proptest! {
         let entries = prefix
             .iter()
             .enumerate()
-            .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 2), fork_prefix_entry(entry)))
+            .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 2), fork_prefix_entry(index as u64, entry)))
             .collect::<BTreeMap<_, _>>();
         let deleted = DeletedRegionsBuilder::from_regions(
             dropped
@@ -5722,14 +5725,21 @@ proptest::proptest! {
             OplogIndex::from_u64(2),
             OplogIndex::from_u64(prefix.len() as u64 + 1),
         );
-        let (_, baseline) = crate::services::worker_fork::fork_update_indices(copied, &deleted)
+        let (cancelled, baseline) = crate::services::worker_fork::fork_update_indices(copied, &deleted)
             .filter_map(|index| entries.get(&index))
             .fold(crate::services::worker_fork::ForkUpdates::default(), |updates, entry| updates.after(entry))
             .into_parts();
 
         proptest::prop_assert_eq!(
-            baseline,
-            pending_update_name(&entries, fields.last_manual_update_snapshot_index)
+            (cancelled, baseline),
+            (
+                fields
+                    .pending_updates
+                    .iter()
+                    .map(|update| update.target_revision)
+                    .collect::<Vec<_>>(),
+                pending_update_name(&entries, fields.last_manual_update_snapshot_index)
+            )
         );
     }
 }

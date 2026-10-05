@@ -310,12 +310,7 @@ pub(crate) fn update_names_in_use(status: &AgentStatusRecord) -> Box<[Filesystem
             status
                 .pending_updates
                 .iter()
-                .filter_map(|update| match &update.kind {
-                    PendingUpdateKind::SnapshotBased {
-                        filesystem_snapshot,
-                    } => filesystem_snapshot.clone(),
-                    PendingUpdateKind::Automatic => None,
-                }),
+                .filter_map(|update| update.kind.filesystem_snapshot().cloned()),
         )
         .collect()
 }

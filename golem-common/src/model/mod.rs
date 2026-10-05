@@ -2802,6 +2802,16 @@ pub enum PendingUpdateKind {
 }
 
 impl PendingUpdateKind {
+    /// The filesystem snapshot of a snapshot-based update, when it has one.
+    pub fn filesystem_snapshot(&self) -> Option<&FilesystemSnapshotName> {
+        match self {
+            Self::Automatic => None,
+            Self::SnapshotBased {
+                filesystem_snapshot,
+            } => filesystem_snapshot.as_ref(),
+        }
+    }
+
     /// The kind of the pending update that `description` describes.
     pub fn of(description: &oplog::UpdateDescription) -> Self {
         match description {

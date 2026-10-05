@@ -1316,30 +1316,25 @@ pub(crate) struct ForkUpdates {
 }
 
 impl ForkUpdates {
-    /// The updates after `entry`.
+    /// The updates after `entry`. A successful snapshot-based update makes its filesystem
+    /// snapshot the baseline, also when it has none; a successful automatic update keeps the
+    /// baseline.
     pub(crate) fn after(mut self, entry: &OplogEntry) -> Self {
-        match entry {
-            OplogEntry::PendingUpdate { description, .. } => {
-                self.pending.push_back((
+        let (pending, paired) = crate::worker::status::pair_update(
+            std::mem::take(&mut self.pending),
+            entry,
+            |description| {
+                (
                     *description.target_revision(),
                     PendingUpdateKind::of(description),
-                ));
-            }
-            OplogEntry::SuccessfulUpdate { .. } => {
-                if let Some((
-                    _,
-                    PendingUpdateKind::SnapshotBased {
-                        filesystem_snapshot,
-                    },
-                )) = self.pending.pop_front()
-                {
-                    self.baseline = filesystem_snapshot;
-                }
-            }
-            OplogEntry::FailedUpdate { .. } => {
-                self.pending.pop_front();
-            }
-            _ => {}
+                )
+            },
+        );
+        self.pending = pending;
+        if let Some(crate::worker::status::Paired::Succeeded(Some((_, kind)))) = paired
+            && matches!(kind, PendingUpdateKind::SnapshotBased { .. })
+        {
+            self.baseline = kind.filesystem_snapshot().cloned();
         }
         self
     }

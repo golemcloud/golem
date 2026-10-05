@@ -1499,6 +1499,34 @@ fn calculate_export_fork_admissions(
     Ok(admissions)
 }
 
+/// The update that an outcome entry ended: the pending update at the front of the queue, when the
+/// queue held one.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Paired<T> {
+    Succeeded(Option<T>),
+    Failed(Option<T>),
+}
+
+/// Gives the pending updates after `entry`, and the pending update that `entry` ended when it is
+/// an outcome. A `PendingUpdate` adds `new(description)` at the back. A `SuccessfulUpdate` or a
+/// `FailedUpdate` ends the update at the front. Any other entry changes nothing.
+pub(crate) fn pair_update<T>(
+    mut pending: VecDeque<T>,
+    entry: &OplogEntry,
+    new: impl FnOnce(&UpdateDescription) -> T,
+) -> (VecDeque<T>, Option<Paired<T>>) {
+    let paired = match entry {
+        OplogEntry::PendingUpdate { description, .. } => {
+            pending.push_back(new(description));
+            None
+        }
+        OplogEntry::SuccessfulUpdate { .. } => Some(Paired::Succeeded(pending.pop_front())),
+        OplogEntry::FailedUpdate { .. } => Some(Paired::Failed(pending.pop_front())),
+        _ => None,
+    };
+    (pending, paired)
+}
+
 /// The fields of the status that the component updates and the automatic snapshot entries decide.
 #[derive(Debug)]
 struct UpdateFields {
@@ -1516,23 +1544,22 @@ struct UpdateFields {
 impl UpdateFields {
     /// The fields after the entry `entry` at `oplog_idx`.
     fn after(mut self, oplog_idx: OplogIndex, entry: &OplogEntry) -> Self {
+        let (pending_updates, paired) = pair_update(
+            std::mem::take(&mut self.pending_updates),
+            entry,
+            |description| PendingUpdateRef {
+                timestamp: entry.timestamp(),
+                oplog_index: oplog_idx,
+                target_revision: *description.target_revision(),
+                kind: PendingUpdateKind::of(description),
+            },
+        );
+        self.pending_updates = pending_updates;
         match entry {
             OplogEntry::Create { parameters, .. } => {
                 self.component_revision = parameters.component_revision;
                 self.component_revision_for_replay = parameters.component_revision;
                 self.component_size = parameters.component_size;
-            }
-            OplogEntry::PendingUpdate {
-                timestamp,
-                description,
-                ..
-            } => {
-                self.pending_updates.push_back(PendingUpdateRef {
-                    timestamp: *timestamp,
-                    oplog_index: oplog_idx,
-                    target_revision: *description.target_revision(),
-                    kind: PendingUpdateKind::of(description),
-                });
             }
             OplogEntry::FailedUpdate {
                 timestamp,
@@ -1544,7 +1571,6 @@ impl UpdateFields {
                     target_revision: *target_revision,
                     details: details.clone(),
                 });
-                self.pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
@@ -1552,19 +1578,17 @@ impl UpdateFields {
                 new_component_size,
                 ..
             } => {
-                let applied_update = self.pending_updates.pop_front();
+                let applied_update = match paired {
+                    Some(Paired::Succeeded(applied)) => applied,
+                    _ => None,
+                };
                 self.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     oplog_index: oplog_idx,
-                    filesystem_snapshot: applied_update.as_ref().and_then(|update| {
-                        match &update.kind {
-                            PendingUpdateKind::SnapshotBased {
-                                filesystem_snapshot,
-                            } => filesystem_snapshot.clone(),
-                            PendingUpdateKind::Automatic => None,
-                        }
-                    }),
+                    filesystem_snapshot: applied_update
+                        .as_ref()
+                        .and_then(|update| update.kind.filesystem_snapshot().cloned()),
                 });
                 self.component_revision = *target_revision;
                 self.component_size = *new_component_size;
