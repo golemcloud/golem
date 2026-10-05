@@ -651,6 +651,7 @@ pub(crate) struct ReadCountingIndexedStorage {
     fail_drop_prefix_once: AtomicBool,
     fail_length_once: AtomicBool,
     fail_exists_once: AtomicBool,
+    miss_closest_once: AtomicBool,
 }
 
 impl ReadCountingIndexedStorage {
@@ -721,6 +722,12 @@ impl ReadCountingIndexedStorage {
 
     pub(crate) fn fail_next_exists(&self) {
         self.fail_exists_once.store(true, Ordering::Relaxed);
+    }
+
+    /// Makes the next `closest` find nothing, as a read does that runs before a write still in
+    /// flight has landed.
+    fn miss_next_closest(&self) {
+        self.miss_closest_once.store(true, Ordering::Relaxed);
     }
 
     fn append_attempts(&self) -> usize {
@@ -1061,6 +1068,9 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         }
         if let Some(error) = self.read_failures.lock().unwrap().pop_front() {
             return Err(error);
+        }
+        if self.miss_closest_once.swap(false, Ordering::Relaxed) {
+            return Ok(None);
         }
         self.inner
             .closest(svc_name, api_name, entity_name, namespace, key, id)
@@ -6932,6 +6942,89 @@ async fn blob_archive_append_reconciles_with_a_chunk_already_listed(_tracing: &T
             .await
             .unwrap(),
         entries.into_iter().collect::<BTreeMap<_, _>>()
+    );
+}
+
+#[test]
+async fn blob_archive_keeps_the_object_of_a_listing_that_lands_late(_tracing: &Tracing) {
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    let manifests = Arc::new(ReadCountingIndexedStorage::new());
+    let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let service = blob_archive(manifests.clone(), storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-archive-late-listing".to_string(),
+        },
+    );
+    let archive = service
+        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .await;
+
+    // The manifest append reports a lost connection, and the check that follows runs before the
+    // entry has landed. Whether the chunk is listed is unknown, so its object must stay.
+    manifests.inject_append_failure(InjectedAppendFailure::CommitThenIndeterminate);
+    manifests.miss_next_closest();
+    assert!(archive.append(&entries).await.is_err());
+    assert_eq!(
+        blob_objects(&storage, &owned_agent_id, 1).await,
+        1,
+        "the object of a listing that may still land was deleted"
+    );
+    assert_eq!(
+        service
+            .open(&owned_agent_id, AgentMode::Durable, None)
+            .await
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap(),
+        expected,
+        "the chunk listed late must be readable"
+    );
+
+    // The transfer's retry finds the chunk listed and discards its own copy.
+    archive.append(&entries).await.unwrap();
+    assert_eq!(archive.length().await.unwrap(), 1);
+    assert_eq!(blob_objects(&storage, &owned_agent_id, 1).await, 1);
+}
+
+#[test]
+async fn blob_archive_retries_past_a_listing_that_never_landed(_tracing: &Tracing) {
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    let manifests = Arc::new(ReadCountingIndexedStorage::new());
+    let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let service = blob_archive(manifests.clone(), storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-archive-lost-listing".to_string(),
+        },
+    );
+    let archive = service
+        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .await;
+
+    manifests.inject_append_failure(InjectedAppendFailure::IndeterminateBeforeWrite);
+    assert!(archive.append(&entries).await.is_err());
+    assert_eq!(archive.length().await.unwrap(), 0);
+
+    // The retry lists a chunk of its own. The first attempt's object stays behind unlisted, and
+    // is never read.
+    archive.append(&entries).await.unwrap();
+    assert_eq!(archive.length().await.unwrap(), 1);
+    assert_eq!(blob_objects(&storage, &owned_agent_id, 1).await, 2);
+    assert_eq!(
+        service
+            .open(&owned_agent_id, AgentMode::Durable, None)
+            .await
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap(),
+        expected
     );
 }
 

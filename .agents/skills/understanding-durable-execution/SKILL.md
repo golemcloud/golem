@@ -421,11 +421,13 @@ owner leaves by:
   deletes that object again. A manifest append that fails without a verdict is checked against
   the manifest: if this attempt's entry landed, or an earlier attempt of the same transfer
   listed a chunk holding the same entries, the append counts as stored, and otherwise it is a
-  maintenance failure to retry. Reads, lengths and scans go through the manifest, never a
-  directory listing. A trim removes the manifest entries first and deletes their objects after, and never
-  deletes the agent's directory, which is recursive and unfenced. Two crash windows leave an
-  object no manifest lists, after its upload and after its trim; nothing reads it, and deleting
-  the agent removes it.
+  maintenance failure to retry. When nothing is listed the object is kept, because the entry
+  may still land and a listed object must never be deleted. Reads, lengths and scans go through
+  the manifest, never a directory listing. A trim removes the manifest entries first and deletes
+  their objects after, and never deletes the agent's directory, which is recursive and unfenced.
+  An object no manifest lists is left behind by a crash after its upload, by a crash after its
+  trim, and by a listing that failed without a verdict and never landed; nothing reads it, and
+  deleting the agent removes it.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and

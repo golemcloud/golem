@@ -542,8 +542,9 @@ impl OplogArchive for BlobOplogArchive {
     }
 
     /// Stores each sub-chunk as an object, then lists it in the manifest as the owner of the
-    /// shard epoch. An object whose listing is refused, or fails without having landed, is
-    /// deleted again.
+    /// shard epoch. An object whose listing is refused is deleted again. One whose listing fails
+    /// without a verdict is kept, because the entry may still land, unless the manifest already
+    /// lists another object for the same chunk.
     async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         if chunk.is_empty() {
             return Ok(0);
@@ -586,16 +587,14 @@ impl OplogArchive for BlobOplogArchive {
                     self.delete_objects(vec![object]).await;
                     return Err(refused);
                 }
-                // The append failed without a verdict: this attempt's entry may have landed
-                // anyway, or an earlier attempt of the same transfer already listed the chunk.
+                // The append failed without a verdict: this attempt's entry may have landed, may
+                // still land, or an earlier attempt of the same transfer already listed the chunk.
                 Err(append_error) => {
                     let listed = self
                         .manifest
                         .closest::<BlobChunkRef>(last_idx)
                         .await
                         .map_err(|error| {
-                            // Whether the entry landed is unknown, so the object stays: a listed
-                            // object must never be deleted.
                             OplogError::Maintenance(format!(
                                 "failed to reconcile blob oplog append for {} after {append_error}: {error}",
                                 self.owned_agent_id.agent_id
@@ -603,13 +602,14 @@ impl OplogArchive for BlobOplogArchive {
                         })?
                         .filter(|(idx, _)| *idx == last_idx);
                     match listed {
-                        Some((_, listed)) if listed.object == object => {}
-                        other => {
-                            // This attempt's entry did not land, so its object is not listed.
+                        // This attempt's entry landed after all.
+                        Some((_, listed)) if listed.object == object => {
+                            total_bytes += compressed_chunk.compressed_data.len() as u64
+                        }
+                        // Another object is listed for this chunk. An entry is never overwritten,
+                        // so this attempt's can no longer land, and its object is a spare copy.
+                        Some((_, listed)) => {
                             self.delete_objects(vec![object]).await;
-                            let Some((_, listed)) = other else {
-                                return Err(append_error);
-                            };
                             self.covers(&listed, sub_chunk).await.map_err(|error| {
                                 OplogError::Maintenance(format!(
                                     "failed to append blob oplog chunk for {} after {append_error}: {error}",
@@ -617,6 +617,10 @@ impl OplogArchive for BlobOplogArchive {
                                 ))
                             })?;
                         }
+                        // Nothing is listed, but this attempt's entry may still land. Its object
+                        // stays: a listed object must never be deleted, and an unlisted one is
+                        // never read.
+                        None => return Err(append_error),
                     }
                 }
             }
