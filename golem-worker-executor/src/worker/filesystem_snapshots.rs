@@ -1086,18 +1086,17 @@ pub(crate) fn reverted_snapshot_names(
         .into_boxed_slice()
 }
 
-/// Requests the delete of all snapshots of each dead incarnation `stale` whose entry a recovery
-/// scan removed from the recovery index. Only durable agents have such an entry.
-pub(crate) fn delete_snapshots_of_stale_incarnations(
+/// Requests the delete of all snapshots of the dead incarnation `fingerprint` of `agent`, whose
+/// recovery-index member is stale. Only durable agents have such a member.
+pub(crate) fn delete_snapshots_of_stale_incarnation(
     snapshots: &AgentFilesystemSnapshots,
-    stale: &[(OwnedAgentId, AgentFingerprint)],
+    agent: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
 ) {
-    stale.iter().for_each(|(agent, fingerprint)| {
-        snapshots.delete_all_snapshots(
-            &AgentSnapshots::agent(agent, *fingerprint),
-            AgentMode::Durable,
-        )
-    });
+    snapshots.delete_all_snapshots(
+        &AgentSnapshots::agent(agent, fingerprint),
+        AgentMode::Durable,
+    )
 }
 
 #[cfg(test)]
@@ -2638,7 +2637,7 @@ mod tests {
         .await
         .unwrap();
 
-        super::delete_snapshots_of_stale_incarnations(&snapshots, &[(stale, fingerprint)]);
+        super::delete_snapshots_of_stale_incarnation(&snapshots, &stale, fingerprint);
         let deleted = tokio::time::timeout(Duration::from_secs(10), async {
             futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter(
                 futures::StreamExt::then(futures::stream::repeat(()), |()| async {

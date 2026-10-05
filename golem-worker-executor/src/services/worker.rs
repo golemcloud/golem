@@ -361,14 +361,43 @@ struct RunningWorker {
     fingerprint: AgentFingerprint,
 }
 
-/// What a scan of the recovery index found.
-#[derive(Debug, Default)]
-pub struct RecoveryScan {
-    /// The workers that this executor must recover.
-    pub workers: Vec<GetWorkerMetadataResult>,
-    /// The incarnations whose recovery-index entry the scan removed, because their oplog is gone
-    /// or the agent id now belongs to another incarnation. Each of them is dead.
-    pub stale: Vec<(OwnedAgentId, AgentFingerprint)>,
+/// Requests the delete of the filesystem snapshots of a dead incarnation of an agent, whose
+/// recovery-index member is stale.
+pub type OnStale<'a> = &'a (dyn Fn(&OwnedAgentId, AgentFingerprint) + Send + Sync);
+
+/// Why a recovery-index member is stale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StaleReason {
+    /// The agent has no oplog.
+    Absent,
+    /// The oplog of the agent belongs to another incarnation.
+    FingerprintMismatch,
+}
+
+impl StaleReason {
+    /// The label of the stale-member metric.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::FingerprintMismatch => "fingerprint_mismatch",
+        }
+    }
+}
+
+/// Tells why the member of the incarnation `fingerprint` is stale, when `identity` is the stored
+/// identity of its agent: no identity, or an identity with another fingerprint. `None` means that
+/// the member is the stored incarnation.
+fn stale_reason(
+    identity: Option<&ResolvedAgentIdentity>,
+    fingerprint: AgentFingerprint,
+) -> Option<StaleReason> {
+    match identity {
+        None => Some(StaleReason::Absent),
+        Some(identity) if identity.fingerprint != fingerprint => {
+            Some(StaleReason::FingerprintMismatch)
+        }
+        Some(_) => None,
+    }
 }
 
 /// Service for persisting the current set of Golem workers represented by their metadata
@@ -385,10 +414,14 @@ pub trait WorkerService: Send + Sync {
 
     /// Enumerates the workers this executor must recover, per assigned shard.
     ///
-    /// Returns `Err` when the recovery index itself could not be read; individual workers that
-    /// cannot be loaded are skipped and logged, so one of them cannot block the rest. The result
-    /// also names each dead incarnation whose entry the scan removed.
-    async fn get_running_workers_in_shards(&self) -> Result<RecoveryScan, WorkerExecutorError>;
+    /// Returns `Err` when the recovery index or a worker behind it cannot be read. Each member
+    /// whose agent has no oplog, or whose agent now has another incarnation, is stale: the scan
+    /// calls `on_stale` with it and then removes it from the index. A scan that fails later keeps
+    /// the requests that it made, and a member whose removal failed stays for the next scan.
+    async fn get_running_workers_in_shards(
+        &self,
+        on_stale: OnStale<'_>,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
     /// Deletes the worker: its cached status, its indexes, its oplog and its entry in the recovery
     /// index, in that order.
@@ -628,11 +661,17 @@ pub trait WorkerService: Send + Sync {
         status_value: &AgentStatusRecord,
     ) -> Result<(), String>;
 
-    async fn remove_assignment_tracking(
+    /// Removes the recovery-index member of the incarnation `fingerprint` of the agent when it
+    /// is stale: when the agent has no oplog, or its oplog belongs to another incarnation. It
+    /// calls `on_stale` before the removal, so a removal that fails leaves the member for the next
+    /// scan. Gives `true` when the member was stale, and `false` when the incarnation is the
+    /// stored one.
+    async fn remove_if_stale(
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String>;
+        on_stale: OnStale<'_>,
+    ) -> Result<bool, WorkerExecutorError>;
 
     /// Convenience cold-path helper that updates the recovery index *and* writes the blob in one
     /// call. Hot paths use [`set_assignment_tracking`](Self::set_assignment_tracking) (index)
@@ -788,7 +827,11 @@ impl DefaultWorkerService {
         self.lifecycle_gates.acquire(owned_agent_id)
     }
 
-    async fn enum_workers_at_key(&self, key: &str) -> Result<RecoveryScan, WorkerExecutorError> {
+    async fn enum_workers_at_key(
+        &self,
+        key: &str,
+        on_stale: OnStale<'_>,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
         record_worker_call("enum");
 
         // The index itself is not per-worker: without it there is no list of workers to recover,
@@ -805,7 +848,6 @@ impl DefaultWorkerService {
             })?;
 
         let mut workers = Vec::new();
-        let mut stale = Vec::new();
 
         for running_worker in value {
             let owned_agent_id = &running_worker.owned_agent_id;
@@ -822,20 +864,10 @@ impl DefaultWorkerService {
             //   outlives it leaves this executor unable to do its job, so replacing it beats
             //   carrying on with an unknown number of agents stranded.
             let identity = self.resolve_agent_identity(owned_agent_id).await?;
-            if identity
-                .as_ref()
-                .is_none_or(|identity| identity.fingerprint != running_worker.fingerprint)
-            {
-                let reason = if identity.is_none() {
-                    "absent"
-                } else {
-                    "fingerprint_mismatch"
-                };
-                self.remove_running_worker_member(key, &running_worker)
+            if let Some(reason) = stale_reason(identity.as_ref(), running_worker.fingerprint) {
+                self.drop_stale_member(key, &running_worker, reason, on_stale)
                     .await?;
-                record_stale_running_worker(reason);
                 debug!("Skipping {owned_agent_id} during recovery: stale recovery-index member");
-                stale.push((owned_agent_id.clone(), running_worker.fingerprint));
                 continue;
             }
 
@@ -846,30 +878,26 @@ impl DefaultWorkerService {
                 {
                     workers.push(metadata)
                 }
+                // The metadata names another incarnation: the same comparison of fingerprints as
+                // `stale_reason`, made on the metadata.
                 Ok(Some(_)) => {
-                    self.remove_running_worker_member(key, &running_worker)
-                        .await?;
-                    record_stale_running_worker("fingerprint_mismatch");
+                    self.drop_stale_member(
+                        key,
+                        &running_worker,
+                        StaleReason::FingerprintMismatch,
+                        on_stale,
+                    )
+                    .await?;
                     debug!(
                         "Skipping {owned_agent_id} during recovery: stale recovery-index member"
                     );
-                    stale.push((owned_agent_id.clone(), running_worker.fingerprint));
                 }
                 Ok(None) => {
                     let current = self.resolve_agent_identity(owned_agent_id).await?;
-                    if current
-                        .as_ref()
-                        .is_none_or(|identity| identity.fingerprint != running_worker.fingerprint)
+                    if let Some(reason) = stale_reason(current.as_ref(), running_worker.fingerprint)
                     {
-                        let reason = if current.is_none() {
-                            "absent"
-                        } else {
-                            "fingerprint_mismatch"
-                        };
-                        self.remove_running_worker_member(key, &running_worker)
+                        self.drop_stale_member(key, &running_worker, reason, on_stale)
                             .await?;
-                        record_stale_running_worker(reason);
-                        stale.push((owned_agent_id.clone(), running_worker.fingerprint));
                     } else {
                         return Err(WorkerExecutorError::runtime(format!(
                             "failed to load metadata for existing {owned_agent_id} during recovery"
@@ -884,7 +912,23 @@ impl DefaultWorkerService {
             }
         }
 
-        Ok(RecoveryScan { workers, stale })
+        Ok(workers)
+    }
+
+    /// Requests the delete of the snapshots of the stale member, then removes it from the index.
+    /// A removal that fails leaves the member, so the next scan requests the delete again.
+    async fn drop_stale_member(
+        &self,
+        key: &str,
+        running_worker: &RunningWorker,
+        reason: StaleReason,
+        on_stale: OnStale<'_>,
+    ) -> Result<(), WorkerExecutorError> {
+        on_stale(&running_worker.owned_agent_id, running_worker.fingerprint);
+        self.remove_running_worker_member(key, running_worker)
+            .await?;
+        record_stale_running_worker(reason.label());
+        Ok(())
     }
 
     async fn remove_running_worker_member(
@@ -1673,15 +1717,17 @@ impl WorkerService for DefaultWorkerService {
         }
     }
 
-    async fn get_running_workers_in_shards(&self) -> Result<RecoveryScan, WorkerExecutorError> {
+    async fn get_running_workers_in_shards(
+        &self,
+        on_stale: OnStale<'_>,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
         let shard_assignment = self.shard_service.try_get_current_assignment();
-        let mut result = RecoveryScan::default();
+        let mut result = Vec::new();
         if let Some(shard_assignment) = shard_assignment {
             for shard_id in shard_assignment.shard_ids() {
                 let key = Self::running_in_shard_key(&shard_id);
-                let mut shard = self.enum_workers_at_key(&key).await?;
-                result.workers.append(&mut shard.workers);
-                result.stale.append(&mut shard.stale);
+                let mut shard = self.enum_workers_at_key(&key, on_stale).await?;
+                result.append(&mut shard);
             }
         }
         Ok(result)
@@ -2378,26 +2424,33 @@ impl WorkerService for DefaultWorkerService {
         }
     }
 
-    async fn remove_assignment_tracking(
+    async fn remove_if_stale(
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<(), String> {
+        on_stale: OnStale<'_>,
+    ) -> Result<bool, WorkerExecutorError> {
+        let identity = self.resolve_agent_identity(owned_agent_id).await?;
+        let Some(reason) = stale_reason(identity.as_ref(), fingerprint) else {
+            return Ok(false);
+        };
         let shard_assignment = self
             .shard_service
             .current_assignment()
             .expect("sharding assignment is not ready");
         let shard_id =
             ShardId::from_agent_id(&owned_agent_id.agent_id, shard_assignment.number_of_shards);
-        self.remove_running_worker_member(
+        self.drop_stale_member(
             &Self::running_in_shard_key(&shard_id),
             &RunningWorker {
                 owned_agent_id: owned_agent_id.clone(),
                 fingerprint,
             },
+            reason,
+            on_stale,
         )
-        .await
-        .map_err(|error| error.to_string())
+        .await?;
+        Ok(true)
     }
 }
 
@@ -4627,6 +4680,213 @@ mod tests {
         ))
     }
 
+    /// The snapshot deletes that a scan requests through `on_stale`.
+    #[derive(Default)]
+    struct StaleRequests(std::sync::Mutex<Vec<(OwnedAgentId, AgentFingerprint)>>);
+
+    impl StaleRequests {
+        fn on_stale(&self) -> impl Fn(&OwnedAgentId, AgentFingerprint) + Send + Sync + '_ {
+            |agent, fingerprint| {
+                self.0.lock().unwrap().push((agent.clone(), fingerprint));
+            }
+        }
+
+        fn take(&self) -> Vec<(OwnedAgentId, AgentFingerprint)> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    async fn running_members(
+        storage: &InMemoryKeyValueStorage,
+        shard_key: &str,
+    ) -> Vec<RunningWorker> {
+        storage
+            .with_entity("worker", "enum", "agent_id")
+            .members_of_set(KeyValueStorageNamespace::RunningWorkers, shard_key)
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn a_member_is_stale_when_its_agent_has_no_oplog_or_another_incarnation() {
+        let agent = test_owned_agent_id("classified");
+        let (own, other) = (
+            AgentFingerprint(Uuid::from_u128(1)),
+            AgentFingerprint(Uuid::from_u128(2)),
+        );
+        let identity = |fingerprint| ResolvedAgentIdentity {
+            agent_mode: AgentMode::Durable,
+            fingerprint,
+            create_entry: test_create_entry(&agent, AgentMode::Durable, fingerprint),
+        };
+
+        assert_eq!(
+            [
+                stale_reason(None, own),
+                stale_reason(Some(&identity(own)), own),
+                stale_reason(Some(&identity(other)), own),
+            ],
+            [
+                Some(StaleReason::Absent),
+                None,
+                Some(StaleReason::FingerprintMismatch),
+            ]
+        );
+    }
+
+    /// A scan that fails after it removed a stale member has requested the delete of that
+    /// member's snapshots: no later scan can find the member again.
+    #[test]
+    async fn a_recovery_scan_that_fails_after_a_removal_has_requested_the_delete_of_the_removed_member()
+     {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let members = ["first-stale", "second-stale"].map(|name| RunningWorker {
+            owned_agent_id: test_owned_agent_id(name),
+            fingerprint: AgentFingerprint(Uuid::new_v4()),
+        });
+        for member in &members {
+            storage
+                .with_entity("worker", "add", "agent_id")
+                .add_to_set(KeyValueStorageNamespace::RunningWorkers, &shard_key, member)
+                .await
+                .unwrap();
+        }
+        let faults = KeyValueStorageFaults::default();
+        faults.fail_after("remove_stale", 1, 1, unreachable());
+        let service = test_worker_service(
+            Arc::new(FaultInjectingKeyValueStorage::new(storage.clone(), faults)),
+            Arc::new(FakeOplogService::default()),
+        );
+        let requested = StaleRequests::default();
+
+        let result = service
+            .enum_workers_at_key(&shard_key, &requested.on_stale())
+            .await;
+        let remaining = running_members(&storage, &shard_key).await;
+        let removed = members
+            .iter()
+            .filter(|member| !remaining.contains(member))
+            .map(|member| (member.owned_agent_id.clone(), member.fingerprint))
+            .collect::<Vec<_>>();
+        let requested = requested.take();
+
+        assert!(
+            result.is_err(),
+            "the second removal fails the scan: {result:?}"
+        );
+        assert_eq!(removed.len(), 1);
+        assert!(
+            removed.iter().all(|member| requested.contains(member)),
+            "a removed member was not requested: removed {removed:?}, requested {requested:?}"
+        );
+    }
+
+    /// The restart path removes a stale member only after it requested the delete of its
+    /// snapshots, so a removal that fails leaves the member, already requested.
+    #[test]
+    async fn a_stale_member_whose_removal_fails_has_requested_its_snapshot_delete() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_service = Arc::new(ShardServiceDefault::new());
+        shard_service.install_unexpiring(1, &HashMap::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let member = RunningWorker {
+            owned_agent_id: test_owned_agent_id("gone-before-the-restart"),
+            fingerprint: AgentFingerprint(Uuid::new_v4()),
+        };
+        storage
+            .with_entity("worker", "add", "agent_id")
+            .add_to_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &shard_key,
+                &member,
+            )
+            .await
+            .unwrap();
+        let faults = KeyValueStorageFaults::default();
+        faults.fail("remove_stale", 1, unreachable());
+        let service = DefaultWorkerService::new(
+            Arc::new(FaultInjectingKeyValueStorage::new(storage.clone(), faults)),
+            shard_service,
+            Arc::new(FakeOplogService::default()),
+            Arc::new(UnusedComponentService),
+            Arc::new(GolemConfig::default()),
+        );
+        let requested = StaleRequests::default();
+
+        let removed = service
+            .remove_if_stale(
+                &member.owned_agent_id,
+                member.fingerprint,
+                &requested.on_stale(),
+            )
+            .await;
+
+        assert!(removed.is_err(), "the removal fails: {removed:?}");
+        assert_eq!(
+            (
+                requested.take(),
+                running_members(&storage, &shard_key).await
+            ),
+            (
+                vec![(member.owned_agent_id.clone(), member.fingerprint)],
+                vec![member]
+            )
+        );
+    }
+
+    #[test]
+    async fn a_member_of_the_stored_incarnation_is_not_stale() {
+        let storage = Arc::new(InMemoryKeyValueStorage::new());
+        let shard_service = Arc::new(ShardServiceDefault::new());
+        shard_service.install_unexpiring(1, &HashMap::new());
+        let shard_key = DefaultWorkerService::running_in_shard_key(&ShardId::new(0));
+        let agent = test_owned_agent_id("still-here");
+        let fingerprint = AgentFingerprint(Uuid::new_v4());
+        let member = RunningWorker {
+            owned_agent_id: agent.clone(),
+            fingerprint,
+        };
+        storage
+            .with_entity("worker", "add", "agent_id")
+            .add_to_set(
+                KeyValueStorageNamespace::RunningWorkers,
+                &shard_key,
+                &member,
+            )
+            .await
+            .unwrap();
+        let oplog = FakeOplogService {
+            initial_entries: HashMap::from([(
+                (agent.clone(), AgentMode::Durable),
+                test_create_entry(&agent, AgentMode::Durable, fingerprint),
+            )]),
+            ..FakeOplogService::default()
+        };
+        let service = DefaultWorkerService::new(
+            storage.clone(),
+            shard_service,
+            Arc::new(oplog),
+            Arc::new(UnusedComponentService),
+            Arc::new(GolemConfig::default()),
+        );
+        let requested = StaleRequests::default();
+
+        let removed = service
+            .remove_if_stale(&agent, fingerprint, &requested.on_stale())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                removed,
+                requested.take(),
+                running_members(&storage, &shard_key).await
+            ),
+            (false, Vec::new(), vec![member])
+        );
+    }
+
     fn test_owned_agent_id(name: &str) -> OwnedAgentId {
         OwnedAgentId::new(
             EnvironmentId::new(),
@@ -4696,9 +4956,13 @@ mod tests {
         let service = test_worker_service(storage.clone(), Arc::new(FakeOplogService::default()));
 
         // The index entry outlived the worker; recovery isolates that instead of aborting.
-        let scan = service.enum_workers_at_key(&shard_key).await.unwrap();
-        assert!(scan.workers.is_empty());
-        assert_eq!(scan.stale, vec![(deleted, deleted_fingerprint)]);
+        let requested = StaleRequests::default();
+        let workers = service
+            .enum_workers_at_key(&shard_key, &requested.on_stale())
+            .await
+            .unwrap();
+        assert!(workers.is_empty());
+        assert_eq!(requested.take(), vec![(deleted, deleted_fingerprint)]);
         let remaining: Vec<RunningWorker> = storage
             .with_entity("worker", "enum", "agent_id")
             .members_of_set(KeyValueStorageNamespace::RunningWorkers, &shard_key)
@@ -4812,12 +5076,16 @@ mod tests {
             Arc::new(FakeOplogService::default()),
         );
 
-        let result = service.enum_workers_at_key(&shard_key).await;
+        let requested = StaleRequests::default();
+        let result = service
+            .enum_workers_at_key(&shard_key, &requested.on_stale())
+            .await;
 
         assert!(
             result.is_err(),
             "an unreadable worker must fail the scan, not be skipped: {result:?}"
         );
+        assert_eq!(requested.take(), Vec::new());
     }
 
     #[test]
@@ -4860,9 +5128,10 @@ mod tests {
             test_worker_service(unreachable_storage(), Arc::new(FakeOplogService::default()));
 
         let result = service
-            .enum_workers_at_key(&DefaultWorkerService::running_in_shard_key(&ShardId::new(
-                0,
-            )))
+            .enum_workers_at_key(
+                &DefaultWorkerService::running_in_shard_key(&ShardId::new(0)),
+                &|_, _| {},
+            )
             .await;
 
         assert!(

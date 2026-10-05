@@ -289,7 +289,9 @@ mod tests {
 
         async fn get_running_workers_in_shards(
             &self,
-        ) -> Result<crate::services::worker::RecoveryScan, WorkerExecutorError> {
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<Vec<crate::services::worker::GetWorkerMetadataResult>, WorkerExecutorError>
+        {
             Ok(Default::default())
         }
 
@@ -360,12 +362,13 @@ mod tests {
             Ok(())
         }
 
-        async fn remove_assignment_tracking(
+        async fn remove_if_stale(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            _fingerprint: AgentFingerprint,
-        ) -> Result<(), String> {
-            Ok(())
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<bool, WorkerExecutorError> {
+            Ok(false)
         }
     }
 

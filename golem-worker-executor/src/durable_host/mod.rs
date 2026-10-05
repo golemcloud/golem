@@ -169,7 +169,7 @@ use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
-use crate::services::worker::{RecoveryScan, WorkerService};
+use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
@@ -6591,14 +6591,18 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
-        let RecoveryScan { workers, stale } = this
+        let snapshots = this.agent_filesystem_snapshots();
+        let on_stale = |agent: &OwnedAgentId, fingerprint| {
+            crate::worker::filesystem_snapshots::delete_snapshots_of_stale_incarnation(
+                &snapshots,
+                agent,
+                fingerprint,
+            )
+        };
+        let workers = this
             .worker_service()
-            .get_running_workers_in_shards()
+            .get_running_workers_in_shards(&on_stale)
             .await?;
-        crate::worker::filesystem_snapshots::delete_snapshots_of_stale_incarnations(
-            &this.agent_filesystem_snapshots(),
-            &stale,
-        );
 
         debug!(workers = ?workers, "Recovering running workers");
 
@@ -6634,25 +6638,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 match activation {
                     Ok(_) => {}
                     Err(error @ WorkerExecutorError::AgentNotFound { .. }) => {
-                        let current = this
+                        if this
                             .worker_service()
-                            .resolve_agent_identity(&owned_agent_id)
-                            .await?;
-                        if current
-                            .as_ref()
-                            .is_none_or(|identity| identity.fingerprint != expected_fingerprint)
+                            .remove_if_stale(&owned_agent_id, expected_fingerprint, &on_stale)
+                            .await?
                         {
-                            this.worker_service()
-                                .remove_assignment_tracking(&owned_agent_id, expected_fingerprint)
-                                .await
-                                .map_err(anyhow::Error::msg)?;
-                            crate::metrics::workers::record_stale_running_worker(
-                                if current.is_none() {
-                                    "absent"
-                                } else {
-                                    "fingerprint_mismatch"
-                                },
-                            );
                             continue;
                         }
                         return Err(anyhow!(
