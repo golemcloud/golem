@@ -363,10 +363,15 @@ pub(super) struct RunStart {
     pub(super) number: u32,
 }
 
-/// How the shell gives each outcome as the answer of one method.
+/// How the shell gives a failure and a stop as the answer of one method.
 pub(super) struct Answers<T> {
     pub(super) failed: fn(Failed) -> T,
     pub(super) stopped: fn(Withdrawal) -> T,
+}
+
+/// How the shell gives what the check of the own name of a save found as the answer of the save.
+/// Only a save checks its own name.
+pub(super) struct OwnName<T> {
     pub(super) saved: fn(SnapshotInfo) -> T,
     pub(super) name_in_use: fn() -> T,
 }
@@ -412,13 +417,51 @@ enum Step {
 }
 
 impl Shell<'_> {
-    /// Runs the call to its final answer. `run` does one run under a slot; it gets the instant of
-    /// the first slot of the call and the number of the run. `check` reads the own name of a save
-    /// for the file that a late publish staged. `backup_end` gives the time after which a run of a
-    /// save does not start, from the instant of the first slot.
-    pub(super) async fn call<T, R, F, C, G>(
+    /// Runs a call that writes no snapshot file to its final answer. `run` does one run under a
+    /// slot; it gets the instant of the first slot of the call and the number of the run.
+    pub(super) async fn call<T, R, F>(&self, answers: Answers<T>, run: R) -> T
+    where
+        R: FnMut(RunStart) -> F,
+        F: Future<Output = Ran<T>>,
+    {
+        self.runs(
+            answers,
+            None,
+            |_| None,
+            run,
+            |_| std::future::ready(Checked::Absent),
+        )
+        .await
+    }
+
+    /// Runs a save to its final answer. `run` does one run under a slot, as for [`Self::call`].
+    /// `check` reads the own name of the save for the file that a late publish staged, and
+    /// `own_name` gives what it found as the answer. `backup_end` gives the time after which a run
+    /// of the save does not start, from the instant of the first slot.
+    pub(super) async fn save<T, R, F, C, G>(
         &self,
         answers: Answers<T>,
+        own_name: OwnName<T>,
+        backup_end: impl Fn(Instant) -> Option<Instant>,
+        run: R,
+        check: C,
+    ) -> T
+    where
+        R: FnMut(RunStart) -> F,
+        F: Future<Output = Ran<T>>,
+        C: Fn(OwnFile) -> G,
+        G: Future<Output = Checked>,
+    {
+        self.runs(answers, Some(own_name), backup_end, run, check)
+            .await
+    }
+
+    /// Runs the call to its final answer, with the answers of a check of the own name when the
+    /// call is a save.
+    async fn runs<T, R, F, C, G>(
+        &self,
+        answers: Answers<T>,
+        own_name: Option<OwnName<T>>,
         backup_end: impl Fn(Instant) -> Option<Instant>,
         mut run: R,
         check: C,
@@ -472,7 +515,9 @@ impl Shell<'_> {
         )))
         .await;
         match ended {
-            Some(Outcome(outcome, calling)) => answer_of(outcome, calling, &answers),
+            Some(Outcome(outcome, calling)) => {
+                answer_of(outcome, calling, &answers, own_name.as_ref())
+            }
             None => (answers.failed)(Failed::new(anyhow::anyhow!(
                 "the filesystem snapshot call ended without an answer"
             ))),
@@ -688,8 +733,14 @@ enum Taken {
 /// The outcome that ended a call, with the state that holds its answer and its last failure.
 struct Outcome<T>(RunOutcome, Calling<T>);
 
-/// Gives the answer of the method for the outcome.
-fn answer_of<T>(outcome: RunOutcome, calling: Calling<T>, answers: &Answers<T>) -> T {
+/// Gives the answer of the method for the outcome. Only a save, which has `own_name`, checks its
+/// own name, so only a save can get `Saved` or `NameInUse`.
+fn answer_of<T>(
+    outcome: RunOutcome,
+    calling: Calling<T>,
+    answers: &Answers<T>,
+    own_name: Option<&OwnName<T>>,
+) -> T {
     let failed = |last_failure: Option<anyhow::Error>| {
         (answers.failed)(Failed::new(last_failure.unwrap_or_else(|| {
             anyhow::anyhow!("the filesystem snapshot call failed")
@@ -700,14 +751,25 @@ fn answer_of<T>(outcome: RunOutcome, calling: Calling<T>, answers: &Answers<T>) 
             Some(answer) => answer,
             None => failed(calling.last_failure),
         },
-        RunOutcome::Saved(info) => (answers.saved)(info),
-        RunOutcome::NameInUse => (answers.name_in_use)(),
+        RunOutcome::Saved(info) => match own_name {
+            Some(own_name) => (own_name.saved)(info),
+            None => failed(Some(not_a_save())),
+        },
+        RunOutcome::NameInUse => match own_name {
+            Some(own_name) => (own_name.name_in_use)(),
+            None => failed(Some(not_a_save())),
+        },
         RunOutcome::FailedWithLast => failed(calling.last_failure),
         RunOutcome::TooLate => failed(Some(anyhow::anyhow!(
             "the save would take longer than the filesystem snapshot store allows"
         ))),
         RunOutcome::Stopped(cause) => (answers.stopped)(cause),
     }
+}
+
+/// The failure of a call that is not a save and got the answer of a check of an own name.
+fn not_a_save() -> anyhow::Error {
+    anyhow::anyhow!("the filesystem snapshot call checked a name that it did not write")
 }
 
 /// Completes when the token is cancelled, and never without a token.

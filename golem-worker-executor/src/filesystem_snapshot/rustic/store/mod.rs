@@ -42,8 +42,8 @@ use super::publish::{
 };
 use super::reload::{self, Found, Learned, Observed, Outcome, Reread, Step};
 use super::runs::{
-    Answers, Checked, Ended, Kind, LateWrite, OwnFile, Ran, RunEnd, Settle, Settled, Shell,
-    answered_after, copy_end,
+    Answers, Checked, Ended, Kind, LateWrite, OwnFile, OwnName, Ran, RunEnd, Settle, Settled,
+    Shell, answered_after, copy_end,
 };
 use super::scope::{copy_scope, delete_scope};
 use super::spawner::Spawner;
@@ -273,16 +273,6 @@ fn call_answers<T>() -> Answers<Result<T, CallError>> {
     Answers {
         failed: |failed| Err(CallError::Failed(failed)),
         stopped: |cause| Err(CallError::Stopped(cause)),
-        saved: |_| {
-            Err(CallError::Failed(Failed::new(anyhow::anyhow!(
-                "the filesystem snapshot call checked a name that it did not write"
-            ))))
-        },
-        name_in_use: || {
-            Err(CallError::Failed(Failed::new(anyhow::anyhow!(
-                "the filesystem snapshot call checked a name that it did not write"
-            ))))
-        },
     }
 }
 
@@ -291,6 +281,12 @@ fn save_answers() -> Answers<Result<SnapshotInfo, SaveError>> {
     Answers {
         failed: |failed| Err(SaveError::Failed(failed)),
         stopped: |cause| Err(SaveError::Stopped(cause)),
+    }
+}
+
+/// The answers of a save to what the check of its own name found.
+fn save_own_name() -> OwnName<Result<SnapshotInfo, SaveError>> {
+    OwnName {
         saved: Ok,
         name_in_use: || Err(SaveError::NameInUse),
     }
@@ -301,16 +297,6 @@ fn restore_answers() -> Answers<Result<SnapshotInfo, RestoreFailure>> {
     Answers {
         failed: |failed| Err(RestoreFailure::Failed(failed)),
         stopped: |cause| Err(RestoreFailure::Stopped(cause)),
-        saved: |_| {
-            Err(RestoreFailure::Failed(Failed::new(anyhow::anyhow!(
-                "a restore checked a name that it did not write"
-            ))))
-        },
-        name_in_use: || {
-            Err(RestoreFailure::Failed(Failed::new(anyhow::anyhow!(
-                "a restore checked a name that it did not write"
-            ))))
-        },
     }
 }
 
@@ -319,22 +305,7 @@ fn read_answers() -> Answers<Result<Option<SnapshotInfo>, ReadError>> {
     Answers {
         failed: |failed| Err(ReadError::Failed(failed)),
         stopped: |_| Err(ReadError::Stopped),
-        saved: |_| {
-            Err(ReadError::Failed(Failed::new(anyhow::anyhow!(
-                "a stat checked a name that it did not write"
-            ))))
-        },
-        name_in_use: || {
-            Err(ReadError::Failed(Failed::new(anyhow::anyhow!(
-                "a stat checked a name that it did not write"
-            ))))
-        },
     }
-}
-
-/// The check of a call that writes no snapshot file. The shell asks it only after a publish.
-async fn no_check(_own: OwnFile) -> Checked {
-    Checked::Absent
 }
 
 /// Gives the end of a run whose step of rustic failed with `error`, when no other rule of the
@@ -1302,8 +1273,9 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             .map_err(SaveError::Source)?;
         let parent = parent.map(|(parent, detection)| (parent.clone(), detection));
         self.shell(Kind::Save, slots, Some(cancel))
-            .call(
+            .save(
                 save_answers(),
+                save_own_name(),
                 |t0| self.policy.backup_end(t0),
                 |start| self.save_run(work, scope, name, tree, parent.clone(), cancel, start.t0),
                 |own| self.own_name_check(work, scope, name, own),
@@ -1332,12 +1304,9 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         .await
         .map_err(RestoreFailure::Destination)?;
         self.shell(Kind::Restore, slots, None)
-            .call(
-                restore_answers(),
-                |_| None,
-                |_| self.restore_run(work, scope, name, into),
-                no_check,
-            )
+            .call(restore_answers(), |_| {
+                self.restore_run(work, scope, name, into)
+            })
             .await
     }
 
@@ -1351,12 +1320,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         }
         let work = &self.work(scope);
         self.shell(Kind::Stat, &Unlimited, None)
-            .call(
-                read_answers(),
-                |_| None,
-                |_| self.stat_run(work, scope, name),
-                no_check,
-            )
+            .call(read_answers(), |_| self.stat_run(work, scope, name))
             .await
     }
 
@@ -1367,12 +1331,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
     ) -> Result<Box<[(SnapshotName, SnapshotInfo)]>, CallError> {
         let work = &self.work(scope);
         self.shell(Kind::List, slots, None)
-            .call(
-                call_answers(),
-                |_| None,
-                |_| self.list_run(work, scope),
-                no_check,
-            )
+            .call(call_answers(), |_| self.list_run(work, scope))
             .await
     }
 
@@ -1389,12 +1348,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
         let names = &names;
         let work = &self.work(scope);
         self.shell(Kind::Delete, slots, None)
-            .call(
-                call_answers(),
-                |_| None,
-                |_| self.delete_run(work, scope, names),
-                no_check,
-            )
+            .call(call_answers(), |_| self.delete_run(work, scope, names))
             .await
     }
 
@@ -1411,12 +1365,7 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
             work = drain_agent(&self.works, scope) => work,
         };
         self.shell(Kind::DeleteAll, slots, None)
-            .call(
-                call_answers(),
-                |_| None,
-                |_| self.delete_all_run(work, scope),
-                no_check,
-            )
+            .call(call_answers(), |_| self.delete_all_run(work, scope))
             .await
     }
 
@@ -1428,12 +1377,9 @@ impl FilesystemSnapshotStore for RusticSnapshotStore {
     ) -> Result<(), CallError> {
         let works = &(self.work(from), self.work(to));
         self.shell(Kind::Copy, slots, None)
-            .call(
-                call_answers(),
-                |_| None,
-                |start| self.copy_run(works, from, to, start.number > 1),
-                no_check,
-            )
+            .call(call_answers(), |start| {
+                self.copy_run(works, from, to, start.number > 1)
+            })
             .await
     }
 

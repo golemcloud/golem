@@ -14,8 +14,9 @@
 
 use super::super::scope::CopyError;
 use super::{
-    Answers, Checked, Ended, Kind, Late, LateWrite, MOST_RACE_RUNS, NextRun, OwnFile, Ran, RunEnd,
-    RunOutcome, RunSeen, Settle, Settled, Shell, Stand, copy_end, jitter, next_run, run_delay,
+    Answers, Checked, Ended, Kind, Late, LateWrite, MOST_RACE_RUNS, NextRun, OwnFile, OwnName, Ran,
+    RunEnd, RunOutcome, RunSeen, Settle, Settled, Shell, Stand, copy_end, jitter, next_run,
+    run_delay,
 };
 use crate::filesystem_snapshot::{Failed, RunSlots, Slot, SnapshotInfo, Withdrawal};
 use futures::future::BoxFuture;
@@ -478,6 +479,11 @@ fn answers() -> Answers<Result<SnapshotInfo, &'static str>> {
             Withdrawal::Stopped => Err("stopped"),
             Withdrawal::Deadline => Err("deadline"),
         },
+    }
+}
+
+fn own_name() -> OwnName<Result<SnapshotInfo, &'static str>> {
+    OwnName {
         saved: Ok,
         name_in_use: || Err("name in use"),
     }
@@ -534,8 +540,9 @@ fn the_shell_tells_its_limiter_before_a_wait_for_late_writes_and_before_a_wait_a
 
         // Run 1 loses a publish; the check finds nothing. Run 2 fails a call. Run 3 answers.
         let answer = shell
-            .call(
+            .save(
                 answers(),
+                own_name(),
                 |_| None,
                 |_| {
                     let run = {
@@ -598,8 +605,9 @@ fn a_save_with_two_lost_publishes_waits_for_and_checks_each_and_answers_with_the
         let started = super::now();
 
         let answer = shell
-            .call(
+            .save(
                 answers(),
+                own_name(),
                 |_| None,
                 |_| {
                     let run = {
@@ -662,12 +670,7 @@ fn a_withdrawal_during_the_wait_after_a_failed_run_ends_the_call_and_a_shutdown_
         let checks = Mutex::new(0u32);
 
         let withdrawn = shell(Kind::Delete)
-            .call(
-                answers(),
-                |_| None,
-                |_| async { ended(RunEnd::CallFailed, None) },
-                |_| async { Checked::Absent },
-            )
+            .call(answers(), |_| async { ended(RunEnd::CallFailed, None) })
             .await;
         let stopping = root.clone();
         tokio::spawn(async move {
@@ -676,8 +679,9 @@ fn a_withdrawal_during_the_wait_after_a_failed_run_ends_the_call_and_a_shutdown_
         });
         let started = tokio::time::Instant::now();
         let shut_down = shell(Kind::Save)
-            .call(
+            .save(
                 answers(),
+                own_name(),
                 |_| None,
                 |_| async {
                     ended(
@@ -761,8 +765,9 @@ async fn settled_call(
     };
     let gate = CancellationToken::new();
     let finished = Arc::new(Mutex::new(None::<Settled>));
-    let call = shell.call(
+    let call = shell.save(
         answers(),
+        own_name(),
         |_| None,
         |_| {
             let (gate, finished) = (gate.clone(), Arc::clone(&finished));
