@@ -399,8 +399,14 @@ fn the_catch_up_copies_the_new_blobs_while_a_listing_holds_a_new_index_file() {
         [
             CatchUp::Done,
             CatchUp::Done,
-            CatchUp::Copy(paths(&["index/b", "data/ab/2"]).into_boxed_slice()),
-            CatchUp::Copy(paths(&["index/b"]).into_boxed_slice()),
+            CatchUp::Copy {
+                packs: paths(&["data/ab/2"]).into_boxed_slice(),
+                index: paths(&["index/b"]).into_boxed_slice(),
+            },
+            CatchUp::Copy {
+                packs: Box::default(),
+                index: paths(&["index/b"]).into_boxed_slice(),
+            },
             CatchUp::Race,
         ]
     );
@@ -461,6 +467,61 @@ async fn a_copy_of_a_source_that_saves_during_it_catches_up_and_succeeds_in_one_
             "keys/efef",
             "snapshots/0101"
         ]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_catch_up_whose_new_pack_a_prune_removed_leaves_no_index_file_of_it_in_to() {
+    // A save of the source writes a new pack and a new index file after the copy listed the
+    // packs. A prune then removes the new pack before the catch-up copies it.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "copy" && path.starts_with("index") {
+                Script::WaitForGate
+            } else if op_label == "copy" && path == Path::new("data/cd/cdcd") {
+                Script::Vanish
+            } else {
+                Script::Pass
+            }
+        });
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+    let saving =
+        async {
+            let reached =
+                futures::stream::repeat(())
+                    .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+                    .filter(|()| {
+                        std::future::ready(storage.calls().iter().any(|(op_label, path)| {
+                            *op_label == "copy" && path.starts_with("index")
+                        }))
+                    });
+            std::pin::pin!(reached).next().await;
+            put_all(
+                &*storage,
+                &from,
+                &[("data/cd/cdcd", "new pack"), ("index/efef", "new index")],
+            )
+            .await;
+            storage.open_gate();
+        };
+
+    let (from_files, to_files) = (files(&storage, &from), files(&storage, &to));
+    let (copied, ()) = tokio::join!(copy_scope(&from_files, &to_files, false), saving);
+    let target = stored(&*storage, &to)
+        .await
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect::<Vec<_>>();
+
+    assert!(
+        matches!(&copied, Err(CopyError::CopySourceMissing { path }) if **path == *Path::new("data/cd/cdcd")),
+        "{copied:?}"
+    );
+    assert!(
+        !target.iter().any(|path| path == "index/efef"),
+        "an index file whose pack is gone landed in the target: {target:?}"
     );
 }
 

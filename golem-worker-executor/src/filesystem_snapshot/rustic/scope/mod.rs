@@ -91,8 +91,13 @@ impl CopyError {
 /// source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CatchUp {
-    /// Copy these blobs, then list again.
-    Copy(Box<[Box<Path>]>),
+    /// Copy these packs, then these index files, then list again. An index file is copied only
+    /// after every pack of its round, so a pack that a prune removed ends the run before an index
+    /// file that lists it lands.
+    Copy {
+        packs: Box<[Box<Path>]>,
+        index: Box<[Box<Path>]>,
+    },
     /// The listing holds no index file that the run did not copy.
     Done,
     /// The catch-up did not end within [`MOST_CATCH_UPS`] rounds.
@@ -100,20 +105,23 @@ pub(super) enum CatchUp {
 }
 
 /// Decides the catch-up after round number `rounds` listed `listed`, when the run copied `copied`.
-/// The run copies each listed blob that it did not copy, and lists again, while the listing holds
-/// an index file that it did not copy.
+/// The run copies each listed blob that it did not copy, the packs before the index files, and
+/// lists again, while the listing holds an index file that it did not copy.
 pub(super) fn catch_up(copied: &HashSet<Box<Path>>, listed: &[Box<Path>], rounds: u32) -> CatchUp {
-    let new = listed
+    let (index, packs): (Vec<_>, Vec<_>) = listed
         .iter()
         .filter(|path| !copied.contains(*path))
         .cloned()
-        .collect::<Box<[_]>>();
-    if !new.iter().any(|path| path.starts_with(INDEX_PATH)) {
+        .partition(|path| path.starts_with(INDEX_PATH));
+    if index.is_empty() {
         CatchUp::Done
     } else if rounds >= MOST_CATCH_UPS {
         CatchUp::Race
     } else {
-        CatchUp::Copy(new)
+        CatchUp::Copy {
+            packs: packs.into_boxed_slice(),
+            index: index.into_boxed_slice(),
+        }
     }
 }
 
@@ -197,7 +205,8 @@ pub(super) async fn copy_scope(
 }
 
 /// Lists the index files and the packs of `from` again, and copies each that the run did not copy,
-/// as [`catch_up`] decides, until a listing holds no index file that the run did not copy.
+/// the packs first, as [`catch_up`] decides, until a listing holds no index file that the run did
+/// not copy.
 async fn catch_up_rounds(
     from: &SnapshotFiles,
     to: &SnapshotFiles,
@@ -224,13 +233,19 @@ async fn catch_up_rounds(
         match catch_up(&copied, &listed, rounds) {
             CatchUp::Done => Some((Some(Ok(())), None)),
             CatchUp::Race => Some((Some(Err(CopyError::Race)), None)),
-            CatchUp::Copy(blobs) => match copy_directory(from, to, &blobs).await {
-                Ok(()) => {
-                    copied.extend(blobs);
-                    Some((None, Some((copied, rounds + 1))))
+            CatchUp::Copy { packs, index } => {
+                let round = async {
+                    copy_directory(from, to, &packs).await?;
+                    copy_directory(from, to, &index).await
+                };
+                match round.await {
+                    Ok(()) => {
+                        copied.extend(packs.into_iter().chain(index));
+                        Some((None, Some((copied, rounds + 1))))
+                    }
+                    Err(error) => Some((Some(Err(error)), None)),
                 }
-                Err(error) => Some((Some(Err(error)), None)),
-            },
+            }
         }
     });
     std::pin::pin!(rounds.filter_map(|ended| async move { ended }))
