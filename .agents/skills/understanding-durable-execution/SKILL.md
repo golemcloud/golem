@@ -104,7 +104,9 @@ or when the oplog of the agent belongs to another incarnation (`stale_reason` in
 `services/worker.rs`). The recovery scan (`WorkerService::get_running_workers_in_shards(on_stale)`)
 and the restart after it (`WorkerService::remove_if_stale`) request `delete_all_snapshots` for the
 dead incarnation of each stale member before they remove the member. A removal that fails leaves
-the member, and the next scan requests the delete again.
+the member, and the next scan requests the delete again. A delete request that a full clean-up
+queue refuses is counted as a leaked clean-up: the scan still removes the member, and no later
+scan asks again.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
@@ -810,10 +812,11 @@ admission never waits.
 (`RunSlots`, `max_concurrent_uploads` for the uploads and deletes) for each run of a call, and
 holds none while it waits. A storage call gets a few tries in its run; after them the run ends,
 and the store runs the operation again after a wait. `save` answers `Saved`, `NameInUse`,
-`Failed` or `Stopped` and checks its own name itself. A write whose try was sent and failed in a
+`Source` (the save could not read the tree), `Failed` or `Stopped`, and checks its own name
+itself. A write whose try was sent and failed in a
 way that can still land is recorded; the call answers only after that write has landed or can no
-longer land, one storage call deadline after its try. A save run ends by cancelling its token and
-giving its slot back; then it waits until rustic's threads release its blob files (a per-run
+longer land, one storage call deadline after its try. A save run ends by cancelling its run token
+and giving its slot back; then it waits until rustic's threads release its blob files (a per-run
 `TaskTracker`), reads its records, and waits for its late writes. Only a lost shard,
 `BoundPassed` and a shutdown cancel a save run; a job stop and `delete_all_snapshots` leave it to
 end as a tail. The discard of the capture and the confirmation hold no slot. A start waits only
@@ -825,8 +828,11 @@ each incarnation (`Names`, or `All`, which replaces pending names), and a fixed 
 `max_concurrent_uploads` workers takes ready agents from a ready queue. Its bounds are 65,536
 pending entries, 786,432 pending names, and `max_pending_deletes_per_agent` names for each agent; a
 request past a bound is counted as a leaked clean-up. Retention and the superseded delete call the
-store directly; they run after their own job's save answered, and the save mark of the agent
-keeps a second save from starting a run while an earlier save call still runs. The metrics are
+store directly; they run after their own job's save answered. Two runs of saves of one agent never
+run at the same time: a save call starts a run only while it holds the save mark of the agent. A
+save call whose periodic job an admission replaced while the call only waited for its late writes
+runs on as a tail that starts no run and no write, and the next save of the agent runs beside
+it. The metrics are
 `filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds` and
 `filesystem_snapshot_failed_space_reclaims_total`. `upload_now` answers `Stopped` after a lost
 shard, a shutdown or `delete_all_snapshots`, unless the save had already finished; ephemeral

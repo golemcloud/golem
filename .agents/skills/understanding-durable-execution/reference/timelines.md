@@ -459,6 +459,6 @@ remove: RunningWorkers member (id, F)
 
 A crash between the oplog delete and the member removal leaves the member. The next recovery scan
 finds no oplog for it, requests `delete_all_snapshots` for `(id, F)` first, and then removes the
-member. A crash after the member removal and before the store delete ended leaves the repository
-for the sweep.
+member. A crash after the member removal and before the store delete ended leaks the repository;
+no sweep removes it yet.
 

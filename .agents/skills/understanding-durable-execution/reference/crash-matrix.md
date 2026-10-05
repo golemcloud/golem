@@ -73,13 +73,14 @@ below for what that leaves behind.
 | Crash window | Reconstruction behaviour | Durable fact |
 |---|---|---|
 | After the oplog delete of a delete, before its `RunningWorkers` removal | The next recovery scan finds the member stale and requests `delete_all_snapshots` before it removes the member | The member names the incarnation |
-| After the delete request, after the member removal, before the store delete ends | The repository stays for the sweep | None (an accepted leak of an idle incarnation) |
+| After the delete request, after the member removal, before the store delete ends | The repository leaks; no sweep removes it yet | None (an accepted leak of an idle incarnation) |
 | A recovery or restart removal of a stale member fails | The member stays, and the next scan requests the delete again | The member |
+| A stale-member or revert delete request that a full clean-up queue refuses | Counted as a leaked clean-up. The scan still removes the member, and no later scan asks again; a revert's names stay until retention counts them | None (an accepted leak) |
 | After a `Revert` commits, before its snapshot delete runs | The names stay. The start uses the status without the region, so the previous baseline. Retention counts the names later | `Revert` entry |
 | A revert whose commit is refused | Nothing is deleted. The new owner has the whole history, and the caller retries there | Oplog epoch fence |
 | A revert whose append landed with an indeterminate answer, then met the fence | The old owner answers `OplogFenced` and deletes nothing. The new owner has the `Revert`. A count-based retry gives "Stale count-based revert resolution", and the names of the region leak until count retention collects them; an index-based retry deletes them | `Revert` entry in the new owner's oplog |
-| A fork attempt before publication | The stage repository stays for the sweep; no record names it | None |
-| A save run whose backup failed while rustic's threads still write | The run cancels its token, gives its slot back, waits until the threads release its blob files, and answers only after the writes that can still land have landed or cannot land | The late record of the run |
+| A fork attempt before publication | The stage repository leaks; no record names it, and no sweep removes it yet | None |
+| A save run whose backup failed while rustic's threads still write | The run cancels its run token, gives its slot back, waits until the threads release its blob files, and answers only after the writes that can still land have landed or cannot land | The late record of the run |
 
 ## Replay-to-live (`replay_state/mod.rs`, `durable_host/mod.rs::PendingReplayToLive`)
 
