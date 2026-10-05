@@ -154,11 +154,11 @@ im = "15.1.0"
 include_dir = "0.7.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
 indoc = "2.0.6"
-inquire = "0.7.5"
+inquire = { version = "0.7.5", default-features = false, features = ["crossterm", "fuzzy"] }
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
-jsonschema = "0.38.1"
+jsonschema = { version = "0.38.1", default-features = false }
 jsonwebtoken = "9.2.0"
 k8s-openapi = { version = "0.24.0", features = ["earliest"] }
 kill_tree = "0.2.4"
@@ -181,7 +181,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 mimalloc = "0.1.52"
-minijinja = "2.7.0"
+minijinja = { version = "2.7.0", default-features = false, features = ["builtins", "debug", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde"] }
 
 nanoid = "0.4.0"
 nondestructive = "0.0.26"
@@ -194,9 +194,9 @@ once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "4.0.1"
 opentelemetry = "0.30.0"
-opentelemetry-otlp = { version = "0.30.0" }
+opentelemetry-otlp = { version = "0.30.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
 opentelemetry-prometheus-text-exporter = "=0.2.0"
-opentelemetry_sdk = "0.30.0"
+opentelemetry_sdk = { version = "0.30.0", default-features = false, features = ["trace", "metrics", "internal-logs"] }
 phf = { version = "0.11.3", features = ["macros"] }
 pin-project = "1.1.10"
 pgvector = { version = "=0.4.1", features = ["sqlx", "halfvec"] }
@@ -248,7 +248,7 @@ serde_json_path = "0.7.1"
 serde_with = "3.5.0"
 serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
-shadow-rs = "1.2.0"
+shadow-rs = { version = "1.2.0", default-features = false, features = ["build"] }
 shell-words = "1.1.0"
 shlex = "1.3.0"
 similar = "2.7.0"
@@ -263,7 +263,7 @@ strum = "0.27.1"
 strum_macros = "0.27.1"
 syn = "2.0.90"
 synoptic = "2.2.9"
-sysinfo = "0.33.1"
+sysinfo = { version = "0.33.1", default-features = false, features = ["system"] }
 system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
@@ -271,7 +271,7 @@ terminal_size = "0.4.2"
 test-r = { version = "3.0.12", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
-textwrap = "0.16.1"
+textwrap = { version = "0.16.1", default-features = false, features = ["unicode-linebreak", "unicode-width"] }
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", "signal"] }
@@ -317,12 +317,12 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.248.0"
 wasm-metadata = { version = "0.248.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.6", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.7", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.248"
 wasmparser = "0.248.0"
 wasmprinter = "0.248.0"
 wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
-wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
+wasmtime-wasi = { version = "=46.0.1", default-features = false, features = ["p2", "p3"] }
 wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
 wat = "1.248.0"
 wax = "0.6.0"
