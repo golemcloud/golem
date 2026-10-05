@@ -429,3 +429,36 @@ tool maps to `InvalidToolName`; true or a missing observation preserves the prot
 maps to `InvalidInput`. Other MCP `isError` content becomes a custom tool error. Fixed discovery
 uses its recorded exact deployment reference, while this dynamic execution uses the full admission
 snapshot. Middleware and code-generation acceptance are outside this completed executor path.
+
+## 17. Revert with filesystem snapshots
+
+```
+#20 Snapshot { files: p-a }                 periodic record, its upload saves p-a
+#21 SnapshotConfirmed { p-a }
+#22..#29 invocations
+#30 Snapshot { files: p-b }
+#31 SnapshotConfirmed { p-b }
+#32 Revert { region: 22..=31 }              committed through commit_oplog_and_update_state
+```
+
+`reverted_snapshot_names` collects `p-b` from the dropped region, without a name that a live record
+outside it uses. Only after the commit of `#32` does `RevertHold::delete_snapshots([p-b])` ask the
+clean-up queue to delete it; the queue runs it when the busy count of the agent is 0. The next
+start folds the status without the region and restores `p-a`. When the commit of `#32` is refused,
+the revert gives `OplogFenced`, deletes nothing, and the caller retries on the new owner.
+
+## 18. Delete of an incarnation
+
+```
+remove: cached status, indexes, stream sessions    (derived state first)
+remove: oplog delete                                 oplog of fingerprint F gone
+          after_oplog_delete(F) → delete_all_snapshots(AgentSnapshots::agent(id, F))
+          ✕ crash here leaves the RunningWorkers member (id, F)
+remove: RunningWorkers member (id, F)
+```
+
+A crash between the oplog delete and the member removal leaves the member. The next recovery scan
+finds no oplog for it, requests `delete_all_snapshots` for `(id, F)` first, and then removes the
+member. A crash after the member removal and before the store delete ended leaves the repository
+for the sweep.
+

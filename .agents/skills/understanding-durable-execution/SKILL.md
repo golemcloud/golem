@@ -99,7 +99,12 @@ These namespaces have a renewable expiry and are rebuilt from the oplog after ex
 metadata compare-and-mutate operations make each multi-field publication atomic. The flat cached
 agent mode only chooses which oplog namespace to probe first and never proves existence or identity.
 `RunningWorkers` entries also include the fingerprint, so shard recovery admits only the recorded
-incarnation and removes only an exact stale member.
+incarnation and removes only an exact stale member. A member is stale when its agent has no oplog,
+or when the oplog of the agent belongs to another incarnation (`stale_reason` in
+`services/worker.rs`). The recovery scan (`WorkerService::get_running_workers_in_shards(on_stale)`)
+and the restart after it (`WorkerService::remove_if_stale`) request `delete_all_snapshots` for the
+dead incarnation of each stale member before they remove the member. A removal that fails leaves
+the member, and the next scan requests the delete again.
 
 Two persistence steps matter for every crash window: **append** puts an entry in the oplog
 buffer; **commit** makes it recoverable (`commit_oplog_and_update_state(CommitLevel)`). The
@@ -281,7 +286,10 @@ is owned by that worker: concurrent callers share its retained attempt result, a
 only unfinished cleanup stages after failure, and successful cleanup retires active-worker and
 open-oplog cache entries only for the generation being deleted. A stale `Arc<Worker>` therefore
 cannot continue deletion against, or evict cache state belonging to, a replacement with the same
-`AgentId`.
+`AgentId`. The `DurableStateRemoved` stage calls `WorkerService::remove` with a closure that
+requests `delete_all_snapshots` for the deleting incarnation right after the oplog delete, also when
+the stored identity is gone or belongs to another incarnation. A fenced delete requests nothing.
+The store's `delete_all` waits for the store work of the incarnation that began before it.
 
 The bounded unload result and final cleanup completion are separate facts. An unload timeout
 permanently fails that deletion attempt, while module-owned cleanup continues. A later explicit
@@ -295,8 +303,15 @@ Create, open, archival, fork-source reads, and deletion share the logical oplog'
 lifecycle guard. Fork reads persisted source history without constructing an absent source;
 the complete hidden stage is published atomically into an absent target under its lifecycle guard.
 Source and target guards are never held together, and publication releases the target guard before
-resuming the child. Cancellation or failure may leave an unreachable hidden stage; cleanup removes
-only that stage's index and never target payloads or canonical state. Archival is routed through the
+resuming the child. Before the publication, a `ForkCopy` ticket copies the filesystem snapshots of
+the source into the repository of the stage (`AgentSnapshots::agent(target, stage_id)`), and
+`Copied::publish` gives the `StagePublication` that `OplogService::publish_staged` requires.
+Attempts of one request share one copy. A fork refuses a missing manual-update baseline after it
+reconciled; an export fork checks the source first. A copy catches up with the source in rounds,
+and each round copies its packs before its index files, so a pack that a prune removed ends the
+copy before an index file that names it lands. Cancellation or failure may leave an unreachable
+hidden stage; cleanup removes that stage's index and its filesystem snapshots, and never target
+payloads or canonical state. Archival is routed through the
 existing worker owner. A scheduled archive releases the
 guard once its transfer is queued, while the oplog sweep holds it until the transfer finishes. No
 lifecycle lock is taken for individual stream items, oplog reads, or replay steps.
@@ -388,7 +403,9 @@ fails with the routing miss and stays cached in `Deleting` with the stages it co
 here is refused at entry and repeats no remote effect; the generation is evicted once the shard has
 left this executor. Stream cleanup confirms the epoch before it reaches any other agent, because a
 re-run (after a restart, or on another executor) finds its fenced records already written. `WorkerService::remove` confirms the epoch (`OplogService::assert_owning_epoch`)
-before removing anything, and deletes the oplog after everything it can rebuild. See `crash-matrix.md` for the fence's
+before removing anything, and deletes the oplog after everything it can rebuild. A revert commits
+its `Revert` entry with `commit_oplog_and_update_state`, so a refused commit gives `OplogFenced` and
+deletes no filesystem snapshot; the caller retries on the new owner. See `crash-matrix.md` for the fence's
 failure modes and `services/active_agents/mod.rs` for the sweep that retires agents on an
 assignment change.
 
@@ -755,7 +772,9 @@ underlying cause.
 ### Filesystem snapshots
 
 With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
-(`services/agent_filesystem_snapshots`). `invocation_loop.rs::take_guest_snapshot` calls one function,
+(`services/agent_filesystem_snapshots`). The snapshots belong to one agent incarnation: they are
+keyed by `AgentSnapshots::agent(agent, fingerprint)`, and a fork target uses its stage id as its
+fingerprint. Ephemeral agents take no filesystem snapshot. `invocation_loop.rs::take_guest_snapshot` calls one function,
 `worker/filesystem_snapshots.rs::periodic_snapshot`, which asks the service for admission, runs
 the guest snapshot hook (`snapshot_guest`), captures the tree (`agent_filesystem::capture`), appends the
 `Snapshot` entry, commits, and gives the capture to an upload job. The record has no name when the
@@ -769,18 +788,49 @@ declarations and directories. A manual update uploads its filesystem snapshot be
 (`worker/filesystem_snapshots.rs::update_snapshot`). When a
 periodic upload of the agent runs, the update first stops the deletes that the running job makes
 after its save (`retention_stop`, a child of the job's stop); the job still ends its save and its
-confirmation. The update then waits once for the end of the job, for at most `confirmation_wait`,
-and asks again; another refusal fails the update. A terminal interrupt ends
-that wait, or the upload of the update, and fails the update. The delete of the older update
-snapshots (`UpdateRetention::delete_older_snapshots`) runs after `PendingUpdate` commits, and it
-never deletes the snapshot of the last successful manual update, because a start restores that baseline without a fallback.
+confirmation. The update then waits until the job is gone or an admission can replace it, and asks
+again; another refusal fails the update. The admission and the slot takes of its upload end
+`confirmation_wait` after `admit_update` started, with `SaveRunning` or `NoSlot`; a run of the
+upload that started before then runs to its end. A terminal interrupt ends that wait, or the upload
+of the update, and fails the update. `SavedUpdate::delete_older_snapshots` runs after
+`PendingUpdate` commits, and keeps every update name that the status holds
+(`snapshot_selection::update_names_in_use`: the successful and the pending updates);
+`retained_update_snapshots` limits only the other update snapshots.
 
-Each store operation of the service holds a slot of `max_concurrent_uploads` while it runs: each
-store attempt of an upload (the `save`, and the `stat` of its own name after `AlreadyExists`),
-each delete of the older snapshots through its retries, each delete of a superseded snapshot, and
-each item of the clean-up queue. An upload gives its slot back before the wait for its next
-attempt; the discard of the capture and the confirmation hold no slot. A start waits only for a
-job that has started saving (it got its first slot) and has not decided.
+An admission replaces a periodic job that has not decided and whose store call still holds the
+save mark of the agent, when the call waits for its next run after a failed run, or waits for or
+checks writes that can still land (`RunPhase::WaitingForLateWrites`, which the store reports through
+`RunSlots::waiting_for_late_writes`). The new job starts at once. The replaced call runs on as a
+tail: it keeps the busy count of the agent, starts no run and no write, never confirms
+(`run_job` checks `ticket.replaced()`), and its capture is discarded after the call returns. A clean
+successful save is never replaced, and neither is a job whose call has returned. A periodic
+admission never waits.
+
+`StoreCalls` is the only owner of the store. The store takes a slot of its caller's limiter
+(`RunSlots`, `max_concurrent_uploads` for the uploads and deletes) for each run of a call, and
+holds none while it waits. A storage call gets a few tries in its run; after them the run ends,
+and the store runs the operation again after a wait. `save` answers `Saved`, `NameInUse`,
+`Failed` or `Stopped` and checks its own name itself. A write whose try was sent and failed in a
+way that can still land is recorded; the call answers only after that write has landed or can no
+longer land, one storage call deadline after its try. A save run ends by cancelling its token and
+giving its slot back; then it waits until rustic's threads release its blob files (a per-run
+`TaskTracker`), reads its records, and waits for its late writes. Only a lost shard,
+`BoundPassed` and a shutdown cancel a save run; a job stop and `delete_all_snapshots` leave it to
+end as a tail. The discard of the capture and the confirmation hold no slot. A start waits only
+for a job that has started saving (it got its first slot) and has not decided.
+
+The deletes of the clean-up queue wait for the busy count of the agent to reach 0: a revert's
+names, `delete_all_snapshots` and the stale-member deletes. The queue keeps one clean-up state for
+each incarnation (`Names`, or `All`, which replaces pending names), and a fixed pool of
+`max_concurrent_uploads` workers takes ready agents from a ready queue. Its bounds are 65,536
+pending entries, 786,432 pending names, and `max_pending_deletes_per_agent` names for each agent; a
+request past a bound is counted as a leaked clean-up. Retention and the superseded delete call the
+store directly; they run after their own job's save answered, and the save mark of the agent
+keeps a second save from starting a run while an earlier save call still runs. The metrics are
+`filesystem_snapshot_cleanups_pending`, `filesystem_snapshot_copy_seconds` and
+`filesystem_snapshot_failed_space_reclaims_total`. `upload_now` answers `Stopped` after a lost
+shard, a shutdown or `delete_all_snapshots`, unless the save had already finished; ephemeral
+agents make no store call.
 
 The upload job uploads the snapshot (`job.rs::upload`), then asks the worker for a confirmation
 (`Worker::confirm_as`, with the pure `worker/filesystem_snapshots.rs::owner_gate`). The worker
@@ -789,8 +839,9 @@ that checks that the record is still the status candidate. Otherwise the answer 
 store. `Superseded` (an update or a revert replaced the record) deletes it (`delete_superseded`); `Confirmed`
 deletes the older snapshots of its kind (`delete_older_snapshots`). A stop never waits for
 an upload. A shutdown ends a job also during its deletes, and so does a call of
-`AgentFilesystemSnapshots::delete_all_snapshots` for the agent of the job, and a manual update of
-the agent ends its deletes.
+`AgentFilesystemSnapshots::delete_all_snapshots` for the agent of the job; a manual update of the
+agent ends its deletes, and so does a revert, whose `RevertHold` (`begin_revert`) stops the deletes
+of the jobs of the agent until the revert ends.
 
 The next start confirms instead (`Worker::confirm_filesystem_snapshot_before_start`, called from
 `WaitingWorker::new` before it takes permits, with `AgentFilesystemSnapshots::prepare_start` for
@@ -826,7 +877,9 @@ baseline must not remove overlapping `Jump` or earlier `Revert` regions, and the
 also used to detect durable constructs spanning the cut. Before committing, the executor verifies
 that the restored component, retained manual snapshot payload, replay metadata and initial files
 are available. This is input preflight, not speculative replay; a later replay failure does not
-undo the committed `Revert`.
+undo the committed `Revert`. After the `Revert` entry commits, the revert deletes the filesystem
+snapshot names of the dropped region that no live record outside it uses
+(`reverted_snapshot_names`, `RevertHold::delete_snapshots`). A refused commit deletes nothing.
 
 ## Concurrency and guest completion delivery
 
