@@ -578,13 +578,13 @@ pub(super) fn run_waiting_for_late_writes(
     Next::of(Transition::RunWaitingForLateWrites, state, ())
 }
 
-/// Whether the deletes of the job of `agent` after its save are stopped, when a job runs.
+/// The stop of the deletes of the job of `agent` after its save, when a job runs.
 #[cfg(test)]
-pub(super) fn job_retention_stopped(state: &State, agent: &AgentSnapshots) -> Option<bool> {
-    state
-        .jobs
-        .get(agent)
-        .map(|job| job.retention_stop.is_cancelled())
+pub(super) fn job_retention_stop(
+    state: &State,
+    agent: &AgentSnapshots,
+) -> Option<CancellationToken> {
+    state.jobs.get(agent).map(|job| job.retention_stop.clone())
 }
 
 /// Whether the job of `agent` waits for its next run after a failed run.

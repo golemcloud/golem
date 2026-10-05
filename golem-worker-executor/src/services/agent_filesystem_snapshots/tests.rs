@@ -3867,11 +3867,17 @@ fn a_restore_gives_its_slot_back_between_two_runs() {
     })
 }
 
+/// Whether the deletes of the running job of `agent` after its save are stopped, when a job
+/// runs. The test reads the stop that the job holds.
 fn retention_stopped(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) -> Option<bool> {
-    snapshots.core.as_ref().and_then(|core| {
-        core.registry
-            .read(|state| rules::job_retention_stopped(state, agent))
-    })
+    snapshots
+        .core
+        .as_ref()
+        .and_then(|core| {
+            core.registry
+                .read(|state| rules::job_retention_stop(state, agent))
+        })
+        .map(|stop| stop.is_cancelled())
 }
 
 #[test]
