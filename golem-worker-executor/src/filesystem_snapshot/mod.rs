@@ -44,7 +44,6 @@ pub(crate) use memory::InMemorySnapshotStore;
 #[cfg(test)]
 pub(crate) use memory::SpacedTimes;
 use rustic::RusticSnapshotStore;
-#[cfg(test)]
 pub(crate) use rustic::run_delay;
 
 /// The filesystem snapshots of one incarnation of an agent.
@@ -163,20 +162,21 @@ pub(crate) enum Withdrawal {
     Deadline,
 }
 
-/// How a withdrawal ends a store call.
+/// How a withdrawal ends a store call whose last failed run gave `F`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WithdrawnCall {
+pub(crate) enum WithdrawnCall<F> {
     /// The call gives `Failed` with the failure of its last run.
-    Failed,
+    Failed(F),
     /// The call gives `Stopped` with the cause.
     Stopped(Withdrawal),
 }
 
-/// Gives how a withdrawal with `cause` ends a call. The deadline gives `Failed` when a run of the
-/// call failed on the storage (`ran`); each other case gives `Stopped` with the cause.
-pub(crate) fn withdrawn_call(cause: Withdrawal, ran: bool) -> WithdrawnCall {
-    match (cause, ran) {
-        (Withdrawal::Deadline, true) => WithdrawnCall::Failed,
+/// Gives how a withdrawal with `cause` ends a call whose last run failed on the storage with
+/// `last`, or that has no failed run. The deadline gives `Failed` with `last` when there is one;
+/// each other case gives `Stopped` with the cause.
+pub(crate) fn withdrawn_call<F>(cause: Withdrawal, last: Option<F>) -> WithdrawnCall<F> {
+    match (cause, last) {
+        (Withdrawal::Deadline, Some(last)) => WithdrawnCall::Failed(last),
         (cause, _) => WithdrawnCall::Stopped(cause),
     }
 }
@@ -472,9 +472,9 @@ impl std::error::Error for ReadError {
 ///
 /// Each call gives a final answer. The store tries a failed storage call again for a short time,
 /// runs the call again after a wait when the failure stays, and does again the work that another
-/// call of the agent made invalid. When a publish of a save, or a write of a copy, ends without an
-/// answer, the store waits until that write has landed or can no longer land before it runs the
-/// call again or answers, unless the store shuts down. `Failed` means that the store could not
+/// call of the agent made invalid. When a write of a save or of a copy ends without an answer, the
+/// store waits until that write has landed or can no longer land before it runs the call again or
+/// answers, unless the store shuts down. `Failed` means that the store could not
 /// finish the call and that a later call can succeed. The doc of each method names the causes of
 /// `Failed`, and says what a failed call can leave.
 ///
@@ -595,13 +595,13 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     ///
     /// Each name stops resolving when the call gives success, so no later restore of it can
     /// succeed, unless a save of that name that runs at the same time, that gave an error, or that
-    /// gave the info after the store shut down, publishes it later, as the doc of `save` says. The call is idempotent for each name. Every
-    /// other snapshot of the agent continues to work, also when it shares data with a deleted
-    /// one, and a save or a restore that runs at the same time gives one of the answers that its
-    /// own doc names. The causes of `Failed` are: the storage failed in each run, or the storage
-    /// gave a failure that no try can fix. A delete that gives an error can have deleted a part of
-    /// the batch; a new call deletes the rest. Each run reads the snapshots of the agent once for
-    /// the whole batch.
+    /// gave the info after the store shut down, publishes it later, as the doc of `save` says. The
+    /// call is idempotent for each name. Every other snapshot of the agent continues to work, also
+    /// when it shares data with a deleted one, and a save or a restore that runs at the same time
+    /// gives one of the answers that its own doc names. The causes of `Failed` are: the storage
+    /// failed in each run, or the storage gave a failure that no try can fix. A delete that gives
+    /// an error can have deleted a part of the batch; a new call deletes the rest. Each run reads
+    /// the snapshots of the agent once for the whole batch.
     async fn delete(
         &self,
         agent: &AgentSnapshots,
@@ -852,16 +852,16 @@ mod tests {
     fn a_withdrawal_stops_a_call_and_its_deadline_fails_a_call_whose_run_failed() {
         assert_eq!(
             [
-                super::withdrawn_call(super::Withdrawal::Stopped, false),
-                super::withdrawn_call(super::Withdrawal::Stopped, true),
-                super::withdrawn_call(super::Withdrawal::Deadline, false),
-                super::withdrawn_call(super::Withdrawal::Deadline, true),
+                super::withdrawn_call(super::Withdrawal::Stopped, None),
+                super::withdrawn_call(super::Withdrawal::Stopped, Some("last")),
+                super::withdrawn_call(super::Withdrawal::Deadline, None),
+                super::withdrawn_call(super::Withdrawal::Deadline, Some("last")),
             ],
             [
                 super::WithdrawnCall::Stopped(super::Withdrawal::Stopped),
                 super::WithdrawnCall::Stopped(super::Withdrawal::Stopped),
                 super::WithdrawnCall::Stopped(super::Withdrawal::Deadline),
-                super::WithdrawnCall::Failed,
+                super::WithdrawnCall::Failed("last"),
             ]
         );
     }

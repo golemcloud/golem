@@ -22,12 +22,12 @@
 use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore,
     InMemorySnapshotStore, ReadError, RestoreFailure, RunSlots, SaveError, SnapshotInfo,
-    SnapshotName, Unlimited,
+    SnapshotName, Unlimited, WithdrawnCall, run_delay, withdrawn_call,
 };
 use crate::services::agent_filesystem_snapshots::StoreSource;
 use crate::services::golem_config::FilesystemSnapshotUploadConfig;
 use async_trait::async_trait;
-use golem_common::model::{AgentFingerprint, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, OwnedAgentId, RetryConfig};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -324,25 +324,52 @@ impl TestFilesystemSnapshotStore {
     }
 
     /// Ends an injected failed save as the store ends a save whose storage fails in each run,
-    /// after its first run under a slot: the wait after the failed run, and a second run under a
-    /// slot. A withdrawal at a take, or a shutdown, gives `Stopped`, and a deadline after the
-    /// first run gives `Failed`.
+    /// after its first run under a slot. [`run_delay`] decides each wait and whether a run
+    /// follows: the script has two runs and no wait between them, so a test spends no time in the
+    /// wait. [`withdrawn_call`] decides what a withdrawal gives: a withdrawal in the wait or at a
+    /// take, or a shutdown, gives `Stopped`, and a deadline after the first run gives `Failed`.
     async fn failed_runs(&self, slots: &dyn RunSlots) -> SaveError {
+        let script = RetryConfig {
+            max_attempts: 2,
+            min_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        };
         let failed = || SaveError::Failed(Failed::new(anyhow::anyhow!("an injected save failure")));
-        slots.waiting_after_failure();
-        match slots.take(false).await {
-            Ok(slot) => {
-                drop(slot);
-                failed()
+        let withdrawn = |cause| match withdrawn_call(cause, Some(())) {
+            WithdrawnCall::Failed(()) => failed(),
+            WithdrawnCall::Stopped(cause) => SaveError::Stopped(cause),
+        };
+        let ended = futures::stream::unfold(Some(1u32), |state| {
+            let (script, failed, withdrawn) = (&script, &failed, &withdrawn);
+            async move {
+                let failed_runs = state?;
+                let Some(delay) = run_delay(script, failed_runs, 0.0) else {
+                    return Some((Some(failed()), None));
+                };
+                slots.waiting_after_failure();
+                let waited = tokio::select! {
+                    biased;
+                    cause = slots.withdrawn() => Err(cause),
+                    () = tokio::time::sleep(delay) => Ok(()),
+                };
+                let next = match waited {
+                    Ok(()) => slots.take(false).await.map(drop),
+                    Err(cause) => Err(cause),
+                };
+                Some(match next {
+                    Ok(()) => (None, Some(failed_runs + 1)),
+                    Err(cause) => (Some(withdrawn(cause)), None),
+                })
             }
-            // The first run failed on the storage, so the deadline gives `Failed`.
-            Err(cause) => match crate::filesystem_snapshot::withdrawn_call(cause, true) {
-                crate::filesystem_snapshot::WithdrawnCall::Failed => failed(),
-                crate::filesystem_snapshot::WithdrawnCall::Stopped(cause) => {
-                    SaveError::Stopped(cause)
-                }
-            },
-        }
+        });
+        futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter_map(
+            ended,
+            |ended| async move { ended }
+        )))
+        .await
+        .unwrap_or_else(failed)
     }
 
     /// Gives this store as the store of the service, with `uploads`, on any storage mode and

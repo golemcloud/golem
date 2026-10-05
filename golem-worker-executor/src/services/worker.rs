@@ -4745,13 +4745,14 @@ mod tests {
             owned_agent_id: test_owned_agent_id(name),
             fingerprint: AgentFingerprint(Uuid::new_v4()),
         });
-        for member in &members {
+        futures::future::try_join_all(members.iter().map(|member| async {
             storage
                 .with_entity("worker", "add", "agent_id")
                 .add_to_set(KeyValueStorageNamespace::RunningWorkers, &shard_key, member)
                 .await
-                .unwrap();
-        }
+        }))
+        .await
+        .unwrap();
         let faults = KeyValueStorageFaults::default();
         faults.fail_after("remove_stale", 1, 1, unreachable());
         let service = test_worker_service(
@@ -4764,6 +4765,10 @@ mod tests {
             .enum_workers_at_key(&shard_key, &requested.on_stale())
             .await;
         let remaining = running_members(&storage, &shard_key).await;
+        let stored = members
+            .iter()
+            .map(|member| (member.owned_agent_id.clone(), member.fingerprint))
+            .collect::<Vec<_>>();
         let removed = members
             .iter()
             .filter(|member| !remaining.contains(member))
@@ -4779,6 +4784,10 @@ mod tests {
         assert!(
             removed.iter().all(|member| requested.contains(member)),
             "a removed member was not requested: removed {removed:?}, requested {requested:?}"
+        );
+        assert!(
+            requested.iter().all(|member| stored.contains(member)),
+            "the scan requested an incarnation that no member names: {requested:?}"
         );
     }
 

@@ -16,8 +16,8 @@ use super::super::fault::{CallFailure, LeaseExpired, OperationCancelled};
 use super::super::tests::polled_until;
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{
-    BeforeTry, CallAgain, IN_CALL_TRIES, IN_CALL_WAITS, LateWrites, Lease, SnapshotFiles,
-    Unanswered, before_try, call_again, extended, lands_by, later,
+    CallAgain, IN_CALL_TRIES, IN_CALL_WAITS, LateWrites, Lease, Refusal, SnapshotFiles, TryStart,
+    Unanswered, before_try, call_again, extended, lands_by, later, window_cut,
 };
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::BlobStorageNamespace;
@@ -299,10 +299,15 @@ async fn a_refresh_of_the_lease_during_a_call_does_not_move_the_end_of_that_call
 }
 
 #[test]
-fn a_call_tries_again_only_after_a_failure_with_tries_and_time_left_and_cuts_the_try_at_the_time_left()
+fn a_call_tries_again_only_after_a_failure_with_tries_and_time_left_and_the_window_cuts_the_try_at_the_time_left()
  {
     let deadline = Duration::from_secs(60);
     let spent = Duration::from_secs(20);
+    let start = |spent| TryStart {
+        now: Instant::now(),
+        spent,
+        deadline,
+    };
 
     assert_eq!(
         [
@@ -325,24 +330,33 @@ fn a_call_tries_again_only_after_a_failure_with_tries_and_time_left_and_cuts_the
         ],
         [
             CallAgain::After {
-                wait: IN_CALL_WAITS[0],
-                cut: Duration::from_secs(40)
+                wait: IN_CALL_WAITS[0]
             },
             CallAgain::After {
-                wait: IN_CALL_WAITS[1],
-                cut: Duration::from_secs(40)
+                wait: IN_CALL_WAITS[1]
             },
             CallAgain::End,
             CallAgain::End,
             CallAgain::End,
             CallAgain::After {
-                wait: IN_CALL_WAITS[0],
-                cut: Duration::from_millis(1)
+                wait: IN_CALL_WAITS[0]
             },
             CallAgain::End,
             CallAgain::End,
             CallAgain::End,
             CallAgain::End,
+        ]
+    );
+    assert_eq!(
+        [
+            window_cut(start(spent)),
+            window_cut(start(deadline - Duration::from_millis(1))),
+            window_cut(start(deadline)),
+        ],
+        [
+            Some(Duration::from_secs(40)),
+            Some(Duration::from_millis(1)),
+            Some(Duration::ZERO),
         ]
     );
 }
@@ -473,14 +487,14 @@ fn a_refusal_before_a_try_comes_in_a_fixed_order_and_only_a_try_has_a_cut() {
             before_try(false, true, false, cut),
         ],
         [
-            BeforeTry::LeaseOut,
-            BeforeTry::Cancelled,
-            BeforeTry::Stop,
-            BeforeTry::Stop,
-            BeforeTry::NoTimeLeft,
-            BeforeTry::Try(Duration::from_secs(1)),
-            BeforeTry::LeaseOut,
-            BeforeTry::Cancelled,
+            Err(Refusal::LeaseOut),
+            Err(Refusal::Cancelled),
+            Err(Refusal::Stop),
+            Err(Refusal::Stop),
+            Err(Refusal::NoTimeLeft),
+            Ok(Duration::from_secs(1)),
+            Err(Refusal::LeaseOut),
+            Err(Refusal::Cancelled),
         ]
     );
 }

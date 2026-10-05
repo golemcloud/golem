@@ -1850,7 +1850,13 @@ async fn a_read_ahead_that_fails_reads_no_file_twice_and_starts_no_new_read() {
             },
         );
 
-    assert!(listed.is_err());
+    assert!(
+        matches!(
+            listed,
+            Err(crate::filesystem_snapshot::CallError::Failed(_))
+        ),
+        "a listing whose snapshot file reads fail gives Failed: {listed:?}"
+    );
     assert!(
         reads
             .values()

@@ -47,8 +47,8 @@ pub(super) const IN_CALL_WAITS: [Duration; 2] =
 /// What a blob call does after a try that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CallAgain {
-    /// Try again after `wait`, and cut the try at `cut`.
-    After { wait: Duration, cut: Duration },
+    /// Try again after `wait`. [`window_cut`] cuts the next try.
+    After { wait: Duration },
     /// Give the failure.
     End,
 }
@@ -57,7 +57,7 @@ pub(super) enum CallAgain {
 /// tries took `spent` in all and the storage call deadline is `deadline`. All tries of one call
 /// share one window of `deadline`, so the call holds its run for at most `deadline` and the waits.
 /// It tries again after the next wait while tries remain, the failure allows it, and the window
-/// has time left; the next try is cut at the time left.
+/// has time left.
 pub(super) fn call_again(
     tried: u32,
     tries: u32,
@@ -70,10 +70,9 @@ pub(super) fn call_again(
         .ok()
         .and_then(|index| IN_CALL_WAITS.get(index));
     match (failure, wait) {
-        (CallFailure::Failed, Some(wait)) if tried < tries && !left.is_zero() => CallAgain::After {
-            wait: *wait,
-            cut: left,
-        },
+        (CallFailure::Failed, Some(wait)) if tried < tries && !left.is_zero() => {
+            CallAgain::After { wait: *wait }
+        }
         _ => CallAgain::End,
     }
 }
@@ -124,10 +123,10 @@ pub(super) struct TryStart {
     pub(super) deadline: Duration,
 }
 
-/// What a blob call does before a try. Only `Try` sends anything, so only a try that started can
-/// be recorded as a write that can still land.
+/// Why a blob call starts no try. A refusal sends nothing, so it is never recorded as a write that
+/// can still land.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum BeforeTry {
+pub(super) enum Refusal {
     /// The lease of the prune ran out: the call gives `LeaseExpired`.
     LeaseOut,
     /// The operation of the blobs is cancelled: the call gives `OperationCancelled`.
@@ -136,24 +135,22 @@ pub(super) enum BeforeTry {
     Stop,
     /// The cut gives no time: a bounded call gives `NoTimeLeft`.
     NoTimeLeft,
-    /// Start a try that is cut at the duration.
-    Try(Duration),
 }
 
 /// Decides the start of a try, in this order: a lease that ran out, a cancelled operation, a stop
-/// of the caller, no time left. A refusal sends nothing, so it records nothing.
+/// of the caller, no time left. Gives the cut of the try when none of them holds.
 pub(super) fn before_try(
     lease_out: bool,
     cancelled: bool,
     stopped: bool,
     cut: Option<Duration>,
-) -> BeforeTry {
+) -> Result<Duration, Refusal> {
     match (lease_out, cancelled, stopped, cut) {
-        (true, _, _, _) => BeforeTry::LeaseOut,
-        (false, true, _, _) => BeforeTry::Cancelled,
-        (false, false, true, _) => BeforeTry::Stop,
-        (false, false, false, None) => BeforeTry::NoTimeLeft,
-        (false, false, false, Some(cut)) => BeforeTry::Try(cut),
+        (true, _, _, _) => Err(Refusal::LeaseOut),
+        (false, true, _, _) => Err(Refusal::Cancelled),
+        (false, false, true, _) => Err(Refusal::Stop),
+        (false, false, false, None) => Err(Refusal::NoTimeLeft),
+        (false, false, false, Some(cut)) => Ok(cut),
     }
 }
 
@@ -389,7 +386,7 @@ impl SnapshotFiles {
                         let (tried, spent) = state?;
                         let started = super::runs::now();
                         let expiry = self.lease.as_ref().map(|lease| lease.expiry());
-                        let decided = before_try(
+                        let cut = match before_try(
                             expiry.is_some_and(|expiry| started >= expiry),
                             self.cancel.is_cancelled(),
                             stop.is_some_and(CancellationToken::is_cancelled),
@@ -398,16 +395,16 @@ impl SnapshotFiles {
                                 spent,
                                 deadline: self.deadline,
                             }),
-                        );
-                        let cut = match decided {
-                            BeforeTry::Try(cut) => cut,
-                            refused => return Some((Some(Err(refusal(refused))), None)),
+                        ) {
+                            Ok(cut) => cut,
+                            Err(refused) => return Some((Some(Err(refusal(refused))), None)),
                         };
                         let answer = self.one_try(cut, expiry, call()).await;
                         let ended = super::runs::now();
                         let spent = spent + ended.saturating_duration_since(started);
-                        let Err(error) = answer else {
-                            return Some((Some(answer.map_err(unreachable_error)), None));
+                        let error = match answer {
+                            Ok(value) => return Some((Some(Ok(value)), None)),
+                            Err(error) => error,
                         };
                         let failure = call_failure(&error);
                         if effect == Effect::Write
@@ -417,7 +414,7 @@ impl SnapshotFiles {
                             late.record(ended);
                         }
                         match call_again(tried, self.tries, failure, spent, self.deadline) {
-                            CallAgain::After { wait, .. } => {
+                            CallAgain::After { wait } => {
                                 debug!(
                                     tried,
                                     error = %format!("{error:#}"),
@@ -662,21 +659,21 @@ impl SnapshotFiles {
 }
 
 /// The failure of a call that [`before_try`] refused, with the error that each class gives.
-fn refusal(refused: BeforeTry) -> NotAnswered {
+fn refusal(refused: Refusal) -> NotAnswered {
     match refused {
-        BeforeTry::LeaseOut => NotAnswered {
+        Refusal::LeaseOut => NotAnswered {
             error: anyhow::Error::new(LeaseExpired),
             why: Unanswered::Failed(CallFailure::LeaseExpired),
         },
-        BeforeTry::Cancelled => NotAnswered {
+        Refusal::Cancelled => NotAnswered {
             error: anyhow::Error::new(OperationCancelled),
             why: Unanswered::Failed(CallFailure::Cancelled),
         },
-        BeforeTry::Stop => NotAnswered {
+        Refusal::Stop => NotAnswered {
             error: anyhow::anyhow!("the caller stopped the blob call before a try"),
             why: Unanswered::Stopped,
         },
-        BeforeTry::NoTimeLeft | BeforeTry::Try(_) => NotAnswered {
+        Refusal::NoTimeLeft => NotAnswered {
             error: anyhow::anyhow!("the blob call has no time left for a try"),
             why: Unanswered::NoTimeLeft,
         },
@@ -688,14 +685,6 @@ fn between_tries() -> NotAnswered {
     NotAnswered {
         error: anyhow::Error::new(OperationCancelled),
         why: Unanswered::Stopped,
-    }
-}
-
-/// Never runs: an answer that is not an error has no failure to map.
-fn unreachable_error(error: anyhow::Error) -> NotAnswered {
-    NotAnswered {
-        why: Unanswered::Failed(call_failure(&error)),
-        error,
     }
 }
 

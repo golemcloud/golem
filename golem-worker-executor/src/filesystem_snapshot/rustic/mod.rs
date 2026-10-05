@@ -32,7 +32,6 @@ mod scope;
 mod spawner;
 mod store;
 
-#[cfg(test)]
 pub(crate) use runs::run_delay;
 pub(crate) use store::RusticSnapshotStore;
 

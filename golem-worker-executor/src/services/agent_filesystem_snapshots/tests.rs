@@ -41,8 +41,7 @@ type SavedParent = Option<(Box<str>, ChangeDetection)>;
 /// A store over the in-memory store that a test can make fail, hold and count. Each call runs as
 /// the rustic store runs it: each scripted run takes a slot of the limiter of the call, and a run
 /// that fails is followed by the wait of the run delay of the store, which a withdrawal ends, until
-/// the call has
-/// made `runs` runs.
+/// the call has made `runs` runs.
 #[derive(Default)]
 struct ScriptedStore {
     memory: InMemorySnapshotStore,
@@ -231,12 +230,12 @@ impl ScriptedStore {
 
     /// Runs `run` as the runs of one call with the limiter `slots`: each run takes a slot first, a
     /// run that fails is followed by the wait of the run delay of the store with no slot, and a
-    /// withdrawal at
-    /// a take or in a wait ends the call with `Stopped`, or with the last failure when the cause is
-    /// the deadline and a run failed. The call answers the last failure after its runs. A run whose
-    /// write lands late is followed by the wait for that write with no slot, which it reports
-    /// to the limiter as a wait for late writes; then the call answers what the check of its own name found, or goes on as
-    /// after a failed run. After a shutdown, a call gives `Stopped`.
+    /// withdrawal at a take or in a wait ends the call with `Stopped`, or with the last failure
+    /// when the cause is the deadline and a run failed. The call answers the last failure after its
+    /// runs. A run whose write lands late is followed by the wait for that write with no slot,
+    /// which it reports to the limiter as a wait for late writes; then the call answers what the
+    /// check of its own name found, or goes on as after a failed run. After a shutdown, a call
+    /// gives `Stopped`.
     async fn runs<T, E, F, R>(
         &self,
         slots: &dyn RunSlots,
@@ -368,15 +367,9 @@ fn withdrawn<T, E>(
     failed: fn(Failed) -> E,
     stopped: fn(Withdrawal) -> E,
 ) -> Result<T, E> {
-    match (
-        crate::filesystem_snapshot::withdrawn_call(cause, last.is_some()),
-        last,
-    ) {
-        (crate::filesystem_snapshot::WithdrawnCall::Failed, Some(last)) => {
-            Err(failed(Failed::new(last)))
-        }
-        (crate::filesystem_snapshot::WithdrawnCall::Failed, None) => Err(stopped(cause)),
-        (crate::filesystem_snapshot::WithdrawnCall::Stopped(cause), _) => Err(stopped(cause)),
+    match crate::filesystem_snapshot::withdrawn_call(cause, last) {
+        crate::filesystem_snapshot::WithdrawnCall::Failed(last) => Err(failed(Failed::new(last))),
+        crate::filesystem_snapshot::WithdrawnCall::Stopped(cause) => Err(stopped(cause)),
     }
 }
 

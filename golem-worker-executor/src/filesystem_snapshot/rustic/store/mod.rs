@@ -743,6 +743,7 @@ impl RusticSnapshotStore {
         };
         let key = self.key.clone();
         let policy = self.policy.clone();
+        let saved = name.clone();
         let name = name.clone();
         let tree: Box<Path> = tree.into();
         let low_priority = self.low_priority;
@@ -784,8 +785,8 @@ impl RusticSnapshotStore {
             Some(staged) => {
                 let staged = staged.and_then(|staged| staged);
                 let backup_finished = matches!(staged, Ok(Some(_)));
-                // The backup has returned, so the store reads the tree no more. A cancel before this
-                // point publishes nothing, whatever the backup gave.
+                // The backup has returned, so the store reads the tree no more. A cancel before
+                // this point publishes nothing, whatever the backup gave.
                 let exit = if cancel.is_cancelled() {
                     SaveExit::Ended {
                         end: RunEnd::Cancelled,
@@ -828,6 +829,8 @@ impl RusticSnapshotStore {
             publish: publish_late.latest(),
         };
         Ran::Settling(save_settle(
+            scope.clone(),
+            saved,
             exit,
             settle_may_land(backup_finished, recorded),
             run_calls,
@@ -1174,8 +1177,11 @@ fn ran_at_shutdown(exit: SaveExit) -> Ran<Result<SnapshotInfo, SaveError>> {
 /// Gives the settle of a save run that ended with `exit`: it waits until `run_calls`, which each
 /// holder of the blobs of the run counts, has no holder left, and then reads the two recorders.
 /// The wait has no time bound, so every try of the run has ended when the recorders are read; a
-/// warning names a wait that takes longer than one `deadline`.
+/// warning names the save of `name` in `scope` when the wait takes longer than one `deadline`.
+#[allow(clippy::too_many_arguments)]
 fn save_settle(
+    scope: AgentSnapshots,
+    name: SnapshotName,
     exit: SaveExit,
     may_land: bool,
     run_calls: TaskTracker,
@@ -1189,7 +1195,10 @@ fn save_settle(
             let slow = async {
                 tokio::time::sleep(deadline).await;
                 warn!(
-                    "A save of a filesystem snapshot waits for the threads of its backup after one storage call deadline"
+                    snapshots = ?scope,
+                    snapshot = %name,
+                    deadline = ?deadline,
+                    "A save of a filesystem snapshot still waits for the threads of its backup"
                 );
                 std::future::pending::<()>().await
             };

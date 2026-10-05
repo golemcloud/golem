@@ -1320,7 +1320,7 @@ impl ForkUpdates {
     /// snapshot the baseline, also when it has none; a successful automatic update keeps the
     /// baseline.
     pub(crate) fn after(mut self, entry: &OplogEntry) -> Self {
-        let (pending, paired) = crate::worker::status::pair_update(
+        let (pending, applied) = crate::worker::status::pair_update(
             std::mem::take(&mut self.pending),
             entry,
             |description| {
@@ -1331,7 +1331,7 @@ impl ForkUpdates {
             },
         );
         self.pending = pending;
-        if let Some(crate::worker::status::Paired::Succeeded(Some((_, kind)))) = paired
+        if let Some((_, kind)) = applied
             && matches!(kind, PendingUpdateKind::SnapshotBased { .. })
         {
             self.baseline = kind.filesystem_snapshot().cloned();

@@ -2842,6 +2842,8 @@ async fn the_settle_of_a_save_reads_its_late_writes_only_after_every_holder_of_i
         })
     };
     let Settle { wait, finish, .. } = super::super::save_settle(
+        new_scope(),
+        name("p-00000000-0000-4000-8000-0000000000ab"),
         super::super::SaveExit::Ended {
             end: RunEnd::CallFailed,
             failure: anyhow::anyhow!("the backup failed"),
@@ -2865,12 +2867,48 @@ async fn the_settle_of_a_save_reads_its_late_writes_only_after_every_holder_of_i
     assert_eq!(until, Some(recorded + deadline));
 }
 
+/// A writer for a test subscriber that keeps every line that it gets.
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8_lossy(
+            &self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+        .into_owned()
+    }
+}
+
 #[test]
 #[timeout("60s")]
-async fn the_settle_of_a_save_waits_for_a_holder_of_its_blobs_past_one_deadline() {
+async fn the_settle_of_a_save_waits_for_a_holder_of_its_blobs_past_one_deadline_and_warns_with_its_name()
+ {
+    use tracing::instrument::WithSubscriber;
+
     let run_calls = tokio_util::task::TaskTracker::new();
     let _held = run_calls.token();
+    let saved = name("p-00000000-0000-4000-8000-0000000000aa");
     let Settle { wait, .. } = super::super::save_settle(
+        new_scope(),
+        saved.clone(),
         super::super::SaveExit::Answered(Err(SaveError::NameInUse)),
         true,
         run_calls,
@@ -2878,8 +2916,27 @@ async fn the_settle_of_a_save_waits_for_a_holder_of_its_blobs_past_one_deadline(
         Arc::new(LateWrites::default()),
         Duration::from_millis(100),
     );
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
 
-    let waited = tokio::time::timeout(Duration::from_millis(500), wait).await;
+    let waited =
+        tokio::time::timeout(Duration::from_millis(500), wait.with_subscriber(subscriber)).await;
+    let logged = captured.text();
 
-    assert!(waited.is_err());
+    assert_eq!(
+        (
+            waited.is_err(),
+            logged.contains(
+                "A save of a filesystem snapshot still waits for the threads of its backup"
+            ),
+            logged.contains(&format!("snapshot={saved}")),
+        ),
+        (true, true, true),
+        "{logged}"
+    );
 }

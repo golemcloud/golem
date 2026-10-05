@@ -652,7 +652,7 @@ impl AgentFilesystemSnapshots {
                     Err(refusal) => refusal,
                 };
                 let skip = refusal.skip;
-                let rules::UpdateAdmit::WaitForEndOrFailure {
+                let rules::UpdateAdmit::WaitForEndOrReplacement {
                     running,
                     stop_deletes,
                 } = rules::update_admission(

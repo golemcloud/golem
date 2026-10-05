@@ -1499,32 +1499,28 @@ fn calculate_export_fork_admissions(
     Ok(admissions)
 }
 
-/// The update that an outcome entry ended: the pending update at the front of the queue, when the
-/// queue held one.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Paired<T> {
-    Succeeded(Option<T>),
-    Failed(Option<T>),
-}
-
-/// Gives the pending updates after `entry`, and the pending update that `entry` ended when it is
-/// an outcome. A `PendingUpdate` adds `new(description)` at the back. A `SuccessfulUpdate` or a
-/// `FailedUpdate` ends the update at the front. Any other entry changes nothing.
+/// Gives the pending updates after `entry`, and the pending update that `entry` applied when it
+/// is a `SuccessfulUpdate` and the queue held one. A `PendingUpdate` adds `new(description)` at
+/// the back. A `SuccessfulUpdate` or a `FailedUpdate` ends the update at the front. Any other
+/// entry changes nothing.
 pub(crate) fn pair_update<T>(
     mut pending: VecDeque<T>,
     entry: &OplogEntry,
     new: impl FnOnce(&UpdateDescription) -> T,
-) -> (VecDeque<T>, Option<Paired<T>>) {
-    let paired = match entry {
+) -> (VecDeque<T>, Option<T>) {
+    let applied = match entry {
         OplogEntry::PendingUpdate { description, .. } => {
             pending.push_back(new(description));
             None
         }
-        OplogEntry::SuccessfulUpdate { .. } => Some(Paired::Succeeded(pending.pop_front())),
-        OplogEntry::FailedUpdate { .. } => Some(Paired::Failed(pending.pop_front())),
+        OplogEntry::SuccessfulUpdate { .. } => pending.pop_front(),
+        OplogEntry::FailedUpdate { .. } => {
+            pending.pop_front();
+            None
+        }
         _ => None,
     };
-    (pending, paired)
+    (pending, applied)
 }
 
 /// The fields of the status that the component updates and the automatic snapshot entries decide.
@@ -1544,7 +1540,7 @@ struct UpdateFields {
 impl UpdateFields {
     /// The fields after the entry `entry` at `oplog_idx`.
     fn after(mut self, oplog_idx: OplogIndex, entry: &OplogEntry) -> Self {
-        let (pending_updates, paired) = pair_update(
+        let (pending_updates, applied_update) = pair_update(
             std::mem::take(&mut self.pending_updates),
             entry,
             |description| PendingUpdateRef {
@@ -1578,10 +1574,6 @@ impl UpdateFields {
                 new_component_size,
                 ..
             } => {
-                let applied_update = match paired {
-                    Some(Paired::Succeeded(applied)) => applied,
-                    _ => None,
-                };
                 self.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,

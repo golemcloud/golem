@@ -66,7 +66,8 @@ pub(crate) enum Script {
     /// change in a task after the time, as a change that lands late. Each other call passes.
     LandAfter(std::time::Duration),
     /// Never answers a write or a delete, and makes the change in a task after the time, as a
-    /// request that was sent, whose answer never comes, and that lands late. Each other call passes.
+    /// request that was sent, whose answer never comes, and that lands late. Each other call
+    /// passes.
     HangThenLand(std::time::Duration),
 }
 

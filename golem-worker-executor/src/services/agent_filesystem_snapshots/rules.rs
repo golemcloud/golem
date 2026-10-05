@@ -415,8 +415,8 @@ pub(super) fn keeps_files(mode: AgentMode) -> bool {
 /// store call still holds the save mark, and that waits for its next run after a failed run or
 /// waits for its late writes, is replaced: the old job leaves the state, its save call loses the
 /// save mark, its decision is `Replaced` for the starts that wait for it, and the answer gives its
-/// stop, which the caller cancels. Any other running job refuses the admission with `UploadInFlight`. Gives the next state
-/// and the job, or the refusal.
+/// stop, which the caller cancels. Any other running job refuses the admission with
+/// `UploadInFlight`. Gives the next state and the job, or the refusal.
 pub(super) fn admit(
     mut state: State,
     agent: &AgentSnapshots,
@@ -1009,7 +1009,7 @@ pub(super) fn all_requested(state: &State, agent: &AgentSnapshots) -> bool {
     })
 }
 
-/// Whether a save of `agent` runs now.
+/// Whether a save call of `agent` holds the save mark now.
 pub(super) fn save_running(state: &State, agent: &AgentSnapshots) -> bool {
     state.save_running.contains_key(agent)
 }
@@ -1228,8 +1228,9 @@ pub(super) fn store_check(
 pub(super) enum UpdateAdmit {
     /// It fails with the refusal.
     Refuse,
-    /// It waits until the job is gone or an admission can replace it, then asks again. With `stop_deletes`, it first stops the deletes of the running job.
-    WaitForEndOrFailure {
+    /// It waits until the job is gone or an admission can replace it, then asks again. With
+    /// `stop_deletes`, it first stops the deletes of the running job.
+    WaitForEndOrReplacement {
         running: RunningJob,
         stop_deletes: bool,
     },
@@ -1237,9 +1238,10 @@ pub(super) enum UpdateAdmit {
 
 /// What a manual update does after an admission gave `refusal`. Only a job that runs makes it
 /// wait: a periodic job that an admission replaces once its store call waits after a failed run or
-/// waits for its late writes, or a job that ends after its deletes, such as the job of an earlier manual update in its retention. The
-/// update refuses when its deadline passed or the service shuts down. It stops the deletes of a
-/// running job once: not again for the job `stopped` whose deletes an earlier ask stopped.
+/// waits for its late writes, or a job that ends after its deletes, such as the job of an earlier
+/// manual update in its retention. The update refuses when its deadline passed or the service
+/// shuts down. It stops the deletes of a running job once: not again for the job `stopped` whose
+/// deletes an earlier ask stopped.
 pub(super) fn update_admission(
     refusal: Refusal,
     deadline_passed: bool,
@@ -1248,7 +1250,7 @@ pub(super) fn update_admission(
 ) -> UpdateAdmit {
     match (refusal.skip, refusal.running) {
         (SnapshotSkip::UploadInFlight, Some(running)) if !deadline_passed && !shut_down => {
-            UpdateAdmit::WaitForEndOrFailure {
+            UpdateAdmit::WaitForEndOrReplacement {
                 stop_deletes: stopped != Some(running.id),
                 running,
             }
@@ -2909,7 +2911,7 @@ mod tests {
     /// The job that an update with `refusal` waits for.
     fn waits_for(refusal: Refusal) -> Option<JobId> {
         match update_admission(refusal, false, false, None) {
-            UpdateAdmit::WaitForEndOrFailure { running, .. } => Some(running.id),
+            UpdateAdmit::WaitForEndOrReplacement { running, .. } => Some(running.id),
             UpdateAdmit::Refuse => None,
         }
     }
@@ -2922,7 +2924,7 @@ mod tests {
         stopped: Option<JobId>,
     ) -> Option<(JobId, bool)> {
         match update_admission(refusal, ends.0, ends.1, stopped) {
-            UpdateAdmit::WaitForEndOrFailure {
+            UpdateAdmit::WaitForEndOrReplacement {
                 running,
                 stop_deletes,
             } => Some((running.id, stop_deletes)),

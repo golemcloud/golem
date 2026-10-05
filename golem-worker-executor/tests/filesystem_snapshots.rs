@@ -3370,7 +3370,7 @@ async fn a_revert_deletes_the_snapshots_of_the_dropped_region_and_a_start_restor
     Ok(())
 }
 
-/// A revert whose commit finds that the shard has a new owner gives an error, and deletes no
+/// A revert whose commit finds that the shard has a new owner gives `OplogFenced`, and deletes no
 /// filesystem snapshot of the dropped region: the new owner holds the whole history.
 #[test]
 #[timeout("4m")]
@@ -3432,9 +3432,15 @@ async fn a_revert_whose_commit_finds_a_new_owner_fails_and_deletes_no_snapshot(
             }),
         )
         .await;
+    // `OplogFenced` goes on the wire as `ShardingNotReady`, which tells the caller to retry on the
+    // new owner. Another failure, such as a runtime error, does not pass.
+    let refusal = reverted
+        .err()
+        .map(|error| format!("{error:#}"))
+        .unwrap_or_default();
     assert!(
-        reverted.is_err(),
-        "a revert whose commit the new owner refused must fail, it gave {reverted:?}"
+        refusal.contains("ShardingNotReady"),
+        "a revert whose commit the new owner refused must fail with OplogFenced, it gave {refusal:?}"
     );
     tokio::time::sleep(Duration::from_secs(2)).await;
     let mut held = store.snapshot_names(&incarnation.0, incarnation.1).await;

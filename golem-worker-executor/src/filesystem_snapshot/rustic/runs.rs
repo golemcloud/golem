@@ -168,7 +168,10 @@ pub(super) enum RunOutcome {
 ///    deadline and a run met a storage failure.
 /// 10. A cancel gives `Stopped`.
 /// 11. A failed call runs again after a wait while the retries allow it and the wait ends before
-///     `backup_end`. This is the only wait that tells the limiter.
+///     `backup_end`.
+///
+/// Rows 0 and 3, and the settle of a run that can have a late write, tell the limiter that the
+/// call waits for late writes. Row 11 tells it that the call waits after a failed run.
 /// 12. Any other failure gives `Failed`.
 /// 13. and 14. A race runs again at once, at most [`MOST_RACE_RUNS`] times.
 pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> NextRun {
@@ -199,10 +202,12 @@ pub(super) fn next_run(seen: &RunSeen, retry: &RetryConfig, jitter: f64) -> Next
         (_, Some((_, Some(Checked::Found(info)))), _) => NextRun::Answer(RunOutcome::Saved(info)),
         (_, Some((_, Some(Checked::Other))), _) => NextRun::Answer(RunOutcome::NameInUse),
         (_, Some((_, Some(Checked::Unreadable))), _) => NextRun::Answer(RunOutcome::FailedWithLast),
-        (_, _, Some(cause)) => NextRun::Answer(match withdrawn_call(cause, seen.ran) {
-            WithdrawnCall::Failed => RunOutcome::FailedWithLast,
-            WithdrawnCall::Stopped(cause) => RunOutcome::Stopped(cause),
-        }),
+        (_, _, Some(cause)) => {
+            NextRun::Answer(match withdrawn_call(cause, seen.ran.then_some(())) {
+                WithdrawnCall::Failed(()) => RunOutcome::FailedWithLast,
+                WithdrawnCall::Stopped(cause) => RunOutcome::Stopped(cause),
+            })
+        }
         (RunEnd::Cancelled, _, None) => NextRun::Answer(RunOutcome::Stopped(Withdrawal::Stopped)),
         (RunEnd::CallFailed, _, None) => {
             match run_delay(retry, seen.failed_runs, jitter)
