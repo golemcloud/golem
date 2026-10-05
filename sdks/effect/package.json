@@ -124,6 +124,7 @@
     "golem-types"
   ],
   "scripts": {
+    "prebuild": "node ./scripts/clean-build-output.mjs",
     "build": "tsc -p tsconfig.build.json && node ./scripts/build-types-entry.mjs",
     "build:bundle": "rollup -c",
     "generate-dts": "node ./scripts/generate-dts.mjs",
