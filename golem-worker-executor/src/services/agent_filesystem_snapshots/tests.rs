@@ -791,8 +791,8 @@ fn no_interrupt() -> watch::Receiver<bool> {
 }
 
 /// A receiver that never reports a lost shard.
-fn no_lost_shard() -> watch::Receiver<bool> {
-    watch::channel(false).1
+fn no_lost_shard() -> crate::worker::LostShard {
+    watch::channel(None).1
 }
 
 fn values(max_uploads: usize, max_restores: usize) -> FilesystemSnapshotUploadValues {
@@ -3078,12 +3078,12 @@ fn a_cancelled_save_is_discarded_after_the_call_returned_and_never_published() {
             .admit_update(&agent, AgentMode::Durable, no_interrupt())
             .await
             .unwrap();
-        let (lose, lost) = watch::channel(false);
+        let (lose, lost) = watch::channel(None);
 
         let uploading = admission.upload_now(capture(b"tree", &discarded), no_interrupt(), lost);
         let losing = async {
             gate.wait_reached(1).await;
-            lose.send_replace(true);
+            lose.send_replace(Some(crate::worker::RetirementReason::ShardRevoked));
         };
         let (uploaded, ()) = futures::join!(uploading, losing);
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -3119,7 +3119,8 @@ async fn upload_after_a_stop(stop: bool, lost: bool) -> (Result<(), String>, usi
         .await
         .unwrap();
     let (_interrupt, interrupted) = watch::channel(stop);
-    let (_lose, lost) = watch::channel(lost);
+    let (_lose, lost) =
+        watch::channel(lost.then_some(crate::worker::RetirementReason::ShardRevoked));
 
     let uploaded = admission
         .upload_now(capture(b"tree", &discarded), interrupted, lost)
@@ -3161,12 +3162,12 @@ fn a_lost_shard_during_a_save_cancels_the_save_in_the_store_before_the_upload_an
             .admit_update(&agent, AgentMode::Durable, no_interrupt())
             .await
             .unwrap();
-        let (lose, lost) = watch::channel(false);
+        let (lose, lost) = watch::channel(None);
 
         let uploading = admission.upload_now(capture(b"tree", &discarded), no_interrupt(), lost);
         let losing = async {
             gate.wait_reached(1).await;
-            lose.send_replace(true);
+            lose.send_replace(Some(crate::worker::RetirementReason::ShardRevoked));
         };
         let (uploaded, ()) = futures::join!(uploading, losing);
         let cancelled_at_the_answer = store

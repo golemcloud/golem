@@ -158,7 +158,7 @@ impl Admission {
         self,
         tree: CapturedTree,
         stop: watch::Receiver<bool>,
-        lost_shard: watch::Receiver<bool>,
+        lost_shard: crate::worker::LostShard,
     ) -> Result<SavedUpdate, UploadNowError> {
         let (answer, answered) = oneshot::channel();
         let caller_gone = CancellationToken::new();

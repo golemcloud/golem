@@ -544,10 +544,8 @@ pub(crate) trait UpdateSnapshotHost {
     fn capture_whole(&self, wait: Duration) -> impl Future<Output = Option<WholeCapture>> + Send;
     /// A receiver of whether a terminal interrupt waits for the agent.
     fn terminal(&self) -> watch::Receiver<bool>;
-    /// Whether the shard of the agent is lost.
-    fn lost_shard(&self) -> bool;
-    /// A receiver of whether the shard of the agent is lost.
-    fn lost_shard_signal(&self) -> watch::Receiver<bool>;
+    /// A receiver of why the shard of the agent moved to another executor, once it has.
+    fn lost_shard(&self) -> super::LostShard;
 }
 
 /// How the snapshot part of a manual update ended.
@@ -584,7 +582,10 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
         UpdateAdmitted::Upload(admission) => Some(admission),
         UpdateAdmitted::WithoutName => None,
         UpdateAdmitted::Interrupted => {
-            return interrupted_update(UpdateInterruption::Wait, host.lost_shard());
+            return interrupted_update(
+                UpdateInterruption::Wait,
+                host.lost_shard().borrow().is_some(),
+            );
         }
         UpdateAdmitted::Skip(skip) => {
             return UpdateSnapshot::Fail(format!(
@@ -624,7 +625,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     // record, and nothing selects it. A lost shard also cancels the save before its publish.
     let terminal = host.terminal();
     match admission
-        .upload_now(tree.into(), terminal.clone(), host.lost_shard_signal())
+        .upload_now(tree.into(), terminal.clone(), host.lost_shard())
         .await
     {
         Ok(saved) => UpdateSnapshot::Saved {
@@ -632,7 +633,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
             name: Some(name),
             retention: Some(Box::new(saved)),
         },
-        Err(error) => failed_update_upload(&error, host.lost_shard()),
+        Err(error) => failed_update_upload(&error, host.lost_shard().borrow().is_some()),
     }
 }
 
@@ -1685,12 +1686,12 @@ mod tests {
             self.terminal.subscribe()
         }
 
-        fn lost_shard(&self) -> bool {
-            self.lost_shard
-        }
-
-        fn lost_shard_signal(&self) -> watch::Receiver<bool> {
-            watch::channel(self.lost_shard).1
+        fn lost_shard(&self) -> super::super::LostShard {
+            watch::channel(
+                self.lost_shard
+                    .then_some(super::super::RetirementReason::ShardRevoked),
+            )
+            .1
         }
     }
 

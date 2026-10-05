@@ -89,7 +89,8 @@ pub struct StatusCheckpointer {
     /// Set once the owning worker starts deleting. After this, no checkpoint is written, so an
     /// in-flight write cannot resurrect the checkpoint after `remove_cached_status` deletes it.
     delete_started: AtomicBool,
-    owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
+    /// Why the shard moved to another executor, once it has.
+    lost_shard: super::LostShard,
 
     /// Serializes checkpoint writes and guards the persisted baseline.
     state: Mutex<CheckpointState>,
@@ -103,7 +104,7 @@ impl StatusCheckpointer {
         enabled: bool,
         min_oplog_delta: u64,
         worker_service: Arc<dyn WorkerService>,
-        owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
+        lost_shard: super::LostShard,
     ) -> Self {
         Self {
             owned_agent_id,
@@ -113,18 +114,14 @@ impl StatusCheckpointer {
             min_oplog_delta,
             worker_service,
             delete_started: AtomicBool::new(false),
-            owner_retirement,
+            lost_shard,
             state: Mutex::new(CheckpointState { last_written: None }),
         }
     }
 
     /// Whether deletion or shard loss prevents this generation from writing a checkpoint.
     fn writes_stopped(&self) -> bool {
-        self.delete_started.load(Ordering::Acquire)
-            || self
-                .owner_retirement
-                .get()
-                .is_some_and(|retirement| retirement.lost_shard.get().is_some())
+        self.delete_started.load(Ordering::Acquire) || self.lost_shard.borrow().is_some()
     }
 
     /// Prevents any future checkpoint write from resurrecting the checkpoint after it is deleted.
@@ -391,6 +388,15 @@ mod tests {
     }
 
     fn checkpointer(service: Arc<RecordingWorkerService>, min_delta: u64) -> StatusCheckpointer {
+        checkpointer_losing(service, min_delta, tokio::sync::watch::channel(None).1)
+    }
+
+    /// A checkpointer whose lost shard `lost_shard` reports.
+    fn checkpointer_losing(
+        service: Arc<RecordingWorkerService>,
+        min_delta: u64,
+        lost_shard: super::super::LostShard,
+    ) -> StatusCheckpointer {
         StatusCheckpointer::new(
             owned_agent_id(),
             AgentFingerprint(Uuid::nil()),
@@ -398,7 +404,7 @@ mod tests {
             true,
             min_delta,
             service,
-            Arc::default(),
+            lost_shard,
         )
     }
 
@@ -575,19 +581,10 @@ mod tests {
     #[test]
     async fn a_given_up_checkpointer_writes_no_checkpoint() {
         let service = Arc::new(RecordingWorkerService::default());
-        let cp = checkpointer(service.clone(), 0);
+        let (lose, lost) = tokio::sync::watch::channel(None);
+        let cp = checkpointer_losing(service.clone(), 0, lost);
 
-        assert!(
-            cp.owner_retirement
-                .set(super::super::OwnerRetirement {
-                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
-                    lost_shard: std::sync::OnceLock::from(
-                        super::super::RetirementReason::ShardRevoked
-                    ),
-                    stop: tokio::sync::OnceCell::new(),
-                })
-                .is_ok()
-        );
+        lose.send_replace(Some(super::super::RetirementReason::ShardRevoked));
         cp.maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
             .await;
         cp.maybe_checkpoint(&status_at(20), CheckpointReason::Idle)
@@ -612,7 +609,7 @@ mod tests {
             false,
             0,
             service.clone(),
-            Arc::default(),
+            tokio::sync::watch::channel(None).1,
         );
         disabled
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)
@@ -625,7 +622,7 @@ mod tests {
             true,
             0,
             service.clone(),
-            Arc::default(),
+            tokio::sync::watch::channel(None).1,
         );
         ephemeral
             .maybe_checkpoint(&status_at(10), CheckpointReason::Snapshot)

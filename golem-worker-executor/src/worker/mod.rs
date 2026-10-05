@@ -718,9 +718,10 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     owner_retirement: Arc<std::sync::OnceLock<OwnerRetirement>>,
     owner_cleanup: Mutex<OwnerCleanupState>,
     owner_retirement_requested: CancellationToken,
-    /// Whether the shard of the worker is lost. It is set with the lost-shard reason of the
-    /// retirement, and an upload of a filesystem snapshot watches it.
-    lost_shard_signal: tokio::sync::watch::Sender<bool>,
+    /// Why the shard of the worker moved to another executor, once it has: the only store of the
+    /// lost shard. The status flusher, the status checkpointer and an upload of a filesystem
+    /// snapshot read it through receivers.
+    lost_shard: tokio::sync::watch::Sender<Option<RetirementReason>>,
     durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler,
     durable_topology_recovery: Arc<Mutex<DurableTopologyRecoveryCache>>,
 }
@@ -730,6 +731,18 @@ enum OwnerCleanupState {
     #[default]
     PreRemoval,
     Retired,
+}
+
+/// A receiver of why the shard of a worker moved to another executor, once it has.
+pub(crate) type LostShard = tokio::sync::watch::Receiver<Option<RetirementReason>>;
+
+/// The lost-shard reason that a retirement for `reason` records, when the worker has `lost` one
+/// already or not. The first reason that is not `Requested` is kept; a later one changes nothing.
+fn newly_lost(lost: bool, reason: &RetirementReason) -> Option<RetirementReason> {
+    match (lost, reason) {
+        (true, _) | (false, RetirementReason::Requested) => None,
+        (false, reason) => Some(reason.clone()),
+    }
 }
 
 /// Why this executor stops owning an agent.
@@ -798,12 +811,10 @@ impl std::fmt::Display for RetirementReason {
 ///
 /// The interrupt is recorded once (the first wins), but the shard can be lost after that: an API
 /// interrupt or an environment unload may already be retiring the agent when its shard moves, and
-/// its waiters must still be sent to the new owner. So the lost shard is a cell of its own, set
-/// once and later than the rest when it has to be: unset while the shard is this executor's,
-/// `Some(reason)` once it is lost.
+/// its waiters must still be sent to the new owner. So the lost shard is not part of this record:
+/// it is the watch of the worker, set once and later than the rest when it has to be.
 pub(super) struct OwnerRetirement {
     kind: InterruptKind,
-    lost_shard: std::sync::OnceLock<RetirementReason>,
     stop: tokio::sync::OnceCell<
         futures::future::Shared<
             futures::future::BoxFuture<'static, Result<(), WorkerExecutorError>>,
@@ -1390,18 +1401,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Records retirement without taking the lifecycle lock. Owner writes stop immediately;
     /// `interrupt_and_retire` carries out the shared stop after that lock is released.
     pub(crate) fn record_retirement(&self, kind: InterruptKind, reason: RetirementReason) {
-        let retirement = self.owner_retirement.get_or_init(|| OwnerRetirement {
+        self.owner_retirement.get_or_init(|| OwnerRetirement {
             kind,
-            lost_shard: std::sync::OnceLock::new(),
             stop: tokio::sync::OnceCell::new(),
         });
         // The lost shard is known before any stop that the retirement causes, so an upload that
         // a stop ends sees it and cancels its save.
-        let newly_lost = !matches!(reason, RetirementReason::Requested)
-            && retirement.lost_shard.set(reason.clone()).is_ok();
-        if retirement.lost_shard.get().is_some() {
-            self.lost_shard_signal.send_replace(true);
-        }
+        let newly_lost =
+            self.lost_shard
+                .send_if_modified(|lost| match newly_lost(lost.is_some(), &reason) {
+                    Some(reason) => {
+                        *lost = Some(reason);
+                        true
+                    }
+                    None => false,
+                });
         self.owner_retirement_requested.cancel();
         self.durable_stream_producer.fence();
         if newly_lost {
@@ -1415,21 +1429,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// A receiver of whether the shard of this worker moved to another executor.
-    pub(crate) fn lost_shard_signal(&self) -> tokio::sync::watch::Receiver<bool> {
-        self.lost_shard_signal.subscribe()
+    /// A receiver of why the shard of this worker moved to another executor, once it has.
+    pub(crate) fn lost_shard(&self) -> LostShard {
+        self.lost_shard.subscribe()
     }
 
     /// Whether this worker is retired because its shard moved to another executor.
     pub(crate) fn retired_for_lost_shard(&self) -> bool {
-        self.lost_shard_reason().is_some()
+        self.lost_shard.borrow().is_some()
     }
 
     /// Why the shard moved, once it has.
     pub(crate) fn lost_shard_reason(&self) -> Option<RetirementReason> {
-        self.owner_retirement
-            .get()
-            .and_then(|retirement| retirement.lost_shard.get().cloned())
+        self.lost_shard.borrow().clone()
     }
 
     /// Starts the lost-shard retirement in a task of its own, for a caller the retirement's stop
@@ -2454,7 +2466,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component.clone()));
 
         let last_known_status_detached = Arc::new(AtomicBool::new(false));
-        let owner_retirement = Arc::new(std::sync::OnceLock::new());
+        let lost_shard = tokio::sync::watch::Sender::new(None);
         let status_flusher = status_flusher::AgentStatusFlusher::new(
             owned_agent_id.clone(),
             initial_worker_metadata.fingerprint,
@@ -2465,7 +2477,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             persisted_status,
             current_status.clone(),
             last_known_status_detached.clone(),
-            owner_retirement.clone(),
+            lost_shard.subscribe(),
         );
 
         let status_checkpointer = status_checkpointer::StatusCheckpointer::new(
@@ -2475,7 +2487,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps.config().agent_status_checkpoint.enabled,
             deps.config().agent_status_checkpoint.min_oplog_delta,
             deps.worker_service(),
-            owner_retirement.clone(),
+            lost_shard.subscribe(),
         );
 
         let all_deps = All::from_other(deps);
@@ -2559,10 +2571,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             read_only_cache_epoch: Arc::new(AtomicU64::new(0)),
             durable_stream_producer: Arc::default(),
             export_fork_receipt: tokio::sync::OnceCell::new(),
-            owner_retirement,
+            owner_retirement: Arc::new(std::sync::OnceLock::new()),
             owner_cleanup: Mutex::new(OwnerCleanupState::PreRemoval),
             owner_retirement_requested: CancellationToken::new(),
-            lost_shard_signal: tokio::sync::watch::Sender::new(false),
+            lost_shard,
             durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::new(
                 deps.shutdown_token(),
             ),
@@ -12468,6 +12480,34 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use std::path::Path;
     use test_r::test;
+
+    /// The first reason that is not `Requested` is the lost shard; a requested retirement and a
+    /// later reason change nothing. The lost shard has one store, so every reader sees it.
+    #[test]
+    fn only_the_first_retirement_for_a_moved_shard_records_the_lost_shard() {
+        let recorded = |lost: bool, reason: RetirementReason| {
+            newly_lost(lost, &reason).map(|reason| format!("{reason:?}"))
+        };
+
+        assert_eq!(
+            [
+                recorded(false, RetirementReason::Requested),
+                recorded(false, RetirementReason::ShardRevoked),
+                recorded(false, RetirementReason::ShardNotAssigned),
+                recorded(false, RetirementReason::Fenced(None)),
+                recorded(true, RetirementReason::ShardRevoked),
+                recorded(true, RetirementReason::Requested),
+            ],
+            [
+                None,
+                Some("ShardRevoked".to_string()),
+                Some("ShardNotAssigned".to_string()),
+                Some("Fenced(None)".to_string()),
+                None,
+                None,
+            ]
+        );
+    }
 
     /// Admission and the epoch read are not atomic. An agent whose shard left the assignment in
     /// between must be refused, not handed an oplog that asserts nothing.

@@ -3808,12 +3808,8 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
         self.invocation.parent.terminal_interrupt()
     }
 
-    fn lost_shard(&self) -> bool {
-        self.invocation.parent.retired_for_lost_shard()
-    }
-
-    fn lost_shard_signal(&self) -> tokio::sync::watch::Receiver<bool> {
-        self.invocation.parent.lost_shard_signal()
+    fn lost_shard(&self) -> crate::worker::LostShard {
+        self.invocation.parent.lost_shard()
     }
 }
 

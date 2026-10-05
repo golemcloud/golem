@@ -36,6 +36,7 @@ use crate::services::agent_filesystem::{RestoreError, RestoreTree};
 use crate::services::golem_config::{
     FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig,
 };
+use crate::worker::LostShard;
 use futures::StreamExt as _;
 use futures::future::{BoxFuture, FutureExt as _, Shared};
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -43,7 +44,7 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -107,9 +108,9 @@ type Stop = Shared<BoxFuture<'static, ()>>;
 pub(super) struct Stops {
     /// The stop of the caller: a terminal interrupt, or a caller that stopped waiting.
     caller: Stop,
-    /// Whether the shard of the agent is lost. A lost shard also cancels a running save in the
-    /// store, so that it publishes nothing.
-    lost_shard: Option<watch::Receiver<bool>>,
+    /// Why the shard of the agent moved, once it has. A lost shard also cancels a running save in
+    /// the store, so that it publishes nothing.
+    lost_shard: Option<LostShard>,
 }
 
 impl Stops {
@@ -124,7 +125,7 @@ impl Stops {
     /// The stop `caller`, and the lost shard that `lost_shard` reports.
     pub(super) fn of(
         caller: impl Future<Output = ()> + Send + 'static,
-        lost_shard: watch::Receiver<bool>,
+        lost_shard: LostShard,
     ) -> Self {
         Self {
             caller: caller.boxed().shared(),
@@ -136,7 +137,7 @@ impl Stops {
     fn lost_shard(&self) -> bool {
         self.lost_shard
             .as_ref()
-            .is_some_and(|lost_shard| *lost_shard.borrow())
+            .is_some_and(|lost_shard| lost_shard.borrow().is_some())
     }
 
     /// Whether the caller stopped or the shard is lost now.
@@ -171,9 +172,9 @@ impl Stops {
 
 /// Completes when `lost_shard` reports a lost shard. It never completes without a receiver or
 /// when its sender is gone.
-async fn lost_shard_set(lost_shard: Option<watch::Receiver<bool>>) {
+async fn lost_shard_set(lost_shard: Option<LostShard>) {
     if let Some(mut lost_shard) = lost_shard
-        && lost_shard.wait_for(|lost| *lost).await.is_ok()
+        && lost_shard.wait_for(Option::is_some).await.is_ok()
     {
         return;
     }
