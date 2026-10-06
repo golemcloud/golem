@@ -2165,7 +2165,7 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Configuration for managed agent filesystems and their cleanup.
+/// Configuration for agent filesystems, their storage and their cleanup.
 ///
 /// An unknown key, such as a key of an earlier storage configuration, makes the configuration fail
 /// to load.

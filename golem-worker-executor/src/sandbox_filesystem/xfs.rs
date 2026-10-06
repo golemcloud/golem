@@ -173,7 +173,7 @@ struct XfsGeometryV1 {
 #[derive(Clone)]
 pub(super) struct ManagedProvisioning {
     volume: FilesystemVolume,
-    root: PathBuf,
+    root: Arc<Path>,
     root_fd: Arc<File>,
     allocator: Arc<Mutex<ProjectAllocator>>,
     filesystem_block_bytes: NonZeroU64,
@@ -202,7 +202,7 @@ impl XfsRoot {
     ///
     /// The path must be the root directory of an XFS filesystem and the root of its mount. The
     /// filesystem must compare names with their case and have a valid block size. No other
-    /// process may hold the lock of the root. The function takes the exclusive lock of the root.
+    /// process must hold the lock of the root. The function takes the exclusive lock of the root.
     /// It changes nothing on the volume, and none of its calls needs a privilege.
     pub(super) fn open(root: &Path) -> Result<Self, FilesystemStorageError> {
         let root_fd = File::open(root)
@@ -374,7 +374,7 @@ impl ManagedProvisioning {
         clear_root_project_assignment(&root_fd, &configured_root)?;
         let backend = Self {
             volume: FilesystemVolume::copy_on_write(Arc::clone(&root_fd), identity),
-            root: stable_root.into_path_buf(),
+            root: Arc::from(stable_root),
             root_fd,
             allocator: Arc::new(Mutex::new(ProjectAllocator {
                 next: 1,
@@ -394,7 +394,7 @@ impl ManagedProvisioning {
         &self.volume
     }
 
-    pub(super) fn root(&self) -> &Path {
+    pub(super) fn root(&self) -> &Arc<Path> {
         &self.root
     }
 
