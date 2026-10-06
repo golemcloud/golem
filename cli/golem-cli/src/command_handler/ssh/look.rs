@@ -18,6 +18,7 @@
 //! background. Slabs stand a cell apart and no block character is drawn, because a terminal
 //! fills a background as an exact rectangle and makes no such promise for a character.
 
+use std::borrow::Cow;
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -149,6 +150,60 @@ pub fn band(background: Rgb, truecolor: bool) -> String {
         cube.0
     };
     format!("48;5;{index}")
+}
+
+/// Text that comes from the agent, as the session draws it: a directory, a branch, a tool's
+/// name, a message. Control characters are written in caret notation (`^[` for escape), and the
+/// characters that reorder or hide the text around them as `\u{...}`, so none of it can act on
+/// the terminal. A command's own output is not passed through this.
+pub fn shown(text: &str) -> Cow<'_, str> {
+    spelled_out(text, |_| false)
+}
+
+/// As [`shown`], for a message that may run over several lines: its line breaks and tabs stay.
+pub fn shown_message(text: &str) -> Cow<'_, str> {
+    spelled_out(text, |character| matches!(character, '\n' | '\t'))
+}
+
+fn spelled_out(text: &str, kept: fn(char) -> bool) -> Cow<'_, str> {
+    let acts = |character: char| acts_on_the_terminal(character) && !kept(character);
+    if !text.chars().any(acts) {
+        return Cow::Borrowed(text);
+    }
+    let mut safe = String::with_capacity(text.len() + 8);
+    for character in text.chars() {
+        match character {
+            character if !acts(character) => safe.push(character),
+            '\0'..='\x1f' => {
+                safe.push('^');
+                safe.push(char::from(character as u8 + 0x40));
+            }
+            '\x7f' => safe.push_str("^?"),
+            character => safe.push_str(&format!("\\u{{{:x}}}", u32::from(character))),
+        }
+    }
+    Cow::Owned(safe)
+}
+
+/// Control characters, and the format characters that change the direction of text, hide it or
+/// break the line. The joiners that scripts and emoji need are not among them.
+pub fn acts_on_the_terminal(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{061c}'
+                | '\u{180e}'
+                | '\u{200b}'
+                | '\u{200e}'
+                | '\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+                | '\u{fff9}'..='\u{fffb}'
+                | '\u{e0001}'
+                | '\u{e0020}'..='\u{e007f}'
+        )
 }
 
 /// What the agent is doing, as far as the session knows.
@@ -478,8 +533,10 @@ pub fn context(
     band: Option<&str>,
     columns: usize,
 ) -> String {
-    let (kind, name) = split_agent(agent);
-    let branch = branch.unwrap_or_default();
+    // The directory and the branch are the agent's to name.
+    let (agent, cwd, branch) = (shown(agent), shown(cwd), shown(branch.unwrap_or_default()));
+    let (cwd, branch): (&str, &str) = (&cwd, &branch);
+    let (kind, name) = split_agent(&agent);
 
     let mut labelled = vec![
         Block::ssh(readiness, palette),
@@ -558,6 +615,32 @@ pub fn result(
     palette: Palette,
     band: Option<&str>,
 ) -> String {
+    row(&result_blocks(status, elapsed, queue), palette, band)
+}
+
+/// The columns [`result`] takes; none when it has nothing to show.
+pub fn result_width(status: u8, elapsed: Option<Duration>, queue: u64) -> usize {
+    row_width(&result_blocks(status, elapsed, queue))
+}
+
+/// The fewest columns the context is cut down to for the result's sake.
+const CONTEXT_FLOOR: usize = 40;
+
+/// How one line is shared: the columns [`context`] may take, and whether [`result`] is drawn
+/// beside it. The context gives way to a result `result_width` columns wide, down to a floor; in
+/// a window too narrow for both it keeps the line, and the marker's colour alone says that the
+/// last command failed.
+pub fn layout(columns: usize, result_width: usize) -> (usize, bool) {
+    if result_width == 0 {
+        return (columns, false);
+    }
+    match columns.checked_sub(result_width + GAP) {
+        Some(room) if room >= CONTEXT_FLOOR => (room, true),
+        _ => (columns, false),
+    }
+}
+
+fn result_blocks(status: u8, elapsed: Option<Duration>, queue: u64) -> Vec<Block> {
     let mut blocks = Vec::new();
     if status != 0 {
         blocks.push(Block::plain(Tone::Failure, &format!("\u{2717} {status}")));
@@ -569,7 +652,7 @@ pub fn result(
     if let Some(elapsed) = elapsed.filter(|elapsed| elapsed.as_millis() >= 50) {
         blocks.push(Block::plain(Tone::Quiet, &elapsed_text(elapsed)));
     }
-    row(&blocks, palette, band)
+    blocks
 }
 
 /// The marker the command is typed after, red after a failure.
@@ -793,8 +876,19 @@ pub fn running(tick: usize, elapsed: Duration, loader: Loader, palette: Palette)
     )
 }
 
+/// The running line for a window too narrow for [`running`]: the animation, the time and the
+/// way out.
+pub fn running_compact(tick: usize, elapsed: Duration, loader: Loader, palette: Palette) -> String {
+    format!(
+        "{} \x1b[2m{} \u{b7} ctrl+c\x1b[0m",
+        animation(tick, loader, palette),
+        elapsed_text(elapsed)
+    )
+}
+
 /// The first lines of a session.
 pub fn banner(agent: &str, tool: &str, palette: Palette) -> String {
+    let (agent, tool) = (shown(agent), shown(tool));
     let name = match palette {
         Palette::Rich => "1;38;5;141",
         Palette::Basic => "1;35",
@@ -810,6 +904,7 @@ pub fn banner(agent: &str, tool: &str, palette: Palette) -> String {
 /// Ctrl+C stopped waiting for a command that runs on; it stops at `limit` at the latest.
 /// `error` is why the cancel request failed, when it did.
 pub fn detached(agent: &str, limit: &str, error: Option<&str>, palette: Palette) -> String {
+    let agent = shown(agent);
     let mut notice = format!(
         "{} still running on {agent}\n\
          \x1b[2mstops at {limit} at the latest \u{b7} the next command waits behind it\x1b[0m",
@@ -817,10 +912,19 @@ pub fn detached(agent: &str, limit: &str, error: Option<&str>, palette: Palette)
     );
     if let Some(error) = error {
         notice.push_str(&format!(
-            "\n\x1b[2mthe cancel request failed: {error}\x1b[0m"
+            "\n\x1b[2mthe cancel request failed: {}\x1b[0m",
+            shown(error)
         ));
     }
     notice
+}
+
+/// Ctrl+C came for a command that had already finished; its result follows.
+pub fn finished(palette: Palette) -> String {
+    format!(
+        "{} before the cancel request arrived",
+        slab(Tone::Notice, "FINISHED", palette)
+    )
 }
 
 /// Ctrl+C cancelled a command that had not started.
@@ -835,8 +939,9 @@ pub fn cancelled(palette: Palette) -> String {
 mod tests {
     use super::{
         BACKGROUND_QUERY, CONTINUATION, Loader, Palette, Readiness, Rgb, VERBS, animation,
-        answered, band, banner, cancelled, context, detached, elapsed_text, marker,
-        parse_background, result, running, session_shade, split_agent, verb,
+        answered, band, banner, cancelled, context, detached, elapsed_text, finished, layout,
+        marker, parse_background, result, result_width, running, running_compact, session_shade,
+        shown, shown_message, split_agent, verb,
     };
     use std::time::Duration;
     use test_r::test;
@@ -1486,6 +1591,155 @@ mod tests {
         assert_eq!(
             cancelled(RICH),
             format!("{} before it started", slab(179, 16, true, "CANCELLED"))
+        );
+    }
+
+    #[test]
+    fn text_from_the_agent_is_shown_with_its_control_characters_spelled_out() {
+        // Printable text is passed through as it is.
+        assert_eq!(shown("/srv/données/2026 ✓"), "/srv/données/2026 ✓");
+        assert!(matches!(shown("/work"), std::borrow::Cow::Borrowed(_)));
+        // An escape sequence is text, not an instruction to the terminal.
+        assert_eq!(
+            shown("/tmp/x\x1b]0;title\x07\x1b[2J"),
+            "/tmp/x^[]0;title^G^[[2J"
+        );
+        assert_eq!(shown("a\rb\nc\td\x7f"), "a^Mb^Jc^Id^?");
+        assert_eq!(shown("a\u{9b}2Jb"), "a\\u{9b}2Jb");
+        // So are the characters that reorder or hide what is around them.
+        assert_eq!(shown("main\u{202e}gpj.sh"), "main\\u{202e}gpj.sh");
+        assert_eq!(
+            shown("a\u{2066}b\u{200b}c\u{feff}"),
+            "a\\u{2066}b\\u{200b}c\\u{feff}"
+        );
+        // A joiner inside an emoji or a script that needs it is left alone.
+        assert_eq!(shown("👩\u{200d}💻"), "👩\u{200d}💻");
+        // A message keeps its lines; everything else in it is spelled out all the same.
+        assert_eq!(
+            shown_message("failed\n\nCause:\n\tx\x1b[2J\ry"),
+            "failed\n\nCause:\n\tx^[[2J^My"
+        );
+    }
+
+    #[test]
+    fn nothing_the_agent_names_reaches_the_terminal_as_an_escape_sequence() {
+        let hostile = "/tmp/x\x1b]0;OWNED\x07\x1b[2J\u{202e}";
+        for palette in [RICH, Palette::Basic] {
+            for columns in [200, 60, 30, 12] {
+                let line = context(
+                    Readiness::Ready,
+                    "Cart(\"a\x1b[8mb\")",
+                    hostile,
+                    Some("main\x1b]52;c;AAAA\x07"),
+                    palette,
+                    Some("48;5;236"),
+                    columns,
+                );
+                // Every escape left is one the session wrote itself: a colour or the band's fill.
+                let mut rest = line.as_str();
+                while let Some(at) = rest.find('\x1b') {
+                    let after = &rest[at + 1..];
+                    let end = after
+                        .find(['m', 'K'])
+                        .unwrap_or_else(|| panic!("an escape that is not styling in {line:?}"));
+                    assert!(
+                        after.starts_with('[')
+                            && after[1..end]
+                                .chars()
+                                .all(|c| c.is_ascii_digit() || c == ';'),
+                        "{line:?}"
+                    );
+                    rest = &after[end + 1..];
+                }
+                assert!(!line.contains(['\x07', '\u{202e}']), "{line:?}");
+                assert!(visible(&line).width() <= columns, "{columns}: {line:?}");
+            }
+        }
+        let notice = detached("A(\"x\x1b[2J\")", "its limit", Some("no\x1b]0;t\x07"), RICH);
+        assert!(
+            !notice.contains("\x1b[2J") && !notice.contains("\x1b]0"),
+            "{notice:?}"
+        );
+        let first = banner("A(\"x\x1b[2J\")", "ba\x1b[2Jsh", RICH);
+        assert!(!first.contains("\x1b[2J"), "{first:?}");
+    }
+
+    #[test]
+    fn the_context_leaves_room_for_the_result_or_the_result_is_left_out() {
+        // What the result takes at the right edge.
+        assert_eq!(result_width(0, None, 0), 0);
+        assert_eq!(
+            result_width(7, Some(Duration::from_millis(400)), 0),
+            visible(&result(7, Some(Duration::from_millis(400)), 0, RICH, None)).width()
+        );
+        // Nothing to show: the context has the whole line.
+        assert_eq!(layout(80, 0), (80, false));
+        // The context gives up the result's columns and one between them.
+        assert_eq!(layout(80, 11), (68, true));
+        // Too narrow for both: the context keeps the line and the marker's colour says it failed.
+        assert_eq!(layout(30, 11), (30, false));
+
+        let agent = "BashOwner(\"you\")";
+        let cwd = "/tmp/projects/customer-portal/services/billing-api";
+        let wanted = result_width(7, Some(Duration::from_millis(400)), 0);
+        let (room, with_result) = layout(80, wanted);
+        assert!(with_result);
+        let left = visible(&context(
+            Readiness::Ready,
+            agent,
+            cwd,
+            None,
+            RICH,
+            None,
+            room,
+        ));
+        assert!(left.width() + 1 + wanted <= 80, "{left:?}");
+        // The directory gave way, from its start.
+        assert!(
+            left.contains('\u{2026}') && left.contains("billing-api"),
+            "{left:?}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_window_gets_a_running_line_that_fits_it() {
+        assert_eq!(
+            visible(&running_compact(
+                0,
+                Duration::from_millis(12_900),
+                Loader::Runes,
+                RICH
+            )),
+            "\u{b7}\u{b7}\u{b7}\u{b7}\u{b7} 12s \u{b7} ctrl+c"
+        );
+        assert_eq!(
+            visible(&running_compact(
+                8,
+                Duration::from_secs(70),
+                Loader::Gem,
+                RICH
+            )),
+            "\u{2756} 1m 10s \u{b7} ctrl+c"
+        );
+        for tick in 0..120 {
+            let line = visible(&running_compact(
+                tick,
+                Duration::from_secs(3_599),
+                Loader::Runes,
+                RICH,
+            ));
+            assert!(line.width() <= 24, "tick {tick}: {line:?}");
+        }
+    }
+
+    #[test]
+    fn the_notice_for_a_command_that_had_finished_says_so() {
+        assert_eq!(
+            finished(RICH),
+            format!(
+                "{} before the cancel request arrived",
+                slab(179, 16, true, "FINISHED")
+            )
         );
     }
 }

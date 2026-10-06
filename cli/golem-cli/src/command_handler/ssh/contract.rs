@@ -15,6 +15,8 @@
 //! The `run` contract a bound tool must offer for `golem ssh`, and the pure parts of a session:
 //! building a submission, decoding its result, local commands, the prompt and exit statuses.
 
+use super::look::shown;
+use super::syntax::{TokenKind, is_complete, scan};
 use crate::context::GlobalEnvironmentSelector;
 use golem_client::model::{NativeToolFailure, NativeToolResult, NativeToolSuccess};
 use golem_common::model::tool::{SerializableToolError, SerializableToolRpcError};
@@ -83,7 +85,7 @@ pub enum LocalCommand {
 /// Checks that `tool` offers the `run` command `golem ssh` submits to, before anything is
 /// submitted: a `--cwd` string option, a `script` string positional, a `--timeout` integer option
 /// when one will be passed, and a record result with `stdout`, `stderr` and `cwd` strings and an
-/// integer `exit_code`. Every other input must have a default.
+/// 8-bit unsigned `exit_code`, as a process status is. Every other input must have a default.
 pub fn check_run_contract(tool: &Tool, with_timeout: bool) -> Result<(), String> {
     let schema = &tool.schema;
     let nodes = &tool.commands.nodes;
@@ -151,7 +153,7 @@ type ResultField = (&'static str, &'static str, fn(&SchemaType) -> bool);
 const RESULT_FIELDS: [ResultField; 4] = [
     ("stdout", "string", is_string),
     ("stderr", "string", is_string),
-    ("exit_code", "integer", is_integer),
+    ("exit_code", "8-bit unsigned integer", is_u8),
     ("cwd", "string", is_string),
 ];
 
@@ -161,6 +163,10 @@ fn resolves_to(schema: &SchemaGraph, ty: &SchemaType, accept: fn(&SchemaType) ->
 
 fn is_string(ty: &SchemaType) -> bool {
     matches!(ty, SchemaType::String { .. })
+}
+
+fn is_u8(ty: &SchemaType) -> bool {
+    matches!(ty, SchemaType::U8 { .. })
 }
 
 fn is_integer(ty: &SchemaType) -> bool {
@@ -268,20 +274,98 @@ fn error_detail(payload: &TypedSchemaValue) -> String {
 /// Recognises the lines the session answers itself, each alone on its line and ignoring
 /// surrounding whitespace: `exit` or `exit N` (as in bash, `N` is taken modulo 256), `help`
 /// and `tools`. Anything more, such as `help cd` or `builtin help`, is a command for the tool.
+///
+/// `exit` is also recognised with what bash allows around it and cannot change its meaning: a
+/// closing `;`, a comment, quotes around the number. Every other use of `exit`, such as
+/// `false || exit 4` or `exit $status`, runs in the command's own shell like anything else: it
+/// ends that shell, not the session.
 pub fn local_command(line: &str) -> Option<LocalCommand> {
     let mut words = line.split_whitespace();
-    match (words.next(), words.next(), words.next()) {
-        (Some("help"), None, _) => Some(LocalCommand::Help),
-        (Some("tools"), None, _) => Some(LocalCommand::Tools),
-        (Some("exit"), None, _) => Some(LocalCommand::Exit(None)),
-        (Some("exit"), Some(status), None) if status.bytes().all(|byte| byte.is_ascii_digit()) => {
-            Some(LocalCommand::Exit(Some(
-                status.bytes().fold(0u8, |status, digit| {
-                    status.wrapping_mul(10).wrapping_add(digit - b'0')
-                }),
-            )))
+    match (words.next(), words.next()) {
+        (Some("help"), None) => return Some(LocalCommand::Help),
+        (Some("tools"), None) => return Some(LocalCommand::Tools),
+        _ => {}
+    }
+    let mut tokens: Vec<_> = scan(line)
+        .tokens
+        .into_iter()
+        .filter(|token| token.kind != TokenKind::Comment)
+        .collect();
+    if tokens.last().is_some_and(|token| {
+        token.kind == TokenKind::Operator && &line[token.start..token.end] == ";"
+    }) {
+        tokens.pop();
+    }
+    let (command, argument) = tokens.split_first()?;
+    if command.kind != (TokenKind::Word { command: true })
+        || &line[command.start..command.end] != "exit"
+    {
+        return None;
+    }
+    let (Some(first), Some(last)) = (argument.first(), argument.last()) else {
+        return Some(LocalCommand::Exit(None));
+    };
+    // One word: a bare number, or a quoted one, which the lexer gives in its parts.
+    let one_word = argument.windows(2).all(|pair| pair[0].end == pair[1].start);
+    let status = &line[first.start..last.end];
+    let status = match first.kind {
+        TokenKind::Word { .. } if argument.len() == 1 => status,
+        TokenKind::Quoted
+            if one_word && argument.iter().all(|token| token.kind == TokenKind::Quoted) =>
+        {
+            status
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+                .or_else(|| {
+                    status
+                        .strip_prefix('\'')
+                        .and_then(|rest| rest.strip_suffix('\''))
+                })?
         }
-        _ => None,
+        _ => return None,
+    };
+    (!status.is_empty() && status.bytes().all(|byte| byte.is_ascii_digit())).then(|| {
+        LocalCommand::Exit(Some(status.bytes().fold(0u8, |status, digit| {
+            status.wrapping_mul(10).wrapping_add(digit - b'0')
+        })))
+    })
+}
+
+/// Whether `command` is only blank lines and comments, which there is no reason to send.
+pub fn runs_nothing(command: &str) -> bool {
+    scan(command)
+        .tokens
+        .iter()
+        .all(|token| token.kind == TokenKind::Comment)
+}
+
+/// The lines of piped input gathered into whole commands. An `if`, a loop or a here-document
+/// takes several lines, and each line on its own would be another command.
+#[derive(Debug, Default)]
+pub struct Gathered {
+    command: String,
+    open: bool,
+}
+
+impl Gathered {
+    /// Adds a line, and gives the command it finishes.
+    pub fn push(&mut self, line: &str) -> Option<String> {
+        if self.open {
+            self.command.push('\n');
+        }
+        self.command.push_str(line);
+        self.open = !is_complete(&self.command);
+        (!self.open).then(|| std::mem::take(&mut self.command))
+    }
+
+    /// The command the input ended in the middle of, if any. Bash is given it as it is.
+    pub fn finish(&mut self) -> Option<String> {
+        std::mem::take(&mut self.open).then(|| std::mem::take(&mut self.command))
+    }
+
+    /// Whether no command is being gathered.
+    pub fn is_empty(&self) -> bool {
+        !self.open
     }
 }
 
@@ -306,10 +390,11 @@ pub fn prompt(
     last_status: u8,
     paint: impl Fn(PromptPart, &str) -> String,
 ) -> String {
-    let mut prompt = paint(PromptPart::Agent, agent);
+    // The directory is the agent's to name: nothing in it may act on the terminal.
+    let mut prompt = paint(PromptPart::Agent, &shown(agent));
     if !cwd.is_empty() {
         prompt.push(' ');
-        prompt.push_str(&paint(PromptPart::Cwd, cwd));
+        prompt.push_str(&paint(PromptPart::Cwd, &shown(cwd)));
     }
     if last_status != 0 {
         prompt.push(' ');
@@ -403,6 +488,47 @@ pub fn strip_cursor_reports(line: &str) -> String {
     stripped
 }
 
+/// Removes a terminal's answer about its background colour (`11;rgb:RRRR/GGGG/BBBB`, as the
+/// line editor leaves it after dropping the escape that opens it) from a typed line. A terminal
+/// that answers after the session stopped waiting delivers its answer as input, and it must
+/// not run as a command.
+pub fn strip_background_reply(line: &str) -> String {
+    let mut rest = line;
+    let mut stripped = String::with_capacity(line.len());
+    while let Some(start) = rest.find("11;rgb") {
+        let after = &rest[start + "11;rgb".len()..];
+        let colour = after
+            .strip_prefix("a:")
+            .or_else(|| after.strip_prefix(':'))
+            .map(|colour| {
+                let len = colour
+                    .bytes()
+                    .take_while(|byte| byte.is_ascii_hexdigit() || *byte == b'/')
+                    .count();
+                &colour[..len]
+            })
+            .filter(|colour| {
+                let parts: Vec<_> = colour.split('/').collect();
+                (3..=4).contains(&parts.len())
+                    && parts.iter().all(|part| (1..=4).contains(&part.len()))
+            });
+        match colour {
+            Some(colour) => {
+                stripped.push_str(&rest[..start]);
+                let answer =
+                    after.len() - after.trim_start_matches("a:").trim_start_matches(':').len();
+                rest = &after[answer + colour.len()..];
+            }
+            None => {
+                stripped.push_str(&rest[..start + "11;rgb".len()]);
+                rest = after;
+            }
+        }
+    }
+    stripped.push_str(rest);
+    stripped
+}
+
 /// The length of `row;colR` at the start of `text`, when it is one.
 fn cursor_report_len(text: &str) -> Option<usize> {
     let row = text.bytes().take_while(u8::is_ascii_digit).count();
@@ -455,17 +581,20 @@ pub fn exit_code(outcome: Outcome) -> u8 {
 pub enum CancelOutcome {
     /// The call was still queued and will not run.
     Cancelled,
+    /// The call had already finished, so there was nothing to cancel and its result exists.
+    Finished,
     /// The call had started and runs on; `error` is set when the request itself failed.
     Running { error: Option<String> },
 }
 
 /// Reads the answer to a cancel request: whether it cancelled, or the failed request's message.
-/// Golem cancels a call only while it is queued. For a running one it answers that the
-/// invocation was not found, which is an answer and not a failure.
+/// Golem cancels a call only while it is queued. For one that already has its result it
+/// answers that nothing was cancelled, and for a running one that the invocation was not
+/// found, which is an answer and not a failure.
 pub fn classify_cancel(answer: Result<bool, String>) -> CancelOutcome {
     match answer {
         Ok(true) => CancelOutcome::Cancelled,
-        Ok(false) => CancelOutcome::Running { error: None },
+        Ok(false) => CancelOutcome::Finished,
         Err(message) if message.contains("Invocation not found") => {
             CancelOutcome::Running { error: None }
         }
@@ -479,12 +608,14 @@ pub fn classify_cancel(answer: Result<bool, String>) -> CancelOutcome {
 pub fn interrupted_message(outcome: &CancelOutcome, agent: &str, timeout: Option<u32>) -> String {
     match outcome {
         CancelOutcome::Cancelled => "Cancelled before it started.".to_string(),
+        CancelOutcome::Finished => "The command had already finished.".to_string(),
         CancelOutcome::Running { error } => {
             let failed = error
                 .as_ref()
-                .map(|error| format!("The cancel request failed: {error}. "))
+                .map(|error| format!("The cancel request failed: {}. ", shown(error)))
                 .unwrap_or_default();
             let limit = time_limit(timeout);
+            let agent = shown(agent);
             format!(
                 "{failed}Stopped waiting. The command is still running on {agent} and stops at \
                  {limit} at the latest. Your next command will wait behind it."
@@ -501,8 +632,17 @@ pub fn time_limit(timeout: Option<u32>) -> String {
     }
 }
 
+/// What to say when a command could not run because the agent has failed.
+pub fn failed_agent_notice(agent: &str) -> String {
+    format!(
+        "{} has failed and runs no commands until it is recovered or made again.",
+        shown(agent)
+    )
+}
+
 /// The first lines of an interactive session.
 pub fn banner(agent: &str, tool: &str) -> String {
+    let (agent, tool) = (shown(agent), shown(tool));
     format!(
         "Connected to {agent} via `{tool}`. Each command runs in a fresh shell; only the \
          directory carries over. Type `help` for how this session works; `exit` or Ctrl+D to \
@@ -512,18 +652,27 @@ pub fn banner(agent: &str, tool: &str) -> String {
 
 /// What `help` prints.
 pub fn help_text(tool: &str, timeout: Option<u32>) -> String {
+    // The limits are the built-in bash tool's own; another binding has whatever it has.
+    let builtin = tool == "bash";
     let limit = match timeout {
         Some(seconds) => format!("This session stops a command after {seconds} seconds."),
-        None => "The built-in bash tool stops a command after 600 seconds; `--timeout` changes \
-                 that."
+        None if builtin => "The built-in bash tool stops a command after 600 seconds; \
+                            `--timeout` changes that."
             .to_string(),
+        None => "`--timeout` sets how long a command may run.".to_string(),
     };
+    let output = if builtin {
+        "Output appears when the command finishes; the built-in bash tool cuts each stream at 2 MiB."
+    } else {
+        "Output appears when the command finishes."
+    };
+    let tool = shown(tool);
     format!(
         "How this session works
   Each command runs in a fresh shell on the agent, through its `{tool}` tool.
   Only the directory carries over: variables, functions, aliases and `$?` do not.
   Keep anything that must last in the agent's files.
-  Output appears when the command finishes; the built-in bash tool cuts each stream at 2 MiB.
+  {output}
   {limit}
 
 Keys
@@ -536,7 +685,7 @@ Keys
 Session commands
   help        this text; `help NAME` asks bash
   tools       the tools bound to this agent
-  exit [N]    leave, with status N"
+  exit [N]    leave, with status N or else the last command's"
     )
 }
 
@@ -545,9 +694,14 @@ pub fn tools_listing(tools: &[(String, String)]) -> String {
     if tools.is_empty() {
         return "No tools are bound to this agent.".to_string();
     }
+    // The names and summaries are the agent's to choose.
+    let tools: Vec<_> = tools
+        .iter()
+        .map(|(name, summary)| (shown(name), shown(summary)))
+        .collect();
     let width = tools.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
     let mut listing = String::new();
-    for (name, summary) in tools {
+    for (name, summary) in &tools {
         listing.push_str(format!("  {name:width$}  {summary}").trim_end());
         listing.push('\n');
     }
@@ -571,10 +725,11 @@ pub fn dimmed(text: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BashResult, CallFailure, CancelOutcome, INTERRUPTED_EXIT, InputMode, LocalCommand,
-        NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract, classify_cancel,
-        classify_invoke_error, decode_result, dimmed, exit_code, global_args, help_text,
-        input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv,
+        BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode,
+        LocalCommand, NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract,
+        classify_cancel, classify_invoke_error, decode_result, dimmed, exit_code,
+        failed_agent_notice, global_args, help_text, input_mode, interrupted_message,
+        local_command, lookup_command, prompt, run_argv, runs_nothing, strip_background_reply,
         strip_cursor_reports, time_limit, tools_listing,
     };
     use crate::context::GlobalEnvironmentSelector;
@@ -685,6 +840,17 @@ mod tests {
             .find(|field| field["name"] == "exit_code")
             .unwrap()["body"] = json!({"kind": "string", "value": {}});
         rejected(definition, false, "exit_code");
+
+        // A process status is eight bits: a wider or signed type could carry a value the
+        // session cannot pass on, so it is refused before anything runs.
+        for kind in ["u32", "s8", "s32", "u64"] {
+            let mut definition = pinned();
+            result_fields(&mut definition)
+                .iter_mut()
+                .find(|field| field["name"] == "exit_code")
+                .unwrap()["body"] = json!({"kind": kind, "value": {}});
+            rejected(definition, false, "`exit_code` 8-bit unsigned integer");
+        }
 
         let mut definition = pinned();
         run_body(&mut definition)["result"] = Value::Null;
@@ -798,6 +964,21 @@ mod tests {
             local_command("exit 300"),
             Some(LocalCommand::Exit(Some(44)))
         );
+        // The same command as bash reads it: with a terminator, a comment or a quoted status.
+        for (line, status) in [
+            ("exit;", None),
+            ("exit # done", None),
+            ("exit 3;", Some(3)),
+            ("exit 3 # stop here", Some(3)),
+            ("exit \"5\"", Some(5)),
+            ("exit '7' ; # bye", Some(7)),
+        ] {
+            assert_eq!(
+                local_command(line),
+                Some(LocalCommand::Exit(status)),
+                "{line:?}"
+            );
+        }
     }
 
     #[test]
@@ -808,6 +989,12 @@ mod tests {
             "exit 3; ls",
             "exit abc",
             "exit 1 2",
+            "exit -1",
+            "exit $((1+2))",
+            "exit \"$status\"",
+            "false || exit 4",
+            "true && exit",
+            "exit 3 > /dev/null",
             "",
         ] {
             assert_eq!(local_command(line), None, "{line:?}");
@@ -824,6 +1011,18 @@ mod tests {
         assert_eq!(
             prompt("A(\"m1\")", "/tmp", 0, plain),
             "A(\"m1\") /tmp \u{276f} "
+        );
+    }
+
+    #[test]
+    fn prompt_spells_out_what_would_act_on_the_terminal() {
+        assert_eq!(
+            prompt("A(\"m1\")", "/tmp/x\x1b]0;title\x07\x1b[2J", 0, plain),
+            "A(\"m1\") /tmp/x^[]0;title^G^[[2J \u{276f} "
+        );
+        assert_eq!(
+            prompt("A(\"\x1b[8m\")", "/a\u{202e}b", 0, plain),
+            "A(\"^[[8m\") /a\\u{202e}b \u{276f} "
         );
     }
 
@@ -889,6 +1088,26 @@ mod tests {
         assert_eq!(strip_cursor_reports("\x1b[12;1Rpwd"), "pwd");
         assert_eq!(strip_cursor_reports("ec\x1b[3;40Rho x"), "echo x");
         assert_eq!(strip_cursor_reports("ls\x1b[1;1R\x1b[1;1R"), "ls");
+    }
+
+    #[test]
+    fn a_late_answer_about_the_background_is_taken_out_of_a_typed_line() {
+        // The editor drops the escape that opens the answer and types the rest.
+        assert_eq!(strip_background_reply("11;rgb:1414/1313/1b1b"), "");
+        assert_eq!(
+            strip_background_reply("echo 11;rgba:14/13/1b/ff hi"),
+            "echo  hi"
+        );
+        assert_eq!(strip_background_reply("ls11;rgb:f/f/f -la"), "ls -la");
+        // Anything that is not that answer stays as typed.
+        for line in [
+            "echo 11;rgb",
+            "seq 11; echo rgb:1/2",
+            "11;rgb:zz/1/2",
+            "ls -la",
+        ] {
+            assert_eq!(strip_background_reply(line), line);
+        }
     }
 
     #[test]
@@ -1099,10 +1318,8 @@ mod tests {
     #[test]
     fn a_cancel_answer_says_whether_the_command_still_runs() {
         assert_eq!(classify_cancel(Ok(true)), CancelOutcome::Cancelled);
-        assert_eq!(
-            classify_cancel(Ok(false)),
-            CancelOutcome::Running { error: None }
-        );
+        // Golem answers "not cancelled" only for a call that already has its result.
+        assert_eq!(classify_cancel(Ok(false)), CancelOutcome::Finished);
         assert_eq!(
             classify_cancel(Err("Invalid request: Invocation not found".to_string())),
             CancelOutcome::Running { error: None }
@@ -1126,6 +1343,22 @@ mod tests {
         assert_eq!(
             interrupted_message(&CancelOutcome::Cancelled, "A(\"a\")", Some(30)),
             "Cancelled before it started."
+        );
+        assert_eq!(
+            interrupted_message(&CancelOutcome::Finished, "A(\"a\")", Some(30)),
+            "The command had already finished."
+        );
+        assert_eq!(
+            interrupted_message(
+                &CancelOutcome::Running {
+                    error: Some("no\x1b[2J answer".to_string())
+                },
+                "A(\"\x1b[8m\")",
+                None
+            ),
+            "The cancel request failed: no^[[2J answer. Stopped waiting. The command is still \
+             running on A(\"^[[8m\") and stops at the tool's time limit at the latest. Your next \
+             command will wait behind it."
         );
         assert_eq!(
             interrupted_message(
@@ -1170,6 +1403,78 @@ mod tests {
         }
         assert!(help_text("sh", Some(45)).contains("stops a command after 45 seconds"));
         assert!(!text.ends_with('\n'));
+        assert!(
+            text.contains("exit [N]    leave, with status N or else the last command's"),
+            "{text}"
+        );
+
+        // The limits are the built-in bash tool's; another binding has its own.
+        let other = help_text("sh", None);
+        assert!(
+            !other.contains("600 seconds") && !other.contains("2 MiB"),
+            "{other}"
+        );
+        assert!(
+            other.contains("`--timeout` sets how long a command may run"),
+            "{other}"
+        );
+        assert!(help_text("s\x1b[2Jh", None).contains("its `s^[[2Jh` tool"));
+    }
+
+    #[test]
+    fn a_failed_agent_is_named_as_the_reason() {
+        assert_eq!(
+            failed_agent_notice("A(\"a\")"),
+            "A(\"a\") has failed and runs no commands until it is recovered or made again."
+        );
+    }
+
+    #[test]
+    fn piped_lines_are_gathered_into_whole_commands() {
+        let mut gathered = Gathered::default();
+        assert_eq!(gathered.push("echo one").as_deref(), Some("echo one"));
+        assert!(gathered.is_empty());
+
+        // An open construct is held until the line that closes it.
+        assert_eq!(gathered.push("if false; then"), None);
+        assert!(!gathered.is_empty());
+        assert_eq!(gathered.push("  rm keep-me"), None);
+        assert_eq!(
+            gathered.push("fi").as_deref(),
+            Some("if false; then\n  rm keep-me\nfi")
+        );
+
+        // A here-document's text belongs to its command, blank lines included.
+        assert_eq!(gathered.push("cat > notes <<EOF"), None);
+        assert_eq!(gathered.push("rm precious"), None);
+        assert_eq!(gathered.push(""), None);
+        assert_eq!(
+            gathered.push("EOF").as_deref(),
+            Some("cat > notes <<EOF\nrm precious\n\nEOF")
+        );
+
+        assert_eq!(gathered.push("echo one \\"), None);
+        assert_eq!(gathered.push("two").as_deref(), Some("echo one \\\ntwo"));
+
+        // Input that ends inside a command: bash is given what there is, and reports it.
+        assert_eq!(gathered.push("for f in a b; do"), None);
+        assert_eq!(gathered.finish().as_deref(), Some("for f in a b; do"));
+        assert_eq!(gathered.finish(), None);
+    }
+
+    #[test]
+    fn a_line_of_blanks_or_comments_runs_nothing() {
+        for line in ["", "   ", "# end of script", "  # a\n# b\n"] {
+            assert!(runs_nothing(line), "{line:?}");
+        }
+        for line in [
+            "echo # not all comment",
+            "echo '#'",
+            ": # no-op",
+            "#!/bin/sh\necho hi",
+        ] {
+            assert!(!runs_nothing(line), "{line:?}");
+        }
     }
 
     #[test]
@@ -1180,6 +1485,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Type `help`"), "{text}");
+        assert!(banner("A(\"\x1b[2J\")", "bash").starts_with("Connected to A(\"^[[2J\")"));
     }
 
     #[test]
@@ -1192,6 +1498,11 @@ mod tests {
             ]),
             "  bash\n  fixture  Test commands\nRun `NAME --help` at the prompt for a tool's \
              commands."
+        );
+        // A tool's name and summary are the agent's to choose.
+        assert_eq!(
+            tools_listing(&[("x\x1b[2J".to_string(), "a\x1b]0;t\x07b\nc".to_string())]),
+            "  x^[[2J  a^[]0;t^Gb^Jc\nRun `NAME --help` at the prompt for a tool's commands."
         );
     }
 

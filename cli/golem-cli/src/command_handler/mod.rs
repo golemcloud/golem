@@ -45,6 +45,7 @@ use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
+use crate::command_handler::ssh::NOT_RUN_EXIT;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
 use crate::log::{
@@ -177,12 +178,17 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
+                // `golem ssh` follows ssh: 255 says that the command did not run, whatever
+                // stopped it.
+                let follows_ssh = matches!(command.subcommand, GolemCliSubcommand::Ssh { .. });
+
                 let mut lazy_context = LazyContext::new(command.global_flags.clone(), hooks);
                 let result = Self::handle_subcommand(&mut lazy_context, command.subcommand)
                     .await
                     .map(|()| ExitCode::SUCCESS);
+                let succeeded = result.is_ok();
 
-                match result {
+                let handled = match result {
                     Ok(result) => Ok(result),
                     Err(error) => {
                         set_log_output(Output::Stderr);
@@ -194,6 +200,14 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                             Err(error)
                         }
                     }
+                };
+                match handled {
+                    Err(error) if follows_ssh && !error.is::<PipedExitCode>() => {
+                        log_anyhow_error(&error);
+                        Ok(ExitCode::from(NOT_RUN_EXIT))
+                    }
+                    Ok(_) if follows_ssh && !succeeded => Ok(ExitCode::from(NOT_RUN_EXIT)),
+                    handled => handled,
                 }
             }
             GolemCliCommandParseResult::ErrorWithPartialMatch {

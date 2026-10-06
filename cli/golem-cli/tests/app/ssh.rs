@@ -14,7 +14,7 @@ const BASH_ONLY: &str = r#"BashOnlyOwner("isolated")"#;
 const DENIED_FILES: &str = r#"DeniedFilesOwner("denied")"#;
 const MARKER: &str = "\u{276f}";
 
-// Runs `golem ssh` with piped input: each input line is one command and stdout carries only the
+// Runs `golem ssh` with piped input: the commands are read from it and stdout carries only the
 // scripts' output.
 async fn ssh(ctx: &TestContext, args: &[&str], input: &str) -> RawOutput {
     let mut command = vec!["ssh"];
@@ -236,57 +236,75 @@ async fn ssh_carries_only_the_directory() {
 
 #[test]
 #[timeout("20 minutes")]
-async fn ssh_resets_a_removed_directory() {
+async fn ssh_piped_input_stops_when_its_directory_is_refused() {
     let ctx = context().await;
 
-    // The remembered directory is removed: the next command is refused before it runs, the
-    // session goes back to where it started, and the command is not resubmitted.
+    // The remembered directory is removed: the next command is refused before it runs. Piped
+    // commands were written for that directory, so none of them runs anywhere else.
     let output = ssh(
         &ctx,
         &[OWNER],
-        "mkdir -p /tmp/gone && cd /tmp/gone\nrmdir /tmp/gone\npwd\npwd\n",
+        "mkdir -p /tmp/gone && cd /tmp/gone\nrmdir /tmp/gone\npwd\ntouch ran-elsewhere\npwd\n",
     )
     .await;
-    assert_eq!(status(&output), 0, "{}", output.stderr_text());
-    assert_eq!(output.stdout_text(), "/\n");
-    let stderr = output.stderr_text();
-    assert!(stderr.contains("`invalid-cwd`"), "{stderr}");
-    assert!(
-        stderr.contains("Continuing from the agent's starting directory; the command was not run."),
-        "{stderr}"
-    );
-
-    // A session started with `--cwd` goes back to that directory.
-    let created = invoke(&ctx, OWNER, "", "mkdir -p /tmp/start/sub").await;
-    assert_eq!(created.exit_code, 0, "{created:?}");
-    let output = ssh(
-        &ctx,
-        &[OWNER, "--cwd", "/tmp/start"],
-        "cd sub\nrmdir /tmp/start/sub\npwd\npwd\n",
-    )
-    .await;
-    assert_eq!(
-        output.stdout_text(),
-        "/tmp/start\n",
-        "{}",
-        output.stderr_text()
-    );
-    assert!(
-        output.stderr_text().contains("Continuing from /tmp/start;"),
-        "{}",
-        output.stderr_text()
-    );
-
-    // When the starting directory itself is refused, the agent's starting directory is used.
-    let output = ssh(&ctx, &[OWNER, "--cwd", "/tmp/nowhere"], "pwd\npwd\n").await;
-    assert_eq!(output.stdout_text(), "/\n", "{}", output.stderr_text());
+    assert_not_run(&output, "`invalid-cwd`");
     assert!(
         output
             .stderr_text()
-            .contains("Continuing from the agent's starting directory"),
+            .contains("The directory cannot be used, so the commands after this one were not run."),
         "{}",
         output.stderr_text()
     );
+
+    // The same when the directory asked for with `--cwd` is not there.
+    let output = ssh(
+        &ctx,
+        &[OWNER, "--cwd", "/tmp/nowhere"],
+        "pwd\ntouch ran-elsewhere\n",
+    )
+    .await;
+    assert_not_run(&output, "`invalid-cwd`");
+    let left = invoke(&ctx, OWNER, "/", "ls ran-elsewhere 2>/dev/null; echo done").await;
+    assert_eq!(left.stdout, "done\n", "{left:?}");
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_piped_lines_run_as_whole_commands() {
+    let ctx = context().await;
+
+    // The lines of an `if`, a loop and a here-document are one command each, as bash reads
+    // them. A comment line is not a command, and only a line that is `exit` ends the session.
+    let output = ssh(
+        &ctx,
+        &[OWNER],
+        concat!(
+            "mkdir -p /tmp/ssh-whole && cd /tmp/ssh-whole && : > keep\n",
+            "if false; then\n",
+            "  rm -v keep\n",
+            "fi\n",
+            "cat > notes.txt <<EOF\n",
+            "rm -v keep\n",
+            "EOF\n",
+            "for name in a b; do\n",
+            "  echo \"item $name\"\n",
+            "done\n",
+            "ls\n",
+            "cat notes.txt\n",
+            "false\n",
+            "# the status of the line before stands\n",
+        ),
+    )
+    .await;
+    assert_output(
+        &output,
+        1,
+        "item a\nitem b\nkeep\nnotes.txt\nrm -v keep\n",
+        "",
+    );
+
+    let output = ssh(&ctx, &[OWNER], "echo one\nexit 3 # stop here\necho two\n").await;
+    assert_output(&output, 3, "one\n", "");
 }
 
 #[test]
@@ -520,6 +538,33 @@ async fn ssh_prompt_feels_like_a_shell() {
         session.expect_str("4800+21")?;
         enter(session, "")?;
         session.expect_str("recall-4821")?;
+        answer_cursor_query(session)?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+
+    // At a prompt, a directory removed from under the session sends it back to where it
+    // started, and says so before the next command is typed.
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(120)));
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        enter(session, "mkdir -p /tmp/ssh-gone && cd /tmp/ssh-gone")?;
+        answer_cursor_query(session)?;
+        session.expect_str("/tmp/ssh-gone")?;
+        enter(session, "rmdir /tmp/ssh-gone")?;
+        answer_cursor_query(session)?;
+        session.expect_str(MARKER)?;
+        enter(session, "printf 'ran-%s\\n' here")?;
+        session.expect_str("`invalid-cwd`")?;
+        session.expect_str(
+            "Continuing from the agent's starting directory; the command was not run.",
+        )?;
+        answer_cursor_query(session)?;
+        session.expect_str("[255]")?;
+        enter(session, "printf 'ran-%s\\n' \"$PWD\"")?;
+        session.expect_str("ran-/\r\n")?;
         answer_cursor_query(session)?;
         enter(session, "exit")?;
         session.expect_eof()

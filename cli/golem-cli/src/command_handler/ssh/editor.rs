@@ -202,6 +202,9 @@ impl Highlighter for Uncoloured {
     }
 }
 
+/// What a prompt without colours shows where a command goes on to another line.
+pub const PLAIN_CONTINUATION: &str = "\u{b7} ";
+
 /// What the editor draws around the text being typed.
 pub struct SshPrompt {
     /// Everything before the typed text, which starts after its last line.
@@ -219,7 +222,7 @@ impl SshPrompt {
         Self {
             left: text,
             right: String::new(),
-            continuation: "\u{b7} ",
+            continuation: PLAIN_CONTINUATION,
         }
     }
 }

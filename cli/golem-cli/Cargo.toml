@@ -128,7 +128,7 @@ wit-component = { workspace = true }
 wit-parser = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["event"] }
+rustix = { workspace = true, features = ["event", "termios"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

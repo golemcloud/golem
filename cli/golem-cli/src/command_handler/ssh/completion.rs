@@ -15,6 +15,7 @@
 //! Tab completion for the prompt: command names and remote paths, fetched from the agent with
 //! short helper scripts and remembered for as long as they can be trusted.
 
+use super::look::acts_on_the_terminal;
 use super::syntax::{Position, cursor_word, is_reserved_word};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -205,19 +206,39 @@ fn lines(output: &str) -> impl Iterator<Item = &str> {
 
 /// Lists the entries of `directory` (as typed, ending in `/`, or empty for the current
 /// directory), hidden ones included, one per line and with a trailing `/` on directories.
+///
+/// Everything the script does to the agent's files is recorded in the agent's oplog for good,
+/// so it does as little as it can: it goes to the directory, reads it once, tests each entry
+/// once, and writes its whole answer with a single `printf`.
 pub fn listing_script(directory: &str) -> String {
     let directory = format!("'{}'", directory.replace('\'', "'\\''"));
     format!(
-        "for p in {directory}* {directory}.[!.]*; do \
-         if [ -d \"$p\" ]; then printf '%s/\\n' \"$p\"; \
-         elif [ -e \"$p\" ] || [ -L \"$p\" ]; then printf '%s\\n' \"$p\"; fi; done"
+        "d={directory}; [ -z \"$d\" ] || cd -- \"$d\" 2>/dev/null || exit 0; \
+         shopt -s nullglob dotglob; nl=$'\\n'; o=; \
+         for n in *; do if [ -d \"$n\" ]; then o=\"$o$d$n/$nl\"; else o=\"$o$d$n$nl\"; fi; done; \
+         printf '%s' \"$o\""
     )
 }
 
-/// Escapes `text` so that typing it at the prompt names exactly that path.
+/// Escapes `text` so that typing it at the prompt names exactly that path. A character that
+/// would act on the terminal is written as bash's `$'...'` spells it, so the typed line and the
+/// list of completions hold none of them.
 pub fn escape_word(text: &str) -> String {
     let mut escaped = String::with_capacity(text.len());
     for character in text.chars() {
+        if acts_on_the_terminal(character) {
+            escaped.push_str(&match character {
+                '\x1b' => "$'\\e'".to_string(),
+                '\n' => "$'\\n'".to_string(),
+                '\t' => "$'\\t'".to_string(),
+                character if character.is_ascii() => format!("$'\\x{:02x}'", u32::from(character)),
+                character if u32::from(character) <= 0xffff => {
+                    format!("$'\\u{:04x}'", u32::from(character))
+                }
+                character => format!("$'\\U{:08x}'", u32::from(character)),
+            });
+            continue;
+        }
         if character.is_ascii()
             && !character.is_ascii_alphanumeric()
             && !"_./-+:@%,=".contains(character)
@@ -413,10 +434,13 @@ mod tests {
     fn the_listing_script_quotes_the_directory() {
         assert_eq!(
             listing_script("it's/"),
-            "for p in 'it'\\''s/'* 'it'\\''s/'.[!.]*; do \
-             if [ -d \"$p\" ]; then printf '%s/\\n' \"$p\"; \
-             elif [ -e \"$p\" ] || [ -L \"$p\" ]; then printf '%s\\n' \"$p\"; fi; done"
+            "d='it'\\''s/'; [ -z \"$d\" ] || cd -- \"$d\" 2>/dev/null || exit 0; \
+             shopt -s nullglob dotglob; nl=$'\\n'; o=; \
+             for n in *; do if [ -d \"$n\" ]; then o=\"$o$d$n/$nl\"; else o=\"$o$d$n$nl\"; fi; done; \
+             printf '%s' \"$o\""
         );
+        // The current directory is listed without going anywhere.
+        assert!(listing_script("").starts_with("d=''; [ -z \"$d\" ] || cd "));
     }
 
     #[test]
@@ -424,5 +448,12 @@ mod tests {
         assert_eq!(escape_word("plain-1.2_x/y"), "plain-1.2_x/y");
         assert_eq!(escape_word("a b$c'd\"e"), "a\\ b\\$c\\'d\\\"e");
         assert_eq!(escape_word("caf\u{e9}"), "caf\u{e9}");
+        // Characters that would act on the terminal are written the way bash spells them, so
+        // the line that is typed holds none of them.
+        assert_eq!(escape_word("a\x1b[2Jb"), "a$'\\e'\\[2Jb");
+        assert_eq!(escape_word("n\nl"), "n$'\\n'l");
+        assert_eq!(escape_word("c\x07d\te\x7f"), "c$'\\x07'd$'\\t'e$'\\x7f'");
+        assert_eq!(escape_word("main\u{202e}gpj"), "main$'\\u202e'gpj");
+        assert_eq!(escape_word("t\u{e0041}"), "t$'\\U000e0041'");
     }
 }

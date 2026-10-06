@@ -16,6 +16,7 @@
 //! script.
 
 use super::completion::Fetch;
+use super::syntax::{TokenKind, scan};
 
 /// Prints the `HEAD` file of the repository the current directory is in, and fails outside one.
 /// It uses only what the shell has built in. A repository here is a directory with a regular
@@ -27,7 +28,8 @@ pub const HEAD_SCRIPT: &str = "d=$PWD; \
 /// The branch a `HEAD` file names, or the start of the commit id when no branch is checked out.
 pub fn branch_of(head: &str) -> Option<String> {
     let head = head.trim();
-    // The file is the agent's; nothing a terminal would act on may reach the prompt.
+    // The file is the agent's. A name with control characters is no branch; anything else a
+    // terminal would act on is spelled out where the prompt draws it.
     if head.chars().any(char::is_control) {
         return None;
     }
@@ -38,6 +40,19 @@ pub fn branch_of(head: &str) -> Option<String> {
     commit.then(|| head[..7].to_string())
 }
 
+/// Whether the branch read for `before` may be another one after `command` ended in `after`.
+/// Reading it costs a call on the agent, so it is read again only when the directory changed
+/// or the command ran git. A script that switches the branch without naming git is not seen
+/// until one of those happens.
+pub fn changes_branch(command: &str, before: &str, after: &str) -> bool {
+    before != after
+        || scan(command).tokens.iter().any(|token| {
+            let word = &command[token.start..token.end];
+            matches!(token.kind, TokenKind::Word { command: true })
+                && (word == "git" || word.ends_with("/git"))
+        })
+}
+
 /// Asks the agent for the branch of `cwd`. `None` outside a repository and when the agent does
 /// not answer.
 pub fn branch(fetch: &dyn Fetch, cwd: &str) -> Option<String> {
@@ -46,7 +61,7 @@ pub fn branch(fetch: &dyn Fetch, cwd: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HEAD_SCRIPT, branch, branch_of};
+    use super::{HEAD_SCRIPT, branch, branch_of, changes_branch};
     use crate::command_handler::ssh::completion::Fetch;
     use std::sync::Mutex;
     use test_r::test;
@@ -69,6 +84,38 @@ mod tests {
             ("ref: refs/heads/a\x1b[31mb", None),
         ] {
             assert_eq!(branch_of(head).as_deref(), expected, "{head:?}");
+        }
+    }
+
+    #[test]
+    fn the_branch_is_read_again_only_when_it_may_have_changed() {
+        // Another directory may be another repository, or none.
+        assert!(changes_branch("cd ../other", "/work/repo", "/work/other"));
+        assert!(changes_branch("echo hi", "", "/"));
+        // A command that names git may have switched the branch.
+        for command in [
+            "git checkout -b topic",
+            "cd . && git switch main",
+            "/usr/bin/git -C . switch main",
+            "if true; then\n  git stash\nfi",
+        ] {
+            assert!(
+                changes_branch(command, "/work/repo", "/work/repo"),
+                "{command:?}"
+            );
+        }
+        // Anything else leaves the branch that was read standing.
+        for command in [
+            "ls -la",
+            "echo git",
+            "cat .gitignore",
+            "legit --flag",
+            "echo 'git checkout x'",
+        ] {
+            assert!(
+                !changes_branch(command, "/work/repo", "/work/repo"),
+                "{command:?}"
+            );
         }
     }
 
