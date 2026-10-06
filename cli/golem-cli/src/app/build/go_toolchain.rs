@@ -70,6 +70,23 @@ pub async fn ensure_go_toolchain(config: &ApplicationConfig) -> anyhow::Result<G
         return Ok(toolchain);
     }
 
+    if !SUPPORTED_PLATFORMS.contains(&(go_os(), go_arch())) {
+        bail!(
+            "The Golem Go toolchain ({tag}) has no build for {os}/{arch}; it is published for {supported}.\n\
+             Set {env} to a toolchain built from https://github.com/{repo} for this platform.",
+            tag = crate::versions::go_toolchain::TAG,
+            os = go_os(),
+            arch = go_arch(),
+            supported = SUPPORTED_PLATFORMS
+                .iter()
+                .map(|(os, arch)| format!("{os}/{arch}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            env = GO_TOOLCHAIN_ENV_VAR,
+            repo = crate::versions::go_toolchain::REPO,
+        );
+    }
+
     if config.offline {
         bail!(
             "The Golem Go toolchain ({tag}) is not installed, and offline mode is enabled.\n\
@@ -203,6 +220,16 @@ fn install_dir() -> anyhow::Result<PathBuf> {
         .join("v2")
         .join(archive_stem()))
 }
+
+/// The platforms the toolchain fork publishes a bootstrap archive for, in Go's
+/// os/arch naming.
+const SUPPORTED_PLATFORMS: &[(&str, &str)] = &[
+    ("linux", "amd64"),
+    ("linux", "arm64"),
+    ("darwin", "amd64"),
+    ("darwin", "arm64"),
+    ("windows", "amd64"),
+];
 
 fn download_url() -> String {
     format!(
