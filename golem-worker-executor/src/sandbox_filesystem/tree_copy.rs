@@ -386,7 +386,7 @@ fn set_host_directory_attributes(
 /// What a seed entry needs to make objects in one sandbox.
 #[derive(Clone, Copy)]
 pub(super) struct SeedContext {
-    pub(super) quota_authority: QuotaAuthority,
+    pub(super) transfer: SeedTransfer,
     pub(super) access: SeedAccess,
     pub(super) placement: SeedPlacement,
 }
@@ -448,11 +448,16 @@ fn seed_file(
     let source_file = open_file_nofollow(source_directory, &source.relative)?;
     let mut temporary = CapabilityTempFile::new(parent)?;
     let temporary_file = temporary.as_file().try_clone()?.into_std();
-    match reflink_project(context.quota_authority) {
-        None => {
+    match context.transfer {
+        SeedTransfer::Bytes => {
             std::io::copy(&mut &source_file, temporary.as_file_mut())?;
         }
-        Some(project_id) => reflink_into_project(project_id, &temporary_file, &source_file)?,
+        SeedTransfer::Reflink => {
+            transfer_file(FileCopyMode::Reflink, &source_file, &temporary_file)?
+        }
+        SeedTransfer::ReflinkIntoProject(project_id) => {
+            reflink_into_project(project_id, &temporary_file, &source_file)?
+        }
     }
     temporary_file.sync_all()?;
     temporary_file.set_permissions(seeded_permissions(
@@ -930,7 +935,7 @@ mod tests {
 
     fn buffered_seed(placement: SeedPlacement) -> SeedContext {
         SeedContext {
-            quota_authority: QuotaAuthority::Unsupported,
+            transfer: SeedTransfer::Bytes,
             access: SeedAccess::FromSource,
             placement,
         }
