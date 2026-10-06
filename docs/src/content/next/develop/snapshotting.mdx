@@ -282,15 +282,14 @@ The available policy forms are listed below. Exact spelling and policy support v
 
 An application snapshot holds only the bytes that your snapshot code returns. Golem does not write file changes to the oplog. Without help, a start from a snapshot record loses every file that the agent wrote before the record, because the replay does not run that code again. The same happens to the files of an agent after a manual update.
 
-A **filesystem snapshot** fixes this. It is a copy of the agent's [filesystem](/next/develop/agent-filesystem) that Golem keeps in blob storage next to the application snapshot. Golem makes filesystem snapshots only on executors whose operator enabled them. See [Availability](#availability).
+A **filesystem snapshot** fixes this. It is a copy of the agent's [filesystem](/next/develop/agent-filesystem) that Golem keeps in blob storage. The snapshot record in the oplog names it. Golem makes filesystem snapshots only on executors whose operator enabled them. See [Availability](#availability).
 
 ### Restore points
 
 The application snapshot and the filesystem snapshot of one snapshot record form one restore point. Golem uses a restore point only when both parts are there:
 
-- When the filesystem snapshot is missing, is not confirmed yet, or does not restore, Golem uses an older restore point or a full replay of the oplog.
-- When the application snapshot does not load, Golem does the same. See [How snapshot restoration runs](#how-snapshot-restoration-runs).
-- For a manual update, the update fails, and the agent stays on its current revision.
+- For an automatic snapshot: when the filesystem snapshot is missing, is not confirmed yet, or does not restore, or when the application snapshot does not load, Golem uses an older restore point: the previous usable automatic snapshot, then the last manual-update snapshot, then a full replay of the oplog. See [How snapshot restoration runs](#how-snapshot-restoration-runs).
+- For a manual update: when Golem cannot take both parts, the update fails, and the agent stays on its current revision. When the restore point of a completed manual update does not restore, the start of the agent fails with a visible cause, because Golem cannot go back to the history before the update.
 
 A snapshot record without a filesystem snapshot name is also a valid restore point on an executor with filesystem snapshots. It means that the agent's files were exactly the initial files of the component revision. A start from it puts the initial files in place.
 
@@ -316,7 +315,7 @@ A snapshot record with a filesystem snapshot name becomes usable only when its c
 
 At most one upload runs for each agent. While it runs, Golem skips the next automatic snapshot of the agent: your snapshot code does not run, and Golem writes no record. There is one exception. When an upload failed and waits to try again, the next automatic snapshot replaces it. The record of the replaced upload never becomes usable. Golem also skips an automatic snapshot when the free space of the executor's volume is low.
 
-If the agent stops while its upload runs, the stop does not wait for the upload. A later start of the agent on the same executor waits for the upload, for at most a limit that the operator sets, and then checks the store. A start on any executor confirms the snapshot itself when the store holds the whole snapshot. An upload that still runs when the agent moves to another executor is lost for that start.
+If the agent stops while its upload runs, the stop does not wait for the upload. A later start of the agent on the same executor waits for the upload, for at most a limit that the operator sets, and then checks blob storage. A start on any executor confirms the snapshot itself when blob storage holds the whole snapshot. An upload that still runs when the agent moves to another executor is lost for that start.
 
 ### What the agent sees after a restart
 
@@ -328,7 +327,7 @@ After a restore, the files are the files that the agent had at the capture. This
 
 ### Manual updates
 
-A manual update also captures the files. The update waits until the upload of the filesystem snapshot is complete, and only then writes its update record. If an automatic snapshot upload of the agent runs at that moment, the update waits for the upload that runs now, but not for later retries of it. The update waits for at most a limit that the operator sets, 60 seconds by default. When the upload still runs after this limit, the update fails.
+A manual update also captures the files. The update waits until the upload of the filesystem snapshot is complete, and only then writes its update record. If an automatic snapshot upload of the agent runs at that moment, the update waits for the upload that runs now, but not for later retries of it. The update waits for at most a limit that the operator sets, 60 seconds by default. When the upload still runs after this limit, the update fails. The update also fails at once when the free space of the executor's volume is low, or while Golem deletes the filesystem snapshots of the agent.
 
 At the start in the target revision, Golem restores the files and then applies the initial files of the target revision. The files that the agent wrote in the old revision are kept. If the target revision changes the declaration of an initial file at a path where the agent wrote or changed the file, the update fails. The error names the path, and the agent stays on its current revision with its files.
 
@@ -339,7 +338,7 @@ At the start in the target revision, Golem restores the files and then applies t
 | Your snapshot code fails                         | Golem writes no snapshot record and restarts the agent. The agent replays its oplog from its last restore point, so each failed save costs a restart and a replay. | The update fails, and the agent stays on its current revision.   |
 | The capture of the files fails or waits too long | Golem writes no snapshot record. The agent continues, and the next snapshot boundary tries again.                                                | The update fails, and the agent stays on its current revision.   |
 | The upload fails after its retries               | The snapshot record stays without a confirmation. A start uses an older restore point.                                                          | The update fails, and the agent stays on its current revision.   |
-| The filesystem snapshot does not restore         | The start uses the usable record before it, the last manual-update snapshot, or a full replay.                                                  | The start of the agent fails with a visible cause.               |
+| The filesystem snapshot does not restore         | The start uses an older restore point.                                                                                                          | The start of the agent fails with a visible cause.               |
 
 ### Code that leaves a stream write unflushed
 
@@ -368,7 +367,7 @@ On an executor without filesystem snapshots, Golem keeps the earlier behaviour:
 
 - Snapshot records have no filesystem snapshot name, and Golem does not save the agent's files.
 - After a start from a snapshot record, the files that the agent wrote before the record do not exist.
-- After a manual update, the files of the old revision do not exist. Your snapshot code must save the file contents in the application snapshot if the agent needs them.
+- After a manual update, the files that the agent wrote in the old revision do not exist. Golem puts only the initial files in place again. Your snapshot code must save the file contents in the application snapshot if the agent needs them.
 
 ### SQLite databases in TypeScript agents
 
@@ -386,7 +385,7 @@ These cases make the save fail:
 
 A failed save has the effect in [When a snapshot fails](#when-a-snapshot-fails): for an automatic snapshot, Golem restarts the agent, which replays its oplog; for a manual update, the update fails.
 
-After a load from an automatic snapshot, the replay of the later oplog entries must read the database as the live agent did. This holds only while the database fits in SQLite's page cache and the live agent had read every page of it. When it does not hold, the start from that snapshot can fail, and Golem uses an older snapshot or a full replay. The state of the agent stays correct, but the start takes longer.
+After a load from an automatic snapshot, the replay of the later oplog entries must read the database as the live agent did. This holds only while the database fits in SQLite's page cache and the live agent had read every page of it. When it does not hold, the start from that snapshot can fail, and Golem uses an older restore point. The state of the agent stays correct, but the start takes longer.
 
 The [TypeScript custom snapshot guide](/next/how-to-guides/ts/golem-custom-snapshot-ts#sqlite-databases) gives the full rules and limits.
 
