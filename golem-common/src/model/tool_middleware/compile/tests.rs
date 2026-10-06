@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use super::{
-    compile_tool_middleware_chains, effective_installations, synthesize_effective_definition,
+    compile_discovered_tool_middleware_chain, compile_tool_middleware_chains,
+    effective_installations, synthesize_effective_definition,
 };
 use crate::model::agent::AgentTypeName;
 use crate::model::agent_secret::CanonicalAgentSecretPath;
@@ -236,9 +237,9 @@ impl CompilerFixture {
     fn compile(
         &self,
         registrations: &[RegisteredToolMiddleware],
-        universal: &[ToolMiddlewareInstallation],
+        environment_wide: &[ToolMiddlewareInstallation],
         environment: &BTreeMap<ToolName, ToolBindingInput>,
-        agent: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+        owner: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
         mode: ToolCompatibilityMode,
     ) -> super::CompiledToolMiddlewareChains {
         compile_tool_middleware_chains(
@@ -246,9 +247,9 @@ impl CompilerFixture {
             std::slice::from_ref(&self.tool),
             std::slice::from_ref(&self.binding),
             registrations,
-            universal,
+            environment_wide,
             environment,
-            agent,
+            owner,
             &BTreeMap::new(),
             mode,
         )
@@ -287,6 +288,51 @@ fn discoverable_middleware_metadata_does_not_self_install() {
             .definition
             .name,
         "audit"
+    );
+}
+
+#[test]
+fn discovered_tool_selectively_applies_per_tool_universal_middleware() {
+    let fixture = CompilerFixture::new();
+    let registration = registered_middleware("audit", ToolMiddlewareScope::Universal);
+    let selected_binding = ToolBindingInput {
+        middleware: Some(vec![installation("audit", 17)]),
+        ..Default::default()
+    };
+    let compile = |tool_name: &ToolName, environment_binding: Option<&ToolBindingInput>| {
+        compile_discovered_tool_middleware_chain(
+            DeploymentRevision::INITIAL,
+            &fixture.tool.definition,
+            &fixture.binding.owner,
+            tool_name,
+            &fixture.binding.config_keys_readable,
+            &fixture.binding.secret_keys_readable,
+            &fixture.binding.secret_keys_revealable,
+            std::slice::from_ref(&registration),
+            &[],
+            environment_binding,
+            None,
+            ToolCompatibilityMode::StructuralSubtype,
+        )
+    };
+
+    let selected = compile(&fixture.tool_name, Some(&selected_binding));
+    assert!(selected.errors.is_empty(), "{:?}", selected.errors);
+    assert_eq!(selected.chains.len(), 1);
+    assert_eq!(selected.chains[0].occurrences.len(), 1);
+    assert_eq!(
+        selected.chains[0].effective_definition,
+        fixture.tool.definition
+    );
+
+    let other_tool = ToolName::try_from("other").unwrap();
+    let unselected = compile(&other_tool, None);
+    assert!(unselected.errors.is_empty(), "{:?}", unselected.errors);
+    assert_eq!(unselected.chains.len(), 1);
+    assert!(unselected.chains[0].occurrences.is_empty());
+    assert_eq!(
+        unselected.chains[0].effective_definition,
+        fixture.tool.definition
     );
 }
 
@@ -547,49 +593,43 @@ fn per_tool_merge_preserves_omitted_empty_order_and_repetitions() {
 }
 
 #[test]
-fn compiler_builds_universal_and_monomorphic_chain_in_order_with_duplicate_parameters() {
+fn compiler_builds_environment_wide_and_per_tool_universal_middleware_in_order() {
     let fixture = CompilerFixture::new();
     let leaf = fixture.tool.definition.clone();
+    let presented = simple_tool("presented");
     let registrations = vec![
         registered_middleware("universal", ToolMiddlewareScope::Universal),
         registered_middleware(
             "scoped",
             ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
-                presented: simple_tool("leaf"),
+                presented: presented.clone(),
                 expected: Some(leaf),
             })),
         ),
     ];
-    let universal = vec![installation("universal", 10), installation("universal", 11)];
+    let environment_wide = vec![installation("universal", 10)];
     let environment = BTreeMap::from([(
         fixture.tool_name.clone(),
         ToolBindingInput {
-            middleware: Some(vec![installation("scoped", 20)]),
+            middleware: Some(vec![
+                installation("universal", 20),
+                installation("scoped", 30),
+                installation("universal", 40),
+            ]),
             ..Default::default()
         },
-    )]);
-    let agent = BTreeMap::from([(
-        fixture.agent.clone(),
-        BTreeMap::from([(
-            fixture.tool_name.clone(),
-            ToolBindingInput {
-                middleware: Some(vec![installation("scoped", 21)]),
-                middleware_merge_mode: Some(ToolMiddlewareMergeMode::Append),
-                ..Default::default()
-            },
-        )]),
     )]);
 
     let compiled = fixture.compile(
         &registrations,
-        &universal,
+        &environment_wide,
         &environment,
-        &agent,
+        &BTreeMap::new(),
         ToolCompatibilityMode::StructuralSubtype,
     );
     assert!(compiled.errors.is_empty(), "{:?}", compiled.errors);
     let chain = &compiled.chains[0];
-    assert_eq!(chain.effective_definition.name(), Some("leaf"));
+    assert_eq!(chain.effective_definition, presented);
     assert_eq!(
         chain
             .occurrences
@@ -607,21 +647,33 @@ fn compiler_builds_universal_and_monomorphic_chain_in_order_with_duplicate_param
             .collect::<Vec<_>>(),
         [
             ("universal", Some(10)),
-            ("universal", Some(11)),
-            ("scoped", Some(20)),
-            ("scoped", Some(21)),
+            ("universal", Some(20)),
+            ("scoped", Some(30)),
+            ("universal", Some(40)),
         ]
     );
-    assert!(
-        chain.occurrences[..2]
+    assert_eq!(
+        chain
+            .occurrences
             .iter()
-            .all(|item| item.compatibility.is_none())
+            .map(|occurrence| occurrence.next_effective_definition.name())
+            .collect::<Vec<_>>(),
+        [
+            Some("presented"),
+            Some("presented"),
+            Some("leaf"),
+            Some("leaf")
+        ]
     );
-    assert!(
-        chain.occurrences[2..]
-            .iter()
-            .all(|item| item.compatibility.is_some())
-    );
+    for index in [0, 1, 3] {
+        let occurrence = &chain.occurrences[index];
+        assert!(occurrence.expected_definition.is_none());
+        assert!(occurrence.presented_definition.is_none());
+        assert!(occurrence.compatibility.is_none());
+    }
+    assert!(chain.occurrences[2].expected_definition.is_some());
+    assert!(chain.occurrences[2].presented_definition.is_some());
+    assert!(chain.occurrences[2].compatibility.is_some());
     assert!(chain.occurrences.iter().all(|item| {
         item.middleware.owner_account_email.as_str() == "middleware@example.com"
             && item.middleware.definition.version == "2.0.0"
@@ -818,7 +870,7 @@ fn compiler_rejects_wrong_and_missing_parameter_fields_with_occurrence_paths() {
 }
 
 #[test]
-fn compiler_rejects_pin_scope_and_leaf_mismatches() {
+fn compiler_rejects_pin_and_leaf_mismatches() {
     let fixture = CompilerFixture::new();
     let universal = registered_middleware("universal", ToolMiddlewareScope::Universal);
     let mut wrong_version = installation("universal", 1);
@@ -836,26 +888,6 @@ fn compiler_rejects_pin_scope_and_leaf_mismatches() {
         assert!(result.chains.is_empty());
         assert!(!result.errors.is_empty());
     }
-    let wrong_scope = fixture.compile(
-        std::slice::from_ref(&universal),
-        &[],
-        &BTreeMap::from([(
-            fixture.tool_name.clone(),
-            ToolBindingInput {
-                middleware: Some(vec![installation("universal", 1)]),
-                ..Default::default()
-            },
-        )]),
-        &BTreeMap::new(),
-        ToolCompatibilityMode::StructuralSubtype,
-    );
-    assert!(wrong_scope.chains.is_empty());
-    assert!(
-        wrong_scope
-            .errors
-            .iter()
-            .any(|error| error.message.contains("wrong scope"))
-    );
 
     let mut missing = fixture.binding.clone();
     missing.tool_name = ToolName::try_from("missing").unwrap();
@@ -871,6 +903,36 @@ fn compiler_rejects_pin_scope_and_leaf_mismatches() {
         ToolCompatibilityMode::StructuralSubtype,
     );
     assert!(result.errors[0].message.contains("no registered leaf tool"));
+}
+
+#[test]
+fn compiler_rejects_environment_wide_monomorphic_middleware_without_selected_bindings() {
+    let fixture = CompilerFixture::new();
+    let monomorphic = registered_middleware(
+        "scoped",
+        ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+            presented: simple_tool("leaf"),
+            expected: Some(fixture.tool.definition.clone()),
+        })),
+    );
+
+    let result = compile_tool_middleware_chains(
+        DeploymentRevision::INITIAL,
+        std::slice::from_ref(&fixture.tool),
+        &[],
+        &[monomorphic],
+        &[installation("scoped", 1)],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+
+    assert!(result.chains.is_empty());
+    assert_eq!(result.errors.len(), 1);
+    assert!(result.errors[0].message.contains(
+        "monomorphic middleware cannot be installed in the environment-wide middleware list"
+    ));
 }
 
 #[test]
