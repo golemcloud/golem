@@ -125,7 +125,7 @@ use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
-    GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
+    FilesystemStorageMode, GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig,
     ResourceLimitsConfig, ResourceLimitsDisabledConfig, ResourceUsageMeteringConfig,
@@ -4067,8 +4067,9 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir =
-                    Some(managed_xfs_root.to_path_buf());
+                config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
+                    root: managed_xfs_root.to_path_buf(),
+                };
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
@@ -4077,6 +4078,43 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
         },
         None,
         "Timeout waiting for managed filesystem snapshot server to start",
+    )
+    .await
+}
+
+/// Starts an executor on XFS storage with reflink and without project quotas, at `reflink_xfs_root`,
+/// that takes a snapshot after each invocation, with the filesystem snapshot settings
+/// `filesystem_snapshots`.
+///
+/// The storage has no per-agent accounting, so the agents get no disk limit and the executor
+/// meters no filesystem usage.
+#[cfg(target_os = "linux")]
+pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    reflink_xfs_root: PathBuf,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes: u64::MAX,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.storage = FilesystemStorageMode::ReflinkXfs {
+                    root: reflink_xfs_root.clone(),
+                };
+                config.resource_usage_metering.filesystem = false;
+                config.filesystem_snapshots = filesystem_snapshots.clone();
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for reflink XFS filesystem snapshot server to start",
     )
     .await
 }
@@ -4171,7 +4209,9 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
+                    root: managed_xfs_root.clone(),
+                };
                 config.filesystem_storage.pressure = pressure.clone();
                 config.resource_usage_metering = metering;
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
@@ -4242,7 +4282,9 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
+                    root: managed_xfs_root.clone(),
+                };
                 config.resource_usage_metering = metering;
                 config.filesystem_storage.filesystem_object_limit_policy =
                     FilesystemObjectLimitPolicyConfig::new(262_144, 1, 1024).unwrap();
