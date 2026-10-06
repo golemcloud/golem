@@ -278,13 +278,17 @@ impl AgentFilesystems {
         &self.pressure
     }
 
-    /// Returns the storage of the agent filesystems: its volume and how it accounts for the files
-    /// of each agent.
+    /// Returns the volume shared by provisioned agent filesystems.
     ///
-    /// Callers use the volume for capacity observation and pressure recovery before a generation
-    /// is created. The value does not represent an individual agent target.
-    pub(crate) fn provisioning(&self) -> &SandboxFilesystemProvisioning {
-        &self.provisioning
+    /// Callers use the volume identity for capacity observation and pressure recovery before a
+    /// generation is created. The returned value does not represent an individual agent target.
+    pub(crate) fn volume(&self) -> &FilesystemVolume {
+        self.provisioning.volume()
+    }
+
+    /// How the storage of the agent filesystems accounts for the files of each agent.
+    pub(crate) fn agent_accounting(&self) -> AgentAccounting {
+        self.provisioning.agent_accounting()
     }
 
     /// Resolves an agent's byte allocation into the limits installed on a new generation.
@@ -425,7 +429,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
             storage: FilesystemStorageMode::Directory {
-                root: root.path().to_path_buf(),
+                root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
         };
@@ -669,7 +673,7 @@ mod tests {
         });
         let settings = FilesystemStorageConfig {
             storage: FilesystemStorageMode::Directory {
-                root: root.path().to_path_buf(),
+                root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
         };
@@ -696,7 +700,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
             storage: FilesystemStorageMode::Directory {
-                root: root.path().to_path_buf(),
+                root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
         };
@@ -725,7 +729,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
             storage: FilesystemStorageMode::Directory {
-                root: root.path().to_path_buf(),
+                root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
         };

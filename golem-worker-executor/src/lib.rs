@@ -202,7 +202,7 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
         StoreSource::configured(
             blob_storage,
             VolumeRoom::Pressure {
-                volume: filesystems.provisioning().volume().clone(),
+                volume: filesystems.volume().clone(),
                 pressure: filesystems.pressure_policy().clone(),
             },
         )
@@ -210,7 +210,7 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
         source,
-        filesystems.provisioning().volume().copies_on_write(),
+        filesystems.volume().copies_on_write(),
         shutdown,
     )
     .map_err(|error| anyhow!(error))
@@ -994,10 +994,7 @@ pub async fn create_worker_executor_impl<
 
     services::resource_usage_metering::check_filesystem_metering(
         golem_config.resource_usage_metering,
-        active_agents
-            .agent_filesystems()
-            .provisioning()
-            .agent_accounting(),
+        active_agents.agent_filesystems().agent_accounting(),
     )
     .map_err(|error| anyhow!(error))?;
 
@@ -1524,7 +1521,7 @@ mod tests {
         let key: Box<str> = "00".repeat(64).into_boxed_str();
         let mut golem_config = GolemConfig::default();
         golem_config.filesystem_storage.storage = FilesystemStorageMode::Directory {
-            root: root.path().to_path_buf(),
+            root: root.path().into(),
         };
         golem_config.filesystem_snapshots =
             services::golem_config::FilesystemSnapshotsConfig::Managed(Box::new(
