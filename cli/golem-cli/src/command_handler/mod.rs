@@ -62,6 +62,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{Level, debug};
 
+pub(crate) use app::tool_middleware::ResolvedToolMiddlewareGrants;
+
 mod account;
 mod agent;
 mod api;
