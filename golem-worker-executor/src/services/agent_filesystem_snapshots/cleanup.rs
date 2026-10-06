@@ -18,8 +18,8 @@
 //! counted.
 
 use super::registry::Registry;
-use super::rules::{self, Work};
 use super::store_calls::{Deleted, StoreCalls};
+use super::transitions::{self, Work};
 use crate::filesystem_snapshot::AgentSnapshots;
 use futures::StreamExt as _;
 use std::sync::Arc;
@@ -54,10 +54,10 @@ async fn worker(calls: Arc<StoreCalls>, registry: Arc<Registry>, shutdown: Cance
                 return None;
             }
             let mut changed = registry.subscribe();
-            match registry.apply(rules::take_ready) {
+            match registry.apply(transitions::take_ready) {
                 Some((agent, work)) => {
                     run(calls, registry, &agent, work).await;
-                    registry.apply(|state| rules::cleanup_ended(state, &agent));
+                    registry.apply(|state| transitions::cleanup_ended(state, &agent));
                     Some(((), ()))
                 }
                 None => tokio::select! {

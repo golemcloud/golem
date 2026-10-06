@@ -255,7 +255,7 @@ impl ScriptedStore {
         let unbusy = registry.is_some_and(|registry| {
             agents
                 .iter()
-                .any(|agent| registry.read(|state| rules::busy(state, agent)) == 0)
+                .any(|agent| registry.read(|state| transitions::busy(state, agent)) == 0)
         });
         if unbusy {
             self.unbusy_writes.lock().unwrap().push(operation);
@@ -2806,7 +2806,7 @@ fn delete_all_snapshots_starts_only_after_the_held_save_ended_and_leaves_no_snap
 fn save_running(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) -> bool {
     snapshots.core.as_ref().is_some_and(|core| {
         core.registry
-            .read(|state| rules::save_running(state, agent))
+            .read(|state| transitions::save_running(state, agent))
     })
 }
 
@@ -3530,7 +3530,7 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
 fn waits_after_failure(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) -> bool {
     snapshots.core.as_ref().is_some_and(|core| {
         core.registry
-            .read(|state| rules::job_waits_after_failure(state, agent))
+            .read(|state| transitions::job_waits_after_failure(state, agent))
     })
 }
 
@@ -3841,9 +3841,9 @@ fn a_stop_answers_a_delete_in_its_run_at_once() {
         };
 
         let (deleted, ()) = futures::join!(deleting, stopping);
-        let busy = core.registry.read(|state| rules::busy(state, &agent));
+        let busy = core.registry.read(|state| transitions::busy(state, &agent));
         delete_gate.open();
-        eventually(|| core.registry.read(|state| rules::busy(state, &agent)) == 0).await;
+        eventually(|| core.registry.read(|state| transitions::busy(state, &agent)) == 0).await;
 
         assert!(
             matches!(deleted, store_calls::Deleted::Stopped),
@@ -3914,7 +3914,7 @@ fn retention_stopped(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshot
         .as_ref()
         .and_then(|core| {
             core.registry
-                .read(|state| rules::job_retention_stop(state, agent))
+                .read(|state| transitions::job_retention_stop(state, agent))
         })
         .map(|stop| stop.is_cancelled())
 }
@@ -3959,7 +3959,7 @@ fn a_manual_update_stops_the_deletes_of_the_running_job_before_it_waits_for_the_
 /// The number of store calls that count on `agent` now.
 fn busy_of(snapshots: &AgentFilesystemSnapshots, agent: &AgentSnapshots) -> u32 {
     snapshots.core.as_ref().map_or(0, |core| {
-        core.registry.read(|state| rules::busy(state, agent))
+        core.registry.read(|state| transitions::busy(state, agent))
     })
 }
 
@@ -4119,10 +4119,10 @@ fn a_manual_update_replaces_a_periodic_save_that_waits_out_a_late_write_and_a_de
         // on the agent from here.
         drop(saved);
         eventually(|| {
-            snapshots
-                .core
-                .as_ref()
-                .is_some_and(|core| core.registry.read(|state| rules::is_free(state, &agent)))
+            snapshots.core.as_ref().is_some_and(|core| {
+                core.registry
+                    .read(|state| transitions::is_free(state, &agent))
+            })
         })
         .await;
         snapshots.delete_all_snapshots(&agent, AgentMode::Durable);

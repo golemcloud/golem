@@ -13,11 +13,11 @@
 // limitations under the License.
 
 //! One job: upload, confirm, then a delete of the older snapshots or of the superseded one. Each
-//! step is a straight line that asks a rule of `rules` what to do next, and the store calls go
+//! step is a straight line that asks a rule of `decisions` what to do next, and the store calls go
 //! through `store_calls`.
 
+use super::decisions::{self, FollowUp};
 use super::registry::JobTicket;
-use super::rules::{self, FollowUp};
 use super::store_calls::{Deleted, Stops, Upload, UploadError};
 use super::{
     Admission, CapturedTree, Confirm, Core, JobDecision, SavedUpdate, SnapshotKind, UploadNowError,
@@ -120,7 +120,7 @@ pub(super) async fn run_job(
     let Ok(own) = store_name(&name) else {
         return;
     };
-    match rules::follow_up(kind, outcome) {
+    match decisions::follow_up(kind, outcome) {
         FollowUp::DeleteOlder => {
             let kept = confirmation
                 .selectable()

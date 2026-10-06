@@ -15,10 +15,10 @@
 //! The state of the agents, and the tickets that report to it.
 //!
 //! The registry holds one [`State`] value and changes it only through the transitions of
-//! [`rules`], each with its own answer. Each ticket makes its transition in its constructor, and
+//! [`transitions`], each with its own answer. Each ticket makes its transition in its constructor, and
 //! its `Drop` only reports the end of what it holds.
 
-use super::rules::{self, JobId, Limits, Next, Refusal, State};
+use super::transitions::{self, JobId, Limits, Next, Refusal, State};
 use super::{JobDecision, SnapshotKind};
 use crate::filesystem_snapshot::AgentSnapshots;
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -57,7 +57,7 @@ impl Registry {
         }
     }
 
-    /// Runs `rule`, a transition of [`rules`], on the state: the state moves out of the lock into
+    /// Runs `rule`, a transition of [`transitions`], on the state: the state moves out of the lock into
     /// the rule, and the next state that the rule gives moves back. Then it wakes the waiters when
     /// the transition says so. The rules have no path that panics in a release build, and the
     /// executor builds with `panic = "abort"`, so the lock is never poisoned with the state moved
@@ -69,7 +69,7 @@ impl Registry {
             let wakes = next.wakes();
             let (next, answer) = next.into_parts();
             crate::metrics::filesystem_snapshots::set_cleanups_pending(
-                rules::agents_with_cleanups(&next),
+                transitions::agents_with_cleanups(&next),
             );
             *state = next;
             (answer, wakes)
@@ -109,21 +109,21 @@ impl Registry {
     /// Waits until the job `id` of `agent` is gone, or an admission replaces it. Gives at once when
     /// the registry is gone.
     pub(super) async fn until_job_gone_or_replaceable(&self, agent: &AgentSnapshots, id: JobId) {
-        self.until(|state| rules::update_may_ask_again(state, agent, id).then_some(()))
+        self.until(|state| transitions::update_may_ask_again(state, agent, id).then_some(()))
             .await;
     }
 
     /// Waits until no job runs for `agent`. Gives at once when the registry is gone.
     #[cfg(test)]
     pub(super) async fn until_agent_free(&self, agent: &AgentSnapshots) {
-        self.until(|state| rules::is_free(state, agent).then_some(()))
+        self.until(|state| transitions::is_free(state, agent).then_some(()))
             .await;
     }
 
     /// Waits until no save of `agent` runs. Gives at once when the registry is gone. It only
     /// reads: the flag of a save is taken by the transition that begins the save call.
     pub(super) async fn until_save_may_start(&self, agent: &AgentSnapshots) {
-        self.until(|state| (!rules::save_running(state, agent)).then_some(()))
+        self.until(|state| (!transitions::save_running(state, agent)).then_some(()))
             .await;
     }
 
@@ -131,7 +131,7 @@ impl Registry {
     /// the registry is gone.
     pub(super) async fn until_all_requested(&self, agent: &AgentSnapshots) {
         if self
-            .until(|state| rules::all_requested(state, agent).then_some(()))
+            .until(|state| transitions::all_requested(state, agent).then_some(()))
             .await
             .is_none()
         {
@@ -165,7 +165,7 @@ impl JobTicket {
     ) -> Result<(Self, Option<CancellationToken>), Refusal> {
         let retention_stop = stop.child_token();
         let admitted = registry.apply(|state| {
-            rules::admit(
+            transitions::admit(
                 state,
                 agent,
                 name,
@@ -202,7 +202,7 @@ impl JobTicket {
     /// Whether an admission replaced the job: the job left the state while its ticket lives.
     pub(super) fn replaced(&self) -> bool {
         self.registry
-            .read(|state| rules::has_ended(state, &self.agent, self.id))
+            .read(|state| transitions::has_ended(state, &self.agent, self.id))
     }
 
     /// The stop of the job, as a token that the limiter of its upload holds.
@@ -213,7 +213,7 @@ impl JobTicket {
     /// Records the decision of the job. The first decision stays.
     pub(super) fn decide(&self, decision: JobDecision) {
         self.registry
-            .apply(|state| rules::decide(state, &self.agent, self.id, decision));
+            .apply(|state| transitions::decide(state, &self.agent, self.id, decision));
     }
 
     /// Completes when the job is stopped: by a delete of all snapshots of the agent, by a delete
@@ -247,7 +247,7 @@ impl JobTicket {
 impl Drop for JobTicket {
     fn drop(&mut self) {
         self.registry
-            .apply(|state| rules::end(state, &self.agent, self.id));
+            .apply(|state| transitions::end(state, &self.agent, self.id));
     }
 }
 
@@ -263,20 +263,20 @@ impl JobRuns {
     /// start.
     pub(super) fn granted(&self) -> bool {
         self.registry
-            .apply(|state| rules::run_granted(state, &self.agent, self.id))
+            .apply(|state| transitions::run_granted(state, &self.agent, self.id))
     }
 
     /// The upload waits for its next run after a failed run.
     pub(super) fn failed(&self) {
         self.registry
-            .apply(|state| rules::run_failed(state, &self.agent, self.id));
+            .apply(|state| transitions::run_failed(state, &self.agent, self.id));
     }
 
     /// The store call of the upload waits until its writes that can still land have landed or
     /// can no longer land.
     pub(super) fn waiting_for_late_writes(&self) {
         self.registry
-            .apply(|state| rules::run_waiting_for_late_writes(state, &self.agent, self.id));
+            .apply(|state| transitions::run_waiting_for_late_writes(state, &self.agent, self.id));
     }
 }
 
@@ -295,7 +295,7 @@ impl WaitTicket {
         agent: &AgentSnapshots,
         name: &FilesystemSnapshotName,
     ) -> Result<Self, Option<JobDecision>> {
-        let id = registry.apply(|state| rules::start_wait(state, agent, name))?;
+        let id = registry.apply(|state| transitions::start_wait(state, agent, name))?;
         Ok(Self {
             registry: Arc::clone(registry),
             agent: agent.clone(),
@@ -307,7 +307,7 @@ impl WaitTicket {
     /// gone, gives `Stopped`.
     pub(super) async fn decided(&self) -> JobDecision {
         self.registry
-            .until(|state| rules::decision_of(state, &self.agent, self.id))
+            .until(|state| transitions::decision_of(state, &self.agent, self.id))
             .await
             .unwrap_or(JobDecision::Stopped)
     }
@@ -316,7 +316,7 @@ impl WaitTicket {
 impl Drop for WaitTicket {
     fn drop(&mut self) {
         self.registry
-            .apply(|state| rules::unwatch(state, &self.agent, self.id));
+            .apply(|state| transitions::unwatch(state, &self.agent, self.id));
     }
 }
 
@@ -358,8 +358,9 @@ mod tests {
         let id = wait.id;
         job.decide(JobDecision::Confirmed(ConfirmOutcome::Confirmed));
         drop(job);
-        let decision =
-            |registry: &Registry| registry.read(|state| rules::decision_of(state, &agent, id));
+        let decision = |registry: &Registry| {
+            registry.read(|state| transitions::decision_of(state, &agent, id))
+        };
 
         let while_waiting = decision(&registry);
         drop(wait);

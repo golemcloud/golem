@@ -27,7 +27,7 @@
 
 use super::CapturedTree;
 use super::registry::{JobRuns, JobTicket, Registry};
-use super::rules::{self, CallKind};
+use super::transitions::{self, CallKind};
 use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
     RestoreFailure, RunSlots, SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
@@ -498,7 +498,7 @@ impl StoreCalls {
         let seen = UploadSeen {
             save_running: self
                 .registry
-                .read(|state| rules::save_running(state, agent)),
+                .read(|state| transitions::save_running(state, agent)),
             stopped: job.stop_requested() || stops.stopped(),
             deadline_passed: deadline.is_some_and(|deadline| Instant::now() >= deadline),
             last: run.last.take(),
@@ -554,7 +554,7 @@ impl StoreCalls {
     fn save_call(
         &self,
         agent: &AgentSnapshots,
-        job: rules::JobId,
+        job: transitions::JobId,
         slots: ServiceSlots,
         name: &SnapshotName,
         directory: Arc<Path>,
@@ -740,7 +740,7 @@ impl StoreCalls {
     ) -> Option<JoinHandle<CallResult<T>>> {
         if !self
             .registry
-            .apply(|state| rules::begin_call(state, agent, &kind))
+            .apply(|state| transitions::begin_call(state, agent, &kind))
         {
             return None;
         }
@@ -755,7 +755,7 @@ impl StoreCalls {
                 () = shutdown.cancelled() => CallResult::ShutDown,
                 result = op() => CallResult::Done(result),
             };
-            registry.apply(|state| rules::store_call_ended(state, &agent, &kind));
+            registry.apply(|state| transitions::store_call_ended(state, &agent, &kind));
             result
         }))
     }
@@ -822,7 +822,7 @@ impl StoreCalls {
     /// counted.
     pub(super) async fn shut_down(&self) {
         self.shutdown.cancel();
-        let lost = self.registry.read(rules::cleanups_lost_at_shutdown);
+        let lost = self.registry.read(transitions::cleanups_lost_at_shutdown);
         std::iter::repeat_n("shutdown", lost)
             .for_each(crate::metrics::filesystem_snapshots::record_leaked_cleanup);
         self.store.shut_down().await;
@@ -1194,7 +1194,11 @@ mod tests {
         assert!(job.runs().granted());
         // The save call of the job holds the save mark while it waits after its failed run.
         assert!(registry.apply(|state| {
-            rules::begin_call(state, &agent, &rules::CallKind::Save { job: job.id() })
+            transitions::begin_call(
+                state,
+                &agent,
+                &transitions::CallKind::Save { job: job.id() },
+            )
         }));
         job.runs().failed();
         (agent, job)

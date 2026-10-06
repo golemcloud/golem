@@ -16,7 +16,8 @@
 //! the attempt, the check of the baseline, and the publication of the target, which decides what
 //! happens to the snapshots of the stage.
 
-use super::rules::{self, Flight, ForkEnd, ForkFound, ForkOutcome};
+use super::decisions::{self, ForkFound, ForkOutcome};
+use super::transitions::{self, Flight, ForkEnd};
 use super::{Core, store_name};
 use crate::filesystem_snapshot::{AgentSnapshots, CallError, ReadError};
 use crate::services::oplog::StagePublication;
@@ -77,7 +78,7 @@ struct ForkTicket {
 impl Drop for ForkTicket {
     fn drop(&mut self) {
         let end = self.core.registry.apply(|state| {
-            rules::fork_ended(
+            transitions::fork_ended(
                 state,
                 &self.from,
                 &self.flight,
@@ -199,7 +200,7 @@ impl Copied {
             ticket
                 .core
                 .registry
-                .apply(|state| rules::fork_publishing(state, &ticket.flight));
+                .apply(|state| transitions::fork_publishing(state, &ticket.flight));
         }
         let publication = StagePublication::new(self.stage_id, PublicationKey(()));
         let (found, answer) = match publish(publication).await {
@@ -223,7 +224,10 @@ impl Copied {
     /// Records what the attempt found, which its end applies.
     fn found(&mut self, found: ForkFound) {
         if let Some(ticket) = self.ticket.as_mut() {
-            ticket.outcome = Some(rules::fork_outcome(found, AgentFingerprint(self.stage_id)));
+            ticket.outcome = Some(decisions::fork_outcome(
+                found,
+                AgentFingerprint(self.stage_id),
+            ));
         }
     }
 }
@@ -246,7 +250,7 @@ pub(super) async fn begin(
             }
             if core
                 .registry
-                .apply(|state| rules::fork_began(state, from, &flight))
+                .apply(|state| transitions::fork_began(state, from, &flight))
             {
                 return Some((Some(Ok(waited)), None));
             }

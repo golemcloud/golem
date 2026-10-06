@@ -19,20 +19,22 @@
 //! store. It does not know the oplog entry types or the worker: a [`Confirm`] closure writes the
 //! confirmation record.
 //!
-//! The rules are pure functions in `rules`. The registry keeps the state of the agents and changes
-//! it only through them, and the jobs are straight-line mechanisms that call a rule at each
-//! decision. Each call to the store goes through `store_calls`, which is the only owner of the
+//! The rules are pure functions: the state of the agents and its transitions are in
+//! `transitions`, and the decisions that do not read or change that state are in `decisions`. The
+//! registry keeps the state of the agents and changes it only through the transitions, and the
+//! jobs are straight-line mechanisms that call a rule at each decision. Each call to the store goes through `store_calls`, which is the only owner of the
 //! store.
 
 mod cleanup;
+mod decisions;
 mod fork;
 mod job;
 mod registry;
 mod retention;
-mod rules;
 mod store_calls;
 #[cfg(test)]
 mod tests;
+mod transitions;
 
 #[cfg(any(test, feature = "test-utils"))]
 use crate::filesystem_snapshot::FilesystemSnapshotStore;
@@ -370,7 +372,7 @@ impl VolumeRoom {
                         tracing::warn!(error = %error, "Failed to observe the free space of the volume")
                     })
                     .ok();
-                rules::has_room(space.as_ref(), pressure)
+                decisions::has_room(space.as_ref(), pressure)
             }
             #[cfg(any(test, feature = "test-utils"))]
             Self::Unlimited => true,
@@ -478,7 +480,7 @@ struct Core {
 }
 
 impl AgentFilesystemSnapshots {
-    /// Makes the service that the configuration asks for, as [`rules::binding`] says, with the
+    /// Makes the service that the configuration asks for, as [`decisions::binding`] says, with the
     /// store of `source`. `managed_storage` tells whether the sandbox provisioning uses managed
     /// XFS storage. When `shutdown` ends, the service stops its jobs and shuts the store down.
     /// This is the only constructor of the service.
@@ -490,9 +492,9 @@ impl AgentFilesystemSnapshots {
     ) -> Result<Arc<Self>, String> {
         let snapshots = Arc::new(match source.0 {
             Source::Configured(blob_storage, room) => {
-                match rules::binding(config, managed_storage)? {
-                    rules::Binding::Disabled => Self::disabled(),
-                    rules::Binding::Managed(config) => Self::enabled(
+                match decisions::binding(config, managed_storage)? {
+                    decisions::Binding::Disabled => Self::disabled(),
+                    decisions::Binding::Managed(config) => Self::enabled(
                         StoreOf::Managed(blob_storage, config),
                         config.uploads().clone(),
                         room,
@@ -534,7 +536,7 @@ impl AgentFilesystemSnapshots {
         shutdown: CancellationToken,
     ) -> Self {
         let jobs = TaskTracker::new();
-        let registry = Arc::new(Registry::new(rules::Limits::new(
+        let registry = Arc::new(Registry::new(transitions::Limits::new(
             settings.max_pending_deletes_per_agent(),
         )));
         let calls = Arc::new(StoreCalls::bind(
@@ -644,7 +646,7 @@ impl AgentFilesystemSnapshots {
         let asks = futures::stream::unfold(Some(None), |stopped| {
             let interrupt = interrupt.clone();
             async move {
-                let stopped: Option<rules::JobId> = stopped?;
+                let stopped: Option<transitions::JobId> = stopped?;
                 let refusal = match Core::admit(core, agent, SnapshotKind::Update, Some(deadline))
                     .await
                 {
@@ -652,10 +654,10 @@ impl AgentFilesystemSnapshots {
                     Err(refusal) => refusal,
                 };
                 let skip = refusal.skip;
-                let rules::UpdateAdmit::WaitForEndOrReplacement {
+                let decisions::UpdateAdmit::WaitForEndOrReplacement {
                     running,
                     stop_deletes,
-                } = rules::update_admission(
+                } = decisions::update_admission(
                     refusal,
                     tokio::time::Instant::now() >= deadline,
                     core.shutdown.is_cancelled(),
@@ -689,7 +691,7 @@ impl AgentFilesystemSnapshots {
 
     /// The core of an enabled service, for an agent in `mode` that keeps files.
     fn enabled_for(&self, mode: AgentMode) -> Option<&Arc<Core>> {
-        self.core.as_ref().filter(|_| rules::keeps_files(mode))
+        self.core.as_ref().filter(|_| decisions::keeps_files(mode))
     }
 
     /// Tells whether the store holds the whole snapshot `name` of `agent`, before a start
@@ -723,17 +725,17 @@ impl AgentFilesystemSnapshots {
             }
             Err(decision) => (None, decision),
         };
-        let limit = match rules::store_check(
+        let limit = match decisions::store_check(
             decision,
             *interrupt.borrow(),
             waited,
-            rules::StoreCheckLimits {
+            decisions::StoreCheckLimits {
                 confirmation_wait: limit,
                 store_check_limit: core.settings.store_check_limit(),
             },
         ) {
-            rules::StoreCheck::Skip => return StartCheck::NotStored,
-            rules::StoreCheck::Stat(limit) => limit,
+            decisions::StoreCheck::Skip => return StartCheck::NotStored,
+            decisions::StoreCheck::Stat(limit) => limit,
         };
         let Ok(store_name) = store_name(name) else {
             return StartCheck::NotStored;
@@ -797,7 +799,7 @@ impl AgentFilesystemSnapshots {
         if let Some(core) = self.enabled_for(mode) {
             let requested = core
                 .registry
-                .apply(|state| rules::request_all(state, agent));
+                .apply(|state| transitions::request_all(state, agent));
             Self::requested(agent, requested);
         }
     }
@@ -812,7 +814,7 @@ impl AgentFilesystemSnapshots {
         if let Some(core) = &core
             && let Some(retention_stop) = core
                 .registry
-                .apply(|state| rules::revert_began(state, agent))
+                .apply(|state| transitions::revert_began(state, agent))
         {
             retention_stop.cancel();
         }
@@ -823,7 +825,7 @@ impl AgentFilesystemSnapshots {
     }
 
     /// Stops the job that a request stops, and counts a request that the bound dropped.
-    fn requested(agent: &AgentSnapshots, requested: rules::Requested) {
+    fn requested(agent: &AgentSnapshots, requested: transitions::Requested) {
         if let Some(stop) = requested.stop {
             stop.cancel();
         }
@@ -885,7 +887,7 @@ impl Core {
             .collect::<Box<[_]>>();
         let requested = self
             .registry
-            .apply(|state| rules::request_names(state, agent, &names));
+            .apply(|state| transitions::request_names(state, agent, &names));
         AgentFilesystemSnapshots::requested(agent, requested);
     }
 
@@ -897,7 +899,7 @@ impl Core {
         agent: &AgentSnapshots,
         kind: SnapshotKind,
         deadline: Option<tokio::time::Instant>,
-    ) -> Result<Admission, rules::Refusal> {
+    ) -> Result<Admission, transitions::Refusal> {
         let room = core.room.has_room().await;
         let name = match kind {
             SnapshotKind::Periodic => FilesystemSnapshotName::periodic(),
@@ -989,7 +991,7 @@ impl Drop for RevertHold {
     fn drop(&mut self) {
         if let Some(core) = &self.core {
             core.registry
-                .apply(|state| rules::revert_ended(state, &self.agent));
+                .apply(|state| transitions::revert_ended(state, &self.agent));
         }
     }
 }
