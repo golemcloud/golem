@@ -160,9 +160,10 @@ enum Open {
     /// `${`
     Parameter,
     DoubleQuote,
+    /// A backquote with no closing backquote after it. `unsure` is as it was before it: bash
+    /// does not parse what a backquote holds until it runs, so nothing in there is an error yet.
     Backquote {
-        outer_command: bool,
-        outer_expect: Expect,
+        unsure: bool,
     },
     If,
     /// `while`, `until`, `for` or `select`, closed by `done`.
@@ -175,6 +176,10 @@ enum Open {
     Group,
     /// `[[ ... ]]`
     Condition,
+    /// The subscript of `name[...]` where bash reads one, with the number of `[` still open.
+    Subscript {
+        depth: u32,
+    },
 }
 
 /// What the grammar requires of the next word.
@@ -193,6 +198,8 @@ enum Expect {
     },
     /// The target of a redirection.
     Target,
+    /// Nothing, but an assignment, a redirection or `time` has come before the command name.
+    Prefixed,
 }
 
 fn is_meta(byte: u8) -> bool {
@@ -209,11 +216,34 @@ fn is_assignment(text: &str) -> bool {
         (Some(bracket), true) => &name[..bracket],
         _ => name,
     };
-    let mut bytes = name.bytes();
+    is_name(name)
+}
+
+/// A variable name.
+fn is_name(text: &str) -> bool {
+    let mut bytes = text.bytes();
     bytes
         .next()
         .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+/// `name[` and what follows, when the `]` that matches that `[` is still to come: `a[`,
+/// `a[b[c]`.
+fn opens_subscript(text: &str) -> bool {
+    let Some(bracket) = text.find('[') else {
+        return false;
+    };
+    let mut depth = 0;
+    for byte in text[bracket..].bytes() {
+        match byte {
+            b'[' => depth += 1,
+            b']' if depth == 1 => return false,
+            b']' => depth -= 1,
+            _ => {}
+        }
+    }
+    is_name(&text[..bracket])
 }
 
 struct Scanner<'a> {
@@ -222,6 +252,8 @@ struct Scanner<'a> {
     i: usize,
     tokens: Vec<Token>,
     open: Vec<Open>,
+    /// How many of the open constructs are double quotes.
+    double_quotes: usize,
     /// Here-documents whose bodies start after the next newline: terminator, and `<<-`.
     heredocs: Vec<(Vec<u8>, bool)>,
     /// The next word is in command position.
@@ -248,6 +280,7 @@ impl<'a> Scanner<'a> {
             i: 0,
             tokens: Vec::new(),
             open: Vec::new(),
+            double_quotes: 0,
             heredocs: Vec::new(),
             command: true,
             expect: Expect::Nothing,
@@ -267,6 +300,7 @@ impl<'a> Scanner<'a> {
                 Some(Open::DoubleQuote) => self.double_quote(),
                 Some(Open::Parameter) => self.parameter(),
                 Some(Open::Arithmetic { .. }) => self.arithmetic(),
+                Some(Open::Subscript { .. }) => self.subscript(),
                 _ => self.command_mode(),
             }
             // Every pass consumes input or opens or closes a construct. Should one ever do
@@ -286,6 +320,15 @@ impl<'a> Scanner<'a> {
             || !self.heredocs.is_empty()
             || self.trailing_backslash
             || self.awaits_command;
+        // Only what came before an unclosed backquote can be an error for bash to report now.
+        let unsure = self
+            .open
+            .iter()
+            .find_map(|open| match open {
+                Open::Backquote { unsure } => Some(*unsure),
+                _ => None,
+            })
+            .unwrap_or(self.unsure);
         let in_comment = self
             .tokens
             .last()
@@ -294,16 +337,21 @@ impl<'a> Scanner<'a> {
             && !in_comment
             && !matches!(
                 self.open.last(),
-                Some(Open::DoubleQuote | Open::Parameter | Open::Arithmetic { .. })
+                Some(
+                    Open::DoubleQuote
+                        | Open::Parameter
+                        | Open::Arithmetic { .. }
+                        | Open::Subscript { .. }
+                )
             );
         let command_next = plain_end
             && !self.continues_word
-            && self.expect == Expect::Nothing
+            && matches!(self.expect, Expect::Nothing | Expect::Prefixed)
             && self.command
             && !self.reads_plain_words();
         Scan {
             tokens: self.tokens,
-            complete: self.unsure || !unfinished,
+            complete: unsure || !unfinished,
             command_next,
             plain_end,
             word_fragment: self.word_fragment,
@@ -370,20 +418,6 @@ impl<'a> Scanner<'a> {
                 Some(b'\n') => self.i += 2,
                 Some(_) => self.word(),
             },
-            b'`' if matches!(self.open.last(), Some(Open::Backquote { .. })) => {
-                let Some(Open::Backquote {
-                    outer_command,
-                    outer_expect,
-                }) = self.open.pop()
-                else {
-                    unreachable!("the top was just matched")
-                };
-                self.token(TokenKind::Expansion, self.i, self.i + 1);
-                self.i += 1;
-                self.command = outer_command;
-                self.expect = outer_expect;
-                self.continues_word = true;
-            }
             byte if is_meta(byte) => self.operator(),
             _ => self.word(),
         }
@@ -520,7 +554,11 @@ impl<'a> Scanner<'a> {
         let rest = &self.src[self.i..];
         if rest.starts_with(b"<(") || rest.starts_with(b">(") {
             self.i += 2;
-            let outer_expect = std::mem::replace(&mut self.expect, Expect::Nothing);
+            let outer_expect = match std::mem::replace(&mut self.expect, Expect::Nothing) {
+                // Before the command name this counts as a redirection.
+                Expect::Nothing if self.command => Expect::Prefixed,
+                expect => expect,
+            };
             self.open.push(Open::Paren {
                 substitution: true,
                 outer_command: self.command,
@@ -590,6 +628,9 @@ impl<'a> Scanner<'a> {
             return;
         }
         self.token(TokenKind::Word { command: false }, start, self.i);
+        if self.command && self.expect == Expect::Nothing {
+            self.expect = Expect::Prefixed;
+        }
         if !self.unterminated {
             self.heredocs.push((terminator, strip_tabs));
         }
@@ -626,6 +667,27 @@ impl<'a> Scanner<'a> {
         let whole =
             !text.is_empty() && next.is_none_or(|byte| byte.is_ascii_whitespace() || is_meta(byte));
         self.awaits_command = false;
+        // At the start of a command bash reads `name[` up to the matching `]` as part of the
+        // word, blanks and operators included. After an assignment, a redirection or `time`,
+        // and in parentheses, which may hold an array's words rather than commands, whether it
+        // does depends on more than is kept here, so there `[` stays an ordinary character.
+        let subscript = self.command
+            && self.expect == Expect::Nothing
+            && !self.reads_plain_words()
+            && !matches!(
+                self.open.last(),
+                Some(Open::Paren {
+                    substitution: false,
+                    ..
+                })
+            )
+            && opens_subscript(text);
+        if subscript {
+            // Scanned from the name on, as one word with what its brackets hold.
+            self.classify(None, text);
+            self.open.push(Open::Subscript { depth: 0 });
+            return;
+        }
         let kind = self.classify(whole.then_some(text), text);
         self.segments(start, kind);
     }
@@ -635,9 +697,13 @@ impl<'a> Scanner<'a> {
     fn classify(&mut self, whole: Option<&str>, leading: &str) -> TokenKind {
         let plain = TokenKind::Word { command: false };
         match self.expect {
-            Expect::Nothing => {}
+            Expect::Nothing | Expect::Prefixed => {}
             Expect::Target => {
-                self.expect = Expect::Nothing;
+                self.expect = if self.command {
+                    Expect::Prefixed
+                } else {
+                    Expect::Nothing
+                };
                 return plain;
             }
             Expect::FunctionName => {
@@ -691,6 +757,7 @@ impl<'a> Scanner<'a> {
         }
         if is_assignment(leading) {
             // An assignment before a command leaves the command position open.
+            self.expect = Expect::Prefixed;
             return plain;
         }
         self.command = false;
@@ -706,7 +773,12 @@ impl<'a> Scanner<'a> {
                 self.open.push(Open::If);
                 self.command = true;
             }
-            "then" | "else" | "elif" | "do" | "!" | "time" => self.command = true,
+            "then" | "else" | "elif" | "do" | "!" => self.command = true,
+            "time" => {
+                self.command = true;
+                // After `|` bash takes `time` for the command name, not for a reserved word.
+                self.expect = Expect::Prefixed;
+            }
             "fi" => {
                 self.close(|open| *open == Open::If);
                 self.command = false;
@@ -787,22 +859,14 @@ impl<'a> Scanner<'a> {
                     self.token(TokenKind::Quoted, self.i, self.i + 1);
                     self.i += 1;
                     self.open.push(Open::DoubleQuote);
+                    self.double_quotes += 1;
                     return;
                 }
                 b'`' => {
                     self.token(kind, run, self.i);
-                    if matches!(self.open.last(), Some(Open::Backquote { .. })) {
-                        // The closing backquote ends the word; the caller's loop closes it.
-                        return;
-                    }
                     self.token(TokenKind::Expansion, self.i, self.i + 1);
                     self.i += 1;
-                    let outer_expect = std::mem::replace(&mut self.expect, Expect::Nothing);
-                    self.open.push(Open::Backquote {
-                        outer_command: self.command,
-                        outer_expect,
-                    });
-                    self.command = true;
+                    self.backquote();
                     return;
                 }
                 b'$' => {
@@ -895,6 +959,35 @@ impl<'a> Scanner<'a> {
         Dollar::Opened
     }
 
+    /// Reads a backquote substitution; `self.i` is just past its opening backquote.
+    fn backquote(&mut self) {
+        // Bash does not parse the text of the substitution until it runs it: the next backquote
+        // with no backslash before it closes the substitution, whatever was opened in between.
+        let mut close = self.i;
+        while self.src.get(close).is_some_and(|&byte| byte != b'`') {
+            close += if self.src[close] == b'\\' { 2 } else { 1 };
+        }
+        if close >= self.src.len() {
+            // No closing backquote yet: the rest of the input is that text.
+            self.open.push(Open::Backquote {
+                unsure: self.unsure,
+            });
+            self.expect = Expect::Nothing;
+            self.command = true;
+            return;
+        }
+        // Nothing the text leaves open reaches past the closing backquote, so it is scanned on
+        // its own, as input that ends there, and only its tokens are kept.
+        let mut inside = Scanner::new(&self.text[..close]);
+        inside.i = self.i;
+        inside.tokens = std::mem::take(&mut self.tokens);
+        inside.run();
+        self.tokens = inside.tokens;
+        self.token(TokenKind::Expansion, close, close + 1);
+        self.i = close + 1;
+        self.continues_word = true;
+    }
+
     fn double_quote(&mut self) {
         let mut run = self.i;
         while let Some(&byte) = self.src.get(self.i) {
@@ -903,6 +996,7 @@ impl<'a> Scanner<'a> {
                     self.i += 1;
                     self.token(TokenKind::Quoted, run, self.i);
                     self.open.pop();
+                    self.double_quotes -= 1;
                     self.continues_word = true;
                     return;
                 }
@@ -920,12 +1014,7 @@ impl<'a> Scanner<'a> {
                     self.token(TokenKind::Quoted, run, self.i);
                     self.token(TokenKind::Expansion, self.i, self.i + 1);
                     self.i += 1;
-                    let outer_expect = std::mem::replace(&mut self.expect, Expect::Nothing);
-                    self.open.push(Open::Backquote {
-                        outer_command: self.command,
-                        outer_expect,
-                    });
-                    self.command = true;
+                    self.backquote();
                     return;
                 }
                 _ => self.i += 1,
@@ -936,7 +1025,7 @@ impl<'a> Scanner<'a> {
 
     fn parameter(&mut self) {
         let start = self.i;
-        let quoted = self.open.contains(&Open::DoubleQuote);
+        let quoted = self.double_quotes > 0;
         while let Some(&byte) = self.src.get(self.i) {
             match byte {
                 b'}' => {
@@ -959,17 +1048,13 @@ impl<'a> Scanner<'a> {
                     self.token(TokenKind::Quoted, self.i, self.i + 1);
                     self.i += 1;
                     self.open.push(Open::DoubleQuote);
+                    self.double_quotes += 1;
                     return;
                 }
                 b'`' => {
                     self.token(TokenKind::Expansion, start, self.i + 1);
                     self.i += 1;
-                    let outer_expect = std::mem::replace(&mut self.expect, Expect::Nothing);
-                    self.open.push(Open::Backquote {
-                        outer_command: self.command,
-                        outer_expect,
-                    });
-                    self.command = true;
+                    self.backquote();
                     return;
                 }
                 b'$' if matches!(self.src.get(self.i + 1), Some(b'(' | b'{')) => {
@@ -1032,6 +1117,83 @@ impl<'a> Scanner<'a> {
             }
         }
         self.token(TokenKind::Expansion, start, self.i);
+    }
+
+    /// A name and its subscript, up to the `]` that matches the first `[`. Bash reads it all
+    /// as part of one word: blanks, operators and reserved words mean nothing in it.
+    fn subscript(&mut self) {
+        let word = TokenKind::Word { command: false };
+        let mut run = self.i;
+        while let Some(&byte) = self.src.get(self.i) {
+            match byte {
+                b'[' | b']' => {
+                    self.i += 1;
+                    let Some(Open::Subscript { depth }) = self.open.last_mut() else {
+                        unreachable!("a subscript is scanned only while it is the top")
+                    };
+                    *depth = if byte == b'[' { *depth + 1 } else { *depth - 1 };
+                    if *depth == 0 {
+                        self.open.pop();
+                        self.token(word, run, self.i);
+                        self.continues_word = true;
+                        // Like a word with a quote in it, this one is not offered for completion.
+                        self.word_fragment = true;
+                        return;
+                    }
+                }
+                // A process substitution is read to its own end. Bash takes the `(` after an
+                // odd run of `<` and `>` as the start of one.
+                b'<' | b'>' => {
+                    let mut end = self.i;
+                    while matches!(self.src.get(end), Some(b'<' | b'>')) {
+                        end += 1;
+                    }
+                    if (end - self.i) % 2 == 1 && self.src.get(end) == Some(&b'(') {
+                        self.token(word, run, end - 1);
+                        self.i = end - 1;
+                        return self.redirect(end - 1);
+                    }
+                    self.i = end;
+                }
+                b'\\' => self.i = (self.i + 2).min(self.src.len()),
+                b'\'' => {
+                    self.token(word, run, self.i);
+                    let quote = self.i;
+                    self.i = match self.src[quote + 1..].iter().position(|&b| b == b'\'') {
+                        Some(length) => quote + length + 2,
+                        None => self.src.len(),
+                    };
+                    self.token(TokenKind::Quoted, quote, self.i);
+                    run = self.i;
+                }
+                b'"' => {
+                    self.token(word, run, self.i);
+                    self.token(TokenKind::Quoted, self.i, self.i + 1);
+                    self.i += 1;
+                    self.open.push(Open::DoubleQuote);
+                    self.double_quotes += 1;
+                    return;
+                }
+                b'`' => {
+                    self.token(word, run, self.i);
+                    self.token(TokenKind::Expansion, self.i, self.i + 1);
+                    self.i += 1;
+                    self.backquote();
+                    return;
+                }
+                b'$' => {
+                    self.token(word, run, self.i);
+                    run = self.i;
+                    match self.dollar(false) {
+                        Dollar::Opened => return,
+                        Dollar::Consumed => run = self.i,
+                        Dollar::Literal => {}
+                    }
+                }
+                _ => self.i += 1,
+            }
+        }
+        self.token(word, run, self.i);
     }
 }
 
@@ -1333,6 +1495,181 @@ mod tests {
             assert!(is_complete(input), "{input:?} should be finished");
         }
         assert!(kinds("case $(uname) in a) ;; esac").contains(&(TokenKind::Reserved, "in")));
+    }
+
+    #[test]
+    fn a_closed_backquote_is_finished_whatever_it_holds() {
+        // Bash does not parse the text between backquotes until it runs it.
+        for input in [
+            "`(`",
+            "`|`",
+            "`#`",
+            "`$(`",
+            "`${`",
+            "`$((`",
+            "`((`",
+            "`<<`",
+            "`'`",
+            "`\"`",
+            "`if `",
+            "`a |`",
+            "`a[`",
+            "echo `{` b",
+            "echo \"`\"`\"",
+            "echo \"`(`\"",
+            "echo ${x:-`(`}",
+            "echo `a \\` b`",
+            "if true; then echo `(`; fi",
+        ] {
+            assert!(is_complete(input), "{input:?} should be finished");
+        }
+        // What follows the closing backquote is the rest of the line, not part of what the
+        // text inside left open.
+        use TokenKind::{Expansion, Operator, Word};
+        assert_eq!(
+            kinds("echo `(` b"),
+            vec![
+                (Word { command: true }, "echo"),
+                (Expansion, "`"),
+                (Operator, "("),
+                (Expansion, "`"),
+                (Word { command: false }, "b"),
+            ]
+        );
+        for input in ["`(`|", "echo `(` &&", "`'`'", "if `(`; then"] {
+            assert!(!is_complete(input), "{input:?} should continue");
+        }
+    }
+
+    #[test]
+    fn an_unclosed_backquote_continues_whatever_it_holds() {
+        for input in [
+            "`",
+            "`(",
+            "`)",
+            "`fi",
+            "echo `date",
+            "`a\\`",
+            "`(``)",
+            "`(`a`)",
+            "echo \"`date",
+        ] {
+            assert!(!is_complete(input), "{input:?} should continue");
+        }
+        // An error before the backquote is one bash reports at once.
+        assert!(is_complete(") `"));
+    }
+
+    #[test]
+    fn an_array_subscript_is_one_word_up_to_its_closing_bracket() {
+        // At the start of a command bash reads `name[` up to the matching `]` without looking
+        // for operators, blanks or reserved words in between.
+        for input in [
+            "a[(]",
+            "a[[(]]",
+            "if[[<<]]",
+            "a[ ( ]=1 b",
+            "a[ ; ]",
+            "a[\n]",
+            "a[#]",
+            "a; b[(]",
+            "if a[(]; then b; fi",
+            "a[$(echo ])]",
+            "a[<(])]",
+            "a[\"]\"]",
+            "a[']']",
+            "a[`]`]",
+            "a[\\]]",
+        ] {
+            assert!(is_complete(input), "{input:?} should be finished");
+        }
+        for input in [
+            "a[",
+            "a[[",
+            "a[(",
+            "a[[(]",
+            "a['",
+            "a[\"]",
+            "a[$(]",
+            "a[<(]",
+            "{ a[; }",
+            "if a[; then b; fi",
+        ] {
+            assert!(!is_complete(input), "{input:?} should continue");
+        }
+        // Anywhere else, and after anything but a name, `[` is an ordinary character.
+        for input in [
+            "echo a[",
+            "ls a[b",
+            "echo x=1 a[",
+            "./a[",
+            "1a[",
+            "a.b[",
+            "a[1][",
+            "\"a\"[",
+            "case x in a[) ;; esac",
+            "for x in a[; do b; done",
+            "a[x][y]=1 b[",
+        ] {
+            assert!(is_complete(input), "{input:?} should be finished");
+        }
+        // So it is for the lexer once an assignment, a redirection or `time` has come before
+        // the command name, where bash reads a subscript in some cases and not in others.
+        for input in [
+            "x=1 >f a[",
+            "x=1 >f y=2 a[",
+            "x=1 >$(f) a[",
+            "x=1 <<E a[\nE",
+            "x=1 then a[",
+            "<(x) a[",
+            "a | time b[",
+        ] {
+            assert!(is_complete(input), "{input:?} should be finished");
+        }
+        // And in parentheses, which may hold the words of an array rather than commands.
+        for input in ["arr=(a[ b)", "arr=(\n  c\n  a[ b\n)"] {
+            assert!(is_complete(input), "{input:?} should be finished");
+        }
+        // The next command starts afresh, and the word after a redirection is still where the
+        // command name goes.
+        assert!(!is_complete("x=1 >f; a["));
+        assert!(!is_complete("x=1 >f\na["));
+        assert_eq!(word(">f "), Some((3, String::new(), Position::Command)));
+        assert_eq!(word("x=1 "), Some((4, String::new(), Position::Command)));
+        // In a subscript bash takes the `(` after an odd run of `<` and `>` as the start of a
+        // process substitution, which it reads to its own end.
+        for input in ["a[<<(]", "a[><(]", "a[<([)]", "a[<<<(])]"] {
+            assert!(is_complete(input), "{input:?} should be finished");
+        }
+        for input in ["a[<<<(]", "a[\\<<(]"] {
+            assert!(!is_complete(input), "{input:?} should continue");
+        }
+        // No completion inside a subscript, or for the word that has one.
+        assert_eq!(word("a[ b"), None);
+        assert_eq!(word("a[ b ]"), None);
+        assert_eq!(word("a[ $(c) b ]"), None);
+        assert_eq!(word("a[ b ]=c"), None);
+    }
+
+    #[test]
+    fn a_single_quote_in_a_parameter_expansion_is_plain_only_inside_double_quotes() {
+        assert!(is_complete("echo \"${x:-'}\""));
+        assert!(!is_complete("echo ${x:-'}"));
+        assert!(is_complete("echo ${x:-'}'}"));
+        // The double quotes that ended before the expansion no longer count.
+        assert!(!is_complete("echo \"a\" ${x:-'}"));
+        assert!(is_complete("echo \"a\" ${x:-'}'}"));
+    }
+
+    #[test]
+    fn deeply_nested_parameter_expansions_scan_in_linear_time() {
+        // The prompt scans the line again on every key press, so a long pasted line must not
+        // cost the square of its nesting depth. Linear time is a few milliseconds here.
+        let input = "${".repeat(50_000);
+        let started = std::time::Instant::now();
+        assert!(!is_complete(&input));
+        let elapsed = started.elapsed();
+        assert!(elapsed.as_millis() < 1_000, "took {elapsed:?}");
     }
 
     fn word(input: &str) -> Option<(usize, String, Position)> {
