@@ -110,15 +110,35 @@ pub struct TestFilesystemSnapshotStore {
     faults: Arc<Faults>,
 }
 
-impl Default for TestFilesystemSnapshotStore {
-    fn default() -> Self {
-        Self::new()
+/// The failure of a test whose store got a write into an agent after a delete of all its
+/// snapshots.
+const WRITE_AFTER_DELETE_ALL: &str =
+    "no write goes into an agent after a delete of all its snapshots";
+
+/// Runs the test `test` with a new store, and then checks that no write went into an agent after a
+/// delete of all its snapshots, also a write of a background job. It is the only way that a test
+/// gets a store, so no test skips the check. It gives the error of the test when the test failed,
+/// with the writes that the check found, and otherwise the failure of the check.
+pub async fn with_snapshot_store<T, F, Fut>(test: F) -> anyhow::Result<T>
+where
+    F: FnOnce(TestFilesystemSnapshotStore) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let store = TestFilesystemSnapshotStore::new();
+    let tested = test(store.clone()).await;
+    let misused = store.writes_after_delete_all();
+    match (tested, misused.is_empty()) {
+        (Ok(value), true) => Ok(value),
+        (Ok(_), false) => Err(anyhow::anyhow!("{WRITE_AFTER_DELETE_ALL}: {misused:?}")),
+        (Err(error), true) => Err(error),
+        (Err(error), false) => Err(error.context(format!("{WRITE_AFTER_DELETE_ALL}: {misused:?}"))),
     }
 }
 
 impl TestFilesystemSnapshotStore {
-    /// Makes a store that holds no snapshot.
-    pub fn new() -> Self {
+    /// Makes a store that holds no snapshot. A test gets one only through
+    /// [`with_snapshot_store`].
+    fn new() -> Self {
         Self {
             inner: InMemorySnapshotStore::new(),
             faults: Arc::default(),

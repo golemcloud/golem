@@ -1994,13 +1994,13 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         stream_session_expiry_policy,
     };
     use golem_common::schema::{schema_value_to_proto_with_streams, stream::SchemaValueStream};
-    use golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore;
+    use golem_worker_executor::filesystem_snapshot_testing::with_snapshot_store;
     use golem_worker_executor::services::golem_config::{
         FilesystemSnapshotUploadConfig, SnapshotPolicy,
     };
     use uuid::Uuid;
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
+    with_snapshot_store(|store| async move {
     let executor = start_with_local_resume_and(
         deps,
         &context,
@@ -2136,4 +2136,6 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
         (0, true, true, 1)
     );
     Ok(())
+    })
+    .await
 }
