@@ -859,3 +859,13 @@ run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
   filesystem_snapshots::reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  services::agent_filesystem_snapshots::tests::reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+
+run_unprivileged_test \
+  integration \
+  "${integration_test_binary}" \
+  filesystem_snapshots::reflink_xfs_with_filesystem_metering_fails_at_startup
