@@ -49,7 +49,9 @@ use golem_common::model::agent::{
     AgentConfigSource, AgentMode, CorsOptions, FileMapping, HttpMountDetails,
 };
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
-use golem_common::schema::schema_type::{DiscriminatorRule, ResultSpec, UnionBranch, UnionSpec};
+use golem_common::schema::schema_type::{
+    DiscriminatorRule, QuantitySpec, ResultSpec, UnionBranch, UnionSpec,
+};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, DuplicateKeyPolicy, ErrorCase, ErrorKind, Formatter, OptionShape,
@@ -784,26 +786,12 @@ fn partly_streaming_agent() -> AgentTypeSchema {
     )
 }
 
-fn assert_stream_methods_left_out(generated: &GeneratedGo) {
-    let client = generated.read("client.go");
-    assert!(
-        client.contains("// Not generated: upload, feed — they take or return a stream"),
-        "{client}"
-    );
-    assert!(client.contains(") Count("), "{client}");
-    assert!(!client.contains(") Upload("), "{client}");
-    assert!(!client.contains(") Feed("), "{client}");
-    let types = generated.read("types.go");
-    assert!(!types.contains("MediaFeed"), "{types}");
-}
-
 /// A guest client calls stream-bearing methods over RPC, so it keeps them,
 /// spelling each stream as the SDK's `golem.AgentStream`.
 #[test]
 fn go_guest_client_generates_stream_bearing_methods(env: &GoEnv) {
     let generated = GeneratedGo::guest(env, partly_streaming_agent());
     let client = generated.read("client.go");
-    assert!(!client.contains("Not generated"), "{client}");
     assert!(client.contains(") Count("), "{client}");
     assert!(client.contains(") Upload("), "{client}");
     assert!(client.contains(") Feed("), "{client}");
@@ -814,12 +802,126 @@ fn go_guest_client_generates_stream_bearing_methods(env: &GoEnv) {
     generated.assert_vets_for_wasip1(env);
 }
 
+/// An external client calls stream-bearing methods over an invocation
+/// session, spelling each stream as the bridge's `bridge.AgentStream`. They
+/// only await: there is no trigger or schedule form.
 #[test]
-fn go_external_client_leaves_out_stream_bearing_methods(env: &GoEnv) {
+fn go_external_client_streams_over_a_session(env: &GoEnv) {
     let generated = GeneratedGo::external(env, partly_streaming_agent());
-    assert_stream_methods_left_out(&generated);
+    let client = generated.read("client.go");
+    for expected in [
+        ") Count(ctx context.Context) (uint64, error)",
+        ") Upload(ctx context.Context, chunks bridge.AgentStream[[]uint8]) (uint64, error)",
+        "return bridge.CallStreaming(ctx, c.agent, \"upload\"",
+        ") Feed(ctx context.Context) (MediaFeed, error)",
+        ") TriggerCount(",
+    ] {
+        assert!(
+            client.contains(expected),
+            "missing {expected} in:\n{client}"
+        );
+    }
+    assert!(!client.contains("TriggerUpload"), "{client}");
+    assert!(!client.contains("ScheduleFeed"), "{client}");
+    let types = generated.read("types.go");
+    assert!(types.contains("bridge.AgentStream[string]"), "{types}");
+    let codec = generated.read("codec.go");
+    assert!(
+        codec.contains("bridge.DecodeStream(bridge.DecodeString)"),
+        "{codec}"
+    );
     generated.assert_gofmt_clean(env);
     generated.assert_vets_natively(env);
+}
+
+fn quantity_agent() -> AgentTypeSchema {
+    let kilograms = SchemaType::Quantity {
+        spec: QuantitySpec {
+            base_unit: "kg".into(),
+            allowed_suffixes: vec![],
+            min: None,
+            max: None,
+        },
+        metadata: Default::default(),
+    };
+    let lengths = SchemaType::Quantity {
+        spec: QuantitySpec {
+            base_unit: "m".into(),
+            allowed_suffixes: vec!["m".into(), "km".into()],
+            min: None,
+            max: None,
+        },
+        metadata: Default::default(),
+    };
+    agent(
+        "ScaleAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "weigh",
+                vec![field("load", kilograms.clone())],
+                Some(kilograms),
+            ),
+            method("measure", vec![], Some(SchemaType::list(lengths))),
+        ],
+        vec![],
+        AgentMode::Durable,
+    )
+}
+
+/// A quantity is `values.Quantity[U]`, with one generated unit marker per
+/// distinct unit.
+#[test]
+fn go_clients_spell_quantities_with_unit_markers(env: &GoEnv) {
+    let guest = GeneratedGo::guest(env, quantity_agent());
+    let types = guest.read("types.go");
+    for expected in [
+        "type UnitKg struct{}",
+        "return \"kg\"",
+        "type UnitM struct{}",
+        "return []string{\"m\", \"km\"}",
+    ] {
+        assert!(types.contains(expected), "missing {expected} in:\n{types}");
+    }
+    let client = guest.read("client.go");
+    assert!(client.contains("values.Quantity[UnitKg]"), "{client}");
+    guest.assert_gofmt_clean(env);
+    guest.assert_vets_for_wasip1(env);
+
+    let external = GeneratedGo::external(env, quantity_agent());
+    external.assert_gofmt_clean(env);
+    external.assert_vets_natively(env);
+    let package = external.package();
+    external.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/bridge"
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+)
+
+func TestQuantitiesTravelInTheirUnit(t *testing.T) {{
+	sv := bridge.EncodeQuantity(values.Quantity[UnitKg]{{Mantissa: 15, Scale: 1}})
+	if sv.(schema.QuantityValueNode).Value.Unit != "kg" {{
+		t.Fatalf("encoded as %#v", sv)
+	}}
+	back, err := bridge.DecodeQuantity[UnitM](schema.QuantityValueNode{{Value: schema.QuantityValue{{Mantissa: 2, Unit: "km"}}}})
+	if err != nil || back.Unit != "km" {{
+		t.Fatalf("decoded %#v, %v", back, err)
+	}}
+	if _, err := bridge.DecodeQuantity[UnitKg](schema.QuantityValueNode{{Value: schema.QuantityValue{{Unit: "lb"}}}}); err == nil {{
+		t.Fatal("a quantity in a unit it does not accept was decoded")
+	}}
+}}
+"#
+        ),
+    );
 }
 
 /// The host fills a principal parameter, so neither client asks a caller for

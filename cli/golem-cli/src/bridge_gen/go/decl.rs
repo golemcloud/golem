@@ -354,7 +354,7 @@ mod tests {
     }
 
     fn render_inline(typ: &SchemaType, writer: &mut GoWriter) -> anyhow::Result<String> {
-        type_ref::render(typ, &|_| None, &|t| t, writer)
+        type_ref::render(typ, &|_| None, &|t| t, type_ref::Streams::Guest, writer)
     }
 
     fn emit(name: &str, typ: &SchemaType) -> String {

@@ -11,7 +11,10 @@ Three independently built Go modules, none of them part of the root Cargo worksp
 - `golem/` — the guest SDK: agents, tools, RPC, durability, host wrappers. Requires
   `core`, and holds the generated WIT bindings under `internal/wit`.
 - `bridge/` — the runtime generated bridge clients use to call an external Golem
-  server over REST. Requires `core`, and deliberately not the guest SDK. It also
+  server: REST for plain calls, the invocation-session WebSocket protocol for
+  streaming ones (`session*.go`, checked against the shared vectors in
+  `golem-client/tests/fixtures/stream-session-v1/`). Requires `core` and
+  `github.com/coder/websocket`, and deliberately not the guest SDK. It also
   holds the leaf conversions and checked accessors (`codec*.go`) the generated
   per-type `encodeX`/`decodeX` functions are composed from, so the generator
   (`cli/golem-cli/src/bridge_gen/go/external.rs`) never spells a wire encoding
@@ -184,9 +187,10 @@ workspace's central dependency rule does not apply here.
 
 **`core` and `golem` take no third-party dependency.** `core` is standard library
 only, and `golem`'s only non-generated dependency is the pinned `componentize-go`
-build tool. `bridge` may take one, because it has to: external streaming needs a
+build tool. `bridge` takes one, because it has to: external streaming needs a
 WebSocket client and Go's standard library has none, where Scala gets one from
-`java.net.http`. The TypeScript bridge package does the same, depending on `ws`.
+`java.net.http`. It uses `github.com/coder/websocket`, which has no dependencies of
+its own; the TypeScript bridge package does the same with `ws`.
 A dependency added there must not be reachable from `core` or `golem`.
 
 A `replace` in a dependency's `go.mod` is ignored, so a component that resolves the

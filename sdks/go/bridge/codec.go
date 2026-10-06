@@ -16,6 +16,7 @@ package bridge
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/core/schema"
@@ -166,6 +167,31 @@ func DecodeDuration(sv schema.SchemaValue) (time.Duration, error) {
 func EncodeUUID(v values.UUID) schema.SchemaValue { return schema.UUIDValue{Value: v} }
 func DecodeUUID(sv schema.SchemaValue) (values.UUID, error) {
 	return decodeAs("uuid", sv, func(v schema.UUIDValue) values.UUID { return v.Value })
+}
+
+// EncodeQuantity sends a quantity in its own unit, or the base unit when it
+// names none.
+func EncodeQuantity[U values.QuantityUnit](v values.Quantity[U]) schema.SchemaValue {
+	unit := v.Unit
+	if unit == "" {
+		var u U
+		unit = u.BaseUnit()
+	}
+	return schema.QuantityValueNode{Value: schema.QuantityValue{Mantissa: v.Mantissa, Scale: v.Scale, Unit: unit}}
+}
+
+// DecodeQuantity reads a quantity, checking its unit is one U accepts.
+func DecodeQuantity[U values.QuantityUnit](sv schema.SchemaValue) (values.Quantity[U], error) {
+	v, ok := sv.(schema.QuantityValueNode)
+	if !ok {
+		return values.Quantity[U]{}, Mismatch("quantity", sv)
+	}
+	var u U
+	allowed := u.AllowedSuffixes()
+	if (len(allowed) == 0 && v.Value.Unit != u.BaseUnit()) || (len(allowed) > 0 && !slices.Contains(allowed, v.Value.Unit)) {
+		return values.Quantity[U]{}, fmt.Errorf("golem: unit %q is not one this quantity accepts", v.Value.Unit)
+	}
+	return values.Quantity[U]{Mantissa: v.Value.Mantissa, Scale: v.Value.Scale, Unit: v.Value.Unit}, nil
 }
 
 // --- sequences ---------------------------------------------------------------

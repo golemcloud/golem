@@ -1066,6 +1066,192 @@ async fn test_streaming_invocation_cli_end_to_end() {
     assert!(after_interrupt.stdout_contains("1"));
 }
 
+/// The Go external bridge against the same streaming agent: inputs, outputs,
+/// nested streams, binary lanes, cancellation and a reconnect after acceptance,
+/// plus typed configuration on a plain call.
+#[test]
+#[tag(agents_streaming)]
+#[timeout("20 minutes")]
+async fn test_go_generated_streaming_bridge_end_to_end() {
+    let ctx = streaming_invocation_context().await;
+    let bridge_root = ctx.cwd_path_join("go-streaming-bridge");
+    for agent_type in ["StreamingRpcTarget", "ConfiguredRpcTarget"] {
+        let output = ctx
+            .cli([
+                cmd::GENERATE_BRIDGE,
+                flag::LANGUAGE,
+                "go",
+                flag::AGENT_TYPE_NAME,
+                agent_type,
+                flag::OUTPUT_DIR,
+                bridge_root.to_str().unwrap(),
+            ])
+            .await;
+        assert!(output.success_or_dump());
+    }
+
+    let worker_service_url = ctx.worker_service_url();
+    let token = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+    let (proxy, interrupted, proxy_task) =
+        start_interrupting_websocket_proxy(&worker_service_url, false).await;
+
+    let program_dir = ctx.cwd_path_join("go-streaming-e2e");
+    std::fs::create_dir_all(&program_dir).unwrap();
+    let sdks = workspace_path().join("sdks/go");
+    std::fs::write(
+        program_dir.join("go.mod"),
+        formatdoc! {r#"
+            module example.com/go-streaming-e2e
+
+            go {go}
+
+            require (
+            	golem.local/bridge/streaming-rpc-target-client v0.0.0
+            	golem.local/bridge/configured-rpc-target-client v0.0.0
+            	github.com/golemcloud/golem/sdks/go/bridge v0.0.0
+            	github.com/golemcloud/golem/sdks/go/core v0.0.0
+            )
+
+            replace golem.local/bridge/streaming-rpc-target-client => {target}
+
+            replace golem.local/bridge/configured-rpc-target-client => {configured}
+
+            replace github.com/golemcloud/golem/sdks/go/bridge => {bridge}
+
+            replace github.com/golemcloud/golem/sdks/go/core => {core}
+            "#,
+            go = versions::build_tool::GO_MIN,
+            target = bridge_root.join("streaming-rpc-target-client").display(),
+            configured = bridge_root.join("configured-rpc-target-client").display(),
+            bridge = sdks.join("bridge").display(),
+            core = sdks.join("core").display(),
+        },
+    )
+    .unwrap();
+    std::fs::write(
+        program_dir.join("main.go"),
+        formatdoc! {r#"
+            package main
+
+            import (
+            	"context"
+            	"fmt"
+            	"log"
+            	"reflect"
+            	"time"
+
+            	"github.com/golemcloud/golem/sdks/go/bridge"
+            	"github.com/golemcloud/golem/sdks/go/core/values"
+            	configured "golem.local/bridge/configured-rpc-target-client"
+            	target "golem.local/bridge/streaming-rpc-target-client"
+            )
+
+            func must[T any](v T, err error) T {{
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	return v
+            }}
+
+            func expect(what string, got, want any) {{
+            	if !reflect.DeepEqual(got, want) {{
+            		log.Fatalf("%s: got %v, want %v", what, got, want)
+            	}}
+            }}
+
+            func main() {{
+            	ctx := context.Background()
+            	if err := bridge.Configure(bridge.Configuration{{
+            		Server:  bridge.Custom("{proxy}", "{token}"),
+            		AppName: "streaming-invocation",
+            		EnvName: "local",
+            	}}); err != nil {{
+            		log.Fatal(err)
+            	}}
+            	agent := must(target.GetStreamingRpcTarget(target.StreamingRpcTargetId{{Name: "go-generated-e2e"}}))
+
+            	expect("consume", must(agent.Consume(ctx, bridge.StreamOf[uint32](1, 2, 3))), []uint32{{1, 2, 3}})
+            	expect("produce", must(must(agent.Produce(ctx, []uint32{{4, 5}})).Collect(ctx)), []uint32{{4, 5}})
+            	expect("transform", must(must(agent.Transform(ctx, bridge.StreamOf[uint32](6, 7))).Collect(ctx)), []uint32{{60, 70}})
+
+            	nested := must(agent.ConsumeNested(ctx, target.NestedStreamInput{{
+            		Labels: bridge.StreamOf("left", "right"),
+            		Values: values.Some(bridge.StreamOf[uint32](10, 11)),
+            	}}))
+            	expect("consume nested", nested, values.Tuple2[[]string, []uint32]{{A: []string{{"left", "right"}}, B: []uint32{{10, 11}}}})
+
+            	var labels []string
+            	var inner [][]uint32
+            	for item, err := range must(agent.ProduceNestedItems(ctx)).All(ctx) {{
+            		if err != nil {{
+            			log.Fatal(err)
+            		}}
+            		labels = append(labels, item.Label)
+            		inner = append(inner, must(item.Values.Collect(ctx)))
+            	}}
+            	expect("nested labels", labels, []string{{"first", "second"}})
+            	expect("nested values", inner, [][]uint32{{{{1, 2}}, {{3, 4, 5}}}})
+
+            	binary := values.Binary{{0, 1, 2, 253, 254, 255}}
+            	expect("transform binary", must(must(agent.TransformBinary(ctx, bridge.StreamOf(binary))).Collect(ctx)), []values.Binary{{binary}})
+
+            	bytes := make([]uint8, 2*1024*1024+17)
+            	for i := range bytes {{
+            		bytes[i] = uint8(i)
+            	}}
+            	expect("transform bytes", must(must(agent.TransformBytes(ctx, bridge.StreamOf(bytes...))).Collect(ctx)), bytes)
+
+            	cancelled := must(agent.ProduceByteThenWait(ctx))
+            	waiting, cancel := context.WithTimeout(ctx, 10*time.Second)
+            	first, ok, err := cancelled.Next(waiting)
+            	cancel()
+            	if err != nil || !ok || first != 1 {{
+            		log.Fatalf("lone packed byte: %v %v %v", first, ok, err)
+            	}}
+            	if err := cancelled.Close(); err != nil {{
+            		log.Fatal(err)
+            	}}
+
+            	described := must(must(configured.GetConfiguredRpcTarget(
+            		configured.ConfiguredRpcTargetId{{Name: "go-configured"}},
+            		configured.WithConfiguredRpcTargetConfig(configured.ConfiguredRpcTargetConfig{{
+            			Count: values.Some[uint32](7),
+            			Label: values.Some("go-label"),
+            		}}),
+            	)).Describe(ctx))
+            	expect("describe", described, values.Tuple3[string, string, uint32]{{A: "go-configured", B: "go-label", C: 7}})
+            	fmt.Println("GO_STREAMING_BRIDGE_E2E_OK")
+            }}
+            "#
+        },
+    )
+    .unwrap();
+
+    let toolchain = golem_cli::app::build::go_toolchain::ensure_go_toolchain(
+        &golem_cli::model::app::ApplicationConfig {
+            offline: false,
+            dev_mode: false,
+            should_colorize: false,
+            enable_wasmtime_fs_cache: false,
+        },
+    )
+    .await
+    .expect("the Golem Go toolchain");
+    let mut command = std::process::Command::new(&toolchain.go);
+    command
+        .args(["run", "."])
+        .current_dir(&program_dir)
+        .env("GOTOOLCHAIN", "local")
+        .env("GOFLAGS", "-mod=mod");
+    let output = run_generated_driver(command).await;
+    proxy_task.abort();
+    assert_generated_driver(output, "Go", "GO_STREAMING_BRIDGE_E2E_OK");
+    assert!(
+        interrupted.load(std::sync::atomic::Ordering::SeqCst),
+        "Go driver did not reach post-acceptance reconnect coverage"
+    );
+}
+
 #[test]
 #[tag(agents_streaming)]
 #[timeout("30 minutes")]

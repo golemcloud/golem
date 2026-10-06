@@ -41,6 +41,7 @@ pub mod external;
 #[allow(clippy::module_inception)]
 pub mod go;
 pub mod go_writer;
+pub mod quantity;
 pub mod tool;
 pub mod type_name;
 pub mod type_ref;
@@ -59,7 +60,6 @@ use crate::bridge_gen::{
     validate_host_managed_agent_bridge_policy,
 };
 use crate::fs;
-use crate::log::log_warn;
 use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, sdk_overrides};
 use crate::versions;
 use anyhow::{Context, bail};
@@ -95,9 +95,7 @@ pub struct GoBridgeGenerator {
     mode: GoBridgeMode,
     type_naming: TypeNaming<GoTypeName>,
     names: AgentNames,
-    /// Methods left out of an external client because they take or return a
-    /// stream, which the external Go bridge does not carry yet.
-    omitted: Vec<String>,
+    quantity_units: quantity::QuantityUnits,
     /// The client directory when it is not derived from the agent type: a tool
     /// client is named after the tool.
     client_dir: Option<String>,
@@ -181,13 +179,6 @@ impl BridgeGenerator for GoBridgeGenerator {
         if !self.target_path.exists() {
             fs::create_dir_all(&self.target_path)?;
         }
-        if !self.omitted.is_empty() {
-            log_warn(format!(
-                "The external Go client for {} leaves out {}: they take or return a stream, which the external Go bridge does not carry yet",
-                self.agent_type.type_name.as_str(),
-                self.omitted.join(", ")
-            ));
-        }
         match self.mode {
             GoBridgeMode::GuestWasmRpc => {
                 self.write_file("go.mod", self.go_mod()?)?;
@@ -215,36 +206,23 @@ impl GoBridgeGenerator {
         mode: GoBridgeMode,
     ) -> anyhow::Result<Self> {
         validate_host_managed_agent_bridge_policy(&agent_type, mode.bridge_mode())?;
-        let mut agent_type = agent_type;
         if input_uses_streams(&agent_type.schema, &agent_type.constructor.input_schema) {
             bail!(
                 "the Go bridge cannot generate a client for {}: its constructor takes a stream",
                 agent_type.type_name.as_str()
             );
         }
-        // The external bridge has no stream transport, so it leaves
-        // stream-bearing methods out rather than failing the whole client, and
-        // the agent's other methods stay callable. Dropping them before naming
-        // also drops the types only they use. A guest client calls them over
-        // RPC with `golem.AgentStream`.
-        let omitted = match mode {
-            GoBridgeMode::GuestWasmRpc => Vec::new(),
-            GoBridgeMode::ExternalRest => {
-                let (methods, streaming): (Vec<_>, Vec<_>) =
-                    std::mem::take(&mut agent_type.methods)
-                        .into_iter()
-                        .partition(|m| !method_uses_streams(&agent_type.schema, m));
-                agent_type.methods = methods;
-                streaming.into_iter().map(|m| m.name).collect::<Vec<_>>()
-            }
-        };
-
         let names = AgentNames::new(&agent_type);
+        let quantity_units = quantity::QuantityUnits::collect(&agent_type, &names.reserved());
         let same_language = agent_type.source_language.eq_ignore_ascii_case("go");
         let type_naming = TypeNaming::new_with_reserved_names(
             &agent_type,
             same_language,
-            names.reserved().into_iter().map(GoTypeName::from),
+            names
+                .reserved()
+                .into_iter()
+                .chain(quantity_units.names())
+                .map(GoTypeName::from),
         )?;
 
         Ok(Self {
@@ -253,7 +231,7 @@ impl GoBridgeGenerator {
             mode,
             type_naming,
             names,
-            omitted,
+            quantity_units,
             client_dir: None,
         })
     }
@@ -268,10 +246,14 @@ impl GoBridgeGenerator {
         reserved: Vec<String>,
     ) -> anyhow::Result<Self> {
         let names = AgentNames::new(&agent_type);
+        let quantity_units = quantity::QuantityUnits::collect(&agent_type, &reserved);
         let type_naming = TypeNaming::new_with_reserved_names(
             &agent_type,
             false,
-            reserved.into_iter().map(GoTypeName::from),
+            reserved
+                .into_iter()
+                .chain(quantity_units.names())
+                .map(GoTypeName::from),
         )?;
         Ok(Self {
             target_path: target_path.to_path_buf(),
@@ -279,7 +261,7 @@ impl GoBridgeGenerator {
             mode: GoBridgeMode::GuestWasmRpc,
             type_naming,
             names,
-            omitted: Vec::new(),
+            quantity_units,
             client_dir: Some(client_dir),
         })
     }
@@ -322,7 +304,12 @@ impl GoBridgeGenerator {
 
     /// The generated name of a schema type that has a named declaration, if it
     /// does. A reference resolves to its definition's name.
+    ///
+    /// A quantity's name is that of its unit marker.
     fn named(&self, typ: &SchemaType) -> Option<String> {
+        if let SchemaType::Quantity { spec, .. } = self.resolve(typ) {
+            return self.quantity_units.name_for(spec).map(str::to_string);
+        }
         if let Some(name) = self.type_naming.type_name_for_type(typ) {
             return Some(name.name.clone());
         }
@@ -337,7 +324,17 @@ impl GoBridgeGenerator {
     }
 
     fn render(&self, typ: &SchemaType, writer: &mut GoWriter) -> anyhow::Result<String> {
-        type_ref::render(typ, &|t| self.named(t), &|t| self.resolve(t), writer)
+        let streams = match self.mode {
+            GoBridgeMode::GuestWasmRpc => type_ref::Streams::Guest,
+            GoBridgeMode::ExternalRest => type_ref::Streams::External,
+        };
+        type_ref::render(
+            typ,
+            &|t| self.named(t),
+            &|t| self.resolve(t),
+            streams,
+            writer,
+        )
     }
 
     // --- go.mod ---------------------------------------------------------
@@ -378,6 +375,7 @@ impl GoBridgeGenerator {
             let body = self.resolve(typ);
             decl::write(&name.name, body, &render, &mut writer)?;
         }
+        self.quantity_units.write(&mut writer);
         Ok(writer.finish(&self.package_name()))
     }
 
@@ -606,9 +604,8 @@ impl GoBridgeGenerator {
         // The client.
         writer.doc(&format!(
             "{} calls a {agent_name} agent. A failed call panics with the SDK's own\n\
-             error, the same as golem.MethodDef.Call, so its classification survives.{}",
-            n.client,
-            self.omitted_note()
+             error, the same as golem.MethodDef.Call, so its classification survives.",
+            n.client
         ));
         writer.line(format!(
             "type {} struct{{ client golem.Client[{}] }}",
@@ -788,23 +785,9 @@ fn input_uses_streams(graph: &SchemaGraph, input: &InputSchema) -> bool {
 }
 
 /// True when a method takes or returns a stream anywhere in its schema.
-fn method_uses_streams(graph: &SchemaGraph, method: &AgentMethodSchema) -> bool {
+pub(super) fn method_uses_streams(graph: &SchemaGraph, method: &AgentMethodSchema) -> bool {
     input_uses_streams(graph, &method.input_schema)
         || matches!(&method.output_schema, OutputSchema::Single(t) if contains_stream_in_graph(graph, t))
-}
-
-impl GoBridgeGenerator {
-    /// A doc paragraph naming the methods the client leaves out, or "".
-    fn omitted_note(&self) -> String {
-        if self.omitted.is_empty() {
-            return String::new();
-        }
-        format!(
-            "\n\nNot generated: {} — they take or return a stream, which the external\n\
-             Go bridge does not carry yet.",
-            self.omitted.join(", ")
-        )
-    }
 }
 
 /// The per-case type names a variant or union declaration emits, which the

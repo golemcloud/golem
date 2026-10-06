@@ -67,7 +67,7 @@ func everyValueCase() []SchemaValue {
 		SecretValue{},
 		QuotaTokenValue{},
 		PermissionCardValue{},
-		StreamValue{},
+		StreamValue{Handle: WireStreamRef{StreamToken: "gai1_token"}},
 	}
 }
 
@@ -95,7 +95,7 @@ func TestEveryValueCaseIsAccountedFor(t *testing.T) {
 func TestValuesRoundTripThroughTheWireForm(t *testing.T) {
 	for _, original := range everyValueCase() {
 		switch original.(type) {
-		case SecretValue, QuotaTokenValue, PermissionCardValue, StreamValue:
+		case SecretValue, QuotaTokenValue, PermissionCardValue:
 			continue
 		}
 		data, err := MarshalWireValue(original)
@@ -201,25 +201,61 @@ func TestHostHandlesAreRejectedInBothDirections(t *testing.T) {
 		!strings.Contains(err.Error(), "the host holds") {
 		t.Fatalf("marshalling a secret should say why it cannot travel, got %v", err)
 	}
-	if _, err := UnmarshalWireValue([]byte(`{"kind":"stream","value":{}}`)); err == nil ||
+	if _, err := UnmarshalWireValue([]byte(`{"kind":"secret","value":{}}`)); err == nil ||
 		!strings.Contains(err.Error(), "the host holds") {
-		t.Fatalf("reading a stream should say why it cannot be read, got %v", err)
+		t.Fatalf("reading a secret should say why it cannot be read, got %v", err)
+	}
+}
+
+// A stream travels only as a session's reference: a provisional one or a
+// stable token, never both and never a host handle.
+func TestStreamsTravelAsSessionReferences(t *testing.T) {
+	for _, data := range []string{
+		`{"kind":"stream","value":{"provisionalRef":"0dff1c71-f12f-4bb1-996c-23d693bdc825"}}`,
+		`{"kind":"stream","value":{"streamToken":"gai1_x"}}`,
+	} {
+		v, err := UnmarshalWireValue([]byte(data))
+		if err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		out, err := MarshalWireValue(v)
+		if err != nil || string(out) != data {
+			t.Fatalf("%s round-tripped to %s, %v", data, out, err)
+		}
+	}
+	for _, data := range []string{
+		`{"kind":"stream","value":{}}`,
+		`{"kind":"stream","value":{"provisionalRef":"a","streamToken":"b"}}`,
+	} {
+		if _, err := UnmarshalWireValue([]byte(data)); err == nil {
+			t.Fatalf("%s was accepted", data)
+		}
+	}
+	if _, err := MarshalWireValue(StreamValue{}); err == nil {
+		t.Fatal("a stream without a session reference was marshalled")
 	}
 }
 
 func TestMalformedValuesAreRejected(t *testing.T) {
 	cases := map[string]string{
-		`{"kind":"nope","value":1}`:                     "unsupported schema value kind",
-		`{"kind":"char","value":"ab"}`:                  "one Unicode scalar value",
-		`{"kind":"result","value":{"tag":"maybe"}}`:     "result tag must be ok or err",
-		`{"kind":"map","value":{"entries":[[]]}}`:       "[key, value] pair",
-		`{"kind":"datetime","value":{"value":"today"}}`: "datetime",
-		`{"kind":"s8","value":"not a number"}`:          "s8 value",
-		`{"kind":"s64","value":5}`:                      "s64 value",
-		`{"kind":"s64","value":"05"}`:                   "canonical decimal string",
-		`{"kind":"u64","value":"-1"}`:                   "canonical decimal string",
-		`{"kind":"f32","value":1e300}`:                  "out of range",
-		`{"kind":"f64","value":{"$float":"huge"}}`:      "exceptional float",
+		`{"kind":"nope","value":1}`:                              "unsupported schema value kind",
+		`{"kind":"char","value":"ab"}`:                           "one Unicode scalar value",
+		`{"kind":"result","value":{"tag":"maybe","value":null}}`: "result tag must be ok or err",
+		`{"kind":"result","value":{"tag":"ok"}}`:                 "missing \"value\"",
+		`{"kind":"bool","value":true,"extra":1}`:                 "exactly the members",
+		`{"kind":"option","value":{"inner":null,"value":1}}`:     "unknown member",
+		`{"kind":"text","value":{"language":null,"text":"x"}}`:   "omit it instead",
+		`{"kind":"binary","value":{"bytes":"-_8="}}`:             "binary value",
+		`{"kind":"binary","value":{"bytes":[256]}}`:              "out of range",
+		`{"kind":"record","value":{"fields":[],"fields":[]}}`:    "duplicate object member",
+		`{"kind":"map","value":{"entries":[[]]}}`:                "[key, value] pair",
+		`{"kind":"datetime","value":{"value":"today"}}`:          "datetime",
+		`{"kind":"s8","value":"not a number"}`:                   "s8 value",
+		`{"kind":"s64","value":5}`:                               "s64 value",
+		`{"kind":"s64","value":"05"}`:                            "canonical decimal string",
+		`{"kind":"u64","value":"-1"}`:                            "canonical decimal string",
+		`{"kind":"f32","value":1e300}`:                           "out of range",
+		`{"kind":"f64","value":{"$float":"huge"}}`:               "exceptional float",
 	}
 	for data, want := range cases {
 		_, err := UnmarshalWireValue([]byte(data))

@@ -123,7 +123,7 @@ doubled := remote.Doubled(golem.ProduceStream(func(w *golem.AgentStreamWriter[in
 }))
 ```
 
-The external Go client generated for `bridge.go.external` (see `golem-call-from-external-go`) leaves stream-bearing methods out: its doc comment names them and `golem build` warns. The agent's other methods are generated as usual.
+The external Go client generated for `bridge.go.external` (see `golem-call-from-external-go`) calls stream-bearing methods over an invocation session, spelling each stream `bridge.AgentStream[T]`.
 
 ## CLI and HTTP
 

@@ -26,7 +26,7 @@
 //! different schemas produce the same Go type and the wrong wire encoding.
 
 use crate::bridge_gen::go::go_writer::GoWriter;
-use crate::sdk_overrides::GO_SDK_MODULE;
+use crate::sdk_overrides::{GO_BRIDGE_MODULE, GO_SDK_MODULE};
 use golem_common::schema::schema_type::SchemaType;
 
 /// The import path of the shared value vocabulary.
@@ -34,6 +34,14 @@ pub const VALUES_PKG: &str = "github.com/golemcloud/golem/sdks/go/core/values";
 
 /// The package qualifier the generated code binds `VALUES_PKG` to.
 pub const VALUES: &str = "values";
+
+/// Which runtime a stream type is spelled from: the guest SDK inside a
+/// component, the bridge runtime outside one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Streams {
+    Guest,
+    External,
+}
 
 /// Renders a Go type for a schema type that needs no named declaration.
 ///
@@ -47,8 +55,18 @@ pub fn render<'a>(
     typ: &'a SchemaType,
     named: &impl Fn(&SchemaType) -> Option<String>,
     resolve: &impl Fn(&'a SchemaType) -> &'a SchemaType,
+    streams: Streams,
     writer: &mut GoWriter,
 ) -> anyhow::Result<String> {
+    // A quantity is named by its unit marker, which parameterises the
+    // shared quantity type.
+    if let SchemaType::Quantity { .. } = resolve(typ) {
+        let unit = named(typ).ok_or_else(|| {
+            anyhow::anyhow!("a quantity reached the Go type mapping without a unit marker")
+        })?;
+        writer.import(VALUES_PKG);
+        return Ok(format!("{VALUES}.Quantity[{unit}]"));
+    }
     if let Some(name) = named(typ) {
         return Ok(name);
     }
@@ -99,18 +117,21 @@ pub fn render<'a>(
         SchemaType::Option { inner, .. } => format!(
             "{}.Option[{}]",
             values(writer),
-            render(inner, named, resolve, writer)?
+            render(inner, named, resolve, streams, writer)?
         ),
 
         SchemaType::List { element, .. } => {
-            format!("[]{}", render(element, named, resolve, writer)?)
+            format!("[]{}", render(element, named, resolve, streams, writer)?)
         }
         // The length is part of the type, which is what keeps a fixed list
         // distinct from a list in the generated Go as well as in the schema.
         SchemaType::FixedList {
             element, length, ..
         } => {
-            format!("[{length}]{}", render(element, named, resolve, writer)?)
+            format!(
+                "[{length}]{}",
+                render(element, named, resolve, streams, writer)?
+            )
         }
 
         // An ordinary Go map. Schema well-formedness restricts a map key to a
@@ -123,14 +144,14 @@ pub fn render<'a>(
         // before encoding, so what travels is still deterministic.
         SchemaType::Map { key, value, .. } => format!(
             "map[{}]{}",
-            render(key, named, resolve, writer)?,
-            render(value, named, resolve, writer)?
+            render(key, named, resolve, streams, writer)?,
+            render(value, named, resolve, streams, writer)?
         ),
 
         SchemaType::Tuple { elements, .. } => {
             let mut rendered = Vec::with_capacity(elements.len());
             for element in elements {
-                rendered.push(render(element, named, resolve, writer)?);
+                rendered.push(render(element, named, resolve, streams, writer)?);
             }
             match rendered.len() {
                 // A 1-tuple has no TupleN; it is its element, which is what the
@@ -147,11 +168,11 @@ pub fn render<'a>(
         // still addressable without carrying a value.
         SchemaType::Result { spec, .. } => {
             let ok = match spec.ok.as_deref() {
-                Some(typ) => render(typ, named, resolve, writer)?,
+                Some(typ) => render(typ, named, resolve, streams, writer)?,
                 None => "struct{}".to_string(),
             };
             let err = match spec.err.as_deref() {
-                Some(typ) => render(typ, named, resolve, writer)?,
+                Some(typ) => render(typ, named, resolve, streams, writer)?,
                 None => "struct{}".to_string(),
             };
             format!("{}.Result[{ok}, {err}]", values(writer))
@@ -169,14 +190,20 @@ pub fn render<'a>(
             unreachable!("a ref is resolved to its body before it reaches here")
         }
 
-        // Only a guest client carries streams; the external bridge leaves
-        // stream-bearing methods, and so these types, out.
         SchemaType::Stream {
             inner: Some(inner), ..
         } => {
-            let item = render(inner, named, resolve, writer)?;
-            writer.import(GO_SDK_MODULE);
-            format!("golem.AgentStream[{item}]")
+            let item = render(inner, named, resolve, streams, writer)?;
+            match streams {
+                Streams::Guest => {
+                    writer.import(GO_SDK_MODULE);
+                    format!("golem.AgentStream[{item}]")
+                }
+                Streams::External => {
+                    writer.import(GO_BRIDGE_MODULE);
+                    format!("bridge.AgentStream[{item}]")
+                }
+            }
         }
 
         // Host capabilities, which only a guest client can pass on; the
@@ -195,14 +222,13 @@ pub fn render<'a>(
         }
 
         SchemaType::Secret { spec, .. } => {
-            let inner = render(&spec.inner, named, resolve, writer)?;
+            let inner = render(&spec.inner, named, resolve, streams, writer)?;
             writer.import(GO_SDK_MODULE);
             format!("golem.Secret[{inner}]")
         }
 
-        SchemaType::Quantity { .. }
-        | SchemaType::Future { .. }
-        | SchemaType::Stream { inner: None, .. } => {
+        SchemaType::Quantity { .. } => unreachable!("a quantity is rendered from its unit marker"),
+        SchemaType::Future { .. } | SchemaType::Stream { inner: None, .. } => {
             anyhow::bail!("the Go bridge does not yet spell this schema type: {resolved:?}")
         }
     })
@@ -229,12 +255,13 @@ mod tests {
 
     fn go_type(typ: &SchemaType) -> String {
         let mut writer = GoWriter::new();
-        render(typ, &unnamed, &identity, &mut writer).expect("a Go type")
+        render(typ, &unnamed, &identity, Streams::Guest, &mut writer).expect("a Go type")
     }
 
     fn go_type_with_imports(typ: &SchemaType) -> (String, String) {
         let mut writer = GoWriter::new();
-        let rendered = render(typ, &unnamed, &identity, &mut writer).expect("a Go type");
+        let rendered =
+            render(typ, &unnamed, &identity, Streams::Guest, &mut writer).expect("a Go type");
         writer.line("var _ = 1");
         (rendered, writer.finish("client"))
     }
@@ -407,6 +434,7 @@ mod tests {
             },
             &unnamed,
             &identity,
+            Streams::Guest,
             &mut writer,
         )
         .expect_err("a 9-tuple has no Go spelling");
@@ -483,6 +511,7 @@ mod tests {
             },
             &unnamed,
             &identity,
+            Streams::Guest,
             &mut writer,
         )
         .expect_err("a record needs a generated name");

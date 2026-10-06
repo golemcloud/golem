@@ -92,7 +92,7 @@ Create or ensure the session first when not every method argument comes from the
 
 ## Clients
 
-External programs speak the protocol over plain HTTP. The generated external Go bridge (`golem-call-from-external-go`) leaves stream-bearing methods out, so use HTTP directly for these endpoints.
+External programs speak the protocol over plain HTTP. To call a streaming method from a Go program instead, use the generated external Go bridge (`golem-call-from-external-go`), which runs it over an invocation session rather than Durable Streams URLs.
 
 From inside a Go agent, read and write any Durable Streams URL — this deployment's or an external one — with `github.com/golemcloud/golem/sdks/go/golem/durablestreams`. The host does the HTTP and authentication, and the reader's checkpoint and the writer's producer progress survive replay:
 

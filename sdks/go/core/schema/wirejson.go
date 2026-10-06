@@ -15,6 +15,7 @@
 package schema
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -57,9 +58,16 @@ func MarshalWireValue(v SchemaValue) ([]byte, error) {
 // UnmarshalWireValue reads a value in the schema-native wire form. The result
 // carries no schema, so it is only meaningful beside the type it was built
 // against.
+//
+// The reading is strict, as the public protocol requires: duplicate, unknown
+// or missing members, an explicit null where a member is optional, and a
+// number where a canonical decimal string belongs are all rejected.
 func UnmarshalWireValue(data []byte) (SchemaValue, error) {
-	var node wireNode
-	if err := json.Unmarshal(data, &node); err != nil {
+	if err := CheckWireJSON(data); err != nil {
+		return nil, fmt.Errorf("golem: malformed schema value: %w", err)
+	}
+	node, err := strictNode(data)
+	if err != nil {
 		return nil, fmt.Errorf("golem: malformed schema value: %w", err)
 	}
 	return wireToValue(node)
@@ -243,7 +251,20 @@ func valueToWire(v SchemaValue) (wireNode, error) {
 		}
 		return wireScalar("union", map[string]any{"tag": n.Tag, "body": body})
 
-	case SecretValue, QuotaTokenValue, PermissionCardValue, StreamValue:
+	case StreamValue:
+		ref, ok := n.Handle.(WireStreamRef)
+		if !ok {
+			return wireNode{}, fmt.Errorf(
+				"golem: a stream travels only as a reference an invocation session assigned, got %T", n.Handle)
+		}
+		if (ref.ProvisionalRef == "") == (ref.StreamToken == "") {
+			return wireNode{}, fmt.Errorf("golem: a stream reference names exactly one of a provisional reference and a stream token")
+		}
+		if ref.ProvisionalRef != "" {
+			return wireScalar("stream", map[string]any{"provisionalRef": ref.ProvisionalRef})
+		}
+		return wireScalar("stream", map[string]any{"streamToken": ref.StreamToken})
+	case SecretValue, QuotaTokenValue, PermissionCardValue:
 		return wireNode{}, fmt.Errorf(
 			"golem: %T is a handle to something the host holds, and does not travel over REST", v)
 	}
@@ -272,7 +293,7 @@ func valuesToWire(values []SchemaValue) ([]wireNode, error) {
 
 // --- Values, incoming ----------------------------------------------------
 
-func wireToValue(node wireNode) (SchemaValue, error) {
+func wireToValue(node wireValueNode) (SchemaValue, error) {
 	switch node.Kind {
 	case "bool":
 		return readWire(node, func(v bool) SchemaValue { return BoolValue{Value: v} })
@@ -443,7 +464,23 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 			return UnionValue{Tag: p.Tag, Body: body}, nil
 		})
 
-	case "secret", "quota-token", "permission-card", "stream":
+	case "stream":
+		return readWireErr(node, func(p wireStreamValue) (SchemaValue, error) {
+			if (p.ProvisionalRef == nil) == (p.StreamToken == nil) {
+				return nil, fmt.Errorf("golem: a stream reference names exactly one of provisionalRef and streamToken")
+			}
+			ref := WireStreamRef{}
+			if p.ProvisionalRef != nil {
+				ref.ProvisionalRef = *p.ProvisionalRef
+			} else {
+				ref.StreamToken = *p.StreamToken
+			}
+			if ref.ProvisionalRef == "" && ref.StreamToken == "" {
+				return nil, fmt.Errorf("golem: a stream reference is empty")
+			}
+			return StreamValue{Handle: ref}, nil
+		})
+	case "secret", "quota-token", "permission-card":
 		return nil, fmt.Errorf(
 			"golem: a %s is a handle to something the host holds, and cannot be read here", node.Kind)
 	}
@@ -452,19 +489,134 @@ func wireToValue(node wireNode) (SchemaValue, error) {
 
 // readWire decodes a node's payload and wraps it; readWireErr does the same for
 // a case that can still reject what it decoded.
-func readWire[T any](node wireNode, wrap func(T) SchemaValue) (SchemaValue, error) {
+func readWire[T any](node wireValueNode, wrap func(T) SchemaValue) (SchemaValue, error) {
 	return readWireErr(node, func(v T) (SchemaValue, error) { return wrap(v), nil })
 }
 
-func readWireErr[T any](node wireNode, wrap func(T) (SchemaValue, error)) (SchemaValue, error) {
+func readWireErr[T any](node wireValueNode, wrap func(T) (SchemaValue, error)) (SchemaValue, error) {
+	if err := checkPayloadMembers(node); err != nil {
+		return nil, err
+	}
 	var payload T
-	if err := json.Unmarshal(node.Value, &payload); err != nil {
+	if err := strictUnmarshal(node.Value, &payload); err != nil {
 		return nil, fmt.Errorf("golem: %s value: %w", node.Kind, err)
 	}
 	return wrap(payload)
 }
 
-func wireToValues(nodes []wireNode) ([]SchemaValue, error) {
+// strictUnmarshal decodes JSON, rejecting members the target does not declare.
+func strictUnmarshal(data []byte, target any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		return err
+	}
+	if dec.More() {
+		return fmt.Errorf("trailing data after the JSON value")
+	}
+	return nil
+}
+
+// wireValueNode is a value node as it arrives. Unlike a type node it is read
+// strictly; see UnmarshalWireValue.
+type wireValueNode struct {
+	Kind  string
+	Value json.RawMessage
+}
+
+// strictNode reads one {kind, value} envelope, which has exactly those two
+// members.
+func strictNode(data []byte) (wireValueNode, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return wireValueNode{}, err
+	}
+	if len(members) != 2 || members["kind"] == nil || members["value"] == nil {
+		return wireValueNode{}, fmt.Errorf("a schema value node has exactly the members kind and value")
+	}
+	var kind string
+	if err := json.Unmarshal(members["kind"], &kind); err != nil {
+		return wireValueNode{}, fmt.Errorf("kind: %w", err)
+	}
+	return wireValueNode{Kind: kind, Value: members["value"]}, nil
+}
+
+// UnmarshalJSON reads a node strictly; nested nodes are read through it too.
+func (n *wireValueNode) UnmarshalJSON(data []byte) error {
+	node, err := strictNode(data)
+	if err != nil {
+		return err
+	}
+	*n = node
+	return nil
+}
+
+// payloadMembers lists, per object-payload kind, the members it must carry,
+// those it may carry (never as null), and those that must be present but may
+// be null.
+var payloadMembers = map[string]struct{ required, optional, nullable []string }{
+	"record":     {required: []string{"fields"}},
+	"variant":    {required: []string{"case"}, optional: []string{"payload"}},
+	"enum":       {required: []string{"case"}},
+	"flags":      {required: []string{"bits"}},
+	"tuple":      {required: []string{"elements"}},
+	"list":       {required: []string{"elements"}},
+	"fixed-list": {required: []string{"elements"}},
+	"map":        {required: []string{"entries"}},
+	"option":     {nullable: []string{"inner"}},
+	"result":     {required: []string{"tag"}, nullable: []string{"value"}},
+	"text":       {required: []string{"text"}, optional: []string{"language"}},
+	"binary":     {required: []string{"bytes"}, optional: []string{"mimeType"}},
+	"path":       {required: []string{"path"}},
+	"url":        {required: []string{"url"}},
+	"datetime":   {required: []string{"value"}},
+	"duration":   {required: []string{"nanoseconds"}},
+	"quantity":   {required: []string{"mantissa", "scale", "unit"}},
+	"union":      {required: []string{"tag", "body"}},
+	"stream":     {optional: []string{"provisionalRef", "streamToken"}},
+}
+
+func checkPayloadMembers(node wireValueNode) error {
+	rule, ok := payloadMembers[node.Kind]
+	if !ok {
+		return nil
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(node.Value, &members); err != nil || members == nil {
+		return fmt.Errorf("golem: %s value must be an object", node.Kind)
+	}
+	allowed := map[string]bool{}
+	for _, name := range rule.required {
+		allowed[name] = true
+		if raw, present := members[name]; !present || isJSONNull(raw) {
+			return fmt.Errorf("golem: %s value is missing %q", node.Kind, name)
+		}
+	}
+	for _, name := range rule.optional {
+		allowed[name] = true
+		if raw, present := members[name]; present && isJSONNull(raw) {
+			return fmt.Errorf("golem: %s value has %q as null; omit it instead", node.Kind, name)
+		}
+	}
+	for _, name := range rule.nullable {
+		allowed[name] = true
+		if _, present := members[name]; !present {
+			return fmt.Errorf("golem: %s value is missing %q", node.Kind, name)
+		}
+	}
+	for name := range members {
+		if !allowed[name] {
+			return fmt.Errorf("golem: %s value has unknown member %q", node.Kind, name)
+		}
+	}
+	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return string(bytes.TrimSpace(raw)) == "null"
+}
+
+func wireToValues(nodes []wireValueNode) ([]SchemaValue, error) {
 	out := make([]SchemaValue, 0, len(nodes))
 	for _, node := range nodes {
 		v, err := wireToValue(node)
@@ -478,8 +630,8 @@ func wireToValues(nodes []wireNode) ([]SchemaValue, error) {
 
 // wireToOptionalValue reads an optional payload, which the wire form spells as
 // null when it is empty.
-func wireToOptionalValue(node *wireNode) (*SchemaValue, error) {
-	if node == nil || node.Kind == "" {
+func wireToOptionalValue(node *wireValueNode) (*SchemaValue, error) {
+	if node == nil {
 		return nil, nil
 	}
 	v, err := wireToValue(*node)
@@ -490,16 +642,16 @@ func wireToOptionalValue(node *wireNode) (*SchemaValue, error) {
 }
 
 type wireValueFields struct {
-	Fields []wireNode `json:"fields"`
+	Fields []wireValueNode `json:"fields"`
 }
 
 type wireValueElements struct {
-	Elements []wireNode `json:"elements"`
+	Elements []wireValueNode `json:"elements"`
 }
 
 type wireVariantValue struct {
-	Case    uint32    `json:"case"`
-	Payload *wireNode `json:"payload"`
+	Case    uint32         `json:"case"`
+	Payload *wireValueNode `json:"payload"`
 }
 
 type wireCase struct {
@@ -511,16 +663,16 @@ type wireFlagsValue struct {
 }
 
 type wireMapValue struct {
-	Entries [][]wireNode `json:"entries"`
+	Entries [][]wireValueNode `json:"entries"`
 }
 
 type wireOptionValue struct {
-	Inner *wireNode `json:"inner"`
+	Inner *wireValueNode `json:"inner"`
 }
 
 type wireResultValue struct {
-	Tag   string    `json:"tag"`
-	Value *wireNode `json:"value"`
+	Tag   string         `json:"tag"`
+	Value *wireValueNode `json:"value"`
 }
 
 type wireTextValue struct {
@@ -537,13 +689,19 @@ type wireBinaryValue struct {
 // encoding/json would otherwise expect a base64 string for a []byte field.
 func (b *wireBinaryValue) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Bytes    []uint8 `json:"bytes"`
+		Bytes    []int64 `json:"bytes"`
 		MimeType *string `json:"mimeType"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := strictUnmarshal(data, &raw); err != nil {
 		return err
 	}
-	b.Bytes = raw.Bytes
+	b.Bytes = make([]byte, len(raw.Bytes))
+	for i, n := range raw.Bytes {
+		if n < 0 || n > 255 {
+			return fmt.Errorf("byte %d is out of range: %d", i, n)
+		}
+		b.Bytes[i] = byte(n)
+	}
 	b.MimeType = raw.MimeType
 	return nil
 }
@@ -570,9 +728,14 @@ type wireQuantityValue struct {
 	Unit     string `json:"unit"`
 }
 
+type wireStreamValue struct {
+	ProvisionalRef *string `json:"provisionalRef"`
+	StreamToken    *string `json:"streamToken"`
+}
+
 type wireUnionValue struct {
-	Tag  string   `json:"tag"`
-	Body wireNode `json:"body"`
+	Tag  string        `json:"tag"`
+	Body wireValueNode `json:"body"`
 }
 
 // byteNumbers renders bytes the way the server's serde derive does: an array

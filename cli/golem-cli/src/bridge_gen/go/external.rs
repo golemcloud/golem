@@ -30,7 +30,7 @@ use crate::bridge_gen::go::go::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
-use crate::bridge_gen::go::{AgentNames, GoBridgeGenerator, case_idents};
+use crate::bridge_gen::go::{AgentNames, GoBridgeGenerator, case_idents, method_uses_streams};
 use crate::bridge_gen::type_naming::user_supplied_fields;
 use crate::sdk_overrides::{GO_BRIDGE_MODULE, GO_CORE_MODULE, sdk_overrides};
 use crate::versions;
@@ -90,6 +90,15 @@ impl<'g> Codecs<'g> {
     /// `dir`: a `bridge` leaf, a named type's pair, or a helper written here.
     fn func(&mut self, dir: Dir, typ: &SchemaType) -> anyhow::Result<String> {
         let g = self.generator;
+        if let SchemaType::Quantity { .. } = g.resolve(typ) {
+            let unit = g.named(typ).ok_or_else(|| {
+                anyhow::anyhow!("a quantity reached the Go codec without a unit marker")
+            })?;
+            return Ok(match dir {
+                Dir::Encode => format!("bridge.EncodeQuantity[{unit}]"),
+                Dir::Decode => format!("bridge.DecodeQuantity[{unit}]"),
+            });
+        }
         if let Some(name) = g.named(typ) {
             return Ok(format!("{}{name}", dir.prefix()));
         }
@@ -208,6 +217,22 @@ impl<'g> Codecs<'g> {
                         "return bridge.DecodeResult[{ok_type}, {err_type}](sv, {ok}, {err})"
                     ),
                 }
+            }
+            (
+                Dir::Encode,
+                SchemaType::Stream {
+                    inner: Some(inner), ..
+                },
+            ) => {
+                format!("return bridge.EncodeStream({})(v)", self.func(dir, inner)?)
+            }
+            (
+                Dir::Decode,
+                SchemaType::Stream {
+                    inner: Some(inner), ..
+                },
+            ) => {
+                format!("return bridge.DecodeStream({})(sv)", self.func(dir, inner)?)
             }
             _ => anyhow::bail!("the Go external bridge cannot convert this schema type: {typ:?}"),
         };
@@ -626,11 +651,11 @@ impl GoBridgeGenerator {
         codecs.write_record(&n.id, &parts, "v.")?;
 
         w.doc(&format!(
-            "{} calls a {agent_name} agent through the Golem REST API.\n\
+            "{} calls a {agent_name} agent through the Golem REST API; a method\n\
+             that takes or returns a stream runs over an invocation session instead.\n\
              Every call returns an error rather than panicking: a transport failure,\n\
-             an error status and a result that does not decode are all reported.{}",
-            n.client,
-            self.omitted_note()
+             an error status and a result that does not decode are all reported.",
+            n.client
         ));
         w.line(format!("type {} struct{{ agent *bridge.Agent }}", n.client));
         w.blank();
@@ -807,6 +832,48 @@ impl GoBridgeGenerator {
                 encoded.join(", ")
             )
         };
+
+        // A method that takes or returns a stream runs over an invocation
+        // session, which only awaits: a trigger could not hand back a stream.
+        if method_uses_streams(&self.agent_type.schema, method) {
+            w.doc(&format!(
+                "{} {doc_tail}. It runs over an invocation session and returns once\n\
+                 the result arrives; streams it returns go on reading from the session.",
+                names.call[idx]
+            ));
+            match &method.output_schema {
+                OutputSchema::Unit => {
+                    w.line(format!(
+                        "func (c {}) {}({}) error {{",
+                        n.client,
+                        names.call[idx],
+                        signature.join(", ")
+                    ));
+                    w.indent();
+                    w.line(format!(
+                        "return bridge.InvokeStreaming(ctx, c.agent, {method_name}, {params_value})"
+                    ));
+                }
+                OutputSchema::Single(typ) => {
+                    let output = self.render(typ, w)?;
+                    let decode = codecs.func(Dir::Decode, typ)?;
+                    w.line(format!(
+                        "func (c {}) {}({}) ({output}, error) {{",
+                        n.client,
+                        names.call[idx],
+                        signature.join(", ")
+                    ));
+                    w.indent();
+                    w.line(format!(
+                        "return bridge.CallStreaming(ctx, c.agent, {method_name}, {params_value}, {decode})"
+                    ));
+                }
+            }
+            w.dedent();
+            w.line("}");
+            w.blank();
+            return Ok(());
+        }
 
         // Await. An ephemeral agent's result carries the id of the instance
         // that ran, since nothing else records it.

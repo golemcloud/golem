@@ -106,7 +106,36 @@ An **ephemeral** agent has no durable instance to get: its client is constructed
 
 Parameter and return types are generated in the client package, using the same Go spelling a Go agent would: records are structs, enums are `uint32` constants (`StatusInTransit`), flags are structs of `bool`, and variants and unions are sealed interfaces with one struct per case (`EventNote{Value: "hi"}`; a case without a payload is an empty struct). Options, results and tuples are `values.Option[T]`, `values.Result[T, E]` and `values.Tuple2[A, B]`… from `github.com/golemcloud/golem/sdks/go/core/values`; `text`, `char`, `binary`, `path`, `url` and `uuid` are `values.Text`, `values.Char`, `values.Binary`, `values.Path`, `values.URL`, `values.UUID`; datetimes and durations are `time.Time` and `time.Duration`.
 
-Methods that take or return streams are not generated for Go yet: the client leaves them out (its doc comment names them, and `golem build` prints a warning), and the agent's other methods are generated as usual.
+A quantity is `values.Quantity[U]`, where `U` is a generated unit marker named after the base unit (`values.Quantity[UnitKg]`). An empty `Unit` sends the base unit.
+
+### Streaming methods
+
+A method that takes or returns a stream spells each stream `bridge.AgentStream[T]` and runs over an invocation session, a WebSocket the bridge manages. It has only the awaited form, `M(ctx, …)`, which returns once the result arrives. Streams in the result keep reading from the session after that:
+
+```go
+// Send a stream: known values, a producer goroutine, or a writer you feed.
+out, err := c.Transform(ctx, bridge.StreamOf[uint32](1, 2, 3))
+if err != nil {
+    return err
+}
+for v, err := range out.All(ctx) { // or out.Next(ctx), out.Collect(ctx)
+    if err != nil {
+        return err // *bridge.StreamError (producer failed), *bridge.StreamCancelled
+    }
+    fmt.Println(v)
+}
+
+upload := bridge.ProduceStream(func(w *bridge.AgentStreamWriter[[]byte]) error {
+    return w.WriteAll(chunks...) // a returned error is the agent's "source unavailable"
+})
+_, err = c.Upload(ctx, upload)
+```
+
+- A stream is read once. Passing it to a method gives it away; reading it afterwards fails with `bridge.ErrStreamConsumed`.
+- `Close()` a returned stream you stop reading early. The agent then knows nobody is listening, and the session can finish.
+- Cancelling `ctx` before the result arrives cancels the call and the streams it sent.
+- If the connection drops, the session reconnects and resumes on its own: unacknowledged input is resent, and output continues after the last item you read.
+- A rejected call or a failed invocation is a `*bridge.SessionError` with the protocol's error code.
 
 ## Approach 2: the CLI
 
@@ -210,7 +239,7 @@ curl -X POST \
 - Every invocation carries an idempotency key (auto-generated if not supplied), giving at-most-once execution even if the client retries.
 - Constructor arguments in the agent ID must match the Go `ID` struct fields in order.
 - A generated Go client is its own module (`golem.local/bridge/<client-dir>`); the consuming `go.mod` needs the `require` and a `replace` pointing at the generated directory.
-- Generated clients leave out stream-bearing methods for now (named in the client's doc comment).
+- A stream-bearing method has no `Trigger`/`Schedule` form: a trigger could not hand back a stream.
 - HTTP-endpoint access requires both a `Spec.HTTP` mount and an `httpApi` deployment declaration.
 
 ### Related Guides

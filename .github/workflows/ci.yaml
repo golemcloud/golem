@@ -1023,7 +1023,7 @@ jobs:
       # above do not reach them. core is the shared schema model and the one
       # canonical-JSON implementation in Go; bridge is the external runtime.
       # Neither builds for wasip1 — core is stdlib-only and bridge is an
-      # ordinary net/http client — so there is no wasm step for them.
+      # ordinary REST and WebSocket client — so there is no wasm step for them.
       - name: Lint core (golangci-lint)
         uses: golangci/golangci-lint-action@v9
         with:
