@@ -301,6 +301,69 @@ async fn capture_gives_busy_at_the_deadline_and_reopens_admission() {
 
 #[test]
 #[timeout("10s")]
+async fn a_check_gives_busy_at_the_deadline_and_reopens_admission() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file_with_access(&generation_handle, &control, 73, AccessMode::Read).await;
+    let range = ReadRange {
+        offset: 0,
+        length: 4,
+    };
+    control.push_read(Ok(Bytes::from_static(b"data")));
+    let gate = control.block("read");
+    let reading = tokio::spawn(read_file(&generation_handle, &file, range).unwrap());
+    gate.wait_started().await;
+
+    let result = check_initial_files(&filesystem, Duration::from_millis(50)).await;
+
+    assert!(matches!(result, Err(CaptureError::Busy)));
+    assert!(
+        read_file(&generation_handle, &file, range).is_ok(),
+        "admission must open again after a busy check"
+    );
+    gate.release();
+    reading.await.unwrap().unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    delete_scripted_resident(&control, filesystem).await;
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_check_decides_as_a_capture_and_makes_no_host_directory_and_no_copy() {
+    let (filesystem, control, window) = metered_resident().await;
+    control.push_open(Ok(SandboxOpened::scripted_directory(1)));
+    control.push_read_directory(Ok(vec![]));
+    control.push_close(Ok(()));
+    let empty = check_initial_files(&filesystem, Duration::from_secs(5))
+        .await
+        .unwrap();
+    push_root_with_an_agent_file(&control);
+    let changed = check_initial_files(&filesystem, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (empty, changed),
+        (InitialFilesCheck::InitialFiles, InitialFilesCheck::Changed)
+    );
+    assert_eq!(
+        [empty.label(), changed.label()],
+        ["initial_files", "changed"]
+    );
+    assert!(!has_call(&control, "copy_contents("));
+    assert!(scratch_is_empty(&scratch_of(&filesystem)));
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    delete_scripted_resident(&control, filesystem).await;
+}
+
+#[test]
+#[timeout("10s")]
 async fn capture_waits_for_a_dropped_call_that_still_runs() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -3678,7 +3741,17 @@ async fn check_restore_against_replay(
             &replay_outcomes[..capture_at]
         ));
     }
+    let checked = check_initial_files(&captured, Duration::from_secs(5)).await;
     let outcome = capture(&captured, Duration::from_secs(5), None).await;
+    if let (Ok(checked), Ok(captured)) = (&checked, &outcome)
+        && (*checked == InitialFilesCheck::InitialFiles)
+            != matches!(captured, CaptureOutcome::InitialFiles { .. })
+    {
+        problems.push(format!(
+            "the check found {checked:?}, and the capture found {}",
+            captured.label()
+        ));
+    }
     if let Ok(CaptureOutcome::InitialFiles { .. }) = outcome {
         let at_capture = tree_without_times(&agents.root(&captured_agent));
         delete(seal(captured)).await.unwrap();

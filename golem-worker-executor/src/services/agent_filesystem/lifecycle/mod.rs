@@ -55,9 +55,9 @@ mod baseline;
 mod initial_files;
 
 pub(crate) use baseline::{
-    CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore,
-    RestoreError, RestoreTree, WholeCapture, capture, capture_whole, materialize_baseline,
-    tree_mark,
+    CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesCheck,
+    InitialFilesRestore, RestoreError, RestoreTree, WholeCapture, capture, capture_whole,
+    check_initial_files, materialize_baseline, tree_mark,
 };
 pub(crate) use initial_files::InitialFileConflict;
 use initial_files::{InitialFileSources, InitialFileState};

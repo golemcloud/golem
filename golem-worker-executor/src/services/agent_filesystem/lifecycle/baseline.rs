@@ -238,6 +238,34 @@ impl WholeCapture {
     }
 }
 
+/// Whether a tree is what a start from the initial files of the generation gives, as a check
+/// without a copy finds it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InitialFilesCheck {
+    /// The tree holds only initial files.
+    InitialFiles,
+    /// The tree holds something that a start from the initial files does not give.
+    Changed,
+}
+
+impl InitialFilesCheck {
+    /// The metric label of the outcome.
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::InitialFiles => "initial_files",
+            Self::Changed => "changed",
+        }
+    }
+}
+
+/// What a capture does with a tree.
+enum Decision {
+    /// The tree is what a start from the initial files gives. Nothing is copied.
+    InitialFiles,
+    /// The tree is copied without the bytes of the files at the paths `left_out`.
+    Copy { left_out: Box<[Box<Path>]> },
+}
+
 /// Whether the tree at the mark `now` is the tree of `since`.
 pub(super) fn unchanged(now: &TreeMark, since: Option<&TreeMark>) -> bool {
     since.is_some_and(|since| now.generation == since.generation && now.changes == since.changes)
@@ -436,6 +464,25 @@ pub(crate) fn capture_whole<Adapter: SandboxFilesystemAdapter>(
     )
 }
 
+/// Tells whether a resident filesystem is what a start from the initial files of the generation
+/// gives, by the rule of [`capture`], and leaves the filesystem resident.
+///
+/// Use this only at a boundary. The check stops new filesystem calls and waits for the calls that
+/// are open, as [`capture`] does. It makes no host directory and copies nothing. The wait for open
+/// calls ends at `wait`. A call that is still open then gives `Busy`, and the filesystem opens
+/// again at once.
+pub(crate) fn check_initial_files<Adapter: SandboxFilesystemAdapter>(
+    filesystem: &ResidentFilesystem<Adapter>,
+    wait: Duration,
+) -> impl Future<Output = Result<InitialFilesCheck, CaptureError>> + Send + 'static {
+    fenced(
+        filesystem,
+        wait,
+        |generation| async move { check_fenced(&generation).await },
+        |_| None,
+    )
+}
+
 /// Runs `run` in a task of the module while no filesystem call runs. The task stops new calls,
 /// waits up to `wait` for the open calls, runs `run`, and opens the filesystem again. A copy that
 /// the caller does not take, because it went away, is discarded.
@@ -521,6 +568,25 @@ async fn copy_fenced<Adapter: SandboxFilesystemAdapter>(
     Ok(WholeCapture::Captured { capture, mark })
 }
 
+/// Decides, while no call runs, whether the tree is what a start from the initial files gives.
+async fn check_fenced<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+) -> Result<InitialFilesCheck, CaptureError> {
+    let (_, counters) = generation.registry.counters();
+    let sandbox = generation.sandbox.read().await;
+    let sandbox = sandbox.as_ref().ok_or(CaptureError::Invalidated)?;
+    let state = Arc::clone(&generation.initial_files.lock().unwrap());
+    Ok(
+        match decide(sandbox.as_ref(), &state, counters.has_chosen_times())
+            .await
+            .map_err(CaptureError::Sandbox)?
+        {
+            Decision::InitialFiles => InitialFilesCheck::InitialFiles,
+            Decision::Copy { .. } => InitialFilesCheck::Changed,
+        },
+    )
+}
+
 /// The time left until [`TIMESTAMP_SETTLE`] passed since the last call ended at `last_millis`
 /// after the Unix epoch, or `None` when it passed at `now`.
 pub(super) fn settle_delay(last_millis: u64, now: std::time::SystemTime) -> Option<Duration> {
@@ -542,16 +608,13 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or(CaptureError::Invalidated)?;
     let state = Arc::clone(&generation.initial_files.lock().unwrap());
-    let left_out = left_out_files(sandbox.as_ref(), &state)
+    let left_out = match decide(sandbox.as_ref(), &state, chosen_times)
         .await
-        .map_err(CaptureError::Sandbox)?;
-    if !chosen_times
-        && holds_only_initial_files(sandbox.as_ref(), &state, &left_out)
-            .await
-            .map_err(CaptureError::Sandbox)?
+        .map_err(CaptureError::Sandbox)?
     {
-        return Ok(None);
-    }
+        Decision::InitialFiles => return Ok(None),
+        Decision::Copy { left_out } => left_out,
+    };
     let directory = HostDirectory::create_in(
         generation.scratch.path(),
         OsStr::new(&uuid::Uuid::new_v4().to_string()),
@@ -567,6 +630,25 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
             Err(CaptureError::Sandbox(error))
         }
     }
+}
+
+/// Decides what a capture does with the tree of `sandbox` with the initial files of `state`: it
+/// copies nothing when the tree is what a start from the initial files gives and no call outside
+/// an install put a chosen modification time at a path, which `chosen_times` tells. The caller
+/// holds the read guard of the sandbox, so a deletion waits for the decision.
+async fn decide<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    state: &InitialFileState,
+    chosen_times: bool,
+) -> Result<Decision, FilesystemStorageError> {
+    let left_out = left_out_files(sandbox, state).await?;
+    Ok(
+        if !chosen_times && holds_only_initial_files(sandbox, state, &left_out).await? {
+            Decision::InitialFiles
+        } else {
+            Decision::Copy { left_out }
+        },
+    )
 }
 
 /// Finds the read-only declared paths that hold the declared initial file with a single name. A
