@@ -32,21 +32,17 @@ pub struct BackendStats {
 
 #[agent_definition]
 pub trait RateLimitBackend {
-    fn new(policy: String) -> Self;
+    fn new(policy: String, limit: u64, window_milliseconds: u64) -> Self;
 
-    async fn admit(
-        &mut self,
-        key: String,
-        logical_invocation_id: String,
-        limit: u64,
-        window_milliseconds: u64,
-    ) -> Admission;
+    async fn admit(&mut self, key: String, logical_invocation_id: String) -> Admission;
 
     fn stats(&self) -> BackendStats;
 }
 
 struct RateLimitBackendImpl {
     _policy: String,
+    limit: u64,
+    window_milliseconds: u64,
     windows: BTreeMap<(String, u64), u64>,
     decisions: BTreeMap<String, Admission>,
     charged: BTreeSet<String>,
@@ -58,8 +54,6 @@ impl RateLimitBackendImpl {
         &mut self,
         key: String,
         logical_invocation_id: String,
-        limit: u64,
-        window_milliseconds: u64,
         now_milliseconds: u64,
     ) -> Admission {
         self.attempts += 1;
@@ -70,12 +64,8 @@ impl RateLimitBackendImpl {
             return decision;
         }
 
-        assert!(limit > 0, "rate limit must be greater than zero");
-        assert!(
-            window_milliseconds > 0,
-            "rate-limit window must be greater than zero"
-        );
-
+        let limit = self.limit;
+        let window_milliseconds = self.window_milliseconds;
         let starts_at_milliseconds = now_milliseconds - now_milliseconds % window_milliseconds;
         let count = self
             .windows
@@ -109,10 +99,17 @@ impl RateLimitBackendImpl {
 
 #[agent_implementation]
 impl RateLimitBackend for RateLimitBackendImpl {
-    fn new(policy: String) -> Self {
+    fn new(policy: String, limit: u64, window_milliseconds: u64) -> Self {
         assert!(!policy.is_empty(), "rate-limit policy must not be empty");
+        assert!(limit > 0, "rate limit must be greater than zero");
+        assert!(
+            window_milliseconds > 0,
+            "rate-limit window must be greater than zero"
+        );
         Self {
             _policy: policy,
+            limit,
+            window_milliseconds,
             windows: BTreeMap::new(),
             decisions: BTreeMap::new(),
             charged: BTreeSet::new(),
@@ -120,24 +117,12 @@ impl RateLimitBackend for RateLimitBackendImpl {
         }
     }
 
-    async fn admit(
-        &mut self,
-        key: String,
-        logical_invocation_id: String,
-        limit: u64,
-        window_milliseconds: u64,
-    ) -> Admission {
+    async fn admit(&mut self, key: String, logical_invocation_id: String) -> Admission {
         let now_milliseconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock must not precede the Unix epoch")
             .as_millis() as u64;
-        self.admit_at(
-            key,
-            logical_invocation_id,
-            limit,
-            window_milliseconds,
-            now_milliseconds,
-        )
+        self.admit_at(key, logical_invocation_id, now_milliseconds)
     }
 
     fn stats(&self) -> BackendStats {
@@ -207,13 +192,15 @@ async fn persistent_rate_limit(
         ));
     }
 
-    let mut backend = RateLimitBackendClient::get(parameters.policy);
+    let mut backend = RateLimitBackendClient::get(
+        parameters.policy,
+        parameters.limit,
+        parameters.window_milliseconds,
+    );
     let admission = backend
         .admit(
             principal_key(&principal),
             generate_idempotency_key().to_string(),
-            parameters.limit,
-            parameters.window_milliseconds,
         )
         .await;
     if !admission.admitted {
@@ -235,79 +222,61 @@ mod tests {
     use std::thread;
     use test_r::test;
 
-    fn backend() -> RateLimitBackendImpl {
-        RateLimitBackendImpl::new("test".to_string())
+    fn backend(limit: u64) -> RateLimitBackendImpl {
+        RateLimitBackendImpl::new("test".to_string(), limit, 1_000)
     }
 
     #[test]
     fn rate_1_limit_boundary_and_independent_keys() {
-        let mut backend = backend();
+        let mut backend = backend(3);
         for ordinal in 1..=3 {
-            let result = backend.admit_at(
-                "principal-a".to_string(),
-                format!("a-{ordinal}"),
-                3,
-                1_000,
-                1_234,
-            );
+            let result = backend.admit_at("principal-a".to_string(), format!("a-{ordinal}"), 1_234);
             assert!(result.admitted);
             assert_eq!(result.remaining, 3 - ordinal);
         }
 
-        let rejected = backend.admit_at(
-            "principal-a".to_string(),
-            "a-4".to_string(),
-            3,
-            1_000,
-            1_234,
-        );
+        let rejected = backend.admit_at("principal-a".to_string(), "a-4".to_string(), 1_234);
         assert!(!rejected.admitted);
         assert_eq!(rejected.retry_after_milliseconds, 766);
 
-        let independent = backend.admit_at(
-            "principal-b".to_string(),
-            "b-1".to_string(),
-            3,
-            1_000,
-            1_234,
-        );
+        let independent = backend.admit_at("principal-b".to_string(), "b-1".to_string(), 1_234);
         assert!(independent.admitted);
         assert_eq!(independent.remaining, 2);
     }
 
     #[test]
     fn rate_1_fixed_window_refills_at_epoch_aligned_boundary() {
-        let mut backend = backend();
+        let mut backend = backend(1);
         assert!(
             backend
-                .admit_at("key".into(), "first".into(), 1, 1_000, 1_999)
+                .admit_at("key".into(), "first".into(), 1_999)
                 .admitted
         );
         assert!(
             !backend
-                .admit_at("key".into(), "blocked".into(), 1, 1_000, 1_999)
+                .admit_at("key".into(), "blocked".into(), 1_999)
                 .admitted
         );
         assert!(
             backend
-                .admit_at("key".into(), "refilled".into(), 1, 1_000, 2_000)
+                .admit_at("key".into(), "refilled".into(), 2_000)
                 .admitted
         );
     }
 
     #[test]
     fn rate_1_fixed_window_does_not_refill_twice_after_clock_rollback() {
-        let mut backend = backend();
+        let mut backend = backend(1);
         assert!(
             backend
-                .admit_at("key".into(), "current-first".into(), 1, 1_000, 2_234)
+                .admit_at("key".into(), "current-first".into(), 2_234)
                 .admitted
         );
 
         // A wall-clock correction visits an older epoch-aligned window.
         assert!(
             backend
-                .admit_at("key".into(), "older".into(), 1, 1_000, 1_234)
+                .admit_at("key".into(), "older".into(), 1_234)
                 .admitted
         );
 
@@ -315,7 +284,7 @@ mod tests {
         // that window a second allowance.
         assert!(
             !backend
-                .admit_at("key".into(), "current-second".into(), 1, 1_000, 2_235)
+                .admit_at("key".into(), "current-second".into(), 2_235)
                 .admitted
         );
     }
@@ -324,7 +293,7 @@ mod tests {
     fn rate_2_distinct_owners_share_one_atomic_backend_key() {
         const LIMIT: usize = 11;
         const OWNERS: usize = 64;
-        let backend = Arc::new(Mutex::new(backend()));
+        let backend = Arc::new(Mutex::new(backend(LIMIT as u64)));
         let barrier = Arc::new(Barrier::new(OWNERS));
         let mut calls = Vec::new();
 
@@ -336,8 +305,6 @@ mod tests {
                 backend.lock().unwrap().admit_at(
                     "shared-principal".to_string(),
                     format!("owner-{owner}"),
-                    LIMIT as u64,
-                    1_000,
                     42,
                 )
             }));
@@ -357,14 +324,8 @@ mod tests {
 
     #[test]
     fn rate_3_replayed_attempt_returns_committed_decision_without_charge() {
-        let mut backend = backend();
-        let first = backend.admit_at(
-            "principal".into(),
-            "stable-logical-invocation".into(),
-            1,
-            1_000,
-            999,
-        );
+        let mut backend = backend(1);
+        let first = backend.admit_at("principal".into(), "stable-logical-invocation".into(), 999);
         assert!(first.admitted);
         assert!(!first.duplicate);
 
@@ -373,8 +334,6 @@ mod tests {
         let replay = backend.admit_at(
             "principal".into(),
             "stable-logical-invocation".into(),
-            1,
-            1_000,
             5_000,
         );
         assert!(replay.admitted);
@@ -382,13 +341,7 @@ mod tests {
         assert_eq!(backend.stats().attempts, 2);
         assert_eq!(backend.stats().committed_charges, 1);
 
-        let next = backend.admit_at(
-            "principal".into(),
-            "new-logical-invocation".into(),
-            1,
-            1_000,
-            5_000,
-        );
+        let next = backend.admit_at("principal".into(), "new-logical-invocation".into(), 5_000);
         assert!(next.admitted);
         assert_eq!(backend.stats().committed_charges, 2);
     }

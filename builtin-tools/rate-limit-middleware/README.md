@@ -1,14 +1,17 @@
 # Persistent rate-limit middleware
 
 `persistent-rate-limit` is universal tool middleware backed by one durable
-`RateLimitBackend` agent per configured policy. The backend is outside the transient middleware
-instance, serializes admissions from every calling owner, and persists its state through Golem's
-ordinary durable-agent execution.
+`RateLimitBackend` agent per `(policy, limit, windowMilliseconds)` configuration. The backend is
+outside the transient middleware instance, serializes admissions from every calling owner, and
+persists its state through Golem's ordinary durable-agent execution.
 
 The policy key is the authenticated invocation principal, not the owning agent. Consequently two
 different owners acting as the same principal share a limit, while different principals have
 independent counters. Anonymous invocations share the `anonymous` key. The deployment environment
-already isolates the backend agent, and `policy` separates independent limits within it.
+already isolates the backend agent, and `policy` separates independent limits within it. The limit
+and window are immutable constructor parameters, not admission arguments. Changing either selects
+a separate backend with independent capacity; an invocation replaying its pinned old configuration
+continues to use the old backend and its recorded decisions.
 
 The policy uses fixed windows aligned to Unix epoch boundaries. `limit: N` admits exactly N new
 logical invocations in each `windowMilliseconds` interval; call N+1 is rejected before dispatch.
