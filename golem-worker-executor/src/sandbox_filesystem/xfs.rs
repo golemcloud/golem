@@ -27,8 +27,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const XFS_SUPER_MAGIC: u64 = 0x5846_5342;
-// XFS reserves inode 128 for the filesystem root.
-const XFS_ROOT_INODE: u64 = 128;
+// The mount table of the process: one line per mount, in the format of `proc_pid_mountinfo(5)`.
+const MOUNT_TABLE: &str = "/proc/self/mountinfo";
+// `XFS_FSOP_GEOM_FLAGS_DIRV2CI` of `xfs_fs.h`: names are compared without ASCII case.
+const XFS_FSOP_GEOM_FLAGS_DIRV2CI: u32 = 1 << 12;
+// `XFS_IOC_FSGEOMETRY_V1` of `xfs_fs.h`: `_IOR('X', 100, struct xfs_fsop_geom_v1)`.
+const XFS_IOC_FSGEOMETRY_V1: rustix::ioctl::Opcode =
+    rustix::ioctl::opcode::read::<XfsGeometryV1>(b'X', 100);
 const XFS_BASIC_BLOCK_BYTES: u64 = 512;
 const XQM_PRJQUOTA: u32 = 2;
 const Q_XGETQUOTA: u32 = (b'X' as u32) << 8 | 3;
@@ -139,6 +144,32 @@ struct FsQuotaStatV {
     qs_pad2: [u64; 7],
 }
 
+/// `struct xfs_fsop_geom_v1` of `xfs_fs.h`, the output of `XFS_IOC_FSGEOMETRY_V1`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct XfsGeometryV1 {
+    blocksize: u32,
+    rtextsize: u32,
+    agblocks: u32,
+    agcount: u32,
+    logblocks: u32,
+    sectsize: u32,
+    inodesize: u32,
+    imaxpct: u32,
+    datablocks: u64,
+    rtblocks: u64,
+    rtextents: u64,
+    logstart: u64,
+    uuid: [u8; 16],
+    sunit: u32,
+    swidth: u32,
+    version: i32,
+    flags: u32,
+    logsectsize: u32,
+    rtsectsize: u32,
+    dirblocksize: u32,
+}
+
 #[derive(Clone)]
 pub(super) struct ManagedProvisioning {
     volume: FilesystemVolume,
@@ -150,70 +181,107 @@ pub(super) struct ManagedProvisioning {
     cleanup_retry: RetryConfig,
 }
 
-impl ManagedProvisioning {
-    pub(super) fn new(
-        root: &Path,
-        cleanup_retry: &RetryConfig,
-    ) -> Result<Self, FilesystemStorageError> {
+/// The root directory of an XFS volume after the checks that every XFS storage mode needs.
+///
+/// The value holds the exclusive lock of the root for as long as its descriptor is open.
+pub(super) struct XfsRoot {
+    root_fd: Arc<File>,
+    stable_root: Box<Path>,
+    identity: FilesystemIdentity,
+    name_mode: ValidatedXfsNameMode,
+    filesystem_block_bytes: NonZeroU64,
+}
+
+impl XfsRoot {
+    /// Opens the XFS volume at `root` for one executor.
+    ///
+    /// The path must be the root directory of an XFS filesystem and the root of its mount, with
+    /// case-sensitive names and a valid block size, and no other process may hold its lock. The
+    /// function takes the exclusive lock of the root. It changes nothing on the volume, and none of
+    /// its calls needs a privilege.
+    pub(super) fn open(root: &Path) -> Result<Self, FilesystemStorageError> {
         let root_fd = File::open(root)
-            .map_err(|error| FilesystemStorageError::io("open managed XFS root", root, error))?;
+            .map_err(|error| FilesystemStorageError::io("open XFS root", root, error))?;
         let filesystem = fstatfs(&root_fd).map_err(|error| {
-            FilesystemStorageError::io("inspect managed XFS root", root, errno_to_io(error))
+            FilesystemStorageError::io("inspect XFS root", root, errno_to_io(error))
         })?;
         if filesystem.f_type as u64 != XFS_SUPER_MAGIC {
             return Err(FilesystemStorageError::verification(
-                "validate managed XFS root filesystem type",
+                "validate XFS root filesystem type",
                 root,
             ));
         }
-        validate_managed_xfs_root_location(&root_fd, root)?;
+        let flags = geometry_flags(&root_fd).map_err(|error| {
+            FilesystemStorageError::io("inspect XFS root geometry", root, error)
+        })?;
+        if !names_are_case_sensitive(flags) {
+            return Err(FilesystemStorageError::verification(
+                "validate XFS names are case-sensitive",
+                root,
+            ));
+        }
+        validate_xfs_root_location(&root_fd, root)?;
         flock(&root_fd, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
             FilesystemStorageError::io(
-                "acquire exclusive ownership of managed XFS root",
+                "acquire exclusive ownership of XFS root",
                 root,
                 errno_to_io(error),
             )
         })?;
-        let filesystem_block_bytes = u64::try_from(filesystem.f_bsize).map_err(|_| {
-            FilesystemStorageError::verification("validate managed XFS filesystem block size", root)
-        })?;
-        if filesystem_block_bytes == 0
-            || !filesystem_block_bytes.is_multiple_of(XFS_BASIC_BLOCK_BYTES)
-        {
-            return Err(FilesystemStorageError::verification(
-                "validate managed XFS filesystem block size",
-                root,
-            ));
-        }
-
-        let stable_root = PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd()));
+        let filesystem_block_bytes = u64::try_from(filesystem.f_bsize)
+            .ok()
+            .filter(|bytes| *bytes != 0 && bytes.is_multiple_of(XFS_BASIC_BLOCK_BYTES))
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| {
+                FilesystemStorageError::verification("validate XFS filesystem block size", root)
+            })?;
+        let stable_root: Box<Path> =
+            PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd())).into_boxed_path();
         std::fs::metadata(&stable_root).map_err(|error| {
-            FilesystemStorageError::io(
-                "open managed XFS root through its stable descriptor",
-                root,
-                error,
-            )
+            FilesystemStorageError::io("open XFS root through its stable descriptor", root, error)
         })?;
+        let identity = filesystem_identity(&root_fd)
+            .map_err(|error| FilesystemStorageError::io("identify XFS root", root, error))?;
+        let name_mode = validated_xfs_name_mode(filesystem.f_type as u64, identity)
+            .expect("validated XFS filesystem type must produce a name-mode proof");
+        Ok(Self {
+            root_fd: Arc::new(root_fd),
+            stable_root,
+            identity,
+            name_mode,
+            filesystem_block_bytes,
+        })
+    }
+}
 
-        let identity = filesystem_identity(&root_fd).map_err(|error| {
-            FilesystemStorageError::io("identify managed XFS root", root, error)
-        })?;
-        let validated_name_mode =
-            validated_xfs_name_mode(filesystem.f_type as u64, identity)
-                .expect("validated XFS filesystem type must produce a name-mode proof");
+impl ManagedProvisioning {
+    /// Binds managed XFS storage with project quotas on the opened root `root`.
+    ///
+    /// The function removes any project from the root, checks that project quota accounting and
+    /// enforcement are on and that this process may query and change project quotas, and probes
+    /// project inheritance and reflink.
+    pub(super) fn new(
+        root: XfsRoot,
+        cleanup_retry: &RetryConfig,
+    ) -> Result<Self, FilesystemStorageError> {
+        let XfsRoot {
+            root_fd,
+            stable_root,
+            identity,
+            name_mode,
+            filesystem_block_bytes,
+        } = root;
         clear_root_project_assignment(&root_fd, &stable_root)?;
-        let root_fd = Arc::new(root_fd);
         let backend = Self {
             volume: FilesystemVolume::managed(Arc::clone(&root_fd), identity),
-            root: stable_root,
+            root: stable_root.into_path_buf(),
             root_fd,
             allocator: Arc::new(Mutex::new(ProjectAllocator {
                 next: 1,
                 active: HashMap::new(),
             })),
-            filesystem_block_bytes: NonZeroU64::new(filesystem_block_bytes)
-                .expect("validated XFS filesystem block size must be nonzero"),
-            validated_name_mode,
+            filesystem_block_bytes,
+            validated_name_mode: name_mode,
             cleanup_retry: cleanup_retry.clone(),
         };
         backend.validate_project_quota_state()?;
@@ -737,47 +805,79 @@ pub(super) fn verify_host_directory_has_no_project(
     Ok(())
 }
 
-fn validate_managed_xfs_root_location(
-    root_fd: &File,
-    root: &Path,
-) -> Result<(), FilesystemStorageError> {
+fn validate_xfs_root_location(root_fd: &File, root: &Path) -> Result<(), FilesystemStorageError> {
     let location = statx(
         root_fd,
         "",
         AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT,
-        StatxFlags::empty(),
+        StatxFlags::MNT_ID,
     )
     .map_err(|error| {
-        FilesystemStorageError::io(
-            "inspect managed XFS root mount location",
-            root,
-            errno_to_io(error),
-        )
+        FilesystemStorageError::io("inspect XFS root mount location", root, errno_to_io(error))
     })?;
-    let inode = root_fd.metadata().map_err(|error| {
-        FilesystemStorageError::io("inspect managed XFS root inode", root, error)
+    let mount_table = std::fs::read_to_string(MOUNT_TABLE).map_err(|error| {
+        FilesystemStorageError::io("read the mount table", Path::new(MOUNT_TABLE), error)
     })?;
-    if !managed_xfs_root_location_is_valid(
-        inode.ino(),
+    let mount_id = (location.stx_mask & StatxFlags::MNT_ID.bits() != 0).then_some(location.stx_mnt_id);
+    if !xfs_root_location_is_valid(
         location.stx_attributes,
         location.stx_attributes_mask,
+        mount_id,
+        &mount_table,
     ) {
         return Err(FilesystemStorageError::verification(
-            "validate managed XFS root is the filesystem mount root",
+            "validate XFS root is the filesystem mount root",
             root,
         ));
     }
     Ok(())
 }
 
-fn managed_xfs_root_location_is_valid(
-    inode: u64,
+/// Whether a directory is the root directory of its filesystem and is mounted there.
+///
+/// The directory must be a mount root, and the line of its mount in `mount_table`, which has the
+/// format of `/proc/self/mountinfo`, must give `/` as the root of the mount within its filesystem.
+/// A bind mount of a subdirectory is a mount root too, but its mount has another root. A
+/// directory whose mount id is not known is not valid.
+fn xfs_root_location_is_valid(
     attributes: StatxAttributes,
     attributes_mask: StatxAttributes,
+    mount_id: Option<u64>,
+    mount_table: &str,
 ) -> bool {
-    inode == XFS_ROOT_INODE
-        && attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
+    attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
         && attributes.contains(StatxAttributes::MOUNT_ROOT)
+        && mount_id.and_then(|id| mount_root(mount_table, id)) == Some("/")
+}
+
+/// Gives the root within its filesystem of the mount `mount_id` in `mount_table`, which has the
+/// format of `/proc/self/mountinfo`: the fourth field of the line whose first field is the id.
+fn mount_root(mount_table: &str, mount_id: u64) -> Option<&str> {
+    mount_table.lines().find_map(|line| {
+        let mut fields = line.split(' ');
+        let id = fields.next()?.parse::<u64>().ok()?;
+        (id == mount_id).then(|| fields.nth(2)).flatten()
+    })
+}
+
+/// Whether an XFS volume with the superblock flags `geometry_flags` compares names with their
+/// case. A volume made with `mkfs.xfs -n version=ci` folds the case of ASCII names.
+fn names_are_case_sensitive(geometry_flags: u32) -> bool {
+    geometry_flags & XFS_FSOP_GEOM_FLAGS_DIRV2CI == 0
+}
+
+/// Reads the superblock flags of the XFS volume that holds `file`. The call needs no privilege.
+fn geometry_flags(file: &File) -> std::io::Result<u32> {
+    // SAFETY: The opcode encodes the size of `XfsGeometryV1`, which has the layout of
+    // `struct xfs_fsop_geom_v1`, and the kernel writes the complete structure.
+    unsafe {
+        ioctl(
+            file,
+            Getter::<{ XFS_IOC_FSGEOMETRY_V1 }, XfsGeometryV1>::new(),
+        )
+    }
+    .map(|geometry| geometry.flags)
+    .map_err(errno_to_io)
 }
 
 pub(super) fn observe_space(
@@ -1555,30 +1655,50 @@ mod tests {
         assert!(validated_xfs_name_mode(0, identity).is_none());
     }
 
-    #[test]
-    fn managed_root_must_be_the_xfs_filesystem_mount_root() {
-        let mount_root = StatxAttributes::MOUNT_ROOT;
+    const MOUNT_TABLE_FIXTURE: &str = "\
+22 1 0:21 / / rw,relatime shared:1 - ext4 /dev/root rw
+36 22 7:0 / /var/lib/golem/agents rw,relatime shared:2 - xfs /dev/loop0 rw,noquota
+37 22 7:0 /agents /srv/bound rw,relatime shared:2 - xfs /dev/loop0 rw,noquota
+";
 
-        assert!(managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE,
-            mount_root,
-            mount_root,
-        ));
-        assert!(!managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE + 1,
-            mount_root,
-            mount_root,
-        ));
-        assert!(!managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE,
-            StatxAttributes::empty(),
-            mount_root,
-        ));
-        assert!(!managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE,
-            StatxAttributes::empty(),
-            StatxAttributes::empty(),
-        ));
+    #[test]
+    fn mount_root_is_the_fourth_field_of_the_line_of_the_mount() {
+        assert_eq!(mount_root(MOUNT_TABLE_FIXTURE, 36), Some("/"));
+        assert_eq!(mount_root(MOUNT_TABLE_FIXTURE, 37), Some("/agents"));
+        assert_eq!(mount_root(MOUNT_TABLE_FIXTURE, 99), None);
+        assert_eq!(mount_root("36 22", 36), None);
+        assert_eq!(mount_root("x 22 7:0 / /a", 36), None);
+    }
+
+    #[test]
+    fn an_xfs_root_is_a_mount_root_whose_mount_starts_at_the_filesystem_root() {
+        let mount_root_flag = StatxAttributes::MOUNT_ROOT;
+        let valid = |attributes, mask, id| {
+            xfs_root_location_is_valid(attributes, mask, id, MOUNT_TABLE_FIXTURE)
+        };
+
+        assert!(valid(mount_root_flag, mount_root_flag, Some(36)));
+        assert!(!valid(mount_root_flag, mount_root_flag, Some(37)));
+        assert!(!valid(mount_root_flag, mount_root_flag, Some(99)));
+        assert!(!valid(mount_root_flag, mount_root_flag, None));
+        assert!(!valid(StatxAttributes::empty(), mount_root_flag, Some(36)));
+        assert!(!valid(mount_root_flag, StatxAttributes::empty(), Some(36)));
+    }
+
+    #[test]
+    fn names_are_case_sensitive_unless_the_volume_folds_ascii_case() {
+        assert!(names_are_case_sensitive(0));
+        assert!(names_are_case_sensitive(!XFS_FSOP_GEOM_FLAGS_DIRV2CI));
+        assert!(!names_are_case_sensitive(XFS_FSOP_GEOM_FLAGS_DIRV2CI));
+        assert!(!names_are_case_sensitive(u32::MAX));
+    }
+
+    #[test]
+    fn geometry_abi_layout_matches_linux_uapi() {
+        assert_eq!(std::mem::size_of::<XfsGeometryV1>(), 112);
+        assert_eq!(std::mem::align_of::<XfsGeometryV1>(), 8);
+        assert_eq!(std::mem::offset_of!(XfsGeometryV1, flags), 92);
+        assert_eq!(XFS_IOC_FSGEOMETRY_V1, 0x8070_5864);
     }
 
     #[test]
