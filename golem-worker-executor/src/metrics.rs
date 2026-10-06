@@ -1823,7 +1823,7 @@ pub mod filesystem_snapshots {
         .unwrap();
         static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(
             "filesystem_snapshot_restore_seconds",
-            "Time of a restore of a filesystem snapshot, without the wait for a slot, by outcome",
+            "Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome",
             &["outcome"],
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
@@ -1836,10 +1836,41 @@ pub mod filesystem_snapshots {
         .unwrap();
         static ref LEAKED_CLEANUPS: CounterVec = register_counter_vec!(
             "filesystem_snapshot_leaked_cleanups_total",
-            "Clean-ups of filesystem snapshots that failed after their retries, by operation",
+            "Clean-ups of filesystem snapshots that failed, by operation",
             &["operation"]
         )
         .unwrap();
+        static ref CLEANUPS_PENDING: Gauge = register_gauge!(
+            "filesystem_snapshot_cleanups_pending",
+            "Number of agents with pending or running clean-up work of filesystem snapshots"
+        )
+        .unwrap();
+        static ref COPY_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_copy_seconds",
+            "Time of a copy of the filesystem snapshots of a fork source, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref FAILED_SPACE_RECLAIMS: Counter = register_counter!(
+            "filesystem_snapshot_failed_space_reclaims_total",
+            "Deletes of filesystem snapshots whose release of unused storage failed; the next delete tries again"
+        )
+        .unwrap();
+    }
+
+    pub fn set_cleanups_pending(agents: usize) {
+        CLEANUPS_PENDING.set(agents as f64);
+    }
+
+    pub fn record_copy(outcome: &'static str, elapsed: Duration) {
+        COPY_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_failed_space_reclaim() {
+        FAILED_SPACE_RECLAIMS.inc();
     }
 
     pub fn record_capture(outcome: &'static str, elapsed: Duration) {

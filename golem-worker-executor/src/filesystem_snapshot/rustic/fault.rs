@@ -13,15 +13,17 @@
 // limitations under the License.
 
 //! The errors that the backend puts into the chain of a rustic error, and the classification of a
-//! failed operation as a [`SnapshotStoreError`].
+//! failed try of a blob call and of a failed run.
 //!
 //! rustic gives no public kind of an error. So the classification reads the chain of sources: the
-//! markers of this module, the name errors of the blob storage, and the I/O errors.
+//! markers of this module, the name, range and missing-blob errors of the blob storage, and the
+//! I/O errors.
 
 use super::prune::SNAPSHOTS_PATH;
-use crate::filesystem_snapshot::SnapshotStoreError;
-use golem_service_base::storage::blob::BlobNameError;
+use super::runs::RunEnd;
+use golem_service_base::storage::blob::{BlobMissingError, BlobNameError, BlobRangeError};
 use rustic_core::FileType;
+use rustic_core::Id;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::Path;
@@ -76,8 +78,8 @@ impl Display for LeaseExpired {
 
 impl Error for LeaseExpired {}
 
-/// Tells whether an error in the chain is [`LeaseExpired`]. Only tests ask this, because the store
-/// gives a lease that ran out as a retryable storage error, the same as a failed call.
+/// Tells whether an error in the chain is [`LeaseExpired`]. Only tests ask this: a prune whose
+/// lease ran out fails as any other failed prune does, and the delete keeps its answer.
 #[cfg(test)]
 pub(super) fn is_lease_expired(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| error.is::<LeaseExpired>())
@@ -145,69 +147,256 @@ pub(super) fn is_config_exists(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| error.is::<ConfigExists>())
 }
 
-/// The kind of operation that failed. It tells where an I/O error came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Operation {
-    /// Reads a tree from the local filesystem and writes it into the repository.
-    Save,
-    /// Reads the repository and writes a tree into the local filesystem.
-    Restore,
-    /// Reads or changes only the repository.
-    Repository,
-    /// Removes the data that no snapshot uses.
-    Prune,
-}
-
-/// A failed storage call gives `Storage`, retryable unless a name error caused it. An index file
-/// that a prune deleted after the listing gives retryable `Storage` in each operation. An I/O error
-/// gives `Source` in a save and `Destination` in a restore. Each other error gives `Storage` that
-/// is not retryable in a save or a prune, and `Corrupt` in a restore or a read of the repository.
-/// So a pack that is gone stays `Corrupt`, because a prune deletes a pack only after the grace
-/// period.
-pub(super) fn classify(operation: Operation, error: anyhow::Error) -> SnapshotStoreError {
-    let from_storage = is_storage_failure(error.as_ref()) || is_index_missing(error.as_ref());
-    let io_kind = chain(error.as_ref())
-        .find_map(|error| error.downcast_ref::<std::io::Error>())
-        .map(std::io::Error::kind);
-    let permanent = chain(error.as_ref()).any(|error| error.is::<BlobNameError>());
-    match (from_storage, io_kind, operation) {
-        (true, _, _) => SnapshotStoreError::Storage {
-            retryable: !permanent,
-            source: error,
-        },
-        (false, Some(kind), Operation::Save) => {
-            SnapshotStoreError::Source(std::io::Error::new(kind, error_text(&error)))
-        }
-        (false, Some(kind), Operation::Restore) => {
-            SnapshotStoreError::Destination(std::io::Error::new(kind, error_text(&error)))
-        }
-        (false, _, Operation::Save | Operation::Prune) => SnapshotStoreError::Storage {
-            retryable: false,
-            source: error,
-        },
-        (false, _, Operation::Restore | Operation::Repository) => {
-            SnapshotStoreError::Corrupt(error)
-        }
-    }
-}
-
 /// Tells whether an error in the chain is a failed blob storage call.
 pub(super) fn is_storage_failure(error: &(dyn Error + 'static)) -> bool {
     chain(error).any(|error| error.is::<BlobCallFailed>())
 }
 
-/// Gives the error of the store for a blob storage call that the store made without rustic. It is
-/// retryable unless a name error of the blob storage caused it.
-pub(super) fn storage_failure(error: anyhow::Error) -> SnapshotStoreError {
-    classify(
-        Operation::Repository,
-        anyhow::Error::new(BlobCallFailed::new(error)),
-    )
+/// How one try of a blob call failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallFailure {
+    /// The operation of the call was cancelled.
+    Cancelled,
+    /// The lease of the prune ran out.
+    LeaseExpired,
+    /// The storage gave an answer that no try can change: a name or a range that breaks a rule, a
+    /// permission that the storage refuses, or a blob that is not there.
+    Permanent,
+    /// The try got no answer within the time left of the window of the call.
+    TimedOut,
+    /// Any other failure.
+    Failed,
 }
 
-/// Gives the text of the error with the text of each of its sources.
-fn error_text(error: &anyhow::Error) -> String {
-    format!("{error:#}")
+/// Classifies the error of one try of a blob call.
+pub(super) fn call_failure(error: &anyhow::Error) -> CallFailure {
+    let in_chain = |is: fn(&(dyn Error + 'static)) -> bool| chain(error.as_ref()).any(is);
+    if in_chain(|error| error.is::<OperationCancelled>()) {
+        CallFailure::Cancelled
+    } else if in_chain(|error| error.is::<LeaseExpired>()) {
+        CallFailure::LeaseExpired
+    } else if in_chain(is_permanent) {
+        CallFailure::Permanent
+    } else if in_chain(|error| error.is::<tokio::time::error::Elapsed>()) {
+        CallFailure::TimedOut
+    } else {
+        CallFailure::Failed
+    }
+}
+
+/// Tells whether an error is an answer of the storage that no try can change.
+fn is_permanent(error: &(dyn Error + 'static)) -> bool {
+    error.is::<BlobNameError>()
+        || error.is::<BlobRangeError>()
+        || error.is::<BlobMissingError>()
+        || error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied)
+}
+
+/// Tells whether a write whose try failed with `failure` can still land: every failure but one that
+/// no try can change.
+pub(super) fn may_land(failure: CallFailure) -> bool {
+    failure != CallFailure::Permanent
+}
+
+/// Gives how a run ends after a blob call whose last try failed with `failure`.
+pub(super) fn run_end(failure: CallFailure) -> RunEnd {
+    match failure {
+        CallFailure::Cancelled => RunEnd::Cancelled,
+        CallFailure::Permanent => RunEnd::Permanent,
+        CallFailure::LeaseExpired | CallFailure::TimedOut | CallFailure::Failed => {
+            RunEnd::CallFailed
+        }
+    }
+}
+
+/// Gives how a run ends after a blob call that the store made without rustic failed with `error`.
+pub(super) fn storage_end(error: &anyhow::Error) -> RunEnd {
+    run_end(call_failure(error))
+}
+
+/// Gives how a run ends after a step of rustic failed with `error`, when the error came from a
+/// blob call, or `None` when it did not.
+pub(super) fn rustic_storage_end(error: &anyhow::Error) -> Option<RunEnd> {
+    is_storage_failure(error.as_ref()).then(|| {
+        if chain(error.as_ref()).any(|error| error.is::<OperationCancelled>()) {
+            RunEnd::Cancelled
+        } else if chain(error.as_ref()).any(is_permanent) {
+            RunEnd::Permanent
+        } else {
+            RunEnd::CallFailed
+        }
+    })
+}
+
+/// Tells whether a range error of the blob storage is in the chain.
+fn is_range_error(error: &(dyn Error + 'static)) -> bool {
+    chain(error).any(|error| error.is::<BlobRangeError>())
+}
+
+/// Gives the path of the first [`FileMissing`] in the chain.
+pub(super) fn missing_file_path<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a Path> {
+    chain(error).find_map(|error| {
+        error
+            .downcast_ref::<FileMissing>()
+            .map(|missing| &*missing.path)
+    })
+}
+
+/// Tells whether an error in the chain is [`FileMissing`] for a pack.
+fn is_pack_missing(error: &(dyn Error + 'static)) -> bool {
+    missing_file_path(error).is_some_and(|path| path.starts_with(FileType::Pack.dirname()))
+}
+
+/// Gives the start of the hex id of the blob that a lookup in the index did not find, from a "not
+/// found in index" error of rustic. rustic keeps the id as the context of the error, and gives the
+/// context only in the text of the error, as the text between the backticks before `not found in
+/// index`. rustic writes an id there with its short display, the first 8 hex digits, so the text
+/// holds the start of the id and not the whole id.
+pub(super) fn missing_blob(error: &(dyn Error + 'static)) -> Option<Box<str>> {
+    chain(error).find_map(|error| {
+        let text = error.to_string();
+        let before = &text[..text.find("` not found in index")?];
+        let start = &before[before.rfind('`')? + 1..];
+        (!start.is_empty()
+            && start.len() <= 64
+            && start.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| Box::from(start.to_ascii_lowercase()))
+    })
+}
+
+/// The text with which rustic begins an error of the kind `InputOutput`.
+const RUSTIC_LOCAL_IO: &str =
+    "`rustic_core` experienced an error related to `input/output operations`.";
+
+/// Gives the kind of the first I/O error in the chain. rustic gives some local I/O errors without
+/// their `io::Error` as a source: the error of the kind `InputOutput` keeps the OS error only in
+/// the text of its cause, as `Os { code: N, .. }`. Such an error gives the kind of the code, or
+/// `Other` when its text has no code. An error of a blob call is not a local I/O error, so the
+/// caller reads the storage first.
+fn io_error_kind(error: &(dyn Error + 'static)) -> Option<std::io::ErrorKind> {
+    chain(error)
+        .find_map(|error| error.downcast_ref::<std::io::Error>())
+        .map(std::io::Error::kind)
+        .or_else(|| {
+            chain(error)
+                .map(|error| error.to_string())
+                .find(|text| text.starts_with(RUSTIC_LOCAL_IO))
+                .map(|text| {
+                    text.split_once("Os { code: ")
+                        .and_then(|(_, after)| {
+                            after
+                                .split(|character: char| !character.is_ascii_digit())
+                                .next()
+                                .and_then(|code| code.parse::<i32>().ok())
+                        })
+                        .map_or(std::io::ErrorKind::Other, |code| {
+                            std::io::Error::from_raw_os_error(code).kind()
+                        })
+                })
+        })
+}
+
+/// The phase of a run of a restore in which a step failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Phase {
+    /// A load of the repository, a read of the snapshots or of the index.
+    Load,
+    /// The check of the index for the whole tree, which writes nothing.
+    Check,
+    /// The write of the tree into the directory.
+    Write,
+}
+
+/// What the error of a failed step of a restore is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum RestoreError {
+    /// A pack, with its id when the path names one, was gone at its read.
+    PackMissing(Option<Id>),
+    /// A file that is not a pack or the config was gone at its read: an index file, a key or a
+    /// snapshot file that a prune or a delete of all snapshots removed after the listing.
+    FileMissing(Box<Path>),
+    /// The config of the repository was gone at its read.
+    ConfigMissing,
+    Cancelled,
+    /// A storage call gave a failure that no try can fix; `range` for a range error.
+    Permanent {
+        range: bool,
+    },
+    /// A storage call failed after its tries.
+    CallFailed,
+    /// The local filesystem of the directory gave this kind of I/O error.
+    Destination(std::io::ErrorKind),
+    /// The index of the check does not hold a blob of the tree.
+    CheckFailed,
+    /// The data of the repository failed an integrity check.
+    Corrupt,
+}
+
+/// Classifies the error of a failed step of a restore in `phase`. The storage decides first: a
+/// missing file, then a failed storage call. A local I/O error in the check or the write is
+/// `Destination`. Any other error is `CheckFailed` in the check, where the index misses a blob of
+/// the tree, and `Corrupt` elsewhere: it comes from data that fails its integrity check, because
+/// the store reads only data of the repository and writes only into the directory.
+pub(super) fn restore_error(error: &anyhow::Error, phase: Phase) -> RestoreError {
+    let config = Path::new(super::backend::CONFIG_PATH);
+    if is_pack_missing(error.as_ref()) {
+        return RestoreError::PackMissing(pack_of(error));
+    }
+    match missing_file_path(error.as_ref()) {
+        Some(path) if path == config => return RestoreError::ConfigMissing,
+        Some(path) => return RestoreError::FileMissing(path.into()),
+        None => {}
+    }
+    match rustic_storage_end(error) {
+        Some(RunEnd::Cancelled) => return RestoreError::Cancelled,
+        Some(RunEnd::Permanent) => {
+            return RestoreError::Permanent {
+                range: is_range_error(error.as_ref()),
+            };
+        }
+        Some(_) => return RestoreError::CallFailed,
+        None => {}
+    }
+    match (phase, io_error_kind(error.as_ref())) {
+        (Phase::Check | Phase::Write, Some(kind)) => RestoreError::Destination(kind),
+        (Phase::Check, None) => RestoreError::CheckFailed,
+        (Phase::Load, _) | (Phase::Write, None) => RestoreError::Corrupt,
+    }
+}
+
+/// Gives the id of the pack that a [`super::fault::FileMissing`] of a pack names.
+fn pack_of(error: &anyhow::Error) -> Option<Id> {
+    missing_file_path(error.as_ref())?
+        .file_name()?
+        .to_str()
+        .and_then(|name| name.parse::<Id>().ok())
+}
+
+/// What the error of a failed backup of a save is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SaveFault {
+    /// The run ends this way.
+    Ended(RunEnd),
+    /// The local filesystem of the tree gave this kind of I/O error.
+    Source(std::io::ErrorKind),
+}
+
+/// Classifies the error of a failed backup of a save. The storage decides first: a failed storage
+/// call, then an index file that was gone at its read, which a new run can find again. A local I/O
+/// error is `Source`. Any other error is permanent.
+pub(super) fn save_fault(error: &anyhow::Error) -> SaveFault {
+    if let Some(end) = rustic_storage_end(error) {
+        return SaveFault::Ended(end);
+    }
+    if is_index_missing(error.as_ref()) {
+        return SaveFault::Ended(RunEnd::CallFailed);
+    }
+    match io_error_kind(error.as_ref()) {
+        Some(kind) => SaveFault::Source(kind),
+        None => SaveFault::Ended(RunEnd::Permanent),
+    }
 }
 
 /// Gives the error and each error in its chain of sources.
@@ -218,14 +407,16 @@ fn chain<'a>(error: &'a (dyn Error + 'static)) -> impl Iterator<Item = &'a (dyn 
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobCallFailed, ConfigExists, FileMissing, Operation, OperationCancelled, classify,
-        is_config_exists,
+        BlobCallFailed, CallFailure, ConfigExists, FileMissing, LeaseExpired, OperationCancelled,
+        call_failure, is_config_exists, is_index_missing, is_pack_missing, may_land, missing_blob,
+        missing_file_path, run_end, rustic_storage_end, storage_end,
     };
-    use crate::filesystem_snapshot::SnapshotStoreError;
-    use golem_service_base::storage::blob::BlobNameError;
+    use crate::filesystem_snapshot::rustic::runs::RunEnd;
+    use golem_service_base::storage::blob::{BlobMissingError, BlobNameError, BlobRangeError};
     use pretty_assertions::assert_eq;
-    use rustic_core::{ErrorKind, RusticError};
+    use rustic_core::{ErrorKind, Id, RusticError};
     use std::io;
+    use std::path::Path;
     use test_r::test;
 
     /// Gives a rustic error whose source is the error, as rustic gives it to the store.
@@ -241,229 +432,219 @@ mod tests {
         rustic(BlobCallFailed::new(failure))
     }
 
-    /// Gives the variant of the error, whether it is retryable, and the kind of its I/O error.
-    fn shape(error: &SnapshotStoreError) -> (&'static str, Option<bool>, Option<io::ErrorKind>) {
-        match error {
-            SnapshotStoreError::NotFound => ("NotFound", None, None),
-            SnapshotStoreError::AlreadyExists => ("AlreadyExists", None, None),
-            SnapshotStoreError::Source(error) => ("Source", None, Some(error.kind())),
-            SnapshotStoreError::Destination(error) => ("Destination", None, Some(error.kind())),
-            SnapshotStoreError::Storage { retryable, .. } => ("Storage", Some(*retryable), None),
-            SnapshotStoreError::Corrupt(_) => ("Corrupt", None, None),
-        }
+    fn missing(path: &str) -> anyhow::Error {
+        rustic(FileMissing {
+            path: Path::new(path).into(),
+        })
+    }
+
+    async fn elapsed() -> anyhow::Error {
+        anyhow::Error::new(
+            tokio::time::timeout(std::time::Duration::ZERO, std::future::pending::<()>())
+                .await
+                .unwrap_err(),
+        )
+        .context("the blob storage gave no answer")
     }
 
     #[test]
-    fn a_failed_blob_storage_call_gives_a_retryable_storage_error_in_each_operation() {
-        let shapes =
-            [Operation::Save, Operation::Restore, Operation::Repository].map(|operation| {
-                shape(&classify(
-                    operation,
-                    failed_call(anyhow::anyhow!("the bucket is gone")),
-                ))
-            });
-
-        assert_eq!(shapes, [("Storage", Some(true), None); 3]);
-    }
-
-    #[test]
-    fn a_blob_storage_call_that_holds_an_io_error_is_still_a_storage_error() {
-        let failure = anyhow::Error::new(io::Error::new(io::ErrorKind::StorageFull, "no space"));
-
-        assert_eq!(
-            shape(&classify(Operation::Restore, failed_call(failure))),
-            ("Storage", Some(true), None)
-        );
-    }
-
-    #[test]
-    fn an_index_file_that_is_gone_gives_retryable_storage_and_a_pack_that_is_gone_does_not() {
-        // The backend gives a missing file as a rustic error of the kind `Backend` whose source is
-        // `FileMissing`. The index load of rustic passes that error on as it is, through the read
-        // of the file and the stream of all index files.
-        let missing = |path: &str| {
-            rustic(FileMissing {
-                path: std::path::Path::new(path).into(),
+    async fn each_failure_of_a_try_gets_its_class() {
+        let name = || {
+            anyhow::Error::new(BlobNameError::NoName {
+                path: std::path::PathBuf::new(),
             })
         };
-        let operations = [
-            Operation::Save,
-            Operation::Restore,
-            Operation::Repository,
-            Operation::Prune,
-        ];
-
-        assert_eq!(
-            (
-                operations.map(|operation| shape(&classify(operation, missing("index/ab12")))),
-                operations.map(|operation| shape(&classify(operation, missing("data/ab/ab12")))),
-            ),
-            (
-                [("Storage", Some(true), None); 4],
-                [
-                    ("Storage", Some(false), None),
-                    ("Corrupt", None, None),
-                    ("Corrupt", None, None),
-                    ("Storage", Some(false), None),
-                ]
-            )
-        );
-    }
-
-    #[test]
-    fn a_name_error_of_the_blob_storage_is_not_retryable() {
-        let failure = anyhow::Error::new(BlobNameError::NoName {
-            path: std::path::PathBuf::new(),
-        });
-
-        assert_eq!(
-            shape(&classify(Operation::Repository, failed_call(failure))),
-            ("Storage", Some(false), None)
-        );
-    }
-
-    #[test]
-    fn a_cancelled_operation_gives_a_retryable_storage_error_in_each_operation() {
-        let shapes =
-            [Operation::Save, Operation::Restore, Operation::Repository].map(|operation| {
-                shape(&classify(
-                    operation,
-                    failed_call(anyhow::Error::new(OperationCancelled)),
-                ))
-            });
-
-        assert_eq!(shapes, [("Storage", Some(true), None); 3]);
-    }
-
-    #[test]
-    fn an_io_error_of_a_save_gives_source_with_its_kind() {
-        let error = rustic(io::Error::new(io::ErrorKind::PermissionDenied, "locked"));
-
-        let classified = classify(Operation::Save, error);
-
-        assert_eq!(
-            (
-                shape(&classified),
-                classified.to_string().contains("locked")
-            ),
-            (
-                ("Source", None, Some(io::ErrorKind::PermissionDenied)),
-                true
-            )
-        );
-    }
-
-    #[test]
-    fn a_full_volume_during_a_restore_gives_destination() {
-        let error = rustic(io::Error::new(io::ErrorKind::StorageFull, "no space"));
-
-        assert_eq!(
-            shape(&classify(Operation::Restore, error)),
-            ("Destination", None, Some(io::ErrorKind::StorageFull))
-        );
-    }
-
-    #[test]
-    fn a_metadata_error_of_a_restore_gives_destination() {
-        let error = rustic(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "setting extended attributes failed",
-        ));
-
-        assert_eq!(
-            shape(&classify(Operation::Restore, error)),
-            ("Destination", None, Some(io::ErrorKind::PermissionDenied))
-        );
-    }
-
-    #[test]
-    fn an_error_without_storage_or_io_is_corrupt_when_it_reads_and_not_retryable_in_a_save() {
-        let refused = || {
-            anyhow::Error::new(RusticError::new(
-                ErrorKind::Cryptography,
-                "the data failed its check",
-            ))
-        };
-
         assert_eq!(
             [
-                shape(&classify(Operation::Restore, refused())),
-                shape(&classify(Operation::Repository, refused())),
-                shape(&classify(Operation::Save, refused())),
+                call_failure(&anyhow::Error::new(OperationCancelled)),
+                call_failure(&anyhow::Error::new(LeaseExpired)),
+                call_failure(&name()),
+                call_failure(&anyhow::Error::new(BlobRangeError { start: 3, end: 2 })),
+                call_failure(&anyhow::Error::new(BlobMissingError {
+                    path: Path::new("a").into()
+                })),
+                call_failure(&anyhow::Error::new(io::Error::from(
+                    io::ErrorKind::PermissionDenied
+                ))),
+                call_failure(&elapsed().await),
+                call_failure(&anyhow::anyhow!("the bucket is gone")),
+                call_failure(&anyhow::Error::new(io::Error::from(
+                    io::ErrorKind::StorageFull
+                ))),
             ],
             [
-                ("Corrupt", None, None),
-                ("Corrupt", None, None),
-                ("Storage", Some(false), None),
+                CallFailure::Cancelled,
+                CallFailure::LeaseExpired,
+                CallFailure::Permanent,
+                CallFailure::Permanent,
+                CallFailure::Permanent,
+                CallFailure::Permanent,
+                CallFailure::TimedOut,
+                CallFailure::Failed,
+                CallFailure::Failed,
             ]
         );
     }
 
-    /// The error below the rustic error of a restore that cannot set an extended attribute, as
-    /// the fork gives it on ext4 for a user attribute of 6,000 bytes.
-    #[derive(Debug)]
-    struct SettingXattrFailed(io::Error);
+    const EVERY_FAILURE: [CallFailure; 5] = [
+        CallFailure::Cancelled,
+        CallFailure::LeaseExpired,
+        CallFailure::Permanent,
+        CallFailure::TimedOut,
+        CallFailure::Failed,
+    ];
 
-    impl std::fmt::Display for SettingXattrFailed {
-        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(
-                formatter,
-                "setting xattr `user.golem-test` on `\"/restore/file.txt\"` with `{:?}`",
-                self.0
-            )
-        }
-    }
-
-    impl std::error::Error for SettingXattrFailed {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            Some(&self.0)
-        }
+    #[test]
+    fn a_write_can_still_land_after_every_failure_but_a_permanent_one() {
+        assert_eq!(EVERY_FAILURE.map(may_land), [true, true, false, true, true]);
     }
 
     #[test]
-    fn the_real_chain_of_a_failed_extended_attribute_of_a_restore_gives_destination() {
-        let error = anyhow::Error::new(RusticError::with_source(
-            ErrorKind::InputOutput,
-            "The restore cannot set the extended attributes of `file.txt`.",
-            SettingXattrFailed(io::Error::from_raw_os_error(28)),
-        ));
-
+    fn each_failure_of_a_last_try_ends_a_run_by_its_class() {
         assert_eq!(
-            shape(&classify(Operation::Restore, error)),
-            ("Destination", None, Some(io::ErrorKind::StorageFull))
+            EVERY_FAILURE.map(run_end),
+            [
+                RunEnd::Cancelled,
+                RunEnd::CallFailed,
+                RunEnd::Permanent,
+                RunEnd::CallFailed,
+                RunEnd::CallFailed,
+            ]
         );
     }
 
     #[test]
-    fn a_prune_error_keeps_the_retryable_flag_of_a_storage_failure_and_is_never_corrupt() {
-        let refused = anyhow::Error::new(RusticError::new(
+    async fn a_failed_call_ends_a_run_by_its_class() {
+        assert_eq!(
+            [
+                storage_end(&anyhow::Error::new(OperationCancelled)),
+                storage_end(&anyhow::Error::new(BlobRangeError { start: 3, end: 2 })),
+                storage_end(&anyhow::Error::new(LeaseExpired)),
+                storage_end(&elapsed().await),
+                storage_end(&anyhow::anyhow!("the bucket is gone")),
+            ],
+            [
+                RunEnd::Cancelled,
+                RunEnd::Permanent,
+                RunEnd::CallFailed,
+                RunEnd::CallFailed,
+                RunEnd::CallFailed,
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_failed_blob_call_ends_a_run_of_rustic_as_a_storage_failure() {
+        assert_eq!(
+            [
+                rustic_storage_end(&failed_call(anyhow::anyhow!("the bucket is gone"))),
+                rustic_storage_end(&failed_call(anyhow::Error::new(OperationCancelled))),
+                rustic_storage_end(&failed_call(anyhow::Error::new(BlobNameError::NoName {
+                    path: std::path::PathBuf::new(),
+                }))),
+                rustic_storage_end(&rustic(io::Error::from(io::ErrorKind::PermissionDenied))),
+                rustic_storage_end(&missing("index/ab12")),
+            ],
+            [
+                Some(RunEnd::CallFailed),
+                Some(RunEnd::Cancelled),
+                Some(RunEnd::Permanent),
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_file_gives_its_path_and_its_directory() {
+        let index = missing("index/ab12");
+        let pack = missing("data/ab/ab12");
+
+        assert_eq!(
+            (
+                missing_file_path(index.as_ref()),
+                is_index_missing(index.as_ref()),
+                is_pack_missing(index.as_ref()),
+                missing_file_path(pack.as_ref()),
+                is_index_missing(pack.as_ref()),
+                is_pack_missing(pack.as_ref()),
+                missing_file_path(anyhow::anyhow!("other").as_ref()),
+            ),
+            (
+                Some(Path::new("index/ab12")),
+                true,
+                false,
+                Some(Path::new("data/ab/ab12")),
+                false,
+                true,
+                None,
+            )
+        );
+    }
+
+    #[test]
+    fn missing_blob_reads_the_start_of_the_id_of_the_forks_not_found_errors() {
+        let id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            .parse::<Id>()
+            .unwrap();
+        // The errors as the fork makes them: `get_index_entry` for a data blob, and the tree
+        // load of the node streamer for a tree blob. The fork writes the context with the short
+        // display of the id.
+        let data = anyhow::Error::new(
+            RusticError::new(
+                ErrorKind::Internal,
+                "Blob ID `{id}` not found in index, but should be there.",
+            )
+            .attach_context("id", id.to_string()),
+        );
+        let tree = anyhow::Error::new(
+            RusticError::new(
+                ErrorKind::Internal,
+                "Tree ID `{tree_id}` not found in index",
+            )
+            .attach_context("tree_id", id.to_string()),
+        )
+        .context("ls the snapshot");
+        let other = anyhow::Error::new(RusticError::new(
             ErrorKind::Internal,
-            "the pack has another size than the index says",
+            "the data failed its check",
         ));
 
         assert_eq!(
             [
-                shape(&classify(Operation::Prune, refused)),
-                shape(&classify(
-                    Operation::Prune,
-                    rustic(io::Error::new(io::ErrorKind::InvalidData, "bad pack"))
-                )),
-                shape(&classify(
-                    Operation::Prune,
-                    failed_call(anyhow::anyhow!("the bucket is gone"))
-                )),
-                shape(&classify(
-                    Operation::Prune,
-                    failed_call(anyhow::Error::new(BlobNameError::NoName {
-                        path: std::path::PathBuf::new(),
-                    }))
-                )),
+                missing_blob(data.as_ref()),
+                missing_blob(tree.as_ref()),
+                missing_blob(other.as_ref()),
             ],
             [
-                ("Storage", Some(false), None),
-                ("Storage", Some(false), None),
-                ("Storage", Some(true), None),
-                ("Storage", Some(false), None),
+                Some(Box::from("01234567")),
+                Some(Box::from("01234567")),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_blob_reads_only_a_hex_start_of_one_to_64_digits() {
+        let not_found = |id: &str| anyhow::anyhow!("Blob ID `{id}` not found in index");
+
+        assert_eq!(
+            [
+                "",
+                "xyz",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "ABCD",
+            ]
+            .map(|id| missing_blob(not_found(id).as_ref())),
+            [
+                None,
+                None,
+                None,
+                Some(Box::from(
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                )),
+                Some(Box::from("abcd")),
             ]
         );
     }

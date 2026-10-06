@@ -718,6 +718,10 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     owner_retirement: Arc<std::sync::OnceLock<OwnerRetirement>>,
     owner_cleanup: Mutex<OwnerCleanupState>,
     owner_retirement_requested: CancellationToken,
+    /// Why the shard of the worker moved to another executor, once it has: the only store of the
+    /// lost shard. The status flusher, the status checkpointer and an upload of a filesystem
+    /// snapshot read it through receivers.
+    lost_shard: tokio::sync::watch::Sender<Option<RetirementReason>>,
     durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler,
     durable_topology_recovery: Arc<Mutex<DurableTopologyRecoveryCache>>,
 }
@@ -727,6 +731,18 @@ enum OwnerCleanupState {
     #[default]
     PreRemoval,
     Retired,
+}
+
+/// A receiver of why the shard of a worker moved to another executor, once it has.
+pub(crate) type LostShard = tokio::sync::watch::Receiver<Option<RetirementReason>>;
+
+/// The lost-shard reason that a retirement for `reason` records, when the worker has `lost` one
+/// already or not. The first reason that is not `Requested` is kept; a later one changes nothing.
+fn newly_lost(lost: bool, reason: &RetirementReason) -> Option<RetirementReason> {
+    match (lost, reason) {
+        (true, _) | (false, RetirementReason::Requested) => None,
+        (false, reason) => Some(reason.clone()),
+    }
 }
 
 /// Why this executor stops owning an agent.
@@ -795,12 +811,10 @@ impl std::fmt::Display for RetirementReason {
 ///
 /// The interrupt is recorded once (the first wins), but the shard can be lost after that: an API
 /// interrupt or an environment unload may already be retiring the agent when its shard moves, and
-/// its waiters must still be sent to the new owner. So the lost shard is a cell of its own, set
-/// once and later than the rest when it has to be: unset while the shard is this executor's,
-/// `Some(reason)` once it is lost.
+/// its waiters must still be sent to the new owner. So the lost shard is not part of this record:
+/// it is the watch of the worker, set once and later than the rest when it has to be.
 pub(super) struct OwnerRetirement {
     kind: InterruptKind,
-    lost_shard: std::sync::OnceLock<RetirementReason>,
     stop: tokio::sync::OnceCell<
         futures::future::Shared<
             futures::future::BoxFuture<'static, Result<(), WorkerExecutorError>>,
@@ -1387,16 +1401,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Records retirement without taking the lifecycle lock. Owner writes stop immediately;
     /// `interrupt_and_retire` carries out the shared stop after that lock is released.
     pub(crate) fn record_retirement(&self, kind: InterruptKind, reason: RetirementReason) {
-        let retirement = self.owner_retirement.get_or_init(|| OwnerRetirement {
+        self.owner_retirement.get_or_init(|| OwnerRetirement {
             kind,
-            lost_shard: std::sync::OnceLock::new(),
             stop: tokio::sync::OnceCell::new(),
         });
+        // The lost shard is known before any stop that the retirement causes, so an upload that
+        // a stop ends sees it and cancels its save.
+        let newly_lost =
+            self.lost_shard
+                .send_if_modified(|lost| match newly_lost(lost.is_some(), &reason) {
+                    Some(reason) => {
+                        *lost = Some(reason);
+                        true
+                    }
+                    None => false,
+                });
         self.owner_retirement_requested.cancel();
         self.durable_stream_producer.fence();
-        if !matches!(reason, RetirementReason::Requested)
-            && retirement.lost_shard.set(reason.clone()).is_ok()
-        {
+        if newly_lost {
             // Debug rather than warn: the oplog that latched a fence has already warned with
             // both epochs, and a revoke or reassignment is logged by the sweep.
             debug!(
@@ -1407,16 +1429,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    /// A receiver of why the shard of this worker moved to another executor, once it has.
+    pub(crate) fn lost_shard(&self) -> LostShard {
+        self.lost_shard.subscribe()
+    }
+
     /// Whether this worker is retired because its shard moved to another executor.
     pub(crate) fn retired_for_lost_shard(&self) -> bool {
-        self.lost_shard_reason().is_some()
+        self.lost_shard.borrow().is_some()
     }
 
     /// Why the shard moved, once it has.
     pub(crate) fn lost_shard_reason(&self) -> Option<RetirementReason> {
-        self.owner_retirement
-            .get()
-            .and_then(|retirement| retirement.lost_shard.get().cloned())
+        self.lost_shard.borrow().clone()
     }
 
     /// Starts the lost-shard retirement in a task of its own, for a caller the retirement's stop
@@ -2441,7 +2466,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let current_component = Arc::new(arc_swap::ArcSwap::from(initial_component.clone()));
 
         let last_known_status_detached = Arc::new(AtomicBool::new(false));
-        let owner_retirement = Arc::new(std::sync::OnceLock::new());
+        let lost_shard = tokio::sync::watch::Sender::new(None);
         let status_flusher = status_flusher::AgentStatusFlusher::new(
             owned_agent_id.clone(),
             initial_worker_metadata.fingerprint,
@@ -2452,7 +2477,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             persisted_status,
             current_status.clone(),
             last_known_status_detached.clone(),
-            owner_retirement.clone(),
+            lost_shard.subscribe(),
         );
 
         let status_checkpointer = status_checkpointer::StatusCheckpointer::new(
@@ -2462,7 +2487,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps.config().agent_status_checkpoint.enabled,
             deps.config().agent_status_checkpoint.min_oplog_delta,
             deps.worker_service(),
-            owner_retirement.clone(),
+            lost_shard.subscribe(),
         );
 
         let all_deps = All::from_other(deps);
@@ -2546,9 +2571,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             read_only_cache_epoch: Arc::new(AtomicU64::new(0)),
             durable_stream_producer: Arc::default(),
             export_fork_receipt: tokio::sync::OnceCell::new(),
-            owner_retirement,
+            owner_retirement: Arc::new(std::sync::OnceLock::new()),
             owner_cleanup: Mutex::new(OwnerCleanupState::PreRemoval),
             owner_retirement_requested: CancellationToken::new(),
+            lost_shard,
             durable_stream_attachment_reconciler: DurableStreamAttachmentReconciler::new(
                 deps.shutdown_token(),
             ),
@@ -3380,6 +3406,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     self.initial_worker_metadata.agent_mode,
                     self.initial_worker_metadata.fingerprint,
                     self.oplog.shard_epoch(),
+                    &|fingerprint| {
+                        self.agent_filesystem_snapshots().delete_all_snapshots(
+                            &crate::filesystem_snapshot::AgentSnapshots::agent(
+                                &self.owned_agent_id,
+                                fingerprint,
+                            ),
+                            self.initial_worker_metadata.agent_mode,
+                        )
+                    },
                 )
                 .await;
             if let Err(error) = removed {
@@ -5350,14 +5385,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// takes the owned instance lock, applies the gate, and sends one status job that carries the
     /// guard. A confirmation of the running instance that gives `Confirmed` records the name in
     /// the slot of the instance under the same guard. So a stop waits for at most the status jobs
-    /// already queued plus one confirm transaction.
+    /// already queued plus one confirm transaction. A `Confirmed` answer carries the names of the
+    /// automatic snapshot records that a start can select, from the status that the worker holds
+    /// after the append returned. A status job that folds an entry after the append, such as the
+    /// `SuccessfulUpdate` of an automatic update, can change those names before the read.
     pub(crate) async fn confirm_as(
         self: &Arc<Self>,
         name: FilesystemSnapshotName,
         who: filesystem_snapshots::Confirmer,
-    ) -> agent_filesystem_snapshots::ConfirmOutcome {
+    ) -> agent_filesystem_snapshots::Confirmation {
         if self.last_known_status_detached.load(Ordering::Acquire) {
-            return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
+            return agent_filesystem_snapshots::Confirmation::Deferred;
         }
         let instance_guard = self.instance.clone().lock_owned().await;
         let instance = match (&*instance_guard, &who) {
@@ -5391,7 +5429,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .is_ok()
         });
         if !owner {
-            return agent_filesystem_snapshots::ConfirmOutcome::Deferred;
+            return agent_filesystem_snapshots::Confirmation::Deferred;
         }
         let on_confirmed: state_actor::OnConfirmed = match who {
             filesystem_snapshots::Confirmer::Running(mark) => {
@@ -5404,28 +5442,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             filesystem_snapshots::Confirmer::Start(_) => Box::new(|_| {}),
         };
-        self.state_actor
+        match self
+            .state_actor
             .append_confirmation(name, instance_guard, on_confirmed)
             .await
-    }
-
-    /// Gives the filesystem snapshot name of the last successful manual update, which the status
-    /// keeps as the manual-update baseline.
-    pub(crate) async fn manual_update_baseline_name(&self) -> Option<FilesystemSnapshotName> {
-        let index = self
-            .last_known_status
-            .load()
-            .last_manual_update_snapshot_index?;
-        match self.oplog.read(index).await {
-            OplogEntry::PendingUpdate {
-                description:
-                    UpdateDescription::SnapshotBased {
-                        filesystem_snapshot,
-                        ..
-                    },
-                ..
-            } => filesystem_snapshot,
-            _ => None,
+        {
+            agent_filesystem_snapshots::ConfirmOutcome::Confirmed => {
+                agent_filesystem_snapshots::Confirmation::Confirmed {
+                    selectable: snapshot_selection::selectable_names(
+                        &self.last_known_status.load(),
+                    ),
+                }
+            }
+            agent_filesystem_snapshots::ConfirmOutcome::Superseded => {
+                agent_filesystem_snapshots::Confirmation::Superseded
+            }
+            agent_filesystem_snapshots::ConfirmOutcome::Deferred => {
+                agent_filesystem_snapshots::Confirmation::Deferred
+            }
         }
     }
 
@@ -5448,8 +5482,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let Some(name) = self.selection_in_memory(&status).candidate else {
             return;
         };
-        let agent_snapshots =
-            crate::filesystem_snapshot::AgentSnapshots::agent(&self.owned_agent_id);
+        let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.initial_worker_metadata.fingerprint,
+        );
         if self
             .agent_filesystem_snapshots()
             .prepare_start(&agent_snapshots, &name, self.terminal_interrupt())
@@ -8426,9 +8462,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Appends an oplog entry without forcing a durable commit. Callers that
     /// require ordering must await the append before exposing subsequent work.
     pub async fn add_to_oplog(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
-        match self.oplog.add(entry).await {
-            Err(OplogError::Fenced(fence)) => Err(self.retired_by(fence)),
-            result => result,
+        self.oplog
+            .add(entry)
+            .await
+            .map_err(|error| self.retire_if_fenced(error))
+    }
+
+    /// Gives `error`, and records the retirement for a lost shard first when it is a fence.
+    fn retire_if_fenced(&self, error: OplogError) -> OplogError {
+        match error {
+            OplogError::Fenced(fence) => self.retired_by(fence),
+            error => error,
         }
     }
 
@@ -8815,6 +8859,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let worker = self.clone();
         tokio::spawn(async move {
+            // The hold stops the deletes of the upload jobs of the agent until the revert ends, so
+            // retention removes no name that the revert can make a baseline again.
+            let revert_hold = worker.agent_filesystem_snapshots().begin_revert(
+                &crate::filesystem_snapshot::AgentSnapshots::agent(
+                    &worker.owned_agent_id,
+                    worker.initial_worker_metadata.fingerprint,
+                ),
+            );
             let mut cleanup = worker.owner_cleanup.lock().await;
             if worker.deletion_owns_retirement().await {
                 return Err(WorkerExecutorError::invalid_request(
@@ -8872,18 +8924,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker.status_checkpointer.begin_delete().await;
             worker.remove_from_active_agents().await;
             *cleanup = OwnerCleanupState::Retired;
-            result
+            result.map(|reverted| revert_hold.delete_snapshots(reverted))
         })
         .await
         .map_err(|error| WorkerExecutorError::runtime(format!("Worker revert failed: {error}")))?
     }
 
-    /// Called only after owner writers have drained, with the stopped instance locked.
+    /// Called only after owner writers have drained, with the stopped instance locked. Gives the
+    /// filesystem snapshot names that the committed revert made unused.
     async fn append_revert(
         &self,
         last_oplog_index: OplogIndex,
         expected_oplog_index: Option<OplogIndex>,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<Box<[FilesystemSnapshotName]>, WorkerExecutorError> {
         use crate::durable_host::durable_stream::StreamStoreError;
         use crate::services::oplog::DurableStreamOplogRecord;
 
@@ -8951,6 +9004,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )));
             }
 
+            let reverted = filesystem_snapshots::reverted_snapshot_names(
+                &entries,
+                &dropped_region,
+                &last_known_status.deleted_regions,
+            );
             let mut prospective_entries = entries;
             prospective_entries.insert(
                 region_end.next(),
@@ -9039,17 +9097,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 self.oplog
                     .add_durable_stream_batch(Box::new(move |_| entries))
-                    .await?;
+                    .await
+                    .map_err(|error| self.retire_if_fenced(error))?;
             } else {
                 // Through the fence-aware helper: a revert is a write like any other, and if the
                 // shard has a new owner this must surface rather than be discarded.
                 self.add_to_oplog(OplogEntry::revert(dropped_region.clone()))
                     .await?;
             }
-            self.durable_stream_commit()(None).await;
+            // Below the commit threshold the add only buffers, so this commit is where a new
+            // owner of the shard is found. A refused commit gives the error, and the caller then
+            // deletes no filesystem snapshot of the dropped region.
+            self.commit_oplog_and_update_state(CommitLevel::Always)
+                .await?;
             self.reattach_worker_status().await;
             self.current_component.store(Arc::new(restored_component));
-            Ok(())
+            Ok(reverted)
         }
     }
 
@@ -9087,7 +9150,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
         }
         if let Some(pending_update) = pending_update
-            && pending_update.kind == PendingUpdateKind::SnapshotBased
+            && matches!(pending_update.kind, PendingUpdateKind::SnapshotBased { .. })
             && Some(pending_update.oplog_index) != status.last_manual_update_snapshot_index
         {
             self.preflight_snapshot_update_payload(pending_update.oplog_index)
@@ -11155,8 +11218,10 @@ impl RunningWorker {
         };
         match step {
             filesystem_snapshots::BaselineStep::Ready { kind, restore } => {
-                let agent_snapshots =
-                    crate::filesystem_snapshot::AgentSnapshots::agent(&parent.owned_agent_id);
+                let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+                    &parent.owned_agent_id,
+                    parent.initial_worker_metadata.fingerprint,
+                );
                 let restore = match restore {
                     Some(name) => Some(filesystem_snapshots::StartRestore::Store(
                         snapshots.restore(&agent_snapshots, &name).map_err(|_| {
@@ -11374,7 +11439,7 @@ impl RunningWorker {
                         "Attempting {} update from {} to revision {target_revision}",
                         match update.kind {
                             PendingUpdateKind::Automatic => "automatic",
-                            PendingUpdateKind::SnapshotBased => "snapshot based",
+                            PendingUpdateKind::SnapshotBased { .. } => "snapshot based",
                         },
                         worker_metadata.last_known_status.component_revision
                     );
@@ -12415,6 +12480,34 @@ mod tests {
     use golem_common::model::oplog::AgentError;
     use std::path::Path;
     use test_r::test;
+
+    /// The first reason that is not `Requested` is the lost shard; a requested retirement and a
+    /// later reason change nothing. The lost shard has one store, so every reader sees it.
+    #[test]
+    fn only_the_first_retirement_for_a_moved_shard_records_the_lost_shard() {
+        let recorded = |lost: bool, reason: RetirementReason| {
+            newly_lost(lost, &reason).map(|reason| format!("{reason:?}"))
+        };
+
+        assert_eq!(
+            [
+                recorded(false, RetirementReason::Requested),
+                recorded(false, RetirementReason::ShardRevoked),
+                recorded(false, RetirementReason::ShardNotAssigned),
+                recorded(false, RetirementReason::Fenced(None)),
+                recorded(true, RetirementReason::ShardRevoked),
+                recorded(true, RetirementReason::Requested),
+            ],
+            [
+                None,
+                Some("ShardRevoked".to_string()),
+                Some("ShardNotAssigned".to_string()),
+                Some("Fenced(None)".to_string()),
+                None,
+                None,
+            ]
+        );
+    }
 
     /// Admission and the epoch read are not atomic. An agent whose shard left the assignment in
     /// between must be refused, not handed an oplog that asserts nothing.

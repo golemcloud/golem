@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 use crate::durability::assert_snapshot_recovery_loaded;
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::component::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
@@ -25,21 +25,26 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, Co
 use golem_common::model::oplog::{
     MultipartPartData, OplogEntry, OplogPayload, PublicOplogEntry, PublicSnapshotData,
 };
-use golem_common::model::{AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId};
+use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
+use golem_common::model::{
+    AgentFingerprint, AgentId, AgentInvocationPayload, OplogIndex, OwnedAgentId,
+};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::model::IFSEntry;
-use golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore;
+use golem_worker_executor::filesystem_snapshot_testing::{
+    TestFilesystemSnapshotStore, with_snapshot_store,
+};
 use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotUploadValues,
     FilesystemSnapshotsConfig, SnapshotPolicy,
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, start_with_overrides, take_agent_oplog_over_at_epoch,
 };
-use pretty_assertions::assert_eq;
+use pretty_assertions::{assert_eq, assert_ne};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,8 +65,8 @@ inherit_test_dep!(Tracing);
 /// The agent type of the test component that takes snapshots.
 const AGENT_TYPE: &str = "SnapshotTree";
 
-/// The upload settings of the tests: one attempt for each save, so an injected failure ends the
-/// upload at once, and a short wait of a start for an upload.
+/// The upload settings of the tests: a short wait of a start for an upload. The test store answers
+/// an injected failure of a save at once.
 fn uploads(confirmation_wait: Duration) -> FilesystemSnapshotUploadConfig {
     FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
         max_concurrent_uploads: 4,
@@ -71,13 +76,7 @@ fn uploads(confirmation_wait: Duration) -> FilesystemSnapshotUploadConfig {
         capture_wait: Duration::from_secs(5),
         retained_periodic_snapshots: 2,
         retained_update_snapshots: 2,
-        upload_retry: golem_common::model::RetryConfig {
-            max_attempts: 1,
-            min_delay: Duration::from_millis(10),
-            max_delay: Duration::from_millis(10),
-            multiplier: 2.0,
-            max_jitter_factor: None,
-        },
+        max_pending_deletes_per_agent: 1024,
     })
     .expect("valid upload settings")
 }
@@ -91,21 +90,26 @@ async fn start_snapshotting(
     confirmation_wait: Duration,
     root: Option<&Path>,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_overrides(deps, context, snapshotting(store, confirmation_wait, root)).await
+}
+
+/// The overrides of an executor that takes a snapshot after each invocation and keeps filesystem
+/// snapshots in `store`. With `root`, the agent filesystems live under it.
+fn snapshotting(
+    store: &TestFilesystemSnapshotStore,
+    confirmation_wait: Duration,
+    root: Option<&Path>,
+) -> TestExecutorOverrides {
     let root: Option<Box<Path>> = root.map(Box::from);
-    start_with_overrides(
-        deps,
-        context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir =
-                    root.as_deref().map(Path::to_path_buf);
-                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
-            })),
-            filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
-            ..TestExecutorOverrides::default()
-        },
-    )
-    .await
+    TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.filesystem_storage.deterministic_root_dir =
+                root.as_deref().map(Path::to_path_buf);
+            config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+        })),
+        filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
+        ..TestExecutorOverrides::default()
+    }
 }
 
 /// Starts an executor without snapshots, whose agent filesystems live under the empty `root`. A
@@ -226,6 +230,25 @@ impl Agent {
 
     fn owned(&self, context: &TestContext) -> OwnedAgentId {
         OwnedAgentId::new(context.default_environment_id, &self.worker_id)
+    }
+
+    /// The agent and the fingerprint of its incarnation, which the `Create` entry of its oplog
+    /// holds. The filesystem snapshots of the agent are keyed by both.
+    async fn incarnation(
+        &self,
+        executor: &TestWorkerExecutor,
+        context: &TestContext,
+    ) -> anyhow::Result<(OwnedAgentId, AgentFingerprint)> {
+        let fingerprint = executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .find_map(|entry| match entry.entry {
+                PublicOplogEntry::Create(create) => Some(AgentFingerprint(create.instance_id)),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("the oplog of the agent has no create entry"))?;
+        Ok((self.owned(context), fingerprint))
     }
 
     /// Applies `operation` and gives its result: `ok`, or the error of the agent.
@@ -558,41 +581,43 @@ async fn a_periodic_snapshot_brings_the_files_back_after_a_restart(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "periodic", &[]).await?;
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "periodic", &[]).await?;
 
-    agent
-        .apply_all(
-            &executor,
-            &[
-                Operation::Mkdir { path: "data" },
-                Operation::Write {
-                    path: "data/one.txt",
-                    content: "one",
-                },
-                Operation::Write {
-                    path: "two.txt",
-                    content: "two",
-                },
-            ],
-        )
-        .await?;
-    agent.confirmed(&executor).await?;
-    let live = agent.describe(&executor).await?;
-    let applied = agent.applied(&executor).await?;
-    executor.release().await?;
-    let restores = store.restored_names().len();
+        agent
+            .apply_all(
+                &executor,
+                &[
+                    Operation::Mkdir { path: "data" },
+                    Operation::Write {
+                        path: "data/one.txt",
+                        content: "one",
+                    },
+                    Operation::Write {
+                        path: "two.txt",
+                        content: "two",
+                    },
+                ],
+            )
+            .await?;
+        agent.confirmed(&executor).await?;
+        let live = agent.describe(&executor).await?;
+        let applied = agent.applied(&executor).await?;
+        executor.release().await?;
+        let restores = store.restored_names().len();
 
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let restored = agent.describe(&restarted).await?;
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let restored = agent.describe(&restarted).await?;
 
-    assert_eq!(restored, live);
-    assert_eq!(agent.applied(&restarted).await?, applied);
-    assert!(store.restored_names().len() > restores);
-    Ok(())
+        assert_eq!(restored, live);
+        assert_eq!(agent.applied(&restarted).await?, applied);
+        assert!(store.restored_names().len() > restores);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -604,95 +629,97 @@ async fn a_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "replay-equal",
-        &[
-            entry("foo.txt", "/ro-kept.txt", AgentFilePermissions::ReadOnly),
-            entry("foo.txt", "/ro-deleted.txt", AgentFilePermissions::ReadOnly),
-            entry("foo.txt", "/ro-renamed.txt", AgentFilePermissions::ReadOnly),
-            entry("bar.txt", "/ro-linked.txt", AgentFilePermissions::ReadOnly),
-            entry(
-                "bar.txt",
-                "/dir/ro-in-dir.txt",
-                AgentFilePermissions::ReadOnly,
-            ),
-            entry(
-                "baz.txt",
-                "/rw-modified.txt",
-                AgentFilePermissions::ReadWrite,
-            ),
-            entry(
-                "baz.txt",
-                "/rw-deleted.txt",
-                AgentFilePermissions::ReadWrite,
-            ),
-        ],
-    )
-    .await?;
-
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
             &executor,
+            &context,
+            initial_file_system,
+            "replay-equal",
             &[
-                Operation::Remove {
-                    path: "ro-deleted.txt",
-                },
-                Operation::Write {
-                    path: "rw-modified.txt",
-                    content: "modified by the agent",
-                },
-                Operation::Remove {
-                    path: "rw-deleted.txt",
-                },
-                Operation::Rename {
-                    from: "ro-renamed.txt",
-                    to: "renamed.txt",
-                },
-                Operation::Link {
-                    existing: "ro-linked.txt",
-                    link: "second-name.txt",
-                },
-                Operation::Rename {
-                    from: "dir",
-                    to: "moved-dir",
-                },
-                Operation::Write {
-                    path: "agent.txt",
-                    content: "agent data",
-                },
-                Operation::Link {
-                    existing: "agent.txt",
-                    link: "agent-alias.txt",
-                },
-                Operation::Symlink {
-                    link: "pointer",
-                    target: "agent.txt",
-                },
+                entry("foo.txt", "/ro-kept.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-deleted.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-renamed.txt", AgentFilePermissions::ReadOnly),
+                entry("bar.txt", "/ro-linked.txt", AgentFilePermissions::ReadOnly),
+                entry(
+                    "bar.txt",
+                    "/dir/ro-in-dir.txt",
+                    AgentFilePermissions::ReadOnly,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-modified.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-deleted.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
             ],
         )
         .await?;
-    agent.confirmed(&executor).await?;
-    let live = agent.describe(&executor).await?;
-    executor.release().await?;
 
-    let from_snapshot =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let restored = agent.describe(&from_snapshot).await?;
-    from_snapshot.release().await?;
-    let replay_root = tempfile::tempdir()?;
-    let replaying = start_replaying(deps, &context, replay_root.path()).await?;
-    let replayed = agent.describe(&replaying).await?;
+        agent
+            .apply_all(
+                &executor,
+                &[
+                    Operation::Remove {
+                        path: "ro-deleted.txt",
+                    },
+                    Operation::Write {
+                        path: "rw-modified.txt",
+                        content: "modified by the agent",
+                    },
+                    Operation::Remove {
+                        path: "rw-deleted.txt",
+                    },
+                    Operation::Rename {
+                        from: "ro-renamed.txt",
+                        to: "renamed.txt",
+                    },
+                    Operation::Link {
+                        existing: "ro-linked.txt",
+                        link: "second-name.txt",
+                    },
+                    Operation::Rename {
+                        from: "dir",
+                        to: "moved-dir",
+                    },
+                    Operation::Write {
+                        path: "agent.txt",
+                        content: "agent data",
+                    },
+                    Operation::Link {
+                        existing: "agent.txt",
+                        link: "agent-alias.txt",
+                    },
+                    Operation::Symlink {
+                        link: "pointer",
+                        target: "agent.txt",
+                    },
+                ],
+            )
+            .await?;
+        agent.confirmed(&executor).await?;
+        let live = agent.describe(&executor).await?;
+        executor.release().await?;
 
-    assert!(!store.restored_names().is_empty());
-    assert_eq!(restored, live);
-    assert_eq!(replayed, live);
-    Ok(())
+        let from_snapshot =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let restored = agent.describe(&from_snapshot).await?;
+        from_snapshot.release().await?;
+        let replay_root = tempfile::tempdir()?;
+        let replaying = start_replaying(deps, &context, replay_root.path()).await?;
+        let replayed = agent.describe(&replaying).await?;
+
+        assert!(!store.restored_names().is_empty());
+        assert_eq!(restored, live);
+        assert_eq!(replayed, live);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -704,74 +731,77 @@ async fn an_injected_upload_failure_falls_back_and_a_later_upload_recovers(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor = start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "failure", &[]).await?;
-    agent
-        .apply_all(
-            &executor,
-            &[Operation::Write {
-                path: "first.txt",
-                content: "first",
-            }],
-        )
-        .await?;
-    let first = agent.confirmed(&executor).await?;
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "failure", &[]).await?;
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "first.txt",
+                    content: "first",
+                }],
+            )
+            .await?;
+        let first = agent.confirmed(&executor).await?;
 
-    store.fail_next_saves(usize::MAX);
-    agent
-        .apply_all(
-            &executor,
-            &[Operation::Write {
-                path: "second.txt",
-                content: "second",
-            }],
-        )
+        store.fail_next_saves(usize::MAX);
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "second.txt",
+                    content: "second",
+                }],
+            )
+            .await?;
+        let saves = store.save_count();
+        eventually(Duration::from_secs(30), || async {
+            Ok((store.save_count() > saves).then_some(()))
+        })
         .await?;
-    let saves = store.save_count();
-    eventually(Duration::from_secs(30), || async {
-        Ok((store.save_count() > saves).then_some(()))
+        let failed = agent.records(&executor).await?;
+        let live = agent.describe(&executor).await?;
+        executor.release().await?;
+
+        let falling_back =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let after_failure = agent.describe(&falling_back).await?;
+        store.fail_next_saves(0);
+        agent
+            .apply_all(
+                &falling_back,
+                &[Operation::Write {
+                    path: "third.txt",
+                    content: "third",
+                }],
+            )
+            .await?;
+        let recovered = agent.confirmed(&falling_back).await?;
+        let recovered_live = agent.describe(&falling_back).await?;
+        falling_back.release().await?;
+        let restores = store.restored_names().len();
+        let recovering =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
+        let after_recovery = agent.describe(&recovering).await?;
+
+        assert_eq!(
+            failed.confirmations.last().map(|confirmed| &**confirmed),
+            Some(first.as_str())
+        );
+        assert_ne!(
+            failed.newest_name(),
+            Some(first.clone()),
+            "the failed upload wrote its own record"
+        );
+        assert_eq!(after_failure, live);
+        assert_ne!(recovered, first);
+        assert_eq!(after_recovery, recovered_live);
+        assert!(store.restored_names().len() > restores);
+        Ok(())
     })
-    .await?;
-    let failed = agent.records(&executor).await?;
-    let live = agent.describe(&executor).await?;
-    executor.release().await?;
-
-    let falling_back =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
-    let after_failure = agent.describe(&falling_back).await?;
-    store.fail_next_saves(0);
-    agent
-        .apply_all(
-            &falling_back,
-            &[Operation::Write {
-                path: "third.txt",
-                content: "third",
-            }],
-        )
-        .await?;
-    let recovered = agent.confirmed(&falling_back).await?;
-    let recovered_live = agent.describe(&falling_back).await?;
-    falling_back.release().await?;
-    let restores = store.restored_names().len();
-    let recovering =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(1), None).await?;
-    let after_recovery = agent.describe(&recovering).await?;
-
-    assert_eq!(
-        failed.confirmations.last().map(|confirmed| &**confirmed),
-        Some(first.as_str())
-    );
-    assert_ne!(
-        failed.newest_name(),
-        Some(first.clone()),
-        "the failed upload wrote its own record"
-    );
-    assert_eq!(after_failure, live);
-    assert_ne!(recovered, first);
-    assert_eq!(after_recovery, recovered_live);
-    assert!(store.restored_names().len() > restores);
-    Ok(())
+    .await
 }
 
 #[test]
@@ -783,43 +813,45 @@ async fn invocations_during_an_upload_keep_their_results_after_a_restart(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "during", &[]).await?;
-    store.set_save_delay(Duration::from_secs(2));
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "during", &[]).await?;
+        store.set_save_delay(Duration::from_secs(2));
 
-    agent
-        .apply_all(
-            &executor,
-            &[
-                Operation::Write {
-                    path: "before.txt",
-                    content: "before",
-                },
-                Operation::Write {
-                    path: "during-1.txt",
-                    content: "during",
-                },
-                Operation::Write {
-                    path: "during-2.txt",
-                    content: "during",
-                },
-            ],
-        )
-        .await?;
-    let live = agent.describe(&executor).await?;
-    let applied = agent.applied(&executor).await?;
-    agent.confirmed(&executor).await?;
-    store.set_save_delay(Duration::ZERO);
-    executor.release().await?;
+        agent
+            .apply_all(
+                &executor,
+                &[
+                    Operation::Write {
+                        path: "before.txt",
+                        content: "before",
+                    },
+                    Operation::Write {
+                        path: "during-1.txt",
+                        content: "during",
+                    },
+                    Operation::Write {
+                        path: "during-2.txt",
+                        content: "during",
+                    },
+                ],
+            )
+            .await?;
+        let live = agent.describe(&executor).await?;
+        let applied = agent.applied(&executor).await?;
+        agent.confirmed(&executor).await?;
+        store.set_save_delay(Duration::ZERO);
+        executor.release().await?;
 
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
 
-    assert_eq!(agent.describe(&restarted).await?, live);
-    assert_eq!(agent.applied(&restarted).await?, applied);
-    Ok(())
+        assert_eq!(agent.describe(&restarted).await?, live);
+        assert_eq!(agent.applied(&restarted).await?, applied);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -831,23 +863,25 @@ async fn the_next_start_confirms_the_snapshot_of_an_agent_that_stopped_during_it
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "stopping", &[]).await?;
-    let (live, named) = stop_during_an_upload(&executor, &context, &store, &agent).await?;
-    let while_stopped = agent.records(&executor).await?;
-    let restores = store.restored_names().len();
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "stopping", &[]).await?;
+        let (live, named) = stop_during_an_upload(&executor, &context, &store, &agent).await?;
+        let while_stopped = agent.records(&executor).await?;
+        let restores = store.restored_names().len();
 
-    executor.resume(&agent.worker_id, false).await?;
-    let after_start = agent.describe(&executor).await?;
-    let records = agent.records(&executor).await?;
+        executor.resume(&agent.worker_id, false).await?;
+        let after_start = agent.describe(&executor).await?;
+        let records = agent.records(&executor).await?;
 
-    assert!(!while_stopped.is_confirmed(&named), "{while_stopped:?}");
-    assert!(records.is_confirmed(&named), "{records:?}");
-    assert_eq!(after_start, live);
-    assert!(store.restored_names().len() > restores);
-    Ok(())
+        assert!(!while_stopped.is_confirmed(&named), "{while_stopped:?}");
+        assert!(records.is_confirmed(&named), "{records:?}");
+        assert_eq!(after_start, live);
+        assert!(store.restored_names().len() > restores);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -859,24 +893,26 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "moved", &[]).await?;
-    let (live, named) = stop_during_an_upload(&executor, &context, &store, &agent).await?;
-    executor.release().await?;
-    let restores = store.restored_names().len();
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "moved", &[]).await?;
+        let (live, named) = stop_during_an_upload(&executor, &context, &store, &agent).await?;
+        executor.release().await?;
+        let restores = store.restored_names().len();
 
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    restarted.resume(&agent.worker_id, false).await?;
-    let after_start = agent.describe(&restarted).await?;
-    let records = agent.records(&restarted).await?;
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        restarted.resume(&agent.worker_id, false).await?;
+        let after_start = agent.describe(&restarted).await?;
+        let records = agent.records(&restarted).await?;
 
-    assert!(records.is_confirmed(&named), "{records:?}");
-    assert_eq!(after_start, live);
-    assert!(store.restored_names().len() > restores);
-    Ok(())
+        assert!(records.is_confirmed(&named), "{records:?}");
+        assert_eq!(after_start, live);
+        assert!(store.restored_names().len() > restores);
+        Ok(())
+    })
+    .await
 }
 
 /// Changes the tree of `agent` with an upload that takes two seconds, stops the agent while the
@@ -904,10 +940,11 @@ async fn stop_during_an_upload(
         Ok(records.newest_name())
     })
     .await?;
+    let (owned, fingerprint) = agent.incarnation(executor, context).await?;
     agent.stop(executor, context).await?;
     eventually(Duration::from_secs(30), || async {
         Ok(store
-            .snapshot_names(&agent.owned(context))
+            .snapshot_names(&owned, fingerprint)
             .await
             .contains(&named)
             .then_some(()))
@@ -948,79 +985,84 @@ async fn a_crash_during_an_upload_restarts_with_the_tree_of_a_run_without_a_cras
         Operation::Remove { path: "logs/2.txt" },
     ];
     let reference_context = TestContext::new(last_unique_id);
-    let reference_store = TestFilesystemSnapshotStore::new();
-    let reference_executor = start_snapshotting(
-        deps,
-        &reference_context,
-        &reference_store,
-        Duration::from_secs(30),
-        None,
-    )
-    .await?;
-    let reference = Agent::start(
-        &reference_executor,
-        &reference_context,
-        initial_file_system,
-        "reference",
-        &[],
-    )
-    .await?;
-    reference
-        .apply_all(&reference_executor, &operations)
+    with_snapshot_store(|reference_store| async move {
+        let reference_executor = start_snapshotting(
+            deps,
+            &reference_context,
+            &reference_store,
+            Duration::from_secs(30),
+            None,
+        )
         .await?;
-    let expected = reference.describe(&reference_executor).await?;
-    reference_executor.release().await?;
+        let reference = Agent::start(
+            &reference_executor,
+            &reference_context,
+            initial_file_system,
+            "reference",
+            &[],
+        )
+        .await?;
+        reference
+            .apply_all(&reference_executor, &operations)
+            .await?;
+        let expected = reference.describe(&reference_executor).await?;
+        reference_executor.release().await?;
 
-    let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "crashing", &[]).await?;
-    let (before, last) = operations.split_at(operations.len() - 1);
-    agent.apply_all(&executor, before).await?;
-    let confirmed = agent.confirmed(&executor).await?;
-    let held = store.hold_next_save();
-    agent.apply_all(&executor, last).await?;
-    // The snapshot of the last operation can be skipped, when the job before it still deletes
-    // older snapshots at that moment. A `describe` changes no file and takes the snapshot then.
-    let blocked = eventually(Duration::from_secs(30), || async {
-        match held.name() {
-            Some(name) => Ok(Some(name)),
-            None => agent.describe(&executor).await.map(|_| None),
-        }
+        let context = TestContext::new(last_unique_id);
+        with_snapshot_store(|store| async move {
+            let executor =
+                start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+            let agent =
+                Agent::start(&executor, &context, initial_file_system, "crashing", &[]).await?;
+            let (before, last) = operations.split_at(operations.len() - 1);
+            agent.apply_all(&executor, before).await?;
+            let confirmed = agent.confirmed(&executor).await?;
+            let held = store.hold_next_save();
+            agent.apply_all(&executor, last).await?;
+            // The snapshot of the last operation can be skipped, when the job before it still deletes
+            // older snapshots at that moment. A `describe` changes no file and takes the snapshot then.
+            let blocked = eventually(Duration::from_secs(30), || async {
+                match held.name() {
+                    Some(name) => Ok(Some(name)),
+                    None => agent.describe(&executor).await.map(|_| None),
+                }
+            })
+            .await?;
+            let newest = agent.records(&executor).await?.newest_name();
+            // The crash: the executor goes away while the upload of the last snapshot is held.
+            executor.release().await?;
+            drop(held);
+            let restores = store.restored_names().len();
+
+            let restarted =
+                start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+            let tree = agent.describe(&restarted).await?;
+            let restored = store.restored_names()[restores..].to_vec();
+            let records = agent.records(&restarted).await?;
+
+            let shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
+
+            assert_eq!(newest.as_ref(), Some(&blocked));
+            assert!(
+                !records.is_confirmed(&blocked),
+                "the held snapshot {blocked} was confirmed: {records:?}"
+            );
+            assert_eq!(restored, [confirmed]);
+            assert_eq!(tree, expected);
+            assert_eq!(
+                shape,
+                InvocationShape {
+                    not_finished_once: Box::default(),
+                    starts_without_terminal: Box::default(),
+                    durable_calls_between_invocations: Box::default(),
+                    applied: operations.len(),
+                }
+            );
+            Ok(())
+        })
+        .await
     })
-    .await?;
-    let newest = agent.records(&executor).await?.newest_name();
-    // The crash: the executor goes away while the upload of the last snapshot is held.
-    executor.release().await?;
-    drop(held);
-    let restores = store.restored_names().len();
-
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let tree = agent.describe(&restarted).await?;
-    let restored = store.restored_names()[restores..].to_vec();
-    let records = agent.records(&restarted).await?;
-
-    let shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
-
-    assert_eq!(newest.as_ref(), Some(&blocked));
-    assert!(
-        !records.is_confirmed(&blocked),
-        "the held snapshot {blocked} was confirmed: {records:?}"
-    );
-    assert_eq!(restored, [confirmed]);
-    assert_eq!(tree, expected);
-    assert_eq!(
-        shape,
-        InvocationShape {
-            not_finished_once: Box::default(),
-            starts_without_terminal: Box::default(),
-            durable_calls_between_invocations: Box::default(),
-            applied: operations.len(),
-        }
-    );
-    Ok(())
+    .await
 }
 
 /// The shape of the invocation entries of an oplog after a restart.
@@ -1134,98 +1176,104 @@ async fn a_tree_of_initial_files_writes_records_without_a_name_and_uses_no_store
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let files = [
-        entry("foo.txt", "/ro-top.txt", AgentFilePermissions::ReadOnly),
-        entry(
-            "bar.txt",
-            "/nested/ro-deep.txt",
-            AgentFilePermissions::ReadOnly,
-        ),
-    ];
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "initial-files",
-        &files,
-    )
-    .await?;
-
-    let live = agent.describe(&executor).await?;
-    agent.applied(&executor).await?;
-    eventually(Duration::from_secs(30), || async {
-        let records = agent.records(&executor).await?;
-        Ok((records.snapshots.len() >= 2).then_some(()))
-    })
-    .await?;
-    let records = agent.records(&executor).await?;
-    let unchanged = executor.filesystem_captures("unchanged");
-    executor.release().await?;
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let restarted = agent.describe(&executor).await?;
-    let updated = executor
-        .update_component_with_files(
-            &agent.component.id,
-            AGENT_TYPE,
-            "it_initial_file_system_release",
-            vec![entry(
-                "foo.txt",
-                "/ro-top.txt",
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let files = [
+            entry("foo.txt", "/ro-top.txt", AgentFilePermissions::ReadOnly),
+            entry(
+                "bar.txt",
+                "/nested/ro-deep.txt",
                 AgentFilePermissions::ReadOnly,
-            )],
+            ),
+        ];
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "initial-files",
+            &files,
         )
         .await?;
-    executor
-        .manual_update_worker(&agent.worker_id, updated.revision, false)
-        .await?;
-    executor
-        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
-        .await?;
-    let updated_agent = Agent {
-        component: updated,
-        agent: agent.agent.clone(),
-        worker_id: agent.worker_id.clone(),
-    };
-    let after_update = updated_agent.describe(&executor).await?;
-    executor.release().await?;
-    let replay_root = tempfile::tempdir()?;
-    let replaying = start_replaying(deps, &context, replay_root.path()).await?;
-    let replayed = updated_agent.describe(&replaying).await?;
 
-    assert!(records.snapshots.iter().all(Option::is_none), "{records:?}");
-    assert!(records.confirmations.is_empty());
-    assert_eq!(store.save_count(), 0);
-    // The executor runs only this agent, so its count is the count of this agent. The boundary
-    // after the first record without a name finds the tree unchanged against the mark of that
-    // record, and checks no declaration and no directory.
-    assert!(unchanged >= 1, "{unchanged} unchanged captures");
-    assert_eq!(
-        live,
-        [
-            "nested dir",
-            r#"nested/ro-deep.txt file links=1 writable=false content="bar\n""#,
-            r#"ro-top.txt file links=1 writable=false content="foo\n""#,
-        ]
-        .map(String::from)
-    );
-    // A restart from a record without a name seeds the initial files, as a full replay does.
-    assert_eq!(restarted, live);
-    // The update keeps the directory that held the file that it removed, as a replay of the
-    // update does.
-    assert_eq!(
-        after_update,
-        [
-            "nested dir",
-            r#"ro-top.txt file links=1 writable=false content="foo\n""#,
-        ]
-        .map(String::from)
-    );
-    assert_eq!(replayed, after_update);
-    Ok(())
+        let live = agent.describe(&executor).await?;
+        agent.applied(&executor).await?;
+        eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok((records.snapshots.len() >= 2).then_some(()))
+        })
+        .await?;
+        let records = agent.records(&executor).await?;
+        let unchanged = executor.filesystem_captures("unchanged");
+        executor.release().await?;
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let restarted = agent.describe(&executor).await?;
+        let updated = executor
+            .update_component_with_files(
+                &agent.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![entry(
+                    "foo.txt",
+                    "/ro-top.txt",
+                    AgentFilePermissions::ReadOnly,
+                )],
+            )
+            .await?;
+        executor
+            .manual_update_worker(&agent.worker_id, updated.revision, false)
+            .await?;
+        executor
+            .wait_for_component_revision(
+                &agent.worker_id,
+                updated.revision,
+                Duration::from_secs(60),
+            )
+            .await?;
+        let updated_agent = Agent {
+            component: updated,
+            agent: agent.agent.clone(),
+            worker_id: agent.worker_id.clone(),
+        };
+        let after_update = updated_agent.describe(&executor).await?;
+        executor.release().await?;
+        let replay_root = tempfile::tempdir()?;
+        let replaying = start_replaying(deps, &context, replay_root.path()).await?;
+        let replayed = updated_agent.describe(&replaying).await?;
+
+        assert!(records.snapshots.iter().all(Option::is_none), "{records:?}");
+        assert!(records.confirmations.is_empty());
+        assert_eq!(store.save_count(), 0);
+        // The executor runs only this agent, so its count is the count of this agent. The boundary
+        // after the first record without a name finds the tree unchanged against the mark of that
+        // record, and checks no declaration and no directory.
+        assert!(unchanged >= 1, "{unchanged} unchanged captures");
+        assert_eq!(
+            live,
+            [
+                "nested dir",
+                r#"nested/ro-deep.txt file links=1 writable=false content="bar\n""#,
+                r#"ro-top.txt file links=1 writable=false content="foo\n""#,
+            ]
+            .map(String::from)
+        );
+        // A restart from a record without a name seeds the initial files, as a full replay does.
+        assert_eq!(restarted, live);
+        // The update keeps the directory that held the file that it removed, as a replay of the
+        // update does.
+        assert_eq!(
+            after_update,
+            [
+                "nested dir",
+                r#"ro-top.txt file links=1 writable=false content="foo\n""#,
+            ]
+            .map(String::from)
+        );
+        assert_eq!(replayed, after_update);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -1237,52 +1285,55 @@ async fn an_unchanged_tree_reuses_the_confirmed_name_and_saves_nothing(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "unchanged", &[]).await?;
-    agent
-        .apply_all(
-            &executor,
-            &[Operation::Write {
-                path: "file.txt",
-                content: "content",
-            }],
-        )
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent =
+            Agent::start(&executor, &context, initial_file_system, "unchanged", &[]).await?;
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "file.txt",
+                    content: "content",
+                }],
+            )
+            .await?;
+        let name = agent.confirmed(&executor).await?;
+        let saves = store.save_count();
+        let snapshots_before = agent.records(&executor).await?.snapshots.len();
+
+        let live = agent.describe(&executor).await?;
+        agent.applied(&executor).await?;
+        eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok((records.snapshots.len() >= snapshots_before + 2).then_some(records))
+        })
         .await?;
-    let name = agent.confirmed(&executor).await?;
-    let saves = store.save_count();
-    let snapshots_before = agent.records(&executor).await?.snapshots.len();
-
-    let live = agent.describe(&executor).await?;
-    agent.applied(&executor).await?;
-    eventually(Duration::from_secs(30), || async {
         let records = agent.records(&executor).await?;
-        Ok((records.snapshots.len() >= snapshots_before + 2).then_some(records))
-    })
-    .await?;
-    let records = agent.records(&executor).await?;
-    executor.release().await?;
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        executor.release().await?;
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
 
-    assert_eq!(store.save_count(), saves);
-    assert!(
-        records.snapshots[snapshots_before..]
-            .iter()
-            .all(|snapshot| snapshot.as_deref() == Some(name.as_str())),
-        "{records:?}"
-    );
-    assert_eq!(
-        records
-            .confirmations
-            .iter()
-            .filter(|confirmed| ***confirmed == *name)
-            .count(),
-        records.snapshots.len() - snapshots_before + 1
-    );
-    assert_eq!(agent.describe(&restarted).await?, live);
-    Ok(())
+        assert_eq!(store.save_count(), saves);
+        assert!(
+            records.snapshots[snapshots_before..]
+                .iter()
+                .all(|snapshot| snapshot.as_deref() == Some(name.as_str())),
+            "{records:?}"
+        );
+        assert_eq!(
+            records
+                .confirmations
+                .iter()
+                .filter(|confirmed| ***confirmed == *name)
+                .count(),
+            records.snapshots.len() - snapshots_before + 1
+        );
+        assert_eq!(agent.describe(&restarted).await?, live);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -1294,78 +1345,84 @@ async fn a_manual_update_brings_the_files_into_the_target_revision(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "manual-update",
-        &[entry(
-            "foo.txt",
-            "/ro-old.txt",
-            AgentFilePermissions::ReadOnly,
-        )],
-    )
-    .await?;
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
             &executor,
-            &[
-                Operation::Mkdir { path: "work" },
-                Operation::Write {
-                    path: "work/state.db",
-                    content: "rows",
-                },
-            ],
-        )
-        .await?;
-    // Let the periodic upload end first, so the manual update is admitted at once and does not
-    // wait for the running upload.
-    agent.confirmed(&executor).await?;
-    let saves = store.save_count();
-
-    let updated = executor
-        .update_component_with_files(
-            &agent.component.id,
-            AGENT_TYPE,
-            "it_initial_file_system_release",
-            vec![entry(
-                "bar.txt",
-                "/ro-new.txt",
+            &context,
+            initial_file_system,
+            "manual-update",
+            &[entry(
+                "foo.txt",
+                "/ro-old.txt",
                 AgentFilePermissions::ReadOnly,
             )],
         )
         .await?;
-    executor
-        .manual_update_worker(&agent.worker_id, updated.revision, false)
-        .await?;
-    executor
-        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
-        .await?;
-    let updated_agent = Agent {
-        component: updated,
-        agent: agent.agent.clone(),
-        worker_id: agent.worker_id.clone(),
-    };
-    let after_update = updated_agent.describe(&executor).await?;
-    executor.release().await?;
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        agent
+            .apply_all(
+                &executor,
+                &[
+                    Operation::Mkdir { path: "work" },
+                    Operation::Write {
+                        path: "work/state.db",
+                        content: "rows",
+                    },
+                ],
+            )
+            .await?;
+        // Let the periodic upload end first, so the manual update is admitted at once and does not
+        // wait for the running upload.
+        agent.confirmed(&executor).await?;
+        let saves = store.save_count();
 
-    assert!(store.save_count() > saves);
-    assert_eq!(
-        after_update,
-        [
-            r#"ro-new.txt file links=1 writable=false content="bar\n""#,
-            "work dir",
-            r#"work/state.db file links=1 writable=true content="rows""#,
-        ]
-        .map(String::from)
-    );
-    assert_eq!(updated_agent.describe(&restarted).await?, after_update);
-    Ok(())
+        let updated = executor
+            .update_component_with_files(
+                &agent.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![entry(
+                    "bar.txt",
+                    "/ro-new.txt",
+                    AgentFilePermissions::ReadOnly,
+                )],
+            )
+            .await?;
+        executor
+            .manual_update_worker(&agent.worker_id, updated.revision, false)
+            .await?;
+        executor
+            .wait_for_component_revision(
+                &agent.worker_id,
+                updated.revision,
+                Duration::from_secs(60),
+            )
+            .await?;
+        let updated_agent = Agent {
+            component: updated,
+            agent: agent.agent.clone(),
+            worker_id: agent.worker_id.clone(),
+        };
+        let after_update = updated_agent.describe(&executor).await?;
+        executor.release().await?;
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+
+        assert!(store.save_count() > saves);
+        assert_eq!(
+            after_update,
+            [
+                r#"ro-new.txt file links=1 writable=false content="bar\n""#,
+                "work dir",
+                r#"work/state.db file links=1 writable=true content="rows""#,
+            ]
+            .map(String::from)
+        );
+        assert_eq!(updated_agent.describe(&restarted).await?, after_update);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -1377,85 +1434,88 @@ async fn a_changed_file_at_a_changed_declaration_fails_both_updates_the_same_way
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let files = [entry(
-        "baz.txt",
-        "/config.txt",
-        AgentFilePermissions::ReadWrite,
-    )];
-    let manual = Agent::start(&executor, &context, initial_file_system, "manual", &files).await?;
-    let automatic = Agent {
-        worker_id: executor
-            .start_agent(&manual.component.id, agent_id!(AGENT_TYPE, "automatic"))
-            .await?,
-        agent: agent_id!(AGENT_TYPE, "automatic"),
-        component: manual.component.clone(),
-    };
-    manual
-        .apply_all(
-            &executor,
-            &[Operation::Write {
-                path: "config.txt",
-                content: "changed",
-            }],
-        )
-        .await?;
-    automatic
-        .apply_all(
-            &executor,
-            &[Operation::Write {
-                path: "config.txt",
-                content: "changed",
-            }],
-        )
-        .await?;
-    let manual_before = manual.describe(&executor).await?;
-    let automatic_before = automatic.describe(&executor).await?;
-    let updated = executor
-        .update_component_with_files(
-            &manual.component.id,
-            AGENT_TYPE,
-            "it_initial_file_system_release",
-            vec![entry(
-                "foo.txt",
-                "/config.txt",
-                AgentFilePermissions::ReadWrite,
-            )],
-        )
-        .await?;
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let files = [entry(
+            "baz.txt",
+            "/config.txt",
+            AgentFilePermissions::ReadWrite,
+        )];
+        let manual =
+            Agent::start(&executor, &context, initial_file_system, "manual", &files).await?;
+        let automatic = Agent {
+            worker_id: executor
+                .start_agent(&manual.component.id, agent_id!(AGENT_TYPE, "automatic"))
+                .await?,
+            agent: agent_id!(AGENT_TYPE, "automatic"),
+            component: manual.component.clone(),
+        };
+        manual
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "config.txt",
+                    content: "changed",
+                }],
+            )
+            .await?;
+        automatic
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "config.txt",
+                    content: "changed",
+                }],
+            )
+            .await?;
+        let manual_before = manual.describe(&executor).await?;
+        let automatic_before = automatic.describe(&executor).await?;
+        let updated = executor
+            .update_component_with_files(
+                &manual.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![entry(
+                    "foo.txt",
+                    "/config.txt",
+                    AgentFilePermissions::ReadWrite,
+                )],
+            )
+            .await?;
 
-    executor
-        .manual_update_worker(&manual.worker_id, updated.revision, false)
-        .await?;
-    executor
-        .auto_update_worker(&automatic.worker_id, updated.revision, false)
-        .await?;
-    let manual_failures = manual.failed_updates(&executor).await?;
-    let automatic_failures = automatic.failed_updates(&executor).await?;
+        executor
+            .manual_update_worker(&manual.worker_id, updated.revision, false)
+            .await?;
+        executor
+            .auto_update_worker(&automatic.worker_id, updated.revision, false)
+            .await?;
+        let manual_failures = manual.failed_updates(&executor).await?;
+        let automatic_failures = automatic.failed_updates(&executor).await?;
 
-    assert!(
-        manual_failures
-            .iter()
-            .any(|failure| failure.contains("config.txt")),
-        "{manual_failures:?}"
-    );
-    assert!(
-        automatic_failures
-            .iter()
-            .any(|failure| failure.contains("config.txt")),
-        "{automatic_failures:?}"
-    );
-    assert_eq!(manual.describe(&executor).await?, manual_before);
-    // A failed automatic update ends the start with an error, and the agent starts again at its
-    // current revision after the retry delay.
-    let automatic_after = eventually(Duration::from_secs(60), || async {
-        Ok(automatic.describe(&executor).await.ok())
+        assert!(
+            manual_failures
+                .iter()
+                .any(|failure| failure.contains("config.txt")),
+            "{manual_failures:?}"
+        );
+        assert!(
+            automatic_failures
+                .iter()
+                .any(|failure| failure.contains("config.txt")),
+            "{automatic_failures:?}"
+        );
+        assert_eq!(manual.describe(&executor).await?, manual_before);
+        // A failed automatic update ends the start with an error, and the agent starts again at its
+        // current revision after the retry delay.
+        let automatic_after = eventually(Duration::from_secs(60), || async {
+            Ok(automatic.describe(&executor).await.ok())
+        })
+        .await?;
+        assert_eq!(automatic_after, automatic_before);
+        Ok(())
     })
-    .await?;
-    assert_eq!(automatic_after, automatic_before);
-    Ok(())
+    .await
 }
 
 #[test]
@@ -1468,40 +1528,42 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
 ) -> anyhow::Result<()> {
     let limit = Duration::from_secs(3);
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor = start_snapshotting(deps, &context, &store, limit, None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "waiting", &[]).await?;
-    store.set_save_delay(Duration::from_secs(120));
-    agent
-        .apply_all(
-            &executor,
-            &[Operation::Write {
-                path: "file.txt",
-                content: "content",
-            }],
-        )
+    with_snapshot_store(|store| async move {
+        let executor = start_snapshotting(deps, &context, &store, limit, None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "waiting", &[]).await?;
+        store.set_save_delay(Duration::from_secs(120));
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "file.txt",
+                    content: "content",
+                }],
+            )
+            .await?;
+        let live = agent.describe(&executor).await?;
+        let named = eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok(records.oldest_name())
+        })
         .await?;
-    let live = agent.describe(&executor).await?;
-    let named = eventually(Duration::from_secs(30), || async {
+        agent.stop(&executor, &context).await?;
+        let restores = store.restored_names().len();
+
+        let started = std::time::Instant::now();
+        executor.resume(&agent.worker_id, false).await?;
+        let after_start = agent.describe(&executor).await?;
+        let waited = started.elapsed();
         let records = agent.records(&executor).await?;
-        Ok(records.oldest_name())
+
+        assert_eq!(after_start, live);
+        assert!(waited >= limit, "the start waited {waited:?}");
+        assert!(waited < limit * 5, "the start waited {waited:?}");
+        assert!(!records.is_confirmed(&named), "{records:?}");
+        assert_eq!(store.restored_names().len(), restores);
+        Ok(())
     })
-    .await?;
-    agent.stop(&executor, &context).await?;
-    let restores = store.restored_names().len();
-
-    let started = std::time::Instant::now();
-    executor.resume(&agent.worker_id, false).await?;
-    let after_start = agent.describe(&executor).await?;
-    let waited = started.elapsed();
-    let records = agent.records(&executor).await?;
-
-    assert_eq!(after_start, live);
-    assert!(waited >= limit, "the start waited {waited:?}");
-    assert!(waited < limit * 5, "the start waited {waited:?}");
-    assert!(!records.is_confirmed(&named), "{records:?}");
-    assert_eq!(store.restored_names().len(), restores);
-    Ok(())
+    .await
 }
 
 #[test]
@@ -1584,26 +1646,29 @@ async fn a_newer_and_an_older_record_that_both_fail_to_load_end_in_a_full_replay
     let expected =
         tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "both-fail", &[]).await?;
-    let (older, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
-    let (newer, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
-    executor
-        .return_empty_snapshot_payload(&agent.worker_id, newer)
-        .await?;
-    executor
-        .return_empty_snapshot_payload(&agent.worker_id, older)
-        .await?;
-    let restores = store.restored_names().len();
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent =
+            Agent::start(&executor, &context, initial_file_system, "both-fail", &[]).await?;
+        let (older, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
+        let (newer, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
+        executor
+            .return_empty_snapshot_payload(&agent.worker_id, newer)
+            .await?;
+        executor
+            .return_empty_snapshot_payload(&agent.worker_id, older)
+            .await?;
+        let restores = store.restored_names().len();
 
-    let (_, tree) = agent.restart_and_describe(&executor, &context).await?;
-    let applied = agent.applied(&executor).await?;
+        let (_, tree) = agent.restart_and_describe(&executor, &context).await?;
+        let applied = agent.applied(&executor).await?;
 
-    assert_eq!(store.restored_names()[restores..], [newer_name, older_name]);
-    assert_eq!((tree, applied), expected);
-    Ok(())
+        assert_eq!(store.restored_names()[restores..], [newer_name, older_name]);
+        assert_eq!((tree, applied), expected);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -1621,50 +1686,52 @@ async fn a_record_that_reuses_a_name_and_fails_to_load_falls_back_to_the_record_
     let expected =
         tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "reused-fails",
-        &[],
-    )
-    .await?;
-    let (first, name) = agent.apply_and_confirm(&executor, operations[0]).await?;
-    // The next invocation changes no file, so its record reuses the name of the first one.
-    agent.applied(&executor).await?;
-    let reused = eventually(Duration::from_secs(30), || async {
-        Ok(executor
-            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
-            .await?
-            .iter()
-            .rev()
-            .find_map(|entry| match &entry.entry {
-                PublicOplogEntry::Snapshot(snapshot)
-                    if snapshot.filesystem_snapshot.as_deref() == Some(name.as_str())
-                        && entry.oplog_index != first =>
-                {
-                    Some(entry.oplog_index)
-                }
-                _ => None,
-            }))
-    })
-    .await?;
-    executor
-        .return_empty_snapshot_payload(&agent.worker_id, reused)
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "reused-fails",
+            &[],
+        )
         .await?;
-    let restores = store.restored_names().len();
+        let (first, name) = agent.apply_and_confirm(&executor, operations[0]).await?;
+        // The next invocation changes no file, so its record reuses the name of the first one.
+        agent.applied(&executor).await?;
+        let reused = eventually(Duration::from_secs(30), || async {
+            Ok(executor
+                .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .rev()
+                .find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::Snapshot(snapshot)
+                        if snapshot.filesystem_snapshot.as_deref() == Some(name.as_str())
+                            && entry.oplog_index != first =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                }))
+        })
+        .await?;
+        executor
+            .return_empty_snapshot_payload(&agent.worker_id, reused)
+            .await?;
+        let restores = store.restored_names().len();
 
-    let (_, tree) = agent.restart_and_describe(&executor, &context).await?;
-    let applied = agent.applied(&executor).await?;
+        let (_, tree) = agent.restart_and_describe(&executor, &context).await?;
+        let applied = agent.applied(&executor).await?;
 
-    // The start restores the name for the reused record, fails to load its payload, and restores
-    // the same name again for the record before it.
-    assert_eq!(store.restored_names()[restores..], [name.clone(), name]);
-    assert_eq!((tree, applied), expected);
-    Ok(())
+        // The start restores the name for the reused record, fails to load its payload, and restores
+        // the same name again for the record before it.
+        assert_eq!(store.restored_names()[restores..], [name.clone(), name]);
+        assert_eq!((tree, applied), expected);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -1676,41 +1743,45 @@ async fn a_start_attempt_from_a_record_that_fails_to_load_writes_nothing_to_the_
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let failing = Agent::start(&executor, &context, initial_file_system, "failing", &[]).await?;
-    let clean = Agent {
-        worker_id: executor
-            .start_agent(&failing.component.id, agent_id!(AGENT_TYPE, "clean"))
-            .await?,
-        agent: agent_id!(AGENT_TYPE, "clean"),
-        component: failing.component.clone(),
-    };
-    let operations = [
-        Operation::Write {
-            path: "a.txt",
-            content: "a",
-        },
-        Operation::Write {
-            path: "b.txt",
-            content: "b",
-        },
-    ];
-    failing.apply_and_confirm(&executor, operations[0]).await?;
-    let (newer, _) = failing.apply_and_confirm(&executor, operations[1]).await?;
-    clean.apply_and_confirm(&executor, operations[0]).await?;
-    clean.apply_and_confirm(&executor, operations[1]).await?;
-    executor
-        .return_empty_snapshot_payload(&failing.worker_id, newer)
-        .await?;
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let failing =
+            Agent::start(&executor, &context, initial_file_system, "failing", &[]).await?;
+        let clean = Agent {
+            worker_id: executor
+                .start_agent(&failing.component.id, agent_id!(AGENT_TYPE, "clean"))
+                .await?,
+            agent: agent_id!(AGENT_TYPE, "clean"),
+            component: failing.component.clone(),
+        };
+        let operations = [
+            Operation::Write {
+                path: "a.txt",
+                content: "a",
+            },
+            Operation::Write {
+                path: "b.txt",
+                content: "b",
+            },
+        ];
+        failing.apply_and_confirm(&executor, operations[0]).await?;
+        let (newer, _) = failing.apply_and_confirm(&executor, operations[1]).await?;
+        clean.apply_and_confirm(&executor, operations[0]).await?;
+        clean.apply_and_confirm(&executor, operations[1]).await?;
+        executor
+            .return_empty_snapshot_payload(&failing.worker_id, newer)
+            .await?;
 
-    let (failing_kinds, failing_tree) = failing.restart_and_describe(&executor, &context).await?;
-    let (clean_kinds, clean_tree) = clean.restart_and_describe(&executor, &context).await?;
+        let (failing_kinds, failing_tree) =
+            failing.restart_and_describe(&executor, &context).await?;
+        let (clean_kinds, clean_tree) = clean.restart_and_describe(&executor, &context).await?;
 
-    assert_eq!(failing_kinds, clean_kinds);
-    assert_eq!(failing_tree, clean_tree);
-    Ok(())
+        assert_eq!(failing_kinds, clean_kinds);
+        assert_eq!(failing_tree, clean_tree);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -1734,39 +1805,41 @@ async fn a_rejected_record_stays_rejected_after_a_restart_and_the_older_record_s
     let expected =
         tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "rejected", &[]).await?;
-    let (_, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
-    let (newer, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
-    executor
-        .return_empty_snapshot_payload(&agent.worker_id, newer)
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "rejected", &[]).await?;
+        let (_, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
+        let (newer, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
+        executor
+            .return_empty_snapshot_payload(&agent.worker_id, newer)
+            .await?;
+        agent.stop(&executor, &context).await?;
+        let restores = store.restored_names().len();
+
+        // The start runs no invocation, so it writes no newer snapshot record.
+        executor.resume(&agent.worker_id, false).await?;
+        let first_start = eventually(Duration::from_secs(30), || async {
+            let restored = store.restored_names()[restores..].to_vec();
+            Ok((restored.len() >= 2).then_some(restored))
+        })
         .await?;
-    agent.stop(&executor, &context).await?;
-    let restores = store.restored_names().len();
+        agent.stop(&executor, &context).await?;
+        executor.release().await?;
 
-    // The start runs no invocation, so it writes no newer snapshot record.
-    executor.resume(&agent.worker_id, false).await?;
-    let first_start = eventually(Duration::from_secs(30), || async {
-        let restored = store.restored_names()[restores..].to_vec();
-        Ok((restored.len() >= 2).then_some(restored))
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let restores = store.restored_names().len();
+        let tree = agent.describe(&restarted).await?;
+        let applied = agent.applied(&restarted).await?;
+        let second_start = store.restored_names()[restores..].to_vec();
+
+        assert_eq!(first_start, [newer_name, older_name.clone()]);
+        assert_eq!(second_start, [older_name]);
+        assert_eq!((tree, applied), expected);
+        Ok(())
     })
-    .await?;
-    agent.stop(&executor, &context).await?;
-    executor.release().await?;
-
-    let restarted =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let restores = store.restored_names().len();
-    let tree = agent.describe(&restarted).await?;
-    let applied = agent.applied(&restarted).await?;
-    let second_start = store.restored_names()[restores..].to_vec();
-
-    assert_eq!(first_start, [newer_name, older_name.clone()]);
-    assert_eq!(second_start, [older_name]);
-    assert_eq!((tree, applied), expected);
-    Ok(())
+    .await
 }
 
 /// One step of a generated history of an agent.
@@ -1922,73 +1995,75 @@ async fn run_history(
     restart: Restart,
 ) -> anyhow::Result<(HistoryRun, RestartSelection)> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        component,
-        "history",
-        &declaration_set(initial),
-    )
-    .await?;
-    let (agent, mut results) = agent.run_steps(&executor, before).await?;
-    if let Restart::FullReplay = restart {
-        agent.stop(&executor, &context).await?;
-        let periodic_records = executor
-            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
-            .await?
-            .into_iter()
-            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
-            .map(|entry| entry.oplog_index)
-            .collect::<Vec<_>>();
-        executor
-            .reject_automatic_snapshots(&agent.worker_id, periodic_records)
-            .await?;
-    }
-    executor.release().await?;
-    let root = tempfile::tempdir()?;
-    if let Restart::FullReplay = restart {
-        let owned = agent.owned(&context);
-        futures::stream::iter(store.snapshot_names(&owned).await)
-            .filter(|name| std::future::ready(name.starts_with("p-")))
-            .for_each(|name| {
-                let (store, owned) = (&store, &owned);
-                async move { store.lose(owned, &name).await }
-            })
-            .await;
-    }
-    let restores = store.completed_restore_names().len();
-    let restarted = match restart {
-        Restart::FromSnapshot => {
-            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            component,
+            "history",
+            &declaration_set(initial),
+        )
+        .await?;
+        let (agent, mut results) = agent.run_steps(&executor, before).await?;
+        if let Restart::FullReplay = restart {
+            agent.stop(&executor, &context).await?;
+            let periodic_records = executor
+                .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>();
+            executor
+                .reject_automatic_snapshots(&agent.worker_id, periodic_records)
+                .await?;
         }
-        Restart::FullReplay => {
-            start_replaying_with(deps, &context, root.path(), Some(&store)).await?
+        let (owned, fingerprint) = agent.incarnation(&executor, &context).await?;
+        executor.release().await?;
+        let root = tempfile::tempdir()?;
+        if let Restart::FullReplay = restart {
+            futures::stream::iter(store.snapshot_names(&owned, fingerprint).await)
+                .filter(|name| std::future::ready(name.starts_with("p-")))
+                .for_each(|name| {
+                    let (store, owned) = (&store, &owned);
+                    async move { store.lose(owned, fingerprint, &name).await }
+                })
+                .await;
         }
-    };
-    let restarted_outcome = agent.outcome(&restarted).await?;
-    let selection = RestartSelection {
-        restored: store.completed_restore_names()[restores..]
-            .iter()
-            .map(|name| name.as_str().into())
-            .collect(),
-        automatic_reads: restarted
-            .oplog_service_call_count(&agent.worker_id, "read_automatic_snapshot"),
-    };
-    let (agent, after_results) = agent.run_steps(&restarted, after).await?;
-    results.extend(after_results);
-    let finished = agent.outcome(&restarted).await?;
-    restarted.release().await?;
-    Ok((
-        HistoryRun {
-            results: results.into_iter().map(String::into_boxed_str).collect(),
-            restarted: restarted_outcome,
-            finished,
-        },
-        selection,
-    ))
+        let restores = store.completed_restore_names().len();
+        let restarted = match restart {
+            Restart::FromSnapshot => {
+                start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?
+            }
+            Restart::FullReplay => {
+                start_replaying_with(deps, &context, root.path(), Some(&store)).await?
+            }
+        };
+        let restarted_outcome = agent.outcome(&restarted).await?;
+        let selection = RestartSelection {
+            restored: store.completed_restore_names()[restores..]
+                .iter()
+                .map(|name| name.as_str().into())
+                .collect(),
+            automatic_reads: restarted
+                .oplog_service_call_count(&agent.worker_id, "read_automatic_snapshot"),
+        };
+        let (agent, after_results) = agent.run_steps(&restarted, after).await?;
+        results.extend(after_results);
+        let finished = agent.outcome(&restarted).await?;
+        restarted.release().await?;
+        Ok((
+            HistoryRun {
+                results: results.into_iter().map(String::into_boxed_str).collect(),
+                restarted: restarted_outcome,
+                finished,
+            },
+            selection,
+        ))
+    })
+    .await
 }
 
 #[test]
@@ -2277,62 +2352,68 @@ async fn a_manual_update_during_an_upload_waits_for_the_upload_and_succeeds(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "update-waits",
-        &[],
-    )
-    .await?;
-    store.set_save_delay(Duration::from_secs(2));
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
             &executor,
-            &[Operation::Write {
-                path: "state.db",
-                content: "rows",
-            }],
+            &context,
+            initial_file_system,
+            "update-waits",
+            &[],
         )
         .await?;
-    eventually(Duration::from_secs(30), || async {
-        let records = agent.records(&executor).await?;
-        Ok(records.oldest_name())
+        store.set_save_delay(Duration::from_secs(2));
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.db",
+                    content: "rows",
+                }],
+            )
+            .await?;
+        eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok(records.oldest_name())
+        })
+        .await?;
+        let updated = executor
+            .update_component_with_files(
+                &agent.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![],
+            )
+            .await?;
+
+        executor
+            .manual_update_worker(&agent.worker_id, updated.revision, false)
+            .await?;
+        executor
+            .wait_for_component_revision(
+                &agent.worker_id,
+                updated.revision,
+                Duration::from_secs(60),
+            )
+            .await?;
+        store.set_save_delay(Duration::ZERO);
+        let updated_agent = Agent {
+            component: updated,
+            agent: agent.agent.clone(),
+            worker_id: agent.worker_id.clone(),
+        };
+        let tree = updated_agent.describe(&executor).await?;
+        let records = updated_agent.records(&executor).await?;
+
+        assert!(records.failed_updates.is_empty(), "{records:?}");
+        assert_eq!(
+            tree,
+            [r#"state.db file links=1 writable=true content="rows""#].map(String::from)
+        );
+        Ok(())
     })
-    .await?;
-    let updated = executor
-        .update_component_with_files(
-            &agent.component.id,
-            AGENT_TYPE,
-            "it_initial_file_system_release",
-            vec![],
-        )
-        .await?;
-
-    executor
-        .manual_update_worker(&agent.worker_id, updated.revision, false)
-        .await?;
-    executor
-        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
-        .await?;
-    store.set_save_delay(Duration::ZERO);
-    let updated_agent = Agent {
-        component: updated,
-        agent: agent.agent.clone(),
-        worker_id: agent.worker_id.clone(),
-    };
-    let tree = updated_agent.describe(&executor).await?;
-    let records = updated_agent.records(&executor).await?;
-
-    assert!(records.failed_updates.is_empty(), "{records:?}");
-    assert_eq!(
-        tree,
-        [r#"state.db file links=1 writable=true content="rows""#].map(String::from)
-    );
-    Ok(())
+    .await
 }
 
 #[test]
@@ -2356,29 +2437,31 @@ async fn a_newest_record_whose_filesystem_does_not_restore_falls_back_to_the_old
     let expected =
         tree_without_snapshots(deps, last_unique_id, initial_file_system, &operations).await?;
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "restore-fails",
-        &[],
-    )
-    .await?;
-    let (_, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
-    let (_, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
-    store.fail_restores_of(&newer_name);
-    agent.stop(&executor, &context).await?;
-    let restores = store.restored_names().len();
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "restore-fails",
+            &[],
+        )
+        .await?;
+        let (_, older_name) = agent.apply_and_confirm(&executor, operations[0]).await?;
+        let (_, newer_name) = agent.apply_and_confirm(&executor, operations[1]).await?;
+        store.fail_restores_of(&newer_name);
+        agent.stop(&executor, &context).await?;
+        let restores = store.restored_names().len();
 
-    let tree = agent.describe(&executor).await?;
-    let applied = agent.applied(&executor).await?;
+        let tree = agent.describe(&executor).await?;
+        let applied = agent.applied(&executor).await?;
 
-    assert_eq!(store.restored_names()[restores..], [newer_name, older_name]);
-    assert_eq!((tree, applied), expected);
-    Ok(())
+        assert_eq!(store.restored_names()[restores..], [newer_name, older_name]);
+        assert_eq!((tree, applied), expected);
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -2390,49 +2473,53 @@ async fn a_start_during_an_upload_waits_for_it_and_then_confirms_its_snapshot(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(&executor, &context, initial_file_system, "start-waits", &[]).await?;
-    store.set_save_delay(Duration::from_secs(3));
-    agent
-        .apply_all(
-            &executor,
-            &[Operation::Write {
-                path: "file.txt",
-                content: "content",
-            }],
-        )
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent =
+            Agent::start(&executor, &context, initial_file_system, "start-waits", &[]).await?;
+        store.set_save_delay(Duration::from_secs(3));
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "file.txt",
+                    content: "content",
+                }],
+            )
+            .await?;
+        let live = agent.describe(&executor).await?;
+        let named = eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok(records.newest_name())
+        })
         .await?;
-    let live = agent.describe(&executor).await?;
-    let named = eventually(Duration::from_secs(30), || async {
+        let (owned, fingerprint) = agent.incarnation(&executor, &context).await?;
+        agent.stop(&executor, &context).await?;
+        let stored_at_start = store
+            .snapshot_names(&owned, fingerprint)
+            .await
+            .contains(&named);
+        let restores = store.restored_names().len();
+
+        let started = std::time::Instant::now();
+        executor.resume(&agent.worker_id, false).await?;
+        let after_start = agent.describe(&executor).await?;
+        let waited = started.elapsed();
         let records = agent.records(&executor).await?;
-        Ok(records.newest_name())
+        store.set_save_delay(Duration::ZERO);
+
+        assert!(!stored_at_start);
+        assert!(records.is_confirmed(&named), "{records:?}");
+        assert_eq!(store.restored_names()[restores..], [named]);
+        assert_eq!(after_start, live);
+        assert!(
+            waited < Duration::from_secs(20),
+            "the start waited {waited:?}"
+        );
+        Ok(())
     })
-    .await?;
-    agent.stop(&executor, &context).await?;
-    let stored_at_start = store
-        .snapshot_names(&agent.owned(&context))
-        .await
-        .contains(&named);
-    let restores = store.restored_names().len();
-
-    let started = std::time::Instant::now();
-    executor.resume(&agent.worker_id, false).await?;
-    let after_start = agent.describe(&executor).await?;
-    let waited = started.elapsed();
-    let records = agent.records(&executor).await?;
-    store.set_save_delay(Duration::ZERO);
-
-    assert!(!stored_at_start);
-    assert!(records.is_confirmed(&named), "{records:?}");
-    assert_eq!(store.restored_names()[restores..], [named]);
-    assert_eq!(after_start, live);
-    assert!(
-        waited < Duration::from_secs(20),
-        "the start waited {waited:?}"
-    );
-    Ok(())
+    .await
 }
 
 /// Runs `future` and gives its output with the time it took.
@@ -2456,49 +2543,51 @@ async fn an_invocation_during_a_stop_waits_for_the_upload_only_in_its_start_and_
     let confirmation_wait = Duration::from_secs(2);
     let margin = Duration::from_secs(5);
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor = start_snapshotting(deps, &context, &store, confirmation_wait, None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "stop-no-wait",
-        &[],
-    )
-    .await?;
-    store.set_save_delay(upload);
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor = start_snapshotting(deps, &context, &store, confirmation_wait, None).await?;
+        let agent = Agent::start(
             &executor,
-            &[Operation::Write {
-                path: "file.txt",
-                content: "content",
-            }],
+            &context,
+            initial_file_system,
+            "stop-no-wait",
+            &[],
         )
         .await?;
-    let live = agent.describe(&executor).await?;
-    eventually(Duration::from_secs(30), || async {
-        let records = agent.records(&executor).await?;
-        Ok(records.oldest_name())
-    })
-    .await?;
-
-    let ((stopped, stop_took), (tree, invocation_took)) = futures::join!(
-        timed(agent.stop(&executor, &context)),
-        timed(async {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-            agent.describe(&executor).await
+        store.set_save_delay(upload);
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "file.txt",
+                    content: "content",
+                }],
+            )
+            .await?;
+        let live = agent.describe(&executor).await?;
+        eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok(records.oldest_name())
         })
-    );
+        .await?;
 
-    stopped?;
-    assert_eq!(tree?, live);
-    assert!(stop_took < confirmation_wait, "the stop took {stop_took:?}");
-    assert!(
-        invocation_took < confirmation_wait + margin,
-        "the invocation took {invocation_took:?}"
-    );
-    Ok(())
+        let ((stopped, stop_took), (tree, invocation_took)) = futures::join!(
+            timed(agent.stop(&executor, &context)),
+            timed(async {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                agent.describe(&executor).await
+            })
+        );
+
+        stopped?;
+        assert_eq!(tree?, live);
+        assert!(stop_took < confirmation_wait, "the stop took {stop_took:?}");
+        assert!(
+            invocation_took < confirmation_wait + margin,
+            "the invocation took {invocation_took:?}"
+        );
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -2510,61 +2599,67 @@ async fn a_named_manual_update_record_fails_a_start_without_filesystem_snapshots
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "disabled-start",
-        &[],
-    )
-    .await?;
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
             &executor,
-            &[Operation::Write {
-                path: "state.db",
-                content: "rows",
-            }],
+            &context,
+            initial_file_system,
+            "disabled-start",
+            &[],
         )
         .await?;
-    agent.confirmed(&executor).await?;
-    let updated = executor
-        .update_component_with_files(
-            &agent.component.id,
-            AGENT_TYPE,
-            "it_initial_file_system_release",
-            vec![],
-        )
-        .await?;
-    executor
-        .manual_update_worker(&agent.worker_id, updated.revision, false)
-        .await?;
-    executor
-        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
-        .await?;
-    executor.release().await?;
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.db",
+                    content: "rows",
+                }],
+            )
+            .await?;
+        agent.confirmed(&executor).await?;
+        let updated = executor
+            .update_component_with_files(
+                &agent.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![],
+            )
+            .await?;
+        executor
+            .manual_update_worker(&agent.worker_id, updated.revision, false)
+            .await?;
+        executor
+            .wait_for_component_revision(
+                &agent.worker_id,
+                updated.revision,
+                Duration::from_secs(60),
+            )
+            .await?;
+        executor.release().await?;
 
-    let root = tempfile::tempdir()?;
-    let disabled = start_replaying(deps, &context, root.path()).await?;
-    let started = agent.describe(&disabled).await;
-    let metadata = disabled.get_worker_metadata(&agent.worker_id).await?;
+        let root = tempfile::tempdir()?;
+        let disabled = start_replaying(deps, &context, root.path()).await?;
+        let started = agent.describe(&disabled).await;
+        let metadata = disabled.get_worker_metadata(&agent.worker_id).await?;
 
-    let error = format!("{:?}", started.err());
-    assert!(
-        error.contains("filesystem snapshots are disabled on this executor"),
-        "{error}"
-    );
-    assert!(
-        metadata
-            .last_error
-            .as_deref()
-            .is_some_and(|error| error.contains("filesystem snapshots are disabled")),
-        "{metadata:?}"
-    );
-    Ok(())
+        let error = format!("{:?}", started.err());
+        assert!(
+            error.contains("filesystem snapshots are disabled on this executor"),
+            "{error}"
+        );
+        assert!(
+            metadata
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("filesystem snapshots are disabled")),
+            "{metadata:?}"
+        );
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -2577,101 +2672,103 @@ async fn failed_manual_updates_never_delete_the_snapshot_of_the_last_successful_
 ) -> anyhow::Result<()> {
     let spacing = Duration::from_secs(10 * 60);
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let declared = || entry("baz.txt", "/config.txt", AgentFilePermissions::ReadWrite);
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "update-baseline",
-        &[declared()],
-    )
-    .await?;
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let declared = || entry("baz.txt", "/config.txt", AgentFilePermissions::ReadWrite);
+        let agent = Agent::start(
             &executor,
-            &[
-                Operation::Write {
-                    path: "config.txt",
-                    content: "changed",
-                },
-                Operation::Write {
-                    path: "state.db",
-                    content: "rows",
-                },
-            ],
+            &context,
+            initial_file_system,
+            "update-baseline",
+            &[declared()],
         )
         .await?;
-    agent.confirmed(&executor).await?;
-    let owned = agent.owned(&context);
-    let update_names = || async {
-        store
-            .snapshot_names(&owned)
+        agent
+            .apply_all(
+                &executor,
+                &[
+                    Operation::Write {
+                        path: "config.txt",
+                        content: "changed",
+                    },
+                    Operation::Write {
+                        path: "state.db",
+                        content: "rows",
+                    },
+                ],
+            )
+            .await?;
+        agent.confirmed(&executor).await?;
+        let (owned, fingerprint) = agent.incarnation(&executor, &context).await?;
+        let update_names = || async {
+            store
+                .snapshot_names(&owned, fingerprint)
+                .await
+                .into_iter()
+                .filter(|name| name.starts_with("u-"))
+                .collect::<Vec<_>>()
+        };
+
+        store.advance_clock(spacing);
+        let successful = agent.manual_update(&executor, vec![declared()]).await?;
+        let baseline = update_names().await;
+        let failing = || entry("foo.txt", "/config.txt", AgentFilePermissions::ReadWrite);
+        let failed = futures::stream::iter(0..3)
+            .then(|_| {
+                let store = &store;
+                let agent = &agent;
+                let executor = &executor;
+                async move {
+                    store.advance_clock(spacing);
+                    agent.manual_update(executor, vec![failing()]).await
+                }
+            })
+            .collect::<Vec<_>>()
             .await
             .into_iter()
-            .filter(|name| name.starts_with("u-"))
-            .collect::<Vec<_>>()
-    };
-
-    store.advance_clock(spacing);
-    let successful = agent.manual_update(&executor, vec![declared()]).await?;
-    let baseline = update_names().await;
-    let failing = || entry("foo.txt", "/config.txt", AgentFilePermissions::ReadWrite);
-    let failed = futures::stream::iter(0..3)
-        .then(|_| {
-            let store = &store;
-            let agent = &agent;
-            let executor = &executor;
-            async move {
-                store.advance_clock(spacing);
-                agent.manual_update(executor, vec![failing()]).await
-            }
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let after_retention = eventually(Duration::from_secs(30), || async {
+            let names = update_names().await;
+            Ok((names.len() == baseline.len() + 2).then_some(names))
         })
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    let after_retention = eventually(Duration::from_secs(30), || async {
-        let names = update_names().await;
-        Ok((names.len() == baseline.len() + 2).then_some(names))
+        .await?;
+        let records = agent.records(&executor).await?;
+        futures::stream::iter(store.snapshot_names(&owned, fingerprint).await)
+            .filter(|name| std::future::ready(name.starts_with("p-")))
+            .for_each(|name| {
+                let (store, owned) = (&store, &owned);
+                async move { store.lose(owned, fingerprint, &name).await }
+            })
+            .await;
+        agent.stop(&executor, &context).await?;
+        let restores = store.restored_names().len();
+        let current = Agent {
+            component: successful,
+            agent: agent.agent.clone(),
+            worker_id: agent.worker_id.clone(),
+        };
+        let tree = current.describe(&executor).await;
+
+        assert_eq!(baseline.len(), 1);
+        assert_eq!(failed.len(), 3);
+        assert_eq!(records.failed_updates.len(), 3, "{records:?}");
+        assert!(
+            after_retention.contains(&baseline[0]),
+            "{after_retention:?}"
+        );
+        assert_eq!(store.restored_names()[restores..], baseline[..]);
+        assert_eq!(
+            tree?,
+            [
+                r#"config.txt file links=1 writable=true content="changed""#,
+                r#"state.db file links=1 writable=true content="rows""#,
+            ]
+            .map(String::from)
+        );
+        Ok(())
     })
-    .await?;
-    let records = agent.records(&executor).await?;
-    futures::stream::iter(store.snapshot_names(&owned).await)
-        .filter(|name| std::future::ready(name.starts_with("p-")))
-        .for_each(|name| {
-            let (store, owned) = (&store, &owned);
-            async move { store.lose(owned, &name).await }
-        })
-        .await;
-    agent.stop(&executor, &context).await?;
-    let restores = store.restored_names().len();
-    let current = Agent {
-        component: successful,
-        agent: agent.agent.clone(),
-        worker_id: agent.worker_id.clone(),
-    };
-    let tree = current.describe(&executor).await;
-
-    assert_eq!(baseline.len(), 1);
-    assert_eq!(failed.len(), 3);
-    assert_eq!(records.failed_updates.len(), 3, "{records:?}");
-    assert!(
-        after_retention.contains(&baseline[0]),
-        "{after_retention:?}"
-    );
-    assert_eq!(store.restored_names()[restores..], baseline[..]);
-    assert_eq!(
-        tree?,
-        [
-            r#"config.txt file links=1 writable=true content="changed""#,
-            r#"state.db file links=1 writable=true content="rows""#,
-        ]
-        .map(String::from)
-    );
-    Ok(())
+    .await
 }
 
 /// Asks for a manual update of `agent` while `store` holds each save for a minute, interrupts
@@ -2719,46 +2816,48 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "interrupted-wait",
-        &[],
-    )
-    .await?;
-    store.set_save_delay(Duration::from_secs(60));
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
             &executor,
-            &[Operation::Write {
-                path: "state.db",
-                content: "rows",
-            }],
+            &context,
+            initial_file_system,
+            "interrupted-wait",
+            &[],
         )
         .await?;
-    eventually(Duration::from_secs(30), || async {
-        let records = agent.records(&executor).await?;
-        Ok(records.oldest_name())
+        store.set_save_delay(Duration::from_secs(60));
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.db",
+                    content: "rows",
+                }],
+            )
+            .await?;
+        eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok(records.oldest_name())
+        })
+        .await?;
+
+        let (failed, took) = interrupt_a_held_manual_update(&executor, &store, &agent).await?;
+
+        assert!(
+            failed
+                .iter()
+                .any(|failure| failure.contains("interrupted while it waited")),
+            "{failed:?}"
+        );
+        assert!(
+            took < Duration::from_secs(10),
+            "the update ended after {took:?}"
+        );
+        Ok(())
     })
-    .await?;
-
-    let (failed, took) = interrupt_a_held_manual_update(&executor, &store, &agent).await?;
-
-    assert!(
-        failed
-            .iter()
-            .any(|failure| failure.contains("interrupted while it waited")),
-        "{failed:?}"
-    );
-    assert!(
-        took < Duration::from_secs(10),
-        "the update ended after {took:?}"
-    );
-    Ok(())
+    .await
 }
 
 /// The target revision of a manual-update invocation entry.
@@ -2815,80 +2914,82 @@ async fn a_lost_shard_ends_a_manual_update_that_waits_for_an_upload_without_a_fa
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "lost-shard-wait",
-        &[],
-    )
-    .await?;
-    store.set_save_delay(Duration::from_secs(60));
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
             &executor,
-            &[Operation::Write {
-                path: "state.db",
-                content: "rows",
-            }],
+            &context,
+            initial_file_system,
+            "lost-shard-wait",
+            &[],
         )
         .await?;
-    eventually(Duration::from_secs(30), || async {
-        let records = agent.records(&executor).await?;
-        Ok(records.oldest_name())
-    })
-    .await?;
-    let updated = executor
-        .update_component_with_files(
-            &agent.component.id,
-            AGENT_TYPE,
-            "it_initial_file_system_release",
-            vec![],
-        )
-        .await?;
-    executor
-        .manual_update_worker(&agent.worker_id, updated.revision, false)
-        .await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    revoke_shard_zero(&executor).await?;
-    let owned = agent.owned(&context);
-    eventually(Duration::from_secs(30), || async {
-        Ok((!executor.worker_is_loaded(&owned).await).then_some(()))
-    })
-    .await?;
-    store.set_save_delay(Duration::ZERO);
-    let oplog = executor.stored_oplog(&agent.worker_id).await;
-
-    let target = updated.revision;
-    let requested = oplog
-        .iter()
-        .filter(|entry| manual_update_target(entry) == Some(target))
-        .count();
-    let consumed = oplog
-        .iter()
-        .filter(|entry| match entry {
-            OplogEntry::FailedUpdate {
-                target_revision, ..
-            }
-            | OplogEntry::SuccessfulUpdate {
-                target_revision, ..
-            } => *target_revision == target,
-            OplogEntry::PendingUpdate { description, .. } => {
-                description.target_revision() == &target
-            }
-            _ => false,
+        store.set_save_delay(Duration::from_secs(60));
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.db",
+                    content: "rows",
+                }],
+            )
+            .await?;
+        eventually(Duration::from_secs(30), || async {
+            let records = agent.records(&executor).await?;
+            Ok(records.oldest_name())
         })
-        .count();
-    assert_eq!(
-        (requested, consumed),
-        (1, 0),
-        "the manual update must stay pending: {oplog:?}"
-    );
-    Ok(())
+        .await?;
+        let updated = executor
+            .update_component_with_files(
+                &agent.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![],
+            )
+            .await?;
+        executor
+            .manual_update_worker(&agent.worker_id, updated.revision, false)
+            .await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        revoke_shard_zero(&executor).await?;
+        let owned = agent.owned(&context);
+        eventually(Duration::from_secs(30), || async {
+            Ok((!executor.worker_is_loaded(&owned).await).then_some(()))
+        })
+        .await?;
+        store.set_save_delay(Duration::ZERO);
+        let oplog = executor.stored_oplog(&agent.worker_id).await;
+
+        let target = updated.revision;
+        let requested = oplog
+            .iter()
+            .filter(|entry| manual_update_target(entry) == Some(target))
+            .count();
+        let consumed = oplog
+            .iter()
+            .filter(|entry| match entry {
+                OplogEntry::FailedUpdate {
+                    target_revision, ..
+                }
+                | OplogEntry::SuccessfulUpdate {
+                    target_revision, ..
+                } => *target_revision == target,
+                OplogEntry::PendingUpdate { description, .. } => {
+                    description.target_revision() == &target
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!(
+            (requested, consumed),
+            (1, 0),
+            "the manual update must stay pending: {oplog:?}"
+        );
+        Ok(())
+    })
+    .await
 }
 
 #[test]
@@ -2900,45 +3001,52 @@ async fn a_terminal_interrupt_ends_a_manual_update_during_its_upload(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "interrupted-upload",
-        &[],
-    )
-    .await?;
-    agent
-        .apply_all(
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
             &executor,
-            &[Operation::Write {
-                path: "state.db",
-                content: "rows",
-            }],
+            &context,
+            initial_file_system,
+            "interrupted-upload",
+            &[],
         )
         .await?;
-    agent.confirmed(&executor).await?;
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.db",
+                    content: "rows",
+                }],
+            )
+            .await?;
+        agent.confirmed(&executor).await?;
 
-    let trees = store.saved_trees().len();
-    let (failed, took) = interrupt_a_held_manual_update(&executor, &store, &agent).await?;
-    let capture = store.saved_trees()[trees..].to_vec();
+        let trees = store.saved_trees().len();
+        let (failed, took) = interrupt_a_held_manual_update(&executor, &store, &agent).await?;
+        let capture = store.saved_trees()[trees..].to_vec();
 
-    assert!(
-        failed
-            .iter()
-            .any(|failure| failure.contains("interrupted while it uploaded")),
-        "{failed:?}"
-    );
-    assert_eq!(capture.len(), 1);
-    assert!(!capture[0].exists(), "the capture {capture:?} stays");
-    assert!(
-        took < Duration::from_secs(10),
-        "the update ended after {took:?}"
-    );
-    Ok(())
+        assert!(
+            failed
+                .iter()
+                .any(|failure| failure.contains("interrupted while it uploaded")),
+            "{failed:?}"
+        );
+        assert_eq!(capture.len(), 1);
+        assert!(
+            took < Duration::from_secs(10),
+            "the update ended after {took:?}"
+        );
+        // The save that the interrupt stopped runs to its end, and the capture goes after it
+        // returned.
+        eventually(Duration::from_secs(90), || async {
+            Ok((!capture[0].exists()).then_some(()))
+        })
+        .await?;
+        Ok(())
+    })
+    .await
 }
 
 /// Waits until the oplog of `worker_id` holds, after its last `AgentInvocationFinished`, a
@@ -3003,113 +3111,115 @@ async fn ts_sqlite_snapshot_keeps_in_memory_databases_and_restores_file_database
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, constructor_parameter_echo)
-        .store()
-        .await?;
-    let agent = agent_id!("SqliteSnapshotAgent", "sqlite-recovery");
-    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, constructor_parameter_echo)
+            .store()
+            .await?;
+        let agent = agent_id!("SqliteSnapshotAgent", "sqlite-recovery");
+        let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
-    executor
-        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
-        .await?;
-    newest_snapshot_confirmed(&executor, &worker_id).await?;
-    executor
-        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("banana"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
-        .await?;
-    newest_snapshot_confirmed(&executor, &worker_id).await?;
-    executor
-        .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("after-init"))
-        .await?;
-    let before = sqlite_state(&executor, &component, &agent).await?;
-    assert_eq!(
-        before,
-        serde_json::json!({
-            "label": "after-init",
-            "items": ["apple", "banana"],
-            "logs": ["started"],
-            "notes": ["started"],
-        })
-    );
-    newest_snapshot_confirmed(&executor, &worker_id).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
+            .await?;
+        newest_snapshot_confirmed(&executor, &worker_id).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addItem", data_value!("banana"))
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
+            .await?;
+        newest_snapshot_confirmed(&executor, &worker_id).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("after-init"))
+            .await?;
+        let before = sqlite_state(&executor, &component, &agent).await?;
+        assert_eq!(
+            before,
+            serde_json::json!({
+                "label": "after-init",
+                "items": ["apple", "banana"],
+                "logs": ["started"],
+                "notes": ["started"],
+            })
+        );
+        newest_snapshot_confirmed(&executor, &worker_id).await?;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let multipart = oplog
-        .iter()
-        .rev()
-        .find_map(|entry| match &entry.entry {
-            PublicOplogEntry::Snapshot(snapshot) => Some(snapshot.data.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| anyhow!("no snapshot record before the restart"))?;
-    let PublicSnapshotData::Multipart(multipart) = multipart else {
-        return Err(anyhow!("the snapshot is not multipart: {multipart:?}"));
-    };
-    let names: Vec<&str> = multipart.parts.iter().map(|part| &*part.name).collect();
-    assert_eq!(names, vec!["state", "db:memDb"]);
-    assert_eq!(multipart.parts[1].content_type, "application/x-sqlite3");
-    let MultipartPartData::Raw(memory_database) = &multipart.parts[1].data else {
-        return Err(anyhow!("the db:memDb part is not raw bytes"));
-    };
-    assert!(
-        !memory_database.data.is_empty(),
-        "the db:memDb part is empty"
-    );
-    let MultipartPartData::Json(envelope) = &multipart.parts[0].data else {
-        return Err(anyhow!("the state part is not JSON"));
-    };
-    let file_databases = envelope
-        .data
-        .get("fileDatabases")
-        .ok_or_else(|| anyhow!("the envelope has no fileDatabases: {:?}", envelope.data))?;
-    assert_eq!(
-        file_databases["fileDb"],
-        serde_json::json!("/tmp/sqlite-snapshot-test.db")
-    );
-    let relative = file_databases["relativeDb"]
-        .as_str()
-        .ok_or_else(|| anyhow!("no location for relativeDb: {file_databases:?}"))?;
-    assert!(
-        relative.starts_with('/') && relative.ends_with("/sqlite-relative-test.db"),
-        "the location of relativeDb is {relative}"
-    );
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let multipart = oplog
+            .iter()
+            .rev()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Snapshot(snapshot) => Some(snapshot.data.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("no snapshot record before the restart"))?;
+        let PublicSnapshotData::Multipart(multipart) = multipart else {
+            return Err(anyhow!("the snapshot is not multipart: {multipart:?}"));
+        };
+        let names: Vec<&str> = multipart.parts.iter().map(|part| &*part.name).collect();
+        assert_eq!(names, vec!["state", "db:memDb"]);
+        assert_eq!(multipart.parts[1].content_type, "application/x-sqlite3");
+        let MultipartPartData::Raw(memory_database) = &multipart.parts[1].data else {
+            return Err(anyhow!("the db:memDb part is not raw bytes"));
+        };
+        assert!(
+            !memory_database.data.is_empty(),
+            "the db:memDb part is empty"
+        );
+        let MultipartPartData::Json(envelope) = &multipart.parts[0].data else {
+            return Err(anyhow!("the state part is not JSON"));
+        };
+        let file_databases = envelope
+            .data
+            .get("fileDatabases")
+            .ok_or_else(|| anyhow!("the envelope has no fileDatabases: {:?}", envelope.data))?;
+        assert_eq!(
+            file_databases["fileDb"],
+            serde_json::json!("/tmp/sqlite-snapshot-test.db")
+        );
+        let relative = file_databases["relativeDb"]
+            .as_str()
+            .ok_or_else(|| anyhow!("no location for relativeDb: {file_databases:?}"))?;
+        assert!(
+            relative.starts_with('/') && relative.ends_with("/sqlite-relative-test.db"),
+            "the location of relativeDb is {relative}"
+        );
 
-    executor.release().await?;
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let mut events = executor.capture_output(&worker_id).await?;
+        executor.release().await?;
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let mut events = executor.capture_output(&worker_id).await?;
 
-    let after = sqlite_state(&executor, &component, &agent).await?;
-    assert_snapshot_recovery_loaded(&mut events).await;
-    assert_eq!(after, before);
+        let after = sqlite_state(&executor, &component, &agent).await?;
+        assert_snapshot_recovery_loaded(&mut events).await;
+        assert_eq!(after, before);
 
-    executor
-        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("cherry"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("recovered"))
-        .await?;
-    assert_eq!(
-        sqlite_state(&executor, &component, &agent).await?,
-        serde_json::json!({
-            "label": "after-init",
-            "items": ["apple", "banana", "cherry"],
-            "logs": ["started", "recovered"],
-            "notes": ["started", "recovered"],
-        })
-    );
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    assert_eq!(
-        invocation_shape(&executor.stored_oplog(&worker_id).await),
-        InvocationShape::settled()
-    );
-    Ok(())
+        executor
+            .invoke_and_await_agent(&component, &agent, "addItem", data_value!("cherry"))
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addLog", data_value!("recovered"))
+            .await?;
+        assert_eq!(
+            sqlite_state(&executor, &component, &agent).await?,
+            serde_json::json!({
+                "label": "after-init",
+                "items": ["apple", "banana", "cherry"],
+                "logs": ["started", "recovered"],
+                "notes": ["started", "recovered"],
+            })
+        );
+        executor.check_oplog_is_queryable(&worker_id).await?;
+        assert_eq!(
+            invocation_shape(&executor.stored_oplog(&worker_id).await),
+            InvocationShape::settled()
+        );
+        Ok(())
+    })
+    .await
 }
 
 /// `SqliteSnapshotAgent` takes a snapshot after every second invocation (the constructor counts
@@ -3126,66 +3236,934 @@ async fn ts_sqlite_tail_replay_after_a_filesystem_restore_matches_the_live_run(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = TestFilesystemSnapshotStore::new();
-    let executor =
-        start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, constructor_parameter_echo)
-        .store()
-        .await?;
-    let agent = agent_id!("SqliteSnapshotAgent", "sqlite-tail-replay");
-    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, constructor_parameter_echo)
+            .store()
+            .await?;
+        let agent = agent_id!("SqliteSnapshotAgent", "sqlite-tail-replay");
+        let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
 
-    executor
-        .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
-        .await?;
-    newest_snapshot_confirmed(&executor, &worker_id).await?;
-    executor
-        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("after-init"))
-        .await?;
-    newest_snapshot_confirmed(&executor, &worker_id).await?;
-    let before = sqlite_state(&executor, &component, &agent).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addItem", data_value!("apple"))
+            .await?;
+        newest_snapshot_confirmed(&executor, &worker_id).await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "addLog", data_value!("started"))
+            .await?;
+        executor
+            .invoke_and_await_agent(&component, &agent, "setLabel", data_value!("after-init"))
+            .await?;
+        newest_snapshot_confirmed(&executor, &worker_id).await?;
+        let before = sqlite_state(&executor, &component, &agent).await?;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let last_snapshot = oplog
-        .iter()
-        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
-        .ok_or_else(|| anyhow!("no snapshot record before the restart"))?;
-    assert!(
-        oplog[last_snapshot..]
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let last_snapshot = oplog
             .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
-        "no invocation is recorded after the last snapshot"
-    );
+            .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+            .ok_or_else(|| anyhow!("no snapshot record before the restart"))?;
+        assert!(
+            oplog[last_snapshot..]
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
+            "no invocation is recorded after the last snapshot"
+        );
 
-    executor.release().await?;
+        executor.release().await?;
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let mut events = executor.capture_output(&worker_id).await?;
+
+        let after = sqlite_state(&executor, &component, &agent).await?;
+        assert_snapshot_recovery_loaded(&mut events).await;
+        assert_eq!(after, before);
+
+        executor
+            .invoke_and_await_agent(&component, &agent, "addLog", data_value!("recovered"))
+            .await?;
+        assert_eq!(
+            sqlite_state(&executor, &component, &agent).await?,
+            serde_json::json!({
+                "label": "after-init",
+                "items": ["apple"],
+                "logs": ["started", "recovered"],
+                "notes": ["started", "recovered"],
+            })
+        );
+        executor.check_oplog_is_queryable(&worker_id).await?;
+        assert_eq!(
+            invocation_shape(&executor.stored_oplog(&worker_id).await),
+            InvocationShape::settled()
+        );
+        Ok(())
+    })
+    .await
+}
+
+/// Waits until the store holds exactly the snapshots `names` of the incarnation `incarnation`, in
+/// any order, and gives the names that it holds.
+async fn store_holds(
+    store: &TestFilesystemSnapshotStore,
+    incarnation: &(OwnedAgentId, AgentFingerprint),
+    names: &[&str],
+) -> anyhow::Result<Vec<String>> {
+    let mut expected = names
+        .iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    expected.sort();
+    eventually(Duration::from_secs(60), || {
+        let expected = expected.clone();
+        async move {
+            let mut held = store.snapshot_names(&incarnation.0, incarnation.1).await;
+            held.sort();
+            Ok((held == expected).then_some(held))
+        }
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_deleted_agent_leaves_no_filesystem_snapshot_in_the_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "deleted", &[]).await?;
+        let (_, name) = agent
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "kept.txt",
+                    content: "kept",
+                },
+            )
+            .await?;
+        let incarnation = agent.incarnation(&executor, &context).await?;
+        store_holds(&store, &incarnation, &[name.as_str()]).await?;
+
+        executor.delete_worker(&agent.worker_id).await?;
+        let left = store_holds(&store, &incarnation, &[]).await?;
+
+        assert_eq!(left, Vec::<String>::new());
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_recreated_agent_keeps_the_snapshots_of_its_new_incarnation_after_the_delete_of_the_old_one(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let old = Agent::start(&executor, &context, initial_file_system, "recreated", &[]).await?;
+        old.apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "old.txt",
+                content: "old",
+            },
+        )
+        .await?;
+        let old_incarnation = old.incarnation(&executor, &context).await?;
+        executor.delete_worker(&old.worker_id).await?;
+        store_holds(&store, &old_incarnation, &[]).await?;
+
+        let new = Agent::start(&executor, &context, initial_file_system, "recreated", &[]).await?;
+        let (_, name) = new
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "new.txt",
+                    content: "new",
+                },
+            )
+            .await?;
+        let new_incarnation = new.incarnation(&executor, &context).await?;
+        let held = store_holds(&store, &new_incarnation, &[name.as_str()]).await?;
+
+        assert_ne!(old_incarnation.1, new_incarnation.1);
+        assert_eq!(held, vec![name]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_revert_deletes_the_snapshots_of_the_dropped_region_and_a_start_restores_the_previous_one(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "reverted", &[]).await?;
+        let (first_index, first) = agent
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "first.txt",
+                    content: "first",
+                },
+            )
+            .await?;
+        let before = agent.describe(&executor).await?;
+        let (_, second) = agent
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "second.txt",
+                    content: "second",
+                },
+            )
+            .await?;
+        let incarnation = agent.incarnation(&executor, &context).await?;
+        store_holds(&store, &incarnation, &[first.as_str(), second.as_str()]).await?;
+
+        executor
+            .revert(
+                &agent.worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: first_index,
+                }),
+            )
+            .await?;
+        let held = store_holds(&store, &incarnation, &[first.as_str()]).await?;
+        let restores = store.restored_names().len();
+        // The revert unloads the agent, so the next invocation starts it from the kept snapshot.
+        let tree = agent.describe(&executor).await?;
+
+        assert_eq!(held, vec![first.clone()]);
+        assert_eq!(tree, before);
+        assert_eq!(store.restored_names().get(restores..), Some(&[first][..]));
+        Ok(())
+    })
+    .await
+}
+
+/// A revert whose commit finds that the shard has a new owner gives `OplogFenced`, and deletes no
+/// filesystem snapshot of the dropped region: the new owner holds the whole history.
+#[test]
+#[timeout("4m")]
+async fn a_revert_whose_commit_finds_a_new_owner_fails_and_deletes_no_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
     let executor =
         start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
-    let mut events = executor.capture_output(&worker_id).await?;
-
-    let after = sqlite_state(&executor, &component, &agent).await?;
-    assert_snapshot_recovery_loaded(&mut events).await;
-    assert_eq!(after, before);
-
-    executor
-        .invoke_and_await_agent(&component, &agent, "addLog", data_value!("recovered"))
+    let agent = Agent::start(&executor, &context, initial_file_system, "fenced", &[]).await?;
+    let (first_index, first) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "first.txt",
+                content: "first",
+            },
+        )
         .await?;
-    assert_eq!(
-        sqlite_state(&executor, &component, &agent).await?,
-        serde_json::json!({
-            "label": "after-init",
-            "items": ["apple"],
-            "logs": ["started", "recovered"],
-            "notes": ["started", "recovered"],
-        })
+    let (_, second) = agent
+        .apply_and_confirm(
+            &executor,
+            Operation::Write {
+                path: "second.txt",
+                content: "second",
+            },
+        )
+        .await?;
+    let incarnation = agent.incarnation(&executor, &context).await?;
+    store_holds(&store, &incarnation, &[first.as_str(), second.as_str()]).await?;
+    // The last committed entry is the confirmation of the second snapshot. This lowers the chance
+    // that an entry is still buffered, which would let an earlier commit find the new owner; it
+    // cannot prove it, because the oplog that the test reads holds only committed entries.
+    eventually(Duration::from_secs(30), || async {
+        let oplog = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?;
+        Ok(oplog.last().and_then(|entry| match &entry.entry {
+            PublicOplogEntry::SnapshotConfirmed(confirmed)
+                if confirmed.filesystem_snapshot == second =>
+            {
+                Some(())
+            }
+            _ => None,
+        }))
+    })
+    .await?;
+    take_agent_oplog_over_at_epoch(deps, &context, &agent.owned(&context), 1).await?;
+
+    let reverted = executor
+        .revert(
+            &agent.worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: first_index,
+            }),
+        )
+        .await;
+    // `OplogFenced` goes on the wire as `ShardingNotReady`, which tells the caller to retry on the
+    // new owner. Another failure, such as a runtime error, does not pass.
+    let refusal = reverted
+        .err()
+        .map(|error| format!("{error:#}"))
+        .unwrap_or_default();
+    assert!(
+        refusal.contains("ShardingNotReady"),
+        "a revert whose commit the new owner refused must fail with OplogFenced, it gave {refusal:?}"
     );
-    executor.check_oplog_is_queryable(&worker_id).await?;
-    assert_eq!(
-        invocation_shape(&executor.stored_oplog(&worker_id).await),
-        InvocationShape::settled()
-    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let mut held = store.snapshot_names(&incarnation.0, incarnation.1).await;
+    held.sort();
+    let mut expected = vec![first, second];
+    expected.sort();
+
+    assert_eq!(held, expected);
     Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_revert_keeps_a_name_that_a_record_before_the_cut_uses_and_the_start_restores_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(&executor, &context, initial_file_system, "reused", &[]).await?;
+        let (first_index, first) = agent
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "first.txt",
+                    content: "first",
+                },
+            )
+            .await?;
+        // The tree does not change, so the next records reuse the name of the first record.
+        let tree = agent.describe(&executor).await?;
+        agent.describe(&executor).await?;
+        let incarnation = agent.incarnation(&executor, &context).await?;
+
+        executor
+            .revert(
+                &agent.worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: first_index,
+                }),
+            )
+            .await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let held = store_holds(&store, &incarnation, &[first.as_str()]).await?;
+        let restores = store.restored_names().len();
+        // The revert unloads the agent, so the next invocation starts it from the kept snapshot.
+        let restored = agent.describe(&executor).await?;
+
+        assert_eq!(held, vec![first.clone()]);
+        assert_eq!(restored, tree);
+        assert_eq!(store.restored_names().get(restores..), Some(&[first][..]));
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_fork_target_restores_the_copied_snapshot_of_the_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let source =
+            Agent::start(&executor, &context, initial_file_system, "fork-source", &[]).await?;
+        let (cut, name) = source
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "copied.txt",
+                    content: "copied",
+                },
+            )
+            .await?;
+        let tree = source.describe(&executor).await?;
+        let target_agent =
+            golem_common::phantom_agent_id!(AGENT_TYPE, uuid::Uuid::new_v4(), "fork-source");
+        let target = Agent {
+            component: source.component.clone(),
+            worker_id: AgentId::from_agent_id(source.component.id, &target_agent)
+                .map_err(anyhow::Error::msg)?,
+            agent: target_agent,
+        };
+
+        executor
+            .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
+            .await?;
+        let target_incarnation = target.incarnation(&executor, &context).await?;
+        let copied = store_holds(&store, &target_incarnation, &[name.as_str()]).await?;
+        let restores = store.restored_names().len();
+        let (_, restored) = target.restart_and_describe(&executor, &context).await?;
+
+        assert_eq!(copied, vec![name.clone()]);
+        assert_eq!(restored, tree);
+        assert_eq!(store.restored_names().get(restores..), Some(&[name][..]));
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_fork_after_the_delete_of_an_old_target_incarnation_keeps_its_baseline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // An old incarnation of the target has a snapshot. The store holds the delete of the
+    // snapshots of that incarnation while the fork makes a new incarnation of the same agent. The
+    // delete then removes only the snapshots of the old incarnation, and the new one keeps the
+    // snapshot that the fork copied and restores it.
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let source =
+            Agent::start(&executor, &context, initial_file_system, "old-target", &[]).await?;
+        let (cut, name) = source
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "copied.txt",
+                    content: "copied",
+                },
+            )
+            .await?;
+        let tree = source.describe(&executor).await?;
+        let target = source.fork_target("old-target")?;
+        executor
+            .start_agent(&target.component.id, target.agent.clone())
+            .await?;
+        target
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "old.txt",
+                    content: "old",
+                },
+            )
+            .await?;
+        let old_incarnation = target.incarnation(&executor, &context).await?;
+        let held = store.hold_next_delete_all();
+        executor.delete_worker(&target.worker_id).await?;
+        eventually(Duration::from_secs(30), || async { Ok(held.name()) })
+            .await
+            .context("the delete of the old incarnation did not start")?;
+
+        executor
+            .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
+            .await?;
+        let new_incarnation = target.incarnation(&executor, &context).await?;
+        held.release();
+        store_holds(&store, &old_incarnation, &[]).await?;
+        let copied = store_holds(&store, &new_incarnation, &[name.as_str()]).await?;
+        let restores = store.restored_names().len();
+        let (_, restored) = target.restart_and_describe(&executor, &context).await?;
+
+        assert_ne!(old_incarnation.1, new_incarnation.1);
+        assert_eq!(copied, vec![name.clone()]);
+        assert_eq!(restored, tree);
+        assert_eq!(store.restored_names().get(restores..), Some(&[name][..]));
+        Ok(())
+    })
+    .await
+}
+
+impl Agent {
+    /// A target of a fork of this agent, which does not exist yet.
+    fn fork_target(&self, name: &str) -> anyhow::Result<Agent> {
+        let agent = golem_common::phantom_agent_id!(AGENT_TYPE, uuid::Uuid::new_v4(), name);
+        Ok(Agent {
+            component: self.component.clone(),
+            worker_id: AgentId::from_agent_id(self.component.id, &agent)
+                .map_err(anyhow::Error::msg)?,
+            agent,
+        })
+    }
+
+    /// The index of the oldest oplog entry that `matches`.
+    async fn first_index(
+        &self,
+        executor: &TestWorkerExecutor,
+        matches: impl Fn(&PublicOplogEntry) -> bool,
+    ) -> anyhow::Result<OplogIndex> {
+        executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .find(|entry| matches(&entry.entry))
+            .map(|entry| entry.oplog_index)
+            .ok_or_else(|| anyhow!("no oplog entry matches"))
+    }
+}
+
+/// The names of the manual-update snapshots of the incarnation in `store`.
+async fn update_names(
+    store: &TestFilesystemSnapshotStore,
+    incarnation: &(OwnedAgentId, AgentFingerprint),
+) -> Vec<String> {
+    store
+        .snapshot_names(&incarnation.0, incarnation.1)
+        .await
+        .into_iter()
+        .filter(|name| name.starts_with("u-"))
+        .collect()
+}
+
+/// Deletes each periodic snapshot of the incarnation from `store`, so a start can restore only
+/// a manual-update snapshot.
+async fn lose_periodic_snapshots(
+    store: &TestFilesystemSnapshotStore,
+    incarnation: &(OwnedAgentId, AgentFingerprint),
+) {
+    futures::stream::iter(store.snapshot_names(&incarnation.0, incarnation.1).await)
+        .filter(|name| std::future::ready(name.starts_with("p-")))
+        .for_each(|name| async move { store.lose(&incarnation.0, incarnation.1, &name).await })
+        .await;
+}
+
+/// Starts an agent that writes a file, takes three successful manual updates, and gives the
+/// agent, its incarnation, the component and the update name of each update.
+async fn three_manual_updates(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    store: &TestFilesystemSnapshotStore,
+    component: &PrecompiledComponent,
+    name: &str,
+) -> anyhow::Result<(
+    Agent,
+    (OwnedAgentId, AgentFingerprint),
+    Vec<ComponentDto>,
+    Vec<String>,
+)> {
+    let declared = || entry("baz.txt", "/config.txt", AgentFilePermissions::ReadWrite);
+    let agent = Agent::start(executor, context, component, name, &[declared()]).await?;
+    agent
+        .apply_all(
+            executor,
+            &[Operation::Write {
+                path: "state.db",
+                content: "rows",
+            }],
+        )
+        .await?;
+    agent
+        .confirmed(executor)
+        .await
+        .context("the first snapshot is not confirmed")?;
+    let incarnation = agent.incarnation(executor, context).await?;
+    let (components, names) = futures::stream::iter(0..3)
+        .then(|_| async {
+            store.advance_clock(Duration::from_secs(10 * 60));
+            let before = update_names(store, &incarnation).await;
+            let updated = agent
+                .manual_update(executor, vec![declared()])
+                .await
+                .context("a manual update gave no outcome")?;
+            let after = update_names(store, &incarnation).await;
+            let new = after
+                .into_iter()
+                .find(|name| !before.contains(name))
+                .ok_or_else(|| anyhow!("the manual update saved no snapshot"))?;
+            anyhow::Ok((updated, new))
+        })
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .unzip();
+    Ok((agent, incarnation, components, names))
+}
+
+#[test]
+#[timeout("6m")]
+async fn three_manual_updates_and_a_revert_behind_the_first_restore_its_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // Retention keeps two manual-update snapshots that no update uses. Each successful update
+    // uses its own, so the first one stays after the third update.
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let (agent, incarnation, components, names) = three_manual_updates(
+            &executor,
+            &context,
+            &store,
+            initial_file_system,
+            "three-updates",
+        )
+        .await?;
+        // Retention runs after each confirmation: it lists the snapshots, then deletes. The names that
+        // it keeps are read after the listing of the retention of the third update.
+        eventually(Duration::from_secs(60), || async {
+            Ok(store.listed_after_save_of(&names[2]).then_some(()))
+        })
+        .await
+        .context("the retention of the third update made no listing")?;
+        let mut held_after_the_updates = update_names(&store, &incarnation).await;
+        held_after_the_updates.sort();
+        let mut all_names = names.clone();
+        all_names.sort();
+        let first_update = agent
+            .first_index(&executor, |entry| {
+                matches!(entry, PublicOplogEntry::SuccessfulUpdate(_))
+            })
+            .await?;
+        let updated = |component: &ComponentDto| Agent {
+            component: component.clone(),
+            agent: agent.agent.clone(),
+            worker_id: agent.worker_id.clone(),
+        };
+        // The updates change no file, so the tree after the third update is the tree after the first.
+        let expected = updated(&components[2])
+            .describe(&executor)
+            .await
+            .context("the describe before the revert failed")?;
+
+        executor
+            .revert(
+                &agent.worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: first_update,
+                }),
+            )
+            .await
+            .context("the revert failed")?;
+        let held_after_the_revert = match eventually(Duration::from_secs(60), || async {
+            let held = update_names(&store, &incarnation).await;
+            Ok((held == [names[0].clone()]).then_some(held))
+        })
+        .await
+        {
+            Ok(held) => held,
+            Err(_) => update_names(&store, &incarnation).await,
+        };
+        lose_periodic_snapshots(&store, &incarnation).await;
+        let restores = store.restored_names().len();
+        let tree = updated(&components[0])
+            .describe(&executor)
+            .await
+            .context("the describe after the revert failed")?;
+
+        assert_eq!(held_after_the_updates, all_names);
+        assert_eq!(held_after_the_revert, vec![names[0].clone()], "{names:?}");
+        assert_eq!(store.restored_names().get(restores..), Some(&names[..1]));
+        assert_eq!(tree, expected);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("6m")]
+async fn a_fork_whose_cut_lies_in_a_region_a_later_revert_dropped_is_refused(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The revert drops the region of the third update and deletes its snapshot. A fork whose cut
+    // lies after that update copies the update as its baseline, and the copy lacks its snapshot.
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let (agent, incarnation, _, names) = three_manual_updates(
+            &executor,
+            &context,
+            &store,
+            initial_file_system,
+            "fork-dropped-region",
+        )
+        .await?;
+        let oplog = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?;
+        let updates = oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_)))
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>();
+        let (second_update, third_update) = (updates[1], updates[2]);
+        executor
+            .revert(
+                &agent.worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: second_update,
+                }),
+            )
+            .await?;
+        eventually(Duration::from_secs(60), || async {
+            Ok((!update_names(&store, &incarnation).await.contains(&names[2])).then_some(()))
+        })
+        .await?;
+        let target = agent.fork_target("fork-dropped-region")?;
+
+        let forked = executor
+            .fork_worker(&agent.worker_id, &target.agent.to_string(), third_update)
+            .await;
+        let target_oplog = executor
+            .get_oplog(&target.worker_id, OplogIndex::INITIAL)
+            .await
+            .map(|oplog| oplog.len())
+            .unwrap_or_default();
+
+        let error = format!("{:?}", forked.err());
+        assert!(
+            error.contains(&format!("Cannot fork worker at oplog index {third_update}"))
+                && error.contains(&names[2])
+                && error.contains("is not in the store"),
+            "{error}"
+        );
+        assert_eq!(target_oplog, 0);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_fork_whose_snapshot_copy_fails_fails_and_publishes_no_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let source =
+            Agent::start(&executor, &context, initial_file_system, "copy-fails", &[]).await?;
+        let (cut, _) = source
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "copied.txt",
+                    content: "copied",
+                },
+            )
+            .await?;
+        let target = source.fork_target("copy-fails")?;
+        store.fail_next_copies(1);
+
+        let forked = executor
+            .fork_worker(&source.worker_id, &target.agent.to_string(), cut)
+            .await;
+        let target_oplog = executor
+            .get_oplog(&target.worker_id, OplogIndex::INITIAL)
+            .await
+            .map(|oplog| oplog.len())
+            .unwrap_or_default();
+
+        let error = format!("{:?}", forked.err());
+        assert!(
+            error.contains("Failed to copy the filesystem snapshots of the fork source"),
+            "{error}"
+        );
+        assert_eq!((store.copy_count(), target_oplog), (1, 0));
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn concurrent_attempts_of_one_fork_copy_once_and_both_succeed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The store holds the copy of the first attempt, so the second attempt of the same request
+    // waits for it, then finds the published target.
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let source =
+            Agent::start(&executor, &context, initial_file_system, "one-flight", &[]).await?;
+        let (cut, name) = source
+            .apply_and_confirm(
+                &executor,
+                Operation::Write {
+                    path: "copied.txt",
+                    content: "copied",
+                },
+            )
+            .await?;
+        let target = source.fork_target("one-flight")?;
+        let held = store.hold_next_copy();
+        let target_name = target.agent.to_string();
+        let fork = || executor.fork_worker(&source.worker_id, &target_name, cut);
+
+        let (first, second, ()) = futures::join!(fork(), fork(), async move {
+            eventually(Duration::from_secs(30), || async {
+                Ok(held.name().map(|_| ()))
+            })
+            .await
+            .ok();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            held.release();
+        });
+        let target_incarnation = target.incarnation(&executor, &context).await?;
+        let copied = store_holds(&store, &target_incarnation, &[name.as_str()]).await?;
+
+        assert!(first.is_ok(), "{first:?}");
+        assert!(second.is_ok(), "{second:?}");
+        assert_eq!((store.copy_count(), copied), (1, vec![name]));
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("6m")]
+async fn a_retry_of_a_published_fork_succeeds_after_the_source_lost_its_baseline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The fork copies the baseline of its update, and publishes the target. Then the source loses
+    // that snapshot. A retry of the same request finds the published target before it copies, so
+    // it never refuses for the missing baseline.
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor = crate::fork::start_with_local_resume_and(
+            deps,
+            &context,
+            snapshotting(&store, Duration::from_secs(30), None),
+        )
+        .await?;
+        let (agent, incarnation, _, names) = three_manual_updates(
+            &executor,
+            &context,
+            &store,
+            initial_file_system,
+            "fork-retry",
+        )
+        .await?;
+        let cut = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?
+            .last()
+            .map(|entry| entry.oplog_index)
+            .ok_or_else(|| anyhow!("the oplog of the source is empty"))?;
+        let target = agent.fork_target("fork-retry")?;
+        executor
+            .fork_worker(&agent.worker_id, &target.agent.to_string(), cut)
+            .await?;
+        store.lose(&incarnation.0, incarnation.1, &names[2]).await;
+
+        let retried = executor
+            .fork_worker(&agent.worker_id, &target.agent.to_string(), cut)
+            .await;
+
+        assert!(retried.is_ok(), "{retried:?}");
+        assert_eq!(store.copy_count(), 1);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn an_ephemeral_agent_with_a_snapshot_policy_makes_no_store_call(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The executor takes a snapshot after each invocation. An ephemeral agent keeps no files, so
+    // the snapshot service makes no store call for it.
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, constructor_parameter_echo)
+            .store()
+            .await?;
+        let agent = agent_id!("EphemeralEchoAgent", "ephemeral-snapshots");
+
+        let answers = futures::stream::iter(0..3)
+            .then(|_| async {
+                executor
+                    .invoke_and_await_agent(&component, &agent, "changeAndGet", data_value!())
+                    .await?
+                    .into_typed::<String>()
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        assert_eq!(answers.len(), 3);
+        assert_eq!((store.save_count(), store.copy_count()), (0, 0));
+        Ok(())
+    })
+    .await
 }

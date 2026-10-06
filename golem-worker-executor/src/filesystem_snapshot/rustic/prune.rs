@@ -17,12 +17,12 @@
 //! The scope keeps a ledger next to the files of the repository: an entry for each prune, whose
 //! name holds the time at which the prune ended and whether it marked packs that a later prune
 //! removes. The newest entry is the ledger. Only the delete that holds the claim of a prune writes
-//! an entry, and an entry is never written over. Each delete that freed bytes writes a record
-//! of its own, with the count in the name, and a prune that succeeds deletes the records it counted.
+//! an entry, and an entry is never written over. Each delete that freed bytes writes a record of
+//! its own, with the count in the name, and a prune that succeeds deletes the records it counted.
 //!
 //! A delete whose prune is due takes a claim before it prunes, so two deletes that read the same
-//! ledger make one prune. The claims of a ledger are in one directory, named by the time of the last
-//! prune in that ledger.
+//! ledger make one prune. The claims of a ledger are in one directory, named by the time of the
+//! last prune in that ledger.
 
 use super::files::{Lease, SnapshotFiles};
 use crate::filesystem_snapshot::clock::Clock;
@@ -442,12 +442,17 @@ fn lease_bound(grace: Duration, deadline: Duration) -> Duration {
     grace.saturating_sub(deadline).max(deadline)
 }
 
-/// Gives how long a marker write that succeeds lets the prune of its claim go on: the lease bound
-/// less one millisecond. The name of a marker keeps its time in whole milliseconds, so the time in
-/// the name can be up to one millisecond before the time that the delete read. So the lease is above
-/// zero for each deadline above one millisecond.
+/// Gives how long a marker write that succeeds lets the prune of its claim go on: one refresh
+/// period and two storage call deadlines, but at most the lease bound less one millisecond. The
+/// name of a marker keeps its time in whole milliseconds, so the time in the name can be up to one
+/// millisecond before the time that the delete read. So the lease is above zero for each deadline
+/// above one millisecond. A prune stops its reads and deletes of snapshot data at most one span
+/// after the start of its newest marker write that succeeded, also when its later refresh writes
+/// fail.
 pub(super) fn lease_span(grace: Duration, deadline: Duration) -> Duration {
-    lease_bound(grace, deadline).saturating_sub(MARKER_TIME_UNIT)
+    refresh_period(grace, deadline)
+        .saturating_add(deadline.saturating_mul(2))
+        .min(lease_bound(grace, deadline).saturating_sub(MARKER_TIME_UNIT))
 }
 
 /// Gives how long a marker holds the claims of its ledger: the lease bound, then one margin for
@@ -516,7 +521,7 @@ async fn list_claims(files: &SnapshotFiles, directory: &Path) -> anyhow::Result<
 /// no later than the time in the name, and it never ends later than the hold that other deletes
 /// count from the name.
 pub(super) fn marker_time(clock: &dyn Clock) -> (Instant, Timestamp) {
-    let started = Instant::now();
+    let started = super::runs::now();
     let time = clock.now();
     (started, time)
 }
@@ -603,32 +608,38 @@ pub(super) async fn take_claim(
 }
 
 /// Gives the time between two markers of a live claim: a fourth of the grace period, or a fourth
-/// of the margin for clock skew when the grace period is zero, but at most a fourth of the lease, so
-/// each lease has at least two refreshes.
+/// of the margin for clock skew when the grace period is zero, but at most a fourth of the lease
+/// bound less one millisecond. It comes from the lease bound and not from the lease span, which
+/// comes from it.
 pub(super) fn refresh_period(grace: Duration, deadline: Duration) -> Duration {
     let base = if grace.is_zero() {
         CLOCK_SKEW_MARGIN
     } else {
         grace
     };
-    (base / 4).min(lease_span(grace, deadline) / 4)
+    (base / 4).min(lease_bound(grace, deadline).saturating_sub(MARKER_TIME_UNIT) / 4)
 }
 
 /// Writes a new marker of the claim at each period, until the caller drops the stream or the
-/// operation of the files is cancelled, and gives the path of each marker whose write succeeded. A
-/// write that succeeds and started before the end of the lease moves the end to `span` after its
-/// start, when that is later. A write that started at or after the end does not move it. A failed
-/// write gives a warning, and the next period tries again.
+/// operation of the files is cancelled, and gives the path of each marker whose write succeeded.
+/// The first write starts `period` after `marked`, the start of the write of the first marker of
+/// the claim, and each later write one period after the end of the write before it. A write that
+/// succeeds and started before the end of the lease moves the end to `span` after its start, when
+/// that is later. A write that started at or after the end does not move it. A failed write gives a
+/// warning, and the next period tries again.
 pub(super) fn keep_claim_fresh<'a>(
     files: &'a SnapshotFiles,
     claim: &'a ClaimName,
+    marked: Instant,
     period: Duration,
     lease: &'a Lease,
     span: Duration,
     clock: &'a dyn Clock,
 ) -> impl Stream<Item = Box<Path>> + 'a {
-    stream::repeat(())
-        .then(move |()| tokio::time::sleep(period))
+    stream::once(tokio::time::sleep_until(tokio::time::Instant::from_std(
+        marked + period,
+    )))
+    .chain(stream::repeat(()).then(move |()| tokio::time::sleep(period)))
         .take_until(files.cancelled())
         .then(move |()| write_leased_marker(files, "refresh_claim", claim, lease, span, clock))
         .filter_map(|written| {
@@ -972,11 +983,11 @@ mod tests {
         CLAIMS_PATH, CLOCK_SKEW_MARGIN, ClaimChoice, ClaimEntry, ClaimName, FREED_PATH,
         FreedRecord, FreedRecords, LEDGERS_PATH, Lease, ListedFreed, Next, Observed, Percent,
         PruneLedger, PrunePolicy, belongs_to_ledger, claim_hold, claims_directory,
-        keep_claim_fresh, lease_span, list_claims, list_freed_names, marker_path, marker_time,
-        may_be_due, named_bytes, newest_ledger, next, next_claim, old_claim_directories,
-        older_entries, parse_claim_entry, parse_freed, parse_ledger_entry, parse_record,
-        read_ledger, record_content, record_freed, refresh_period, settle, settle_freed,
-        take_claim, write_ledger,
+        keep_claim_fresh, lease_bound, lease_span, list_claims, list_freed_names, marker_path,
+        marker_time, may_be_due, named_bytes, newest_ledger, next, next_claim,
+        old_claim_directories, older_entries, parse_claim_entry, parse_freed, parse_ledger_entry,
+        parse_record, read_ledger, record_content, record_freed, refresh_period, settle,
+        settle_freed, take_claim, write_ledger,
     };
     use crate::filesystem_snapshot::clock::SystemClock;
     use futures::StreamExt;
@@ -1480,21 +1491,41 @@ mod tests {
     }
 
     #[test]
-    fn the_lease_is_the_grace_period_less_one_deadline_and_at_least_one_deadline_less_one_millisecond()
-     {
+    fn the_lease_is_one_period_and_two_deadlines_and_at_most_the_lease_bound() {
         let second = Duration::from_secs(1);
         let minute = Duration::from_secs(60);
+        let cases = [
+            (GRACE, minute),
+            (2 * minute, minute),
+            (2 * minute - second, minute),
+            (Duration::ZERO, minute),
+            (minute, Duration::ZERO),
+            (Duration::ZERO, second),
+            (Duration::from_millis(16), minute),
+        ];
+        let period = |grace: Duration, deadline: Duration| refresh_period(grace, deadline);
 
         assert_eq!(
+            cases.map(|(grace, deadline)| lease_span(grace, deadline)),
             [
-                lease_span(GRACE, minute),
-                lease_span(2 * minute, minute),
-                lease_span(2 * minute - second, minute),
-                lease_span(Duration::ZERO, minute),
-                lease_span(minute, Duration::ZERO),
-                lease_span(Duration::ZERO, second),
-            ],
-            [GRACE - minute, minute, minute, minute, minute, second].map(|span| span - MILLI)
+                period(GRACE, minute) + 2 * minute,
+                minute - MILLI,
+                minute - MILLI,
+                minute - MILLI,
+                period(minute, Duration::ZERO),
+                second - MILLI,
+                minute - MILLI,
+            ]
+        );
+        // The invariant of the claim protocol: a call of a prune whose lease ran out lands before
+        // another delete can take the claim over.
+        assert!(cases.iter().all(|(grace, deadline)| {
+            lease_span(*grace, *deadline) + *deadline
+                <= lease_bound(*grace, *deadline) + 2 * *deadline
+        }));
+        assert_eq!(
+            lease_span(GRACE, minute),
+            Duration::from_secs(330) - Duration::from_micros(250)
         );
     }
 
@@ -1520,7 +1551,8 @@ mod tests {
     }
 
     #[test]
-    fn each_lease_has_at_least_two_refreshes() {
+    fn the_refresh_period_is_a_fourth_of_the_grace_or_of_the_margin_and_at_most_a_fourth_of_the_lease_bound()
+     {
         let minute = Duration::from_secs(60);
         let cases = [
             (GRACE, minute),
@@ -1542,9 +1574,6 @@ mod tests {
                 Duration::from_micros(249_750),
             ]
         );
-        assert!(cases.iter().all(|(grace, deadline)| {
-            refresh_period(*grace, *deadline) * 2 <= lease_span(*grace, *deadline)
-        }));
     }
 
     #[test]
@@ -1581,6 +1610,7 @@ mod tests {
             keep_claim_fresh(
                 &files,
                 &claim_zero(),
+                Instant::now(),
                 Duration::from_secs(3600),
                 &Lease::until(Instant::now()),
                 GRACE,
@@ -1592,6 +1622,38 @@ mod tests {
         .is_ok();
 
         assert!(ended);
+    }
+
+    #[test]
+    fn the_first_refresh_starts_one_period_after_the_first_marker_and_not_after_the_call() {
+        // The first marker was written 900 ms before the refresh starts, and the period is 1 s. So
+        // the first refresh write starts 100 ms after the start of the refresh. The time is paused,
+        // so each wait ends at its instant.
+        let elapsed = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap()
+            .block_on(async {
+                let files = files_over(Arc::new(InMemoryBlobStorage::new()));
+                let started = super::super::runs::now();
+                let marked = started.checked_sub(Duration::from_millis(900)).unwrap();
+                let lease = Lease::until(started + Duration::from_secs(3600));
+                let claim = claim_zero();
+                let refreshes = keep_claim_fresh(
+                    &files,
+                    &claim,
+                    marked,
+                    Duration::from_secs(1),
+                    &lease,
+                    GRACE,
+                    &SystemClock,
+                );
+                std::pin::pin!(refreshes).next().await.unwrap();
+                super::super::runs::now().duration_since(started)
+            });
+
+        assert_eq!(elapsed, Duration::from_millis(100));
     }
 
     /// Refreshes the claim at each period until the first refresh write succeeds, and gives the
@@ -1606,6 +1668,7 @@ mod tests {
         std::pin::pin!(keep_claim_fresh(
             files,
             &claim,
+            Instant::now(),
             period,
             lease,
             span,

@@ -17,13 +17,13 @@
 //! Each test calls the backend from the thread of the test. That thread is not a thread of the
 //! runtime that the backend holds, as the threads of rustic are not.
 
-use super::super::fault::{Operation, OperationCancelled, classify, is_config_exists};
+use super::super::fault::{OperationCancelled, is_config_exists, rustic_storage_end};
 use super::super::publish::{SnapshotStage, StagedSnapshot};
+use super::super::runs::RunEnd;
 use super::super::tests::files_of;
 use super::super::tests::holding::{holding_storage, reached_deadline};
 use super::super::tests::scripted::{Script, ScriptedBlobStorage};
 use super::{BlobBackend, KEPT_PACKS_LIMIT, file_size};
-use crate::filesystem_snapshot::SnapshotStoreError;
 use crate::services::golem_config::DEFAULT_FILESYSTEM_SNAPSHOT_STORAGE_CALL_DEADLINE as STORAGE_CALL_DEADLINE;
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -883,9 +883,7 @@ fn a_range_outside_a_kept_pack_gives_the_error_of_a_ranged_read_outside_a_blob()
             tree_range(&backend, offset, length).err().map(|error| {
                 (
                     text_of(&error).contains("is not in the blob"),
-                    classify(Operation::Restore, anyhow::Error::new(error))
-                        .to_string()
-                        .contains("storage"),
+                    rustic_storage_end(&anyhow::Error::new(error)) == Some(RunEnd::Permanent),
                 )
             })
         })
@@ -1137,15 +1135,8 @@ fn each_failed_call_is_a_storage_failure_to_the_classification() {
             .err(),
     ]
     .map(|error| {
-        error.map(|error| {
-            matches!(
-                classify(Operation::Restore, anyhow::Error::new(error)),
-                SnapshotStoreError::Storage {
-                    retryable: true,
-                    ..
-                }
-            )
-        })
+        error
+            .map(|error| rustic_storage_end(&anyhow::Error::new(error)) == Some(RunEnd::CallFailed))
     });
 
     assert_eq!(classified, [Some(true); 3]);
@@ -1196,6 +1187,18 @@ fn broken() -> anyhow::Error {
 
 #[async_trait]
 impl BlobStorageBackend for FailingBlobStorage {
+    async fn copy_between_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        _from_namespace: BlobStorageNamespace,
+        _from: &NormalizedBlobPath<'_>,
+        _to_namespace: BlobStorageNamespace,
+        _to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        Err(broken())
+    }
+
     async fn get_raw_at(
         &self,
         _target_label: &'static str,

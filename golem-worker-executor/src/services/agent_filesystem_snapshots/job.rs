@@ -12,72 +12,42 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! One job: upload, discard, confirm, then a delete of the older snapshots or of the superseded
-//! one. Each step is a straight line that asks a rule of `rules` what to do next.
+//! One job: upload, confirm, then a delete of the older snapshots or of the superseded one. Each
+//! step is a straight line that asks a rule of `decisions` what to do next, and the store calls go
+//! through `store_calls`.
 
+use super::decisions::{self, FollowUp};
 use super::registry::JobTicket;
-use super::rules::{self, FollowUp, SaveAttempt};
+use super::store_calls::{Deleted, Stops, Upload, UploadError};
 use super::{
     Admission, CapturedTree, Confirm, Core, JobDecision, SavedUpdate, SnapshotKind, UploadNowError,
     retention, store_name,
 };
-use crate::filesystem_snapshot::{ChangeDetection, SnapshotInfo, SnapshotName, SnapshotStoreError};
-use futures::StreamExt as _;
-use golem_common::model::RetryConfig;
+use crate::filesystem_snapshot::{ChangeDetection, Failed, SaveError, SnapshotInfo, SnapshotName};
 use golem_common::model::oplog::FilesystemSnapshotName;
-use rand::Rng as _;
-use std::future::Future;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{OwnedSemaphorePermit, watch};
+use tokio::sync::{oneshot, watch};
+use tokio_util::sync::CancellationToken;
 
-/// What the upload of a job gave.
-enum UploadOutcome {
-    /// The store holds the snapshot.
-    Saved(SnapshotInfo),
-    /// The save failed, after the retries when the error allows them.
-    Failed(SnapshotStoreError),
-    /// A shutdown, a call of `delete_all_snapshots` for the agent, or the stop of the caller
-    /// stopped the upload.
-    Stopped,
-}
-
-/// A slot of the uploads that one store attempt of an upload holds. It counts the attempt in the
-/// gauge of the uploads in progress while it lives, so a stop that drops the attempt during its
-/// store call leaves the gauge right.
-struct UploadSlot {
-    _permit: OwnedSemaphorePermit,
-    #[cfg(test)]
-    attempts: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl UploadSlot {
-    fn new(permit: OwnedSemaphorePermit, core: &Core) -> Self {
-        crate::metrics::filesystem_snapshots::inc_uploads_in_progress();
-        #[cfg(test)]
-        core.upload_attempts
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        #[cfg(not(test))]
-        let _ = core;
-        Self {
-            _permit: permit,
-            #[cfg(test)]
-            attempts: Arc::clone(&core.upload_attempts),
+/// The store names of the own name and of the parent of a job, or the error of a name that breaks
+/// a rule of the store.
+fn store_names(
+    name: &FilesystemSnapshotName,
+    parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
+) -> Result<(SnapshotName, Option<(SnapshotName, ChangeDetection)>), SaveError> {
+    let parent = parent
+        .map(|(name, detection)| store_name(&name).map(|name| (name, detection)))
+        .transpose();
+    match (store_name(name), parent) {
+        (Ok(name), Ok(parent)) => Ok((name, parent)),
+        (Err(error), _) | (_, Err(error)) => {
+            Err(SaveError::Failed(Failed::new(anyhow::Error::new(error))))
         }
     }
 }
 
-impl Drop for UploadSlot {
-    fn drop(&mut self) {
-        crate::metrics::filesystem_snapshots::dec_uploads_in_progress();
-        #[cfg(test)]
-        self.attempts
-            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-/// Saves the tree of `admission`, discards it, and confirms, as [`Admission::submit`] says.
+/// Saves the tree of `admission`, and confirms, as [`Admission::submit`] says.
 pub(super) async fn run_job(
     admission: Admission,
     tree: CapturedTree,
@@ -89,24 +59,26 @@ pub(super) async fn run_job(
         ticket,
         name,
         kind,
+        deadline: _,
     } = admission;
     let started = Instant::now();
-    let saved = upload(
-        &core,
-        &ticket,
-        &name,
-        parent,
-        &tree.directory,
-        std::future::pending(),
-    )
-    .await;
-    tree.discard.await;
-    let info = match saved {
-        UploadOutcome::Saved(info) => info,
-        UploadOutcome::Failed(error) => {
+    let uploaded = match store_names(&name, parent) {
+        Ok((own, parent)) => {
+            core.calls
+                .upload(&ticket, &own, tree, parent, Stops::none(), None)
+                .await
+        }
+        Err(error) => {
+            tree.discard.await;
+            Upload::Failed(UploadError::Store(error))
+        }
+    };
+    let info = match uploaded {
+        Upload::Saved(info) => info,
+        Upload::Failed(error) => {
             ticket.decide(JobDecision::SaveFailed);
             tracing::warn!(
-                error = %error,
+                error = ?error,
                 name = %name,
                 "Failed to upload a filesystem snapshot; no confirmation record follows its record"
             );
@@ -117,29 +89,49 @@ pub(super) async fn run_job(
             );
             return;
         }
-        UploadOutcome::Stopped => return,
+        Upload::Stopped => {
+            if ticket.replaced() {
+                crate::metrics::filesystem_snapshots::record_upload(
+                    kind.label(),
+                    "replaced",
+                    started.elapsed(),
+                );
+            }
+            return;
+        }
     };
     crate::metrics::filesystem_snapshots::record_uploaded_bytes(kind.label(), info.bytes);
-    if ticket.stop_requested() {
+    // A job that an admission replaced writes no confirmation, also when its stop is not
+    // cancelled yet: the replacement came before its save call ended, so the registry shows it.
+    if ticket.stop_requested() || ticket.replaced() {
         return;
     }
-    let outcome = tokio::select! {
-        outcome = confirm(name.clone()) => outcome,
+    let confirmation = tokio::select! {
+        confirmation = confirm(name.clone()) => confirmation,
         () = ticket.until_stopped() => return,
     };
+    let outcome = confirmation.outcome();
     ticket.decide(JobDecision::Confirmed(outcome));
     crate::metrics::filesystem_snapshots::record_upload(
         kind.label(),
         outcome.label(),
         started.elapsed(),
     );
-    match rules::follow_up(kind, outcome) {
+    let Ok(own) = store_name(&name) else {
+        return;
+    };
+    match decisions::follow_up(kind, outcome) {
         FollowUp::DeleteOlder => {
-            delete_older_snapshots(&core, &ticket, &name, kind, &info, None).await
+            let kept = confirmation
+                .selectable()
+                .iter()
+                .filter_map(|name| store_name(name).ok())
+                .collect::<Box<[_]>>();
+            delete_older_snapshots(&core, &ticket, &own, kind, &info, &kept).await
         }
         FollowUp::DeleteSuperseded => {
             crate::metrics::filesystem_snapshots::record_dropped_confirmation(outcome.label());
-            delete_superseded(&core, &ticket, &name).await;
+            delete_superseded(&core, &ticket, own).await;
         }
         FollowUp::Keep => {}
     }
@@ -148,37 +140,82 @@ pub(super) async fn run_job(
 impl Admission {
     /// Uploads `tree` while the caller waits, and gives the [`SavedUpdate`] for after the commit
     /// of the record. It differs from [`Admission::submit`] only in who waits and in what
-    /// follows: both go through the same upload. A manual update calls this before it writes its
-    /// record. The agent stays reserved until the [`SavedUpdate`] deletes the older snapshots or
-    /// is dropped. When `stop` reports a terminal interrupt, or a shutdown or a call of
-    /// `delete_all_snapshots` for the agent stops the upload, the tree is discarded and the call
-    /// gives [`UploadNowError::Stopped`].
+    /// follows: both go through the same upload, in a task of the jobs. A manual update calls
+    /// this before it writes its record. The agent stays reserved until the [`SavedUpdate`]
+    /// deletes the older snapshots or is dropped.
+    ///
+    /// A terminal interrupt that `stop` reports, a caller that stops waiting, a lost shard that
+    /// `lost_shard` reports, a shutdown, or a delete of all snapshots of the agent gives
+    /// [`UploadNowError::Stopped`] at once and ends the admission. A save that runs then goes on
+    /// until it returns, and the tree is discarded after it; a lost shard also cancels that save in
+    /// the store, so it publishes nothing. An error of the save after a stop also gives
+    /// [`UploadNowError::Stopped`]. A save that had succeeded before the stop gives `Saved`; when
+    /// the success and the stop are both there at the same wake, the success wins. The wait for a
+    /// running save of the agent ends at the deadline of the admission with
+    /// [`UploadNowError::SaveRunning`]. A save that the deadline withdrew gives
+    /// [`UploadNowError::NoSlot`] when no run of it failed, and the storage error otherwise.
     pub(crate) async fn upload_now(
         self,
         tree: CapturedTree,
         stop: watch::Receiver<bool>,
+        lost_shard: crate::worker::LostShard,
+    ) -> Result<SavedUpdate, UploadNowError> {
+        let (answer, answered) = oneshot::channel();
+        let caller_gone = CancellationToken::new();
+        let jobs = self.core.jobs.clone();
+        let stops = Stops::of(
+            {
+                let caller_gone = caller_gone.clone();
+                async move {
+                    tokio::select! {
+                        () = interrupt_raised(stop) => {}
+                        () = caller_gone.cancelled() => {}
+                    }
+                }
+            },
+            lost_shard,
+        );
+        jobs.spawn(async move {
+            let _ = answer.send(self.upload_in_job(tree, stops).await);
+        });
+        // A caller that stops waiting drops this guard, which stops the upload.
+        let guard = caller_gone.drop_guard();
+        let answer = answered_now(answered.await);
+        guard.disarm();
+        answer
+    }
+
+    /// The upload of [`Admission::upload_now`], in its job task.
+    async fn upload_in_job(
+        self,
+        tree: CapturedTree,
+        stops: Stops,
     ) -> Result<SavedUpdate, UploadNowError> {
         let Admission {
             core,
             ticket,
             name,
             kind,
+            deadline,
         } = self;
         let started = Instant::now();
-        let saved = upload(
-            &core,
-            &ticket,
-            &name,
-            None,
-            &tree.directory,
-            interrupt_raised(stop),
-        )
-        .await;
-        tree.discard.await;
-        let result = match saved {
-            UploadOutcome::Saved(info) => Ok(info),
-            UploadOutcome::Failed(error) => Err(UploadNowError::Store(error)),
-            UploadOutcome::Stopped => Err(UploadNowError::Stopped),
+        let uploaded = match store_names(&name, None) {
+            Ok((own, _)) => {
+                core.calls
+                    .upload(&ticket, &own, tree, None, stops, deadline)
+                    .await
+            }
+            Err(error) => {
+                tree.discard.await;
+                Upload::Failed(UploadError::Store(error))
+            }
+        };
+        let result = match uploaded {
+            Upload::Saved(info) => Ok(info),
+            Upload::Failed(UploadError::Store(error)) => Err(UploadNowError::Store(error)),
+            Upload::Failed(UploadError::SaveRunning) => Err(UploadNowError::SaveRunning),
+            Upload::Failed(UploadError::NoSlot) => Err(UploadNowError::NoSlot),
+            Upload::Stopped => Err(UploadNowError::Stopped),
         };
         match &result {
             Ok(info) => {
@@ -192,7 +229,9 @@ impl Admission {
                     info.bytes,
                 );
             }
-            Err(UploadNowError::Store(_)) => {
+            Err(
+                UploadNowError::Store(_) | UploadNowError::SaveRunning | UploadNowError::NoSlot,
+            ) => {
                 crate::metrics::filesystem_snapshots::record_upload(
                     kind.label(),
                     "failed",
@@ -210,6 +249,14 @@ impl Admission {
     }
 }
 
+/// The answer of an upload that a job task gave through its channel. A job task that is gone
+/// without an answer stopped the upload.
+fn answered_now<T>(
+    answered: Result<Result<T, UploadNowError>, oneshot::error::RecvError>,
+) -> Result<T, UploadNowError> {
+    answered.unwrap_or(Err(UploadNowError::Stopped))
+}
+
 /// Completes when `stop` reports a terminal interrupt. It never completes when the sender is
 /// gone.
 pub(super) async fn interrupt_raised(mut stop: watch::Receiver<bool>) {
@@ -218,122 +265,23 @@ pub(super) async fn interrupt_raised(mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// Uploads the tree of a job: saves the tree under the own name of the job with retries. Each
-/// attempt waits for a slot of the uploads and holds it for one store `save`, and for the `stat`
-/// of the own name when [`rules::save_attempt`] asks for it. The attempt gives the slot back
-/// before the wait for the next attempt. `stop`, a shutdown, or a call of `delete_all_snapshots`
-/// for the agent ends the upload with `Stopped`, and no store call starts after the attempt sees
-/// such a stop.
-async fn upload(
-    core: &Core,
-    ticket: &JobTicket,
-    name: &FilesystemSnapshotName,
-    parent: Option<(FilesystemSnapshotName, ChangeDetection)>,
-    tree: &Path,
-    stop: impl Future<Output = ()> + Send,
-) -> UploadOutcome {
-    let stop = futures::FutureExt::shared(futures::FutureExt::boxed(stop));
-    let (name, parent) = match (
-        store_name(name),
-        parent
-            .map(|(name, detection)| store_name(&name).map(|name| (name, detection)))
-            .transpose(),
-    ) {
-        (Ok(name), Ok(parent)) => (name, parent),
-        (Err(error), _) | (_, Err(error)) => {
-            return UploadOutcome::Failed(SnapshotStoreError::Storage {
-                retryable: false,
-                source: anyhow::Error::new(error),
-            });
-        }
-    };
-    let parent = parent.as_ref().map(|(name, detection)| (name, *detection));
-    let agent = ticket.agent();
-    // The stops that the `select!` below watches. An attempt that sees one after its grant gives
-    // its slot back and waits for that `select!` to end the upload in the same poll.
-    let stopped =
-        || ticket.stop_requested() || futures::FutureExt::now_or_never(stop.clone()).is_some();
-    let attempt = || async {
-        let slot = match Arc::clone(&core.uploads).acquire_owned().await {
-            Ok(permit) => UploadSlot::new(permit, core),
-            Err(_) => {
-                // The slots are gone: the job stops, and the `select!` below ends the upload.
-                ticket.stop_job();
-                return std::future::pending().await;
-            }
-        };
-        ticket.saving();
-        if stopped() {
-            drop(slot);
-            return std::future::pending().await;
-        }
-        let saved = match rules::save_attempt(core.store.save(agent, &name, tree, parent).await) {
-            SaveAttempt::Saved(info) => Ok(info),
-            SaveAttempt::StatOwn => {
-                if stopped() {
-                    drop(slot);
-                    return std::future::pending().await;
-                }
-                core.store.stat(agent, &name).await.and_then(|found| {
-                    found.ok_or_else(|| SnapshotStoreError::Storage {
-                        retryable: true,
-                        source: anyhow::anyhow!(
-                            "the filesystem snapshot {name} exists at the save and not after it"
-                        ),
-                    })
-                })
-            }
-            SaveAttempt::Failed(error) => Err(error),
-        };
-        drop(slot);
-        saved
-    };
-    let saved = tokio::select! {
-        biased;
-        saved = retrying(core.settings.upload_retry(), attempt) => Some(saved),
-        () = ticket.until_stopped() => None,
-        () = stop.clone() => None,
-    };
-    match saved {
-        Some(Ok(info)) => UploadOutcome::Saved(info),
-        Some(Err(error)) => UploadOutcome::Failed(error),
-        None => UploadOutcome::Stopped,
-    }
-}
-
-/// Waits for a slot of the uploads for a delete of the job. Gives `None` when the stop of the
-/// deletes of the job ends the wait, is seen after the grant, or when the slots are gone.
-async fn delete_slot(core: &Core, ticket: &JobTicket) -> Option<OwnedSemaphorePermit> {
-    let slot = tokio::select! {
-        biased;
-        () = ticket.until_deletes_stopped() => return None,
-        slot = Arc::clone(&core.uploads).acquire_owned() => slot.ok()?,
-    };
-    (!ticket.deletes_stop_requested()).then_some(slot)
-}
-
-/// Keeps the own snapshot and the newest older snapshots of its kind, and deletes the rest of
-/// its kind that are older than it, under its own slot of the uploads. `info` is the info of the
-/// own snapshot, and `kept` a snapshot that it never deletes. The stop of the deletes of the job
-/// ends it at once, also in its wait for the slot and between two attempts, and a later
-/// retention deletes what it left.
+/// Keeps the own snapshot `own` and the newest older snapshots of its kind, and deletes the rest
+/// of its kind that are older than it. `info` is the info of the own snapshot, and `kept` the
+/// snapshots that it never deletes and does not count. Each run of the listing and of the delete
+/// takes a slot of the uploads. The stop of the deletes of the job ends it at once, also in its
+/// waits; a run of a delete that the store already runs goes on, and a later retention deletes
+/// what it left.
 pub(super) async fn delete_older_snapshots(
     core: &Core,
     ticket: &JobTicket,
-    name: &FilesystemSnapshotName,
+    own: &SnapshotName,
     kind: SnapshotKind,
     info: &SnapshotInfo,
-    kept: Option<&SnapshotName>,
+    kept: &[SnapshotName],
 ) {
-    let Some(_slot) = delete_slot(core, ticket).await else {
-        return;
-    };
     let agent = ticket.agent();
     let retention = async {
-        let Ok(own) = store_name(name) else {
-            return;
-        };
-        let listing = match core.store.list(agent).await {
+        let listing = match core.calls.list(agent, ticket.deletes_stopped()).await {
             Ok(listing) => listing,
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to list the filesystem snapshots for retention");
@@ -344,17 +292,19 @@ pub(super) async fn delete_older_snapshots(
             SnapshotKind::Periodic => core.settings.retained_periodic_snapshots(),
             SnapshotKind::Update => core.settings.retained_update_snapshots(),
         };
-        let victims = retention::victims(&listing, &own, info, keep.get(), kept);
+        let victims: Arc<[SnapshotName]> =
+            retention::victims(&listing, own, info, keep.get(), kept).into();
         if victims.is_empty() {
             return;
         }
-        if let Err(error) = retrying(core.settings.upload_retry(), || {
-            core.store.delete(agent, &victims)
-        })
-        .await
+        if let Deleted::Leaked(error) = core
+            .calls
+            .delete(agent, Arc::clone(&victims), ticket.deletes_stopped())
+            .await
         {
             tracing::warn!(
                 error = %error,
+                agent = ?agent,
                 names = ?victims,
                 "Failed to delete old filesystem snapshots; the next retention tries again"
             );
@@ -362,113 +312,46 @@ pub(super) async fn delete_older_snapshots(
     };
     tokio::select! {
         biased;
-        () = ticket.until_deletes_stopped() => {}
+        () = ticket.deletes_stopped() => {}
         () = retention => {}
     }
 }
 
-/// Deletes the snapshot of the job, which no confirmation record names, under its own slot of
-/// the uploads. The stop of the deletes of the job ends it at once, and the snapshot stays until
-/// a retention of its kind deletes it.
-async fn delete_superseded(core: &Core, ticket: &JobTicket, name: &FilesystemSnapshotName) {
-    let Some(_slot) = delete_slot(core, ticket).await else {
-        return;
-    };
-    let agent = ticket.agent();
-    let delete = async {
-        let Ok(name) = store_name(name) else {
-            return;
-        };
-        let names = [name];
-        if let Err(error) = retrying(core.settings.upload_retry(), || {
-            core.store.delete(agent, &names)
-        })
-        .await
-        {
-            tracing::warn!(
-                error = %error,
-                name = %names[0],
-                "Failed to delete a filesystem snapshot that no confirmation record names"
-            );
-            crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete");
-        }
-    };
-    tokio::select! {
-        biased;
-        () = ticket.until_deletes_stopped() => {}
-        () = delete => {}
+/// Deletes the snapshot `own` of the job, which no confirmation record names, with its own slots
+/// of the uploads. The stop of the deletes of the job ends it at once, and the snapshot stays
+/// until a retention of its kind deletes it.
+async fn delete_superseded(core: &Core, ticket: &JobTicket, own: SnapshotName) {
+    let deleted = core
+        .calls
+        .delete(
+            ticket.agent(),
+            Arc::from([own.clone()]),
+            ticket.deletes_stopped(),
+        )
+        .await;
+    if let Deleted::Leaked(error) = deleted {
+        tracing::warn!(
+            error = %error,
+            agent = ?ticket.agent(),
+            name = %own,
+            "Failed to delete a filesystem snapshot that no confirmation record names"
+        );
+        crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete");
     }
-}
-
-/// Draws the jitter factor of a retry delay below the `max_jitter_factor` of `retry`. The
-/// settings allow a factor from 0 to 1, and a factor of 0 gives no jitter.
-fn jitter(retry: &RetryConfig) -> f64 {
-    retry
-        .max_jitter_factor
-        .filter(|factor| *factor > 0.0)
-        .map_or(0.0, |factor| rand::rng().random_range(0.0..factor))
-}
-
-/// Runs `operation`, and runs it again after the delay that [`rules::retry_delay`] gives while
-/// it fails.
-pub(super) async fn retrying<T, Operation, Attempt>(
-    retry: &RetryConfig,
-    operation: Operation,
-) -> Result<T, SnapshotStoreError>
-where
-    Operation: Fn() -> Attempt,
-    Attempt: Future<Output = Result<T, SnapshotStoreError>>,
-{
-    let operation = &operation;
-    futures::stream::unfold(Some(1u32), |attempt| async move {
-        let attempt = attempt?;
-        let result = operation().await;
-        let next = match &result {
-            Err(error) => match rules::retry_delay(retry, attempt, error, jitter(retry)) {
-                Some(delay) => {
-                    tokio::time::sleep(delay).await;
-                    Some(attempt + 1)
-                }
-                None => None,
-            },
-            Ok(_) => None,
-        };
-        Some((result, next))
-    })
-    .fold(None, |_, result| async move { Some(result) })
-    .await
-    .unwrap_or_else(|| {
-        Err(SnapshotStoreError::Storage {
-            retryable: false,
-            source: anyhow::anyhow!("the store operation made no attempt"),
-        })
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use test_r::test;
 
     #[test]
-    fn a_jitter_is_drawn_below_a_positive_factor_and_is_zero_otherwise() {
-        let retry = |max_jitter_factor| RetryConfig {
-            max_attempts: 3,
-            min_delay: Duration::from_secs(2),
-            max_delay: Duration::from_secs(120),
-            multiplier: 4.0,
-            max_jitter_factor,
-        };
-        let drawn = (0..200)
-            .map(|_| jitter(&retry(Some(0.5))))
-            .collect::<Vec<_>>();
+    fn an_upload_now_whose_job_task_is_gone_gives_stopped() {
+        let (sender, receiver) = oneshot::channel::<Result<(), UploadNowError>>();
+        drop(sender);
+        let gone = futures::executor::block_on(receiver);
 
-        assert_eq!(
-            (jitter(&retry(None)), jitter(&retry(Some(0.0)))),
-            (0.0, 0.0)
-        );
-        assert!(drawn.iter().all(|factor| (0.0..0.5).contains(factor)));
-        assert!(drawn.iter().any(|factor| *factor > 0.0));
+        assert!(matches!(answered_now(gone), Err(UploadNowError::Stopped)));
+        assert!(matches!(answered_now(Ok(Ok(()))), Ok(())));
     }
 }

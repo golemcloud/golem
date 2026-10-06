@@ -17,6 +17,7 @@ use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
+use crate::worker::snapshot_selection::update_names_in_use;
 use crate::worker::status::{
     calculate_last_known_status, calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
@@ -2046,6 +2047,89 @@ async fn two_successful_manual_updates() {
 }
 
 #[test]
+async fn a_revert_across_an_update_drops_its_name_from_the_status() {
+    let k1 = IdempotencyKey::fresh();
+    let name = FilesystemSnapshotName::update();
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: Some(name.clone()),
+    };
+
+    let updated = TestCase::builder(1)
+        .agent_invocation_started("a", vec![], k1.clone())
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            k1,
+            ComponentRevision::INITIAL,
+        )
+        .pending_update(&update, |_| {})
+        .successful_update(update, 2000, &HashSet::new());
+    let before_revert = updated.previous_status_record.clone();
+    let test_case = updated.revert(OplogIndex::from_u64(3)).build();
+    let after_revert = test_case.entries.last().unwrap().expected_status.clone();
+
+    assert_eq!(
+        before_revert
+            .successful_updates
+            .iter()
+            .map(|update| update.filesystem_snapshot.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(name.clone())]
+    );
+    assert_eq!(
+        (
+            update_names_in_use(&before_revert),
+            before_revert.last_manual_update_snapshot_index
+        ),
+        (Box::from([name]), Some(OplogIndex::from_u64(4)))
+    );
+    assert_eq!(
+        (
+            update_names_in_use(&after_revert),
+            after_revert.last_manual_update_snapshot_index
+        ),
+        (Box::from([]), None)
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+fn a_successful_update_without_a_pending_update_has_no_name_and_no_baseline() {
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(2),
+        OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            100,
+            None,
+            HashSet::new(),
+        ),
+    )]);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord {
+            oplog_idx: OplogIndex::from_u64(1),
+            ..AgentStatusRecord::default()
+        },
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        status
+            .successful_updates
+            .iter()
+            .map(|update| (update.oplog_index, update.filesystem_snapshot.clone()))
+            .collect::<Vec<_>>(),
+        vec![(OplogIndex::from_u64(2), None)]
+    );
+    assert_eq!(status.last_manual_update_snapshot_index, None);
+}
+
+#[test]
 async fn multiple_reverts() {
     let k1 = IdempotencyKey::fresh();
     let k2 = IdempotencyKey::fresh();
@@ -3234,15 +3318,11 @@ impl TestCaseBuilder {
         let entry = OplogEntry::pending_update(update_description.clone()).rounded();
         let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
         self.add(entry.clone(), move |mut status| {
-            let kind = match update_description {
-                UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
-                UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
-            };
             status.pending_updates.push_back(PendingUpdateRef {
                 timestamp: entry.timestamp(),
                 oplog_index: oplog_idx,
                 target_revision: *update_description.target_revision(),
-                kind,
+                kind: PendingUpdateKind::of(update_description),
             });
 
             if !status.pending_invocations.is_empty() {
@@ -3283,6 +3363,13 @@ impl TestCaseBuilder {
                 timestamp: entry.timestamp(),
                 target_revision: *update_description.target_revision(),
                 oplog_index: status.oplog_idx,
+                filesystem_snapshot: match &update_description {
+                    UpdateDescription::SnapshotBased {
+                        filesystem_snapshot,
+                        ..
+                    } => filesystem_snapshot.clone(),
+                    UpdateDescription::Automatic { .. } => None,
+                },
             });
             status.component_size = new_component_size;
             status.component_revision = *update_description.target_revision();
@@ -5534,4 +5621,125 @@ fn update_fields_skip_the_entries_in_a_deleted_region() {
         fields.last_automatic_snapshot.map(|last| last.files),
         Some(SnapshotFiles::Unconfirmed(name))
     );
+}
+
+/// One update entry of a generated prefix of a fork.
+#[derive(Clone, Debug)]
+enum ForkPrefixEntry {
+    /// A pending snapshot-based update, with a filesystem snapshot when `true`.
+    SnapshotBased(bool),
+    Automatic,
+    Successful,
+    Failed,
+    /// A jump over the region from the first to the second index.
+    Jump(u64, u64),
+}
+
+/// The oplog entry of `entry` at the position `position` of the prefix. A pending update targets
+/// the revision `position + 2`, so the revisions of the pending updates tell them apart.
+fn fork_prefix_entry(position: u64, entry: &ForkPrefixEntry) -> OplogEntry {
+    let target_revision = ComponentRevision::new(position + 2).unwrap();
+    match entry {
+        ForkPrefixEntry::Jump(start, length) => OplogEntry::Jump {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            jump: OplogRegion::from_index_range(
+                OplogIndex::from_u64(*start)..=OplogIndex::from_u64(start + length),
+            ),
+        },
+        ForkPrefixEntry::SnapshotBased(named) => {
+            OplogEntry::pending_update(UpdateDescription::SnapshotBased {
+                target_revision,
+                payload: OplogPayload::Inline(Box::new(vec![])),
+                mime_type: "application/octet-stream".to_string(),
+                filesystem_snapshot: named.then(FilesystemSnapshotName::update),
+            })
+        }
+        ForkPrefixEntry::Automatic => {
+            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision })
+        }
+        ForkPrefixEntry::Successful => OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            100,
+            None,
+            HashSet::new(),
+        ),
+        ForkPrefixEntry::Failed => {
+            OplogEntry::failed_update(ComponentRevision::new(2).unwrap(), None)
+        }
+    }
+}
+
+/// The filesystem snapshot name of the pending update at `index` in `entries`, when it is a
+/// snapshot-based update.
+fn pending_update_name(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    index: Option<OplogIndex>,
+) -> Option<FilesystemSnapshotName> {
+    match entries.get(&index?)? {
+        OplogEntry::PendingUpdate {
+            description:
+                UpdateDescription::SnapshotBased {
+                    filesystem_snapshot,
+                    ..
+                },
+            ..
+        } => filesystem_snapshot.clone(),
+        _ => None,
+    }
+}
+
+proptest::proptest! {
+    #[test]
+    fn the_fork_baseline_name_and_cancelled_updates_equal_the_fold(
+        prefix in proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::strategy::Strategy::prop_map(proptest::bool::ANY, ForkPrefixEntry::SnapshotBased),
+                proptest::strategy::Just(ForkPrefixEntry::Automatic),
+                proptest::strategy::Just(ForkPrefixEntry::Successful),
+                proptest::strategy::Just(ForkPrefixEntry::Failed),
+                proptest::strategy::Strategy::prop_map((2u64..26, 0u64..4), |(start, length)| ForkPrefixEntry::Jump(start, length)),
+            ],
+            0..24,
+        ),
+        dropped in proptest::collection::vec((2u64..26, 0u64..4), 0..3),
+    ) {
+        let entries = prefix
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 2), fork_prefix_entry(index as u64, entry)))
+            .collect::<BTreeMap<_, _>>();
+        let deleted = DeletedRegionsBuilder::from_regions(
+            dropped
+                .iter()
+                .map(|(start, length)| {
+                    OplogRegion::from_index_range(
+                        OplogIndex::from_u64(*start)..=OplogIndex::from_u64(start + length),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+        .build();
+        let fields = super::calculate_update_fields(empty_update_fields(), &deleted, &entries);
+        let copied = golem_common::model::oplog::OplogIndexRange::new(
+            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(prefix.len() as u64 + 1),
+        );
+        let (cancelled, baseline) = crate::services::worker_fork::fork_update_indices(copied, &deleted)
+            .filter_map(|index| entries.get(&index))
+            .fold(crate::services::worker_fork::ForkUpdates::default(), |updates, entry| updates.after(entry))
+            .into_parts();
+
+        proptest::prop_assert_eq!(
+            (cancelled, baseline),
+            (
+                fields
+                    .pending_updates
+                    .iter()
+                    .map(|update| update.target_revision)
+                    .collect::<Vec<_>>(),
+                pending_update_name(&entries, fields.last_manual_update_snapshot_index)
+            )
+        );
+    }
 }

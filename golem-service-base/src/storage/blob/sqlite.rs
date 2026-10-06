@@ -162,9 +162,11 @@ impl SqliteBlobStorage {
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id,
                 agent_id,
+                fingerprint,
             } => {
                 let agent = agent_path_segment(&agent_id);
-                format!("filesystem_snapshots-{environment_id}-{agent}")
+                let fingerprint = fingerprint.0;
+                format!("filesystem_snapshots-{environment_id}-{agent}-{fingerprint}")
             }
         }
     }
@@ -323,6 +325,41 @@ impl BlobStorageBackend for SqliteBlobStorage {
             .await?;
 
         Ok(())
+    }
+
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        // One statement reads the row of the source and writes the row of the target, so the
+        // bytes stay in the database. A source with no row inserts nothing.
+        let query = sqlx::query(
+            r#"
+                INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
+                SELECT ?, ?, ?, value, size, FALSE FROM blob_storage
+                WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE
+                ON CONFLICT(namespace, parent, name) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+            "#,
+        )
+        .bind(Self::namespace(to_namespace))
+        .bind(to.parent_text()?)
+        .bind(to.file_name_text()?)
+        .bind(Self::namespace(from_namespace))
+        .bind(from.parent_text()?)
+        .bind(from.file_name_text()?);
+
+        let copied = self
+            .pool
+            .with_rw(target_label, op_label)
+            .execute(query)
+            .await?
+            .rows_affected();
+        Ok(copied > 0)
     }
 
     async fn put_raw_if_absent_at(

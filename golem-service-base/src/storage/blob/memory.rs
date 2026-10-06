@@ -334,6 +334,28 @@ impl BlobStorageBackend for InMemoryBlobStorage {
         Ok(())
     }
 
+    async fn copy_between_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        let (from_key, to_key) = (
+            Self::blob_key(from_namespace, from)?,
+            Self::blob_key(to_namespace, to)?,
+        );
+        let mut data = self.data.write().await;
+        let copied = match data.get(&from_key) {
+            Some(Entry::File { data: content, .. }) => Self::file_entry(content.clone()),
+            Some(Entry::Directory { .. }) | None => return Ok(false),
+        };
+        data.insert(to_key, copied);
+        Ok(true)
+    }
+
     async fn put_raw_if_absent_at(
         &self,
         _target_label: &'static str,

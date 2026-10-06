@@ -6591,9 +6591,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
+        let snapshots = this.agent_filesystem_snapshots();
+        let on_stale = |agent: &OwnedAgentId, fingerprint| {
+            // Only a durable agent has a member in the recovery index.
+            snapshots.delete_all_snapshots(
+                &crate::filesystem_snapshot::AgentSnapshots::agent(agent, fingerprint),
+                AgentMode::Durable,
+            )
+        };
         let workers = this
             .worker_service()
-            .get_running_workers_in_shards()
+            .get_running_workers_in_shards(&on_stale)
             .await?;
 
         debug!(workers = ?workers, "Recovering running workers");
@@ -6630,25 +6638,11 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 match activation {
                     Ok(_) => {}
                     Err(error @ WorkerExecutorError::AgentNotFound { .. }) => {
-                        let current = this
+                        if this
                             .worker_service()
-                            .resolve_agent_identity(&owned_agent_id)
-                            .await?;
-                        if current
-                            .as_ref()
-                            .is_none_or(|identity| identity.fingerprint != expected_fingerprint)
+                            .remove_if_stale(&owned_agent_id, expected_fingerprint, &on_stale)
+                            .await?
                         {
-                            this.worker_service()
-                                .remove_assignment_tracking(&owned_agent_id, expected_fingerprint)
-                                .await
-                                .map_err(anyhow::Error::msg)?;
-                            crate::metrics::workers::record_stale_running_worker(
-                                if current.is_none() {
-                                    "absent"
-                                } else {
-                                    "fingerprint_mismatch"
-                                },
-                            );
                             continue;
                         }
                         return Err(anyhow!(

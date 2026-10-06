@@ -360,7 +360,7 @@ impl SpanData {
 /// The name is `p-<uuid>` for a periodic snapshot and `u-<uuid>` for a manual-update snapshot.
 /// The name does not depend on an oplog index.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FilesystemSnapshotName(Box<str>);
+pub struct FilesystemSnapshotName(Arc<str>);
 
 impl FilesystemSnapshotName {
     /// The prefix of the name of a periodic snapshot.
@@ -388,7 +388,7 @@ impl FilesystemSnapshotName {
                 .hyphenated()
                 .encode_lower(&mut [0; uuid::fmt::Hyphenated::LENGTH]),
         );
-        Self(name.into_boxed_str())
+        Self(name.into())
     }
 
     pub fn as_str(&self) -> &str {
@@ -396,7 +396,7 @@ impl FilesystemSnapshotName {
     }
 }
 
-// desert has no codec for `Box<str>`. This pair writes and reads the name as a plain string.
+// desert has no codec for `Arc<str>`. This pair writes and reads the name as a plain string.
 impl BinarySerializer for FilesystemSnapshotName {
     fn serialize<Output: BinaryOutput>(
         &self,
@@ -408,7 +408,7 @@ impl BinarySerializer for FilesystemSnapshotName {
 
 impl BinaryDeserializer for FilesystemSnapshotName {
     fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
-        String::deserialize(context).map(|name| Self(name.into_boxed_str()))
+        String::deserialize(context).map(|name| Self(name.into()))
     }
 }
 
@@ -433,7 +433,7 @@ impl std::str::FromStr for FilesystemSnapshotName {
 
 impl From<FilesystemSnapshotName> for String {
     fn from(value: FilesystemSnapshotName) -> Self {
-        value.0.into_string()
+        value.0.to_string()
     }
 }
 

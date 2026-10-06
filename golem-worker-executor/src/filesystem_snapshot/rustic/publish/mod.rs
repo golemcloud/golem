@@ -12,25 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The publish of a snapshot file.
+//! The publish of a snapshot file, and the time before which a save lands all its writes.
 //!
 //! In a save of the store, the backend keeps the snapshot file in a [`SnapshotStage`] and does not
 //! write it. The save writes it later with [`publish`], after the blocking work returns. That
-//! write is the step that makes the snapshot visible. A publish that fails, or that the caller
-//! drops, deletes the file again, because a write that the storage received can still complete.
+//! write is the step that makes the snapshot visible. A publish whose tries all failed does not
+//! delete the file: a try that ended without an answer can still land, and the save waits for that
+//! and then checks its own name.
+//!
+//! A prune can delete a pack that a save wrote or reused, when the prune reads the index before the
+//! index file and the snapshot file of the save land. [`index_read_bound`] is the earliest time of
+//! such a read after the first slot of the save, so a save lands every index file and its snapshot
+//! file before it.
 
-use super::files::SnapshotFiles;
-use super::spawner::Spawner;
+use super::fault::run_end;
+use super::files::{NotAnswered, SnapshotFiles, Unanswered};
+use super::runs::RunEnd;
 use bytes::Bytes;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
-use tracing::warn;
+use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
+
+/// The shortest try of a publish. A try that would be shorter does not start.
+pub(super) const MIN_PUBLISH_TRY: Duration = Duration::from_secs(1);
+
+/// Whether a save lands its writes before [`index_read_bound`]. A test with a short grace period
+/// turns it off, because the bound would fail every save of such a test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PublishBound {
+    On,
+    #[cfg(test)]
+    Off,
+}
 
 /// A snapshot file that the backend kept and did not write.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StagedSnapshot {
-    /// The path of the file, relative to the root of the namespace. The drop guard of a publish
-    /// and its delete task share it.
+    /// The path of the file, relative to the root of the namespace. Its name is the hash of the
+    /// content.
     pub(super) path: Arc<Path>,
     pub(super) content: Bytes,
 }
@@ -58,64 +78,96 @@ impl SnapshotStage {
     }
 }
 
+/// Gives the earliest time at which a prune can read an index that lets it delete a pack of a save
+/// whose first slot was at `t0`: `t0`, plus the grace period of a marked pack, less two storage
+/// call deadlines, less one refresh period `period` of a prune claim.
+pub(super) fn index_read_bound(
+    t0: Instant,
+    grace: Duration,
+    deadline: Duration,
+    period: Duration,
+) -> Instant {
+    t0 + grace
+        .saturating_sub(deadline.saturating_mul(2))
+        .saturating_sub(period)
+}
+
+/// Gives the time after which the backup of a save does not run: two storage call deadlines
+/// before `bound`, so the last index write of the backup lands by one deadline before `bound` and
+/// the publish has time for a try.
+pub(super) fn backup_end(bound: Instant, deadline: Duration) -> Instant {
+    bound
+        .checked_sub(deadline.saturating_mul(2))
+        .unwrap_or(bound)
+}
+
+/// Gives the cut of the next try of a publish that would start at `now`, when the tries of the
+/// publish took `spent` and `bound` is the time before which the write must land: the least of the
+/// time left of the window of the call and the time before `bound` less one deadline. Gives `None`
+/// when that is less than [`MIN_PUBLISH_TRY`]. Without a bound, the time left of the window cuts
+/// the try.
+pub(super) fn publish_try(
+    now: Instant,
+    spent: Duration,
+    bound: Option<Instant>,
+    deadline: Duration,
+) -> Option<Duration> {
+    let window = deadline.saturating_sub(spent);
+    match bound {
+        Some(bound) => {
+            let before_bound = bound
+                .saturating_duration_since(now)
+                .saturating_sub(deadline);
+            Some(window.min(before_bound)).filter(|cut| *cut >= MIN_PUBLISH_TRY)
+        }
+        None => Some(window).filter(|cut| !cut.is_zero()),
+    }
+}
+
+/// What a publish gave.
+#[derive(Debug)]
+pub(super) enum Published {
+    /// The file is there.
+    Written,
+    /// The publish did not write the file.
+    NotWritten {
+        /// How the run of the save ends.
+        end: RunEnd,
+        failure: anyhow::Error,
+    },
+}
+
 /// Writes the staged file only when its path has no blob, which makes the snapshot visible. The
-/// name is the hash of the content, so a blob at the path is this file. A failed write deletes the
-/// path before the error returns, and a dropped write deletes it in a task of `spawner`. The guard
-/// keeps its delete until that delete ends, so a publish that is dropped during the delete also
-/// deletes the path in a task of `spawner`.
+/// name is the hash of the content, so a blob at the path is this file, and `AlreadyExists` after
+/// a try whose answer was lost counts as written. The publish has the tries of a blob call, each
+/// cut by [`publish_try`] at `bound`, and no try starts once `cancel` fires. The wait between two
+/// tries ends at a cancel of the operation of `files` or a stop of its tries. A try that ended
+/// without an answer is not undone: the late writes of `files` record it.
 pub(super) async fn publish(
     files: &SnapshotFiles,
     staged: &StagedSnapshot,
-    spawner: &Spawner,
-) -> anyhow::Result<()> {
-    let mut guard = RetractOnDrop {
-        retraction: Some((files.clone(), staged.path.clone())),
-        spawner: spawner.clone(),
-    };
-    let written = files
-        .put_if_absent("publish", &staged.path, &staged.content)
-        .await;
-    if let Err(error) = written {
-        // A write that lost its answer can have landed.
-        retract_or_warn(files, &staged.path).await;
-        guard.retraction = None;
-        return Err(error);
-    }
-    guard.retraction = None;
-    Ok(())
-}
-
-/// Deletes the snapshot file at the path. A path without a blob gives success.
-pub(super) async fn retract(files: &SnapshotFiles, path: &Path) -> anyhow::Result<()> {
-    files.delete("retract", path).await
-}
-
-async fn retract_or_warn(files: &SnapshotFiles, path: &Path) {
-    if let Err(error) = retract(files, path).await {
-        warn!(
-            path = %path.display(),
-            error = %format!("{error:#}"),
-            "Failed to delete a filesystem snapshot file whose publish did not finish"
-        );
-    }
-}
-
-/// Runs its delete in a task of the spawner when it is dropped before the publish took the delete
-/// away.
-struct RetractOnDrop {
-    /// The blobs and the path of the file that the delete removes, until the publish ends.
-    retraction: Option<(SnapshotFiles, Arc<Path>)>,
-    spawner: Spawner,
-}
-
-impl Drop for RetractOnDrop {
-    fn drop(&mut self) {
-        if let Some((files, path)) = self.retraction.take() {
-            drop(
-                self.spawner
-                    .spawn(async move { retract_or_warn(&files, &path).await }),
-            );
-        }
+    bound: Option<Instant>,
+    cancel: &CancellationToken,
+) -> Published {
+    match files
+        .put_if_absent_bounded(
+            "publish",
+            &staged.path,
+            &staged.content,
+            |start| publish_try(start.now, start.spent, bound, start.deadline),
+            cancel,
+        )
+        .await
+    {
+        Ok(_) => Published::Written,
+        Err(NotAnswered { error, why }) => Published::NotWritten {
+            end: match why {
+                Unanswered::Failed(failure) => run_end(failure),
+                Unanswered::NoTimeLeft => RunEnd::BoundPassed,
+                Unanswered::Stopped => RunEnd::Cancelled,
+            },
+            failure: error,
+        },
     }
 }
 

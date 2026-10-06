@@ -1499,6 +1499,30 @@ fn calculate_export_fork_admissions(
     Ok(admissions)
 }
 
+/// Gives the pending updates after `entry`, and the pending update that `entry` applied when it
+/// is a `SuccessfulUpdate` and the queue held one. A `PendingUpdate` adds `new(description)` at
+/// the back. A `SuccessfulUpdate` or a `FailedUpdate` ends the update at the front. Any other
+/// entry changes nothing.
+pub(crate) fn pair_update<T>(
+    mut pending: VecDeque<T>,
+    entry: &OplogEntry,
+    new: impl FnOnce(&UpdateDescription) -> T,
+) -> (VecDeque<T>, Option<T>) {
+    let applied = match entry {
+        OplogEntry::PendingUpdate { description, .. } => {
+            pending.push_back(new(description));
+            None
+        }
+        OplogEntry::SuccessfulUpdate { .. } => pending.pop_front(),
+        OplogEntry::FailedUpdate { .. } => {
+            pending.pop_front();
+            None
+        }
+        _ => None,
+    };
+    (pending, applied)
+}
+
 /// The fields of the status that the component updates and the automatic snapshot entries decide.
 #[derive(Debug)]
 struct UpdateFields {
@@ -1516,27 +1540,22 @@ struct UpdateFields {
 impl UpdateFields {
     /// The fields after the entry `entry` at `oplog_idx`.
     fn after(mut self, oplog_idx: OplogIndex, entry: &OplogEntry) -> Self {
+        let (pending_updates, applied_update) = pair_update(
+            std::mem::take(&mut self.pending_updates),
+            entry,
+            |description| PendingUpdateRef {
+                timestamp: entry.timestamp(),
+                oplog_index: oplog_idx,
+                target_revision: *description.target_revision(),
+                kind: PendingUpdateKind::of(description),
+            },
+        );
+        self.pending_updates = pending_updates;
         match entry {
             OplogEntry::Create { parameters, .. } => {
                 self.component_revision = parameters.component_revision;
                 self.component_revision_for_replay = parameters.component_revision;
                 self.component_size = parameters.component_size;
-            }
-            OplogEntry::PendingUpdate {
-                timestamp,
-                description,
-                ..
-            } => {
-                let kind = match description {
-                    UpdateDescription::Automatic { .. } => PendingUpdateKind::Automatic,
-                    UpdateDescription::SnapshotBased { .. } => PendingUpdateKind::SnapshotBased,
-                };
-                self.pending_updates.push_back(PendingUpdateRef {
-                    timestamp: *timestamp,
-                    oplog_index: oplog_idx,
-                    target_revision: *description.target_revision(),
-                    kind,
-                });
             }
             OplogEntry::FailedUpdate {
                 timestamp,
@@ -1548,7 +1567,6 @@ impl UpdateFields {
                     target_revision: *target_revision,
                     details: details.clone(),
                 });
-                self.pending_updates.pop_front();
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
@@ -1560,16 +1578,18 @@ impl UpdateFields {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     oplog_index: oplog_idx,
+                    filesystem_snapshot: applied_update
+                        .as_ref()
+                        .and_then(|update| update.kind.filesystem_snapshot().cloned()),
                 });
                 self.component_revision = *target_revision;
                 self.component_size = *new_component_size;
 
-                let applied_update = self.pending_updates.pop_front();
                 self.last_automatic_snapshot = None;
                 self.previous_usable_automatic_snapshot = None;
 
                 if let Some(PendingUpdateRef {
-                    kind: PendingUpdateKind::SnapshotBased,
+                    kind: PendingUpdateKind::SnapshotBased { .. },
                     oplog_index: applied_update_oplog_index,
                     ..
                 }) = applied_update

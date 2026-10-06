@@ -12,158 +12,90 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The clean-up queue of `delete_snapshots` and `delete_all_snapshots`. Nothing on it can stop the
-//! executor: each job catches its own error, and a failure after the retries is logged and counted.
+//! The workers of the clean-ups of `delete_snapshots` and `delete_all_snapshots`. The pending work
+//! of each agent is in the state of the registry, and a fixed pool of workers takes the agents
+//! whose work is ready. Nothing here can stop the executor: a failure of the store is logged and
+//! counted.
 
-use super::registry::DeleteAllTicket;
-use super::{job::retrying, store_name};
-use crate::filesystem_snapshot::{AgentSnapshots, FilesystemSnapshotStore};
+use super::registry::Registry;
+use super::store_calls::{Deleted, StoreCalls};
+use super::transitions::{self, Work};
+use crate::filesystem_snapshot::AgentSnapshots;
 use futures::StreamExt as _;
-use golem_common::model::RetryConfig;
-use golem_common::model::oplog::FilesystemSnapshotName;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-/// One clean-up.
-enum Cleanup {
-    /// Deletes some snapshots of an agent.
-    Delete {
-        agent: AgentSnapshots,
-        names: Box<[FilesystemSnapshotName]>,
-    },
-    /// Deletes all snapshots of an agent, after the job of the agent ended. The ticket goes away
-    /// with the clean-up, on each exit.
-    DeleteAll {
-        agent: AgentSnapshots,
-        ticket: DeleteAllTicket,
-    },
+/// Starts `workers` workers of the clean-ups on `jobs`. They end at `shutdown`.
+pub(super) fn start(
+    calls: &Arc<StoreCalls>,
+    registry: &Arc<Registry>,
+    shutdown: &CancellationToken,
+    jobs: &TaskTracker,
+    workers: usize,
+) {
+    std::iter::repeat_n((), workers).for_each(|()| {
+        jobs.spawn(worker(
+            Arc::clone(calls),
+            Arc::clone(registry),
+            shutdown.clone(),
+        ));
+    });
 }
 
-/// The sender side of the queue. A send never blocks and never fails the caller.
-pub(super) struct CleanupQueue {
-    sender: UnboundedSender<Cleanup>,
-}
-
-/// What a clean-up needs.
-struct Cleaner {
-    store: Arc<dyn FilesystemSnapshotStore>,
-    /// The slots of the store operations that save or delete. Each delete holds one.
-    uploads: Arc<Semaphore>,
-    retry: RetryConfig,
-}
-
-impl CleanupQueue {
-    /// Starts the task that runs the clean-ups, tracked by `jobs`. The task ends at `shutdown`.
-    pub(super) fn start(
-        store: Arc<dyn FilesystemSnapshotStore>,
-        uploads: Arc<Semaphore>,
-        retry: RetryConfig,
-        shutdown: CancellationToken,
-        jobs: &TaskTracker,
-    ) -> Self {
-        let (sender, receiver) = unbounded_channel();
-        let cleaner = Arc::new(Cleaner {
-            store,
-            uploads,
-            retry,
-        });
-        jobs.spawn(async move {
-            let cleanups =
-                UnboundedReceiverStream::new(receiver).for_each_concurrent(None, |cleanup| {
-                    let cleaner = Arc::clone(&cleaner);
-                    async move { cleaner.run(cleanup).await }
-                });
-            tokio::select! {
-                () = cleanups => {}
-                () = shutdown.cancelled() => {}
+/// Takes the agents whose clean-up is ready and runs their work, one at a time, until the
+/// shutdown. The receiver of the wake-ups is taken before each take, so a transition between the
+/// take and the wait is not lost.
+async fn worker(calls: Arc<StoreCalls>, registry: Arc<Registry>, shutdown: CancellationToken) {
+    futures::stream::unfold((), |()| {
+        let (calls, registry, shutdown) = (&calls, &registry, &shutdown);
+        async move {
+            if shutdown.is_cancelled() {
+                return None;
             }
-        });
-        Self { sender }
-    }
-
-    pub(super) fn delete(&self, agent: AgentSnapshots, names: Box<[FilesystemSnapshotName]>) {
-        self.send(Cleanup::Delete { agent, names }, "delete");
-    }
-
-    pub(super) fn delete_all(&self, agent: AgentSnapshots, ticket: DeleteAllTicket) {
-        self.send(Cleanup::DeleteAll { agent, ticket }, "delete_all");
-    }
-
-    fn send(&self, cleanup: Cleanup, operation: &'static str) {
-        if self.sender.send(cleanup).is_err() {
-            tracing::warn!(
-                operation,
-                "The clean-up queue of filesystem snapshots has stopped; the clean-up is lost"
-            );
-            crate::metrics::filesystem_snapshots::record_leaked_cleanup(operation);
-        }
-    }
-}
-
-impl Cleaner {
-    async fn run(&self, cleanup: Cleanup) {
-        match cleanup {
-            Cleanup::Delete { agent, names } => self.delete(&agent, &names).await,
-            Cleanup::DeleteAll { agent, ticket } => {
-                ticket.until_agent_free().await;
-                let deleted = self
-                    .with_slot(|| retrying(&self.retry, || self.store.delete_all(&agent)))
-                    .await;
-                if let Err(error) = deleted {
-                    tracing::warn!(
-                        error = %error,
-                        "Failed to delete the filesystem snapshots of a deleted agent after the retries"
-                    );
-                    crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete_all");
+            let mut changed = registry.subscribe();
+            match registry.apply(transitions::take_ready) {
+                Some((agent, work)) => {
+                    run(calls, registry, &agent, work).await;
+                    registry.apply(|state| transitions::cleanup_ended(state, &agent));
+                    Some(((), ()))
                 }
+                None => tokio::select! {
+                    biased;
+                    () = shutdown.cancelled() => None,
+                    changed = changed.changed() => changed.ok().map(|()| ((), ())),
+                },
             }
         }
-    }
+    })
+    .for_each(|()| std::future::ready(()))
+    .await
+}
 
-    /// Deletes the snapshots `names` of `agent` as one batch, under one slot and its retries.
-    async fn delete(&self, agent: &AgentSnapshots, names: &[FilesystemSnapshotName]) {
-        let store_names = names
-            .iter()
-            .filter_map(|name| store_name(name).ok())
-            .collect::<Box<[_]>>();
-        if store_names.is_empty() {
-            return;
+/// Runs the clean-up `work` of `agent`. A delete of names ends when a delete of all snapshots of
+/// the agent is requested.
+async fn run(calls: &StoreCalls, registry: &Arc<Registry>, agent: &AgentSnapshots, work: Work) {
+    let (operation, deleted) = match work {
+        Work::Names(names) => {
+            let (registry, requested) = (Arc::clone(registry), agent.clone());
+            (
+                "delete",
+                calls
+                    .delete(agent, names.into_iter().collect(), async move {
+                        registry.until_all_requested(&requested).await
+                    })
+                    .await,
+            )
         }
-        let deleted = self
-            .with_slot(|| retrying(&self.retry, || self.store.delete(agent, &store_names)))
-            .await;
-        if let Err(error) = deleted {
-            tracing::warn!(
-                error = %error,
-                names = ?store_names,
-                "Failed to delete filesystem snapshots after the retries"
-            );
-            crate::metrics::filesystem_snapshots::record_leaked_cleanup("delete");
-        }
-    }
-
-    /// Runs `operation` while it holds a slot of the store operations that save or delete.
-    async fn with_slot<T, Operation>(
-        &self,
-        operation: impl FnOnce() -> Operation,
-    ) -> Result<T, crate::filesystem_snapshot::SnapshotStoreError>
-    where
-        Operation:
-            std::future::Future<Output = Result<T, crate::filesystem_snapshot::SnapshotStoreError>>,
-    {
-        let _slot = Arc::clone(&self.uploads)
-            .acquire_owned()
-            .await
-            .map_err(
-                |error| crate::filesystem_snapshot::SnapshotStoreError::Storage {
-                    retryable: false,
-                    source: anyhow::Error::new(error),
-                },
-            )?;
-        operation().await
+        Work::All => ("delete_all", calls.delete_all(agent).await),
+    };
+    if let Deleted::Leaked(error) = deleted {
+        tracing::warn!(
+            error = %error,
+            agent = ?agent,
+            operation,
+            "Failed to delete filesystem snapshots"
+        );
+        crate::metrics::filesystem_snapshots::record_leaked_cleanup(operation);
     }
 }

@@ -23,14 +23,17 @@ use super::fault::{BlobCallFailed, ConfigExists, FileMissing};
 use super::files::SnapshotFiles;
 use super::publish::{SnapshotStage, StagedSnapshot};
 use bytes::Bytes;
+use futures::StreamExt as _;
 use golem_service_base::storage::blob::{BlobRangeError, PutIfAbsent};
 use kept::KeptPacks;
 use rustic_core::{
     BytesList, ErrorKind, FileType, Id, ReadBackend, RusticError, RusticResult, WriteBackend,
 };
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::runtime::Handle;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
@@ -40,6 +43,14 @@ pub(super) const CONFIG_PATH: &str = "config";
 /// The largest number of bytes of tree packs that the backend of one operation of the store keeps
 /// in memory.
 pub(super) const KEPT_PACKS_LIMIT: usize = 32 * 1024 * 1024;
+
+/// The largest number of reads ahead of one call of [`BlobBackend::read_ahead`] that run at the
+/// same time.
+pub(super) const SNAPSHOT_FILE_READS: usize = 32;
+
+/// The largest number of reads ahead of a store that run at the same time, over all its
+/// operations. It bounds the reads of a recovery that starts many agents at once.
+pub(super) const MAX_SNAPSHOT_FILE_READS: usize = 128;
 
 /// A call that the backend makes on the blob storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,11 +106,18 @@ pub(super) struct BlobBackend {
     _tracked: Option<TaskTrackerToken>,
     /// The packs of tree blobs that the operation of the backend read.
     kept: KeptPacks,
+    /// The files that [`BlobBackend::read_ahead`] read and no read of rustic took yet, by path.
+    read_ahead: Mutex<HashMap<Box<Path>, Bytes>>,
+    /// The paths of the index files that a listing of the backend gave.
+    index_listed: Mutex<HashSet<Box<Path>>>,
+    /// The slots of the reads ahead, which the backends of one store share.
+    read_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl BlobBackend {
     /// Makes a backend over the blobs. Each call goes through `files` and waits on `runtime`. The
-    /// backend keeps tree packs up to `kept_limit` bytes.
+    /// backend keeps tree packs up to `kept_limit` bytes, and has
+    /// [`MAX_SNAPSHOT_FILE_READS`] slots of reads ahead of its own.
     pub(super) fn new(files: SnapshotFiles, runtime: Handle, kept_limit: usize) -> Self {
         Self {
             files,
@@ -107,7 +125,77 @@ impl BlobBackend {
             stage: None,
             _tracked: None,
             kept: KeptPacks::new(kept_limit),
+            read_ahead: Mutex::default(),
+            index_listed: Mutex::default(),
+            read_slots: Arc::new(tokio::sync::Semaphore::new(MAX_SNAPSHOT_FILE_READS)),
         }
+    }
+
+    /// Gives the backend with the slots of reads ahead `slots`, which it shares with the other
+    /// backends that got them.
+    pub(super) fn reading_under(self, slots: Arc<tokio::sync::Semaphore>) -> Self {
+        Self {
+            read_slots: slots,
+            ..self
+        }
+    }
+
+    /// Gives the paths of the index files that a listing of the backend gave since the last call,
+    /// and forgets them.
+    pub(super) fn take_index_listed(&self) -> HashSet<Box<Path>> {
+        std::mem::take(
+            &mut *self
+                .index_listed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    /// Reads the files of the type `tpe` with `ids` ahead, at most [`SNAPSHOT_FILE_READS`] at a
+    /// time and at most one for each of its slots of reads ahead, and keeps them until a read of
+    /// rustic takes each one. A read that finds no file keeps nothing, so the read of rustic gives
+    /// its own answer. After the first read that fails, no new read starts; the call returns when
+    /// every read in flight has ended, with the error of the first read that failed.
+    pub(super) fn read_ahead(
+        &self,
+        tpe: FileType,
+        ids: impl IntoIterator<Item = Id>,
+    ) -> RusticResult<()> {
+        let paths = ids
+            .into_iter()
+            .filter_map(|id| file_path(tpe, &id).ok())
+            .collect::<Vec<_>>();
+        let failed = AtomicBool::new(false);
+        let failed = &failed;
+        let read = self.runtime.block_on(
+            futures::stream::iter(paths)
+                .map(|path| async move {
+                    if failed.load(Ordering::SeqCst) {
+                        return Ok(None);
+                    }
+                    let Ok(_slot) = self.read_slots.acquire().await else {
+                        return Ok(None);
+                    };
+                    if failed.load(Ordering::SeqCst) {
+                        return Ok(None);
+                    }
+                    match self.files.get(StorageCall::Read.label(), &path).await {
+                        Ok(content) => Ok(content.map(|content| (path, Bytes::from(content)))),
+                        Err(error) => {
+                            failed.store(true, Ordering::SeqCst);
+                            Err(storage_error(StorageCall::Read, &path, error))
+                        }
+                    }
+                })
+                .buffer_unordered(SNAPSHOT_FILE_READS)
+                .collect::<Vec<_>>(),
+        );
+        let read = read.into_iter().collect::<RusticResult<Vec<_>>>()?;
+        self.read_ahead
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(read.into_iter().flatten());
+        Ok(())
     }
 
     /// Gives the backend with a stage for the snapshot file of a save.
@@ -171,27 +259,42 @@ impl ReadBackend for BlobBackend {
             }
             _ => {
                 let directory = Path::new(tpe.dirname());
-                self.request(
+                let listed = self.request(
                     StorageCall::List,
                     directory,
                     self.files.list_below(StorageCall::List.label(), directory),
-                )?
-                .iter()
-                .filter_map(|blob| {
-                    blob.path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .and_then(|name| Id::parse_some(name, tpe))
-                        .map(|id| (id, blob))
-                })
-                .map(|(id, blob)| file_size(&blob.path, blob.size).map(|size| (id, size)))
-                .collect()
+                )?;
+                if tpe == FileType::Index {
+                    self.index_listed
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .extend(listed.iter().map(|blob| blob.path.clone()));
+                }
+                listed
+                    .iter()
+                    .filter_map(|blob| {
+                        blob.path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .and_then(|name| Id::parse_some(name, tpe))
+                            .map(|id| (id, blob))
+                    })
+                    .map(|(id, blob)| file_size(&blob.path, blob.size).map(|size| (id, size)))
+                    .collect()
             }
         }
     }
 
     fn read_full(&self, tpe: FileType, id: &Id) -> RusticResult<Bytes> {
         let path = file_path(tpe, id)?;
+        let read_ahead = self
+            .read_ahead
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&path);
+        if let Some(content) = read_ahead {
+            return Ok(content);
+        }
         self.request(
             StorageCall::Read,
             &path,

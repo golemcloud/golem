@@ -15,23 +15,169 @@
 //! The blobs of the repository of one scope, and the one policy of each blob storage call of the
 //! store and of its rustic backends.
 //!
-//! The tracker of the store counts each call. A call does not start when the lease of its prune ran
-//! out or its operation is cancelled. It ends at the expiry that the lease had when the call
-//! started, when the operation is cancelled, or at the deadline. A refresh of the lease during a
-//! call does not move the end of that call.
+//! The tracker of the store counts each call. A call has up to [`IN_CALL_TRIES`] tries, which share
+//! one window of the deadline; [`call_again`] decides each new try. A try does not start when the
+//! lease of its prune ran out or its operation is cancelled. It ends at the expiry that the lease
+//! had when the try started, when the operation is cancelled, or at the end of the window. A
+//! refresh of the lease during a try does not move the end of that try.
 
-use super::fault::{LeaseExpired, OperationCancelled};
+use super::fault::{CallFailure, LeaseExpired, OperationCancelled, call_failure, may_land};
+use crate::filesystem_snapshot::agent_work::OperationWork;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
+    BlobMetadata, BlobMissingError, BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
 use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
+use tracing::debug;
 
 /// The target label of each blob storage call of the rustic store.
 const TARGET_LABEL: &str = "filesystem_snapshot";
+
+/// The tries of one blob call in a run.
+pub(super) const IN_CALL_TRIES: u32 = 3;
+
+/// The waits before the second and the third try: about 1 s in all.
+pub(super) const IN_CALL_WAITS: [Duration; 2] =
+    [Duration::from_millis(250), Duration::from_millis(750)];
+
+/// What a blob call does after a try that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CallAgain {
+    /// Try again after `wait`. [`window_cut`] cuts the next try.
+    After { wait: Duration },
+    /// Give the failure.
+    End,
+}
+
+/// What a blob call does after its try number `tried` of `tries` failed with `failure`, when its
+/// tries took `spent` in all and the storage call deadline is `deadline`. All tries of one call
+/// share one window of `deadline`, so the call holds its run for at most `deadline` and the waits.
+/// It tries again after the next wait while tries remain, the failure allows it, and the window
+/// has time left.
+pub(super) fn call_again(
+    tried: u32,
+    tries: u32,
+    failure: CallFailure,
+    spent: Duration,
+    deadline: Duration,
+) -> CallAgain {
+    let left = deadline.saturating_sub(spent);
+    let wait = usize::try_from(tried.saturating_sub(1))
+        .ok()
+        .and_then(|index| IN_CALL_WAITS.get(index));
+    match (failure, wait) {
+        (CallFailure::Failed, Some(wait)) if tried < tries && !left.is_zero() => {
+            CallAgain::After { wait: *wait }
+        }
+        _ => CallAgain::End,
+    }
+}
+
+/// Gives the end of the latest try that can still land, after a try that ended at `ended`, when
+/// `latest` was the latest one before.
+pub(super) fn later(latest: Option<Instant>, ended: Instant) -> Instant {
+    latest.map_or(ended, |latest| latest.max(ended))
+}
+
+/// Gives the instant after which a try that ended at `ended` has landed or never lands: one
+/// deadline after its end.
+pub(super) fn lands_by(ended: Option<Instant>, deadline: Duration) -> Option<Instant> {
+    ended.map(|ended| ended + deadline)
+}
+
+/// The end of the latest try of a write of a run that was sent and ended without an answer. Such a
+/// write can still land, within one deadline after the end of the try.
+#[derive(Debug, Default)]
+pub(super) struct LateWrites(Mutex<Option<Instant>>);
+
+impl LateWrites {
+    /// Records a try of a write that ended at `ended` without an answer.
+    pub(super) fn record(&self, ended: Instant) {
+        let mut latest = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        *latest = Some(later(*latest, ended));
+    }
+
+    /// The end of the latest recorded try, when there is one.
+    pub(super) fn latest(&self) -> Option<Instant> {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Tells whether a call is a write, whose try that ended without an answer can still land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Effect {
+    Read,
+    Write,
+}
+
+/// What a try of a blob call starts with: the instant now, the time that the tries before it took,
+/// and the storage call deadline of the blobs.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TryStart {
+    pub(super) now: Instant,
+    pub(super) spent: Duration,
+    pub(super) deadline: Duration,
+}
+
+/// Why a blob call starts no try. A refusal sends nothing, so it is never recorded as a write that
+/// can still land.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Refusal {
+    /// The lease of the prune ran out: the call gives `LeaseExpired`.
+    LeaseOut,
+    /// The operation of the blobs is cancelled: the call gives `OperationCancelled`.
+    Cancelled,
+    /// The stop of the caller is cancelled: a bounded call gives `Stopped`.
+    Stop,
+    /// The cut gives no time: a bounded call gives `NoTimeLeft`.
+    NoTimeLeft,
+}
+
+/// Decides the start of a try, in this order: a lease that ran out, a cancelled operation, a stop
+/// of the caller, no time left. Gives the cut of the try when none of them holds.
+pub(super) fn before_try(
+    lease_out: bool,
+    cancelled: bool,
+    stopped: bool,
+    cut: Option<Duration>,
+) -> Result<Duration, Refusal> {
+    match (lease_out, cancelled, stopped, cut) {
+        (true, _, _, _) => Err(Refusal::LeaseOut),
+        (false, true, _, _) => Err(Refusal::Cancelled),
+        (false, false, true, _) => Err(Refusal::Stop),
+        (false, false, false, None) => Err(Refusal::NoTimeLeft),
+        (false, false, false, Some(cut)) => Ok(cut),
+    }
+}
+
+/// The cut of a try of a call that has the window of one deadline for all its tries: what is left
+/// of the window.
+fn window_cut(start: TryStart) -> Option<Duration> {
+    Some(start.deadline.saturating_sub(start.spent))
+}
+
+/// Why a call ended without its answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Unanswered {
+    /// The last try, or the refusal before a try, failed with this class, and the call tries no
+    /// more.
+    Failed(CallFailure),
+    /// The cut of the call gave no time for the next try.
+    NoTimeLeft,
+    /// The stop of the caller was cancelled before a try, or the wait between two tries ended.
+    Stopped,
+}
+
+/// The failure of a call that ended without its answer.
+#[derive(Debug)]
+pub(super) struct NotAnswered {
+    pub(super) error: anyhow::Error,
+    pub(super) why: Unanswered,
+}
 
 /// The time until which a prune may make storage calls. A prune holds its claim until the time in
 /// its newest marker plus the hold, as the other deletes see it. The lease ends before that, so a
@@ -85,8 +231,20 @@ pub(super) struct SnapshotFiles {
     namespace: BlobStorageNamespace,
     deadline: Duration,
     cancel: CancellationToken,
+    /// Ends the waits between two tries: a child of the root of the store, also in detached files.
+    retry_stop: CancellationToken,
+    /// The tries of each call.
+    tries: u32,
     lease: Option<Arc<Lease>>,
     tracker: TaskTracker,
+    /// Records the writes that ended without an answer, when a run asks for them.
+    late: Option<Arc<LateWrites>>,
+    /// The share of the operation in the work of its incarnation, which each clone of the blobs
+    /// holds, so a drain of the incarnation waits for each holder of the blobs.
+    _work: Option<OperationWork>,
+    /// A token of the tracker of one run, which each clone of the blobs holds, so the run can wait
+    /// until no holder of its blobs is left, and so until no blob call of it runs or can start.
+    _run: Option<TaskTrackerToken>,
 }
 
 impl SnapshotFiles {
@@ -104,8 +262,59 @@ impl SnapshotFiles {
             namespace,
             deadline,
             cancel,
+            retry_stop: CancellationToken::new(),
+            tries: IN_CALL_TRIES,
             lease: None,
             tracker,
+            late: None,
+            _work: None,
+            _run: None,
+        }
+    }
+
+    /// Gives the same blobs, which hold a share of the work `work` of the incarnation of the
+    /// operation.
+    pub(super) fn of_work(&self, work: &OperationWork) -> Self {
+        Self {
+            _work: Some(work.clone()),
+            ..self.clone()
+        }
+    }
+
+    /// Gives the same blobs, which hold `run`, a token of the tracker of their run.
+    pub(super) fn held_by(&self, run: TaskTrackerToken) -> Self {
+        Self {
+            _run: Some(run),
+            ..self.clone()
+        }
+    }
+
+    /// Gives the same blobs, whose waits between two tries end when `retry_stop` is cancelled.
+    pub(super) fn with_retry_stop(&self, retry_stop: CancellationToken) -> Self {
+        Self {
+            retry_stop,
+            ..self.clone()
+        }
+    }
+
+    /// Gives the same blobs with one try for each call.
+    pub(super) fn once(&self) -> Self {
+        self.with_tries(1)
+    }
+
+    /// Gives the same blobs with `tries` tries for each call, at least one.
+    pub(super) fn with_tries(&self, tries: u32) -> Self {
+        Self {
+            tries: tries.max(1),
+            ..self.clone()
+        }
+    }
+
+    /// Gives the same blobs, whose writes that end without an answer `late` records.
+    pub(super) fn recording(&self, late: Arc<LateWrites>) -> Self {
+        Self {
+            late: Some(late),
+            ..self.clone()
         }
     }
 
@@ -120,7 +329,8 @@ impl SnapshotFiles {
     }
 
     /// Gives the same blobs with a token that nothing cancels and no lease. They are for the calls
-    /// that run after a cancel or a drop by design. The tracker still counts each call.
+    /// that run after a cancel or a drop by design. The tracker still counts each call, and the
+    /// tries keep their number and their stop.
     pub(super) fn detached(&self) -> Self {
         Self {
             cancel: CancellationToken::new(),
@@ -139,24 +349,147 @@ impl SnapshotFiles {
         self.cancel.cancelled()
     }
 
-    /// Waits for one call. The tracker counts the call before any check, so a shut down either
-    /// stops the call or waits for it. A call of a lease that ran out gives [`LeaseExpired`], also
-    /// when the operation is cancelled. A call of a cancelled operation does not start, and a
-    /// cancel ends a running call. A call without an answer within the deadline, or within the time
-    /// that the lease leaves, fails. Each of these gives an error, the same as a call that failed.
-    async fn answer<T>(
+    /// Waits for one call, with its tries, each cut at what is left of the window of the call.
+    /// The errors are those of [`Self::tries`].
+    async fn answer<T, F>(&self, effect: Effect, call: impl Fn() -> F) -> anyhow::Result<T>
+    where
+        F: Future<Output = anyhow::Result<T>>,
+    {
+        self.tries(effect, window_cut, None, call)
+            .await
+            .map_err(|not_answered| not_answered.error)
+    }
+
+    /// Waits for one call, with its tries. The tracker counts the call before any check, so a shut
+    /// down either stops the call or waits for it. Before each try, [`before_try`] decides from the
+    /// lease, the cancel of the operation, `stop` and `cut`: a lease that ran out gives
+    /// [`LeaseExpired`], also when the operation is cancelled, and a cancelled operation gives
+    /// [`OperationCancelled`]. A refused try sends nothing and is not recorded. A cancel ends a
+    /// running try and a wait between two tries. A try without an answer within its cut, or within
+    /// the time that the lease leaves, fails. [`call_again`] decides each new try. A write whose
+    /// try started and failed in a way that can still land is recorded.
+    async fn tries<T, F>(
         &self,
-        future: impl Future<Output = anyhow::Result<T>>,
-    ) -> anyhow::Result<T> {
+        effect: Effect,
+        cut: impl Fn(TryStart) -> Option<Duration>,
+        stop: Option<&CancellationToken>,
+        call: impl Fn() -> F,
+    ) -> Result<T, NotAnswered>
+    where
+        F: Future<Output = anyhow::Result<T>>,
+    {
         self.tracker
             .track_future(async {
-                let answer = answer_or_cancel(self.deadline, &self.cancel, future);
-                match &self.lease {
-                    None => answer.await,
-                    Some(lease) => within_lease(lease, answer).await,
-                }
+                let tries = futures::stream::unfold(Some((1u32, Duration::ZERO)), |state| {
+                    let (call, cut) = (&call, &cut);
+                    async move {
+                        let (tried, spent) = state?;
+                        let started = super::runs::now();
+                        let expiry = self.lease.as_ref().map(|lease| lease.expiry());
+                        let cut = match before_try(
+                            expiry.is_some_and(|expiry| started >= expiry),
+                            self.cancel.is_cancelled(),
+                            stop.is_some_and(CancellationToken::is_cancelled),
+                            cut(TryStart {
+                                now: started,
+                                spent,
+                                deadline: self.deadline,
+                            }),
+                        ) {
+                            Ok(cut) => cut,
+                            Err(refused) => return Some((Some(Err(refusal(refused))), None)),
+                        };
+                        let answer = self.one_try(cut, expiry, call()).await;
+                        let ended = super::runs::now();
+                        let spent = spent + ended.saturating_duration_since(started);
+                        let error = match answer {
+                            Ok(value) => return Some((Some(Ok(value)), None)),
+                            Err(error) => error,
+                        };
+                        let failure = call_failure(&error);
+                        if effect == Effect::Write
+                            && may_land(failure)
+                            && let Some(late) = &self.late
+                        {
+                            late.record(ended);
+                        }
+                        match call_again(tried, self.tries, failure, spent, self.deadline) {
+                            CallAgain::After { wait } => {
+                                debug!(
+                                    tried,
+                                    error = %format!("{error:#}"),
+                                    "A filesystem snapshot blob call failed and tries again"
+                                );
+                                tokio::select! {
+                                    biased;
+                                    () = self.cancel.cancelled() => {
+                                        Some((Some(Err(between_tries())), None))
+                                    }
+                                    () = self.retry_stop.cancelled() => {
+                                        Some((Some(Err(between_tries())), None))
+                                    }
+                                    () = tokio::time::sleep(wait) => {
+                                        Some((None, Some((tried + 1, spent))))
+                                    }
+                                }
+                            }
+                            CallAgain::End => Some((
+                                Some(Err(NotAnswered {
+                                    error,
+                                    why: Unanswered::Failed(failure),
+                                })),
+                                None,
+                            )),
+                        }
+                    }
+                });
+                futures::StreamExt::next(&mut std::pin::pin!(futures::StreamExt::filter_map(
+                    tries,
+                    |answer| async move { answer }
+                )))
+                .await
+                .unwrap_or_else(|| Err(between_tries()))
             })
             .await
+    }
+
+    /// Runs one try, cut at `cut`, and within the lease that ends at `expiry` when the blobs have
+    /// one.
+    async fn one_try<T>(
+        &self,
+        cut: Duration,
+        expiry: Option<Instant>,
+        future: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        let answer = answer_or_cancel(cut, &self.cancel, future);
+        match expiry {
+            None => answer.await,
+            Some(expiry) => within_lease(expiry, answer).await,
+        }
+    }
+
+    /// Writes `content` at `path` only when the path has no blob, with the tries of a blob call.
+    /// Each try is cut at what `cut` gives for it, and no try starts when `cut` gives `None` or
+    /// `stop` is cancelled. The tracker counts the call. A try that can still land is recorded
+    /// when the blobs record late writes.
+    pub(super) async fn put_if_absent_bounded(
+        &self,
+        op_label: &'static str,
+        path: &Path,
+        content: &[u8],
+        cut: impl Fn(TryStart) -> Option<Duration>,
+        stop: &CancellationToken,
+    ) -> Result<PutIfAbsent, NotAnswered> {
+        self.tries(Effect::Write, cut, Some(stop), || {
+            self.storage.put_raw_if_absent(
+                TARGET_LABEL,
+                op_label,
+                self.namespace.clone(),
+                path,
+                content,
+            )
+        })
+        .await
     }
 
     /// Gives the size of the blob at the path, or `None` when the path has no blob.
@@ -165,10 +498,10 @@ impl SnapshotFiles {
         op_label: &'static str,
         path: &Path,
     ) -> anyhow::Result<Option<BlobMetadata>> {
-        self.answer(
+        self.answer(Effect::Read, || {
             self.storage
-                .get_metadata(TARGET_LABEL, op_label, self.namespace.clone(), path),
-        )
+                .get_metadata(TARGET_LABEL, op_label, self.namespace.clone(), path)
+        })
         .await
     }
 
@@ -178,10 +511,10 @@ impl SnapshotFiles {
         op_label: &'static str,
         path: &Path,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.answer(
+        self.answer(Effect::Read, || {
             self.storage
-                .get_raw(TARGET_LABEL, op_label, self.namespace.clone(), path),
-        )
+                .get_raw(TARGET_LABEL, op_label, self.namespace.clone(), path)
+        })
         .await
     }
 
@@ -194,15 +527,45 @@ impl SnapshotFiles {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.answer(self.storage.get_raw_slice(
-            TARGET_LABEL,
-            op_label,
-            self.namespace.clone(),
-            path,
-            start,
-            end,
-        ))
+        self.answer(Effect::Read, || {
+            self.storage.get_raw_slice(
+                TARGET_LABEL,
+                op_label,
+                self.namespace.clone(),
+                path,
+                start,
+                end,
+            )
+        })
         .await
+    }
+
+    /// Copies the blob at the path into the same path of the blobs `to`, on the side of the
+    /// storage, so no byte comes to this process. Gives false when the path has no blob, and then
+    /// writes nothing. The blobs `to` must be of the same storage.
+    pub(super) async fn copy_to(
+        &self,
+        to: &SnapshotFiles,
+        op_label: &'static str,
+        path: &Path,
+    ) -> anyhow::Result<bool> {
+        match self
+            .answer(Effect::Write, || {
+                self.storage.copy_between(
+                    TARGET_LABEL,
+                    op_label,
+                    self.namespace.clone(),
+                    path,
+                    to.namespace.clone(),
+                    path,
+                )
+            })
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error) if error.downcast_ref::<BlobMissingError>().is_some() => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Writes the content as the blob at the path, over the blob that was there.
@@ -212,13 +575,15 @@ impl SnapshotFiles {
         path: &Path,
         content: &[u8],
     ) -> anyhow::Result<()> {
-        self.answer(self.storage.put_raw(
-            TARGET_LABEL,
-            op_label,
-            self.namespace.clone(),
-            path,
-            content,
-        ))
+        self.answer(Effect::Write, || {
+            self.storage.put_raw(
+                TARGET_LABEL,
+                op_label,
+                self.namespace.clone(),
+                path,
+                content,
+            )
+        })
         .await
     }
 
@@ -229,22 +594,24 @@ impl SnapshotFiles {
         path: &Path,
         content: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
-        self.answer(self.storage.put_raw_if_absent(
-            TARGET_LABEL,
-            op_label,
-            self.namespace.clone(),
-            path,
-            content,
-        ))
+        self.answer(Effect::Write, || {
+            self.storage.put_raw_if_absent(
+                TARGET_LABEL,
+                op_label,
+                self.namespace.clone(),
+                path,
+                content,
+            )
+        })
         .await
     }
 
     /// Deletes the blob at the path. A path without a blob gives success.
     pub(super) async fn delete(&self, op_label: &'static str, path: &Path) -> anyhow::Result<()> {
-        self.answer(
+        self.answer(Effect::Write, || {
             self.storage
-                .delete(TARGET_LABEL, op_label, self.namespace.clone(), path),
-        )
+                .delete(TARGET_LABEL, op_label, self.namespace.clone(), path)
+        })
         .await
     }
 
@@ -254,10 +621,10 @@ impl SnapshotFiles {
         op_label: &'static str,
         path: &Path,
     ) -> anyhow::Result<bool> {
-        self.answer(
+        self.answer(Effect::Write, || {
             self.storage
-                .delete_dir(TARGET_LABEL, op_label, self.namespace.clone(), path),
-        )
+                .delete_dir(TARGET_LABEL, op_label, self.namespace.clone(), path)
+        })
         .await
     }
 
@@ -269,10 +636,10 @@ impl SnapshotFiles {
         path: &Path,
     ) -> anyhow::Result<Box<[Box<Path>]>> {
         let listed = self
-            .answer(
+            .answer(Effect::Read, || {
                 self.storage
-                    .list_dir(TARGET_LABEL, op_label, self.namespace.clone(), path),
-            )
+                    .list_dir(TARGET_LABEL, op_label, self.namespace.clone(), path)
+            })
             .await?;
         Ok(listed.into_iter().map(PathBuf::into_boxed_path).collect())
     }
@@ -283,27 +650,50 @@ impl SnapshotFiles {
         op_label: &'static str,
         path: &Path,
     ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.answer(self.storage.list_blobs_below(
-            TARGET_LABEL,
-            op_label,
-            self.namespace.clone(),
-            path,
-        ))
+        self.answer(Effect::Read, || {
+            self.storage
+                .list_blobs_below(TARGET_LABEL, op_label, self.namespace.clone(), path)
+        })
         .await
     }
 }
 
-/// Gives the output of the future, or [`LeaseExpired`] when the lease runs out first. The bound is
-/// the expiry of the lease that the call reads once. A call does not start when the lease ran out
-/// at that read.
+/// The failure of a call that [`before_try`] refused, with the error that each class gives.
+fn refusal(refused: Refusal) -> NotAnswered {
+    match refused {
+        Refusal::LeaseOut => NotAnswered {
+            error: anyhow::Error::new(LeaseExpired),
+            why: Unanswered::Failed(CallFailure::LeaseExpired),
+        },
+        Refusal::Cancelled => NotAnswered {
+            error: anyhow::Error::new(OperationCancelled),
+            why: Unanswered::Failed(CallFailure::Cancelled),
+        },
+        Refusal::Stop => NotAnswered {
+            error: anyhow::anyhow!("the caller stopped the blob call before a try"),
+            why: Unanswered::Stopped,
+        },
+        Refusal::NoTimeLeft => NotAnswered {
+            error: anyhow::anyhow!("the blob call has no time left for a try"),
+            why: Unanswered::NoTimeLeft,
+        },
+    }
+}
+
+/// The failure of a call whose wait between two tries a cancel or a stop of the tries ended.
+fn between_tries() -> NotAnswered {
+    NotAnswered {
+        error: anyhow::Error::new(OperationCancelled),
+        why: Unanswered::Stopped,
+    }
+}
+
+/// Gives the output of the future, or [`LeaseExpired`] when the lease runs out first, at `expiry`,
+/// the expiry of the lease that the call read before the try.
 async fn within_lease<T>(
-    lease: &Lease,
+    expiry: Instant,
     future: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
-    let expiry = lease.expiry();
-    if Instant::now() >= expiry {
-        return Err(anyhow::Error::new(LeaseExpired));
-    }
     tokio::time::timeout_at(tokio::time::Instant::from_std(expiry), future)
         .await
         .unwrap_or_else(|_| Err(anyhow::Error::new(LeaseExpired)))
@@ -329,16 +719,13 @@ async fn answer_within<T>(
 }
 
 /// Gives the output of the future within the deadline, or an error when the operation of the token
-/// is cancelled. A call of a cancelled operation does not start, and a cancel ends a call that
-/// runs.
+/// is cancelled. The future is polled first, so a cancel that comes after [`before_try`] still lets
+/// the try start; a cancel ends a call that runs.
 async fn answer_or_cancel<T>(
     deadline: Duration,
     cancel: &CancellationToken,
     future: impl Future<Output = anyhow::Result<T>>,
 ) -> anyhow::Result<T> {
-    if cancel.is_cancelled() {
-        return Err(anyhow::Error::new(OperationCancelled));
-    }
     tokio::select! {
         biased;
         answer = answer_within(deadline, future) => answer,

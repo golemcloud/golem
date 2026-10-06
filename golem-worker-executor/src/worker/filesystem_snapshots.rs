@@ -25,18 +25,21 @@ use crate::services::agent_filesystem::{
     RestoreTree, TreeMark, WholeCapture,
 };
 use crate::services::agent_filesystem_snapshots::{
-    Admission, AgentFilesystemSnapshots, Confirm, ConfirmOutcome, SavedUpdate, SnapshotSkip,
-    SnapshotsDisabled, StoreRestore, UpdateRefusal, UploadNowError,
+    Admission, Admitted, AgentFilesystemSnapshots, Confirm, Confirmation, SavedUpdate,
+    SnapshotsDisabled, StoreRestore, UpdateAdmitted, UploadNowError,
 };
 use crate::services::oplog::OplogError;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     FilesystemSnapshotName, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::oplog::{OplogEntry, RawSnapshotData};
+use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{AgentId, UsableAutomaticSnapshot};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Weak;
@@ -464,11 +467,12 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
     agent: &AgentSnapshots,
+    mode: AgentMode,
 ) -> PeriodicResult<Host::Stop> {
-    let admission = match snapshots.admit_periodic(agent).await {
-        Ok(admission) => Some(admission),
-        Err(SnapshotSkip::Disabled) => None,
-        Err(skip) => {
+    let admission = match snapshots.admit_periodic(agent, mode).await {
+        Admitted::Upload(admission) => Some(admission),
+        Admitted::WithoutName => None,
+        Admitted::Skip(skip) => {
             tracing::debug!(reason = %skip, "Skipping periodic snapshot");
             return PeriodicResult::Continue;
         }
@@ -540,26 +544,8 @@ pub(crate) trait UpdateSnapshotHost {
     fn capture_whole(&self, wait: Duration) -> impl Future<Output = Option<WholeCapture>> + Send;
     /// A receiver of whether a terminal interrupt waits for the agent.
     fn terminal(&self) -> watch::Receiver<bool>;
-    /// Whether the shard of the agent is lost.
-    fn lost_shard(&self) -> bool;
-    /// The filesystem snapshot of the last successful manual update, which the retention of the
-    /// update snapshot keeps.
-    fn kept_baseline(&self) -> impl Future<Output = Option<FilesystemSnapshotName>> + Send;
-}
-
-/// The retention of a saved manual-update snapshot, with the snapshot that it keeps.
-#[must_use = "a dropped update retention deletes no older snapshot; delete them after the record commits"]
-pub(crate) struct UpdateRetention {
-    saved: Box<SavedUpdate>,
-    kept: Option<FilesystemSnapshotName>,
-}
-
-impl UpdateRetention {
-    /// Deletes the older update snapshots in the background, except the kept one. Call it after
-    /// the update record commits.
-    pub(crate) fn delete_older_snapshots(self) {
-        self.saved.delete_older_snapshots(self.kept.as_ref());
-    }
+    /// A receiver of why the shard of the agent moved to another executor, once it has.
+    fn lost_shard(&self) -> super::LostShard;
 }
 
 /// How the snapshot part of a manual update ended.
@@ -569,7 +555,7 @@ pub(crate) enum UpdateSnapshot<Stop> {
     Saved {
         snapshot: RawSnapshotData,
         name: Option<FilesystemSnapshotName>,
-        retention: Option<UpdateRetention>,
+        retention: Option<Box<SavedUpdate>>,
     },
     /// The update fails with the details.
     Fail(String),
@@ -590,14 +576,18 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
     agent: &AgentSnapshots,
+    mode: AgentMode,
 ) -> UpdateSnapshot<Host::Stop> {
-    let admission = match snapshots.admit_update(agent, host.terminal()).await {
-        Ok(admission) => Some(admission),
-        Err(UpdateRefusal::Skip(SnapshotSkip::Disabled)) => None,
-        Err(UpdateRefusal::Interrupted) => {
-            return interrupted_update(UpdateInterruption::Wait, host.lost_shard());
+    let admission = match snapshots.admit_update(agent, mode, host.terminal()).await {
+        UpdateAdmitted::Upload(admission) => Some(admission),
+        UpdateAdmitted::WithoutName => None,
+        UpdateAdmitted::Interrupted => {
+            return interrupted_update(
+                UpdateInterruption::Wait,
+                host.lost_shard().borrow().is_some(),
+            );
         }
-        Err(UpdateRefusal::Skip(skip)) => {
+        UpdateAdmitted::Skip(skip) => {
             return UpdateSnapshot::Fail(format!(
                 "cannot take a filesystem snapshot for the update: {skip}"
             ));
@@ -630,20 +620,20 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
         Some(WholeCapture::Captured { capture, .. }) => capture,
     };
     let name = admission.name().clone();
-    // A terminal interrupt stops the save, and the capture is discarded. An interrupted save
-    // writes no record: a snapshot that its publish still leaves has no record, and nothing
-    // selects it.
+    // A terminal interrupt stops the upload, and the capture is discarded after the save returned.
+    // An interrupted save writes no record: a snapshot that its publish still leaves has no
+    // record, and nothing selects it. A lost shard also cancels the save before its publish.
     let terminal = host.terminal();
-    match admission.upload_now(tree.into(), terminal.clone()).await {
+    match admission
+        .upload_now(tree.into(), terminal.clone(), host.lost_shard())
+        .await
+    {
         Ok(saved) => UpdateSnapshot::Saved {
             snapshot,
             name: Some(name),
-            retention: Some(UpdateRetention {
-                saved: Box::new(saved),
-                kept: host.kept_baseline().await,
-            }),
+            retention: Some(Box::new(saved)),
         },
-        Err(error) => failed_update_upload(&error, *terminal.borrow(), host.lost_shard()),
+        Err(error) => failed_update_upload(&error, host.lost_shard().borrow().is_some()),
     }
 }
 
@@ -679,19 +669,17 @@ fn interrupted_update<Stop>(
     )
 }
 
-/// How a manual update whose upload failed with `error` ends. A failure while a terminal
-/// interrupt waits counts as interrupted, because the interrupt stops the save.
-fn failed_update_upload<Stop>(
-    error: &UploadNowError,
-    terminal_pending: bool,
-    lost_shard: bool,
-) -> UpdateSnapshot<Stop> {
-    if terminal_pending {
-        return interrupted_update(UpdateInterruption::Upload, lost_shard);
+/// How a manual update whose upload failed with `error` ends. An upload that a stop ended gives
+/// `Stopped`, also when its save failed after the stop, and counts as interrupted.
+fn failed_update_upload<Stop>(error: &UploadNowError, lost_shard: bool) -> UpdateSnapshot<Stop> {
+    match error {
+        UploadNowError::Stopped => interrupted_update(UpdateInterruption::Upload, lost_shard),
+        UploadNowError::Store(_) | UploadNowError::SaveRunning | UploadNowError::NoSlot => {
+            UpdateSnapshot::Fail(format!(
+                "failed to upload the filesystem snapshot for the update: {error}"
+            ))
+        }
     }
-    UpdateSnapshot::Fail(format!(
-        "failed to upload the filesystem snapshot for the update: {error}"
-    ))
 }
 
 /// The baseline that a start selected, with its restore.
@@ -961,7 +949,7 @@ pub(crate) fn confirm_by<Ctx: WorkerCtx>(worker: Weak<Worker<Ctx>>, mark: TreeMa
         Box::pin(async move {
             match worker.upgrade() {
                 Some(worker) => worker.confirm_as(name, Confirmer::Running(mark)).await,
-                None => ConfirmOutcome::Deferred,
+                None => Confirmation::Deferred,
             }
         })
     })
@@ -1027,6 +1015,59 @@ pub(crate) fn owner_gate(
     } else {
         OwnerGate::Refused
     }
+}
+
+/// The filesystem snapshot name that the record `entry` holds: the name of a snapshot record or
+/// of a snapshot-based update record.
+fn record_name(entry: &OplogEntry) -> Option<&FilesystemSnapshotName> {
+    match entry {
+        OplogEntry::Snapshot {
+            filesystem_snapshot,
+            ..
+        } => filesystem_snapshot.as_ref(),
+        OplogEntry::PendingUpdate {
+            description:
+                UpdateDescription::SnapshotBased {
+                    filesystem_snapshot,
+                    ..
+                },
+            ..
+        } => filesystem_snapshot.as_ref(),
+        _ => None,
+    }
+}
+
+/// The filesystem snapshot names that a revert of the region `dropped` makes unused, newest
+/// first: the names of the snapshot records and of the snapshot-based update records in `entries`
+/// inside `dropped`, without the names that such a record outside `dropped` and outside the
+/// regions `deleted` uses. A record outside the region can use an older name again, and after the
+/// revert that record can be a baseline again.
+pub(crate) fn reverted_snapshot_names(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    dropped: &OplogRegion,
+    deleted: &DeletedRegions,
+) -> Box<[FilesystemSnapshotName]> {
+    let live = entries
+        .iter()
+        .filter(|(index, _)| !dropped.contains(**index) && !deleted.is_in_deleted_region(**index))
+        .filter_map(|(_, entry)| record_name(entry))
+        .collect::<HashSet<_>>();
+    entries
+        .range(dropped.start..=dropped.end)
+        .rev()
+        .filter_map(|(_, entry)| record_name(entry))
+        .filter(|name| !live.contains(name))
+        .fold(
+            (HashSet::new(), Vec::new()),
+            |(mut seen, mut names), name| {
+                if seen.insert(name) {
+                    names.push(name.clone());
+                }
+                (seen, names)
+            },
+        )
+        .1
+        .into_boxed_slice()
 }
 
 #[cfg(test)]
@@ -1301,6 +1342,7 @@ mod tests {
                 timestamp: Timestamp::from(millis),
                 target_revision: ComponentRevision::new(revision).unwrap(),
                 oplog_index: OplogIndex::from_u64(index),
+                filesystem_snapshot: None,
             };
         // The update to revision 3 applies the pending record at index 7 on an executor whose
         // clock is behind: its timestamp is earlier than the pending record, and its index is
@@ -1607,7 +1649,7 @@ mod tests {
 
         fn confirm(&self, _mark: TreeMark) -> Confirm {
             self.call("confirm".to_string());
-            Box::new(|_| Box::pin(async { ConfirmOutcome::Deferred }))
+            Box::new(|_| Box::pin(async { Confirmation::Deferred }))
         }
 
         fn initial_files_written(&self, _mark: TreeMark) {
@@ -1631,24 +1673,26 @@ mod tests {
             self.terminal.subscribe()
         }
 
-        fn lost_shard(&self) -> bool {
-            self.lost_shard
-        }
-
-        async fn kept_baseline(&self) -> Option<FilesystemSnapshotName> {
-            self.call("kept_baseline".to_string());
-            None
+        fn lost_shard(&self) -> super::super::LostShard {
+            watch::channel(
+                self.lost_shard
+                    .then_some(super::super::RetirementReason::ShardRevoked),
+            )
+            .1
         }
     }
 
     fn agent_snapshots(name: &str) -> AgentSnapshots {
-        AgentSnapshots::agent(&golem_common::model::OwnedAgentId::new(
-            golem_common::model::environment::EnvironmentId::new(),
-            &AgentId {
-                component_id: golem_common::model::component::ComponentId::new(),
-                agent_id: name.to_string(),
-            },
-        ))
+        AgentSnapshots::agent(
+            &golem_common::model::OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId::new(),
+                &AgentId {
+                    component_id: golem_common::model::component::ComponentId::new(),
+                    agent_id: name.to_string(),
+                },
+            ),
+            golem_common::model::AgentFingerprint(uuid::Uuid::new_v4()),
+        )
     }
 
     /// An enabled service over an in-memory store, with the shutdown that keeps it running.
@@ -1668,6 +1712,15 @@ mod tests {
         )
         .unwrap();
         (snapshots, shutdown)
+    }
+
+    /// Shuts down the service of `shutdown`, and waits until it stopped.
+    async fn shut_down(shutdown: crate::services::shutdown::Shutdown) {
+        shutdown.cancel();
+        assert!(
+            shutdown.wait_for_tracked(Duration::from_secs(10)).await,
+            "the filesystem snapshot service did not stop"
+        );
     }
 
     /// A service that keeps no filesystem snapshots, with the shutdown that keeps it running.
@@ -1695,14 +1748,15 @@ mod tests {
 
     #[test]
     async fn a_periodic_snapshot_without_snapshots_writes_a_record_without_a_name() {
-        let (disabled, _disabled_shutdown) = disabled_service();
+        let (disabled, disabled_shutdown) = disabled_service();
         let agent = agent_snapshots("periodic-disabled");
         let run = |host: ScriptedHost| {
             let disabled = disabled.as_ref();
             let agent = &agent;
             async move {
                 let mut host = host;
-                let result = periodic_snapshot(&mut host, disabled, agent).await;
+                let result =
+                    periodic_snapshot(&mut host, disabled, agent, AgentMode::Durable).await;
                 (outcome(&result), host.calls())
             }
         };
@@ -1752,34 +1806,46 @@ mod tests {
             not_written.0,
             "NotWritten(Write(Payload(\"refused\")))".to_string()
         );
+        shut_down(disabled_shutdown).await;
     }
 
     #[test]
     async fn a_periodic_snapshot_admits_before_the_guest_saves_and_captures_after() {
         let (mark, _) = marks();
-        let (snapshots, _shutdown) = enabled_service();
+        let (snapshots, shutdown) = enabled_service();
         let agent = agent_snapshots("periodic-enabled");
         let since = confirmed(&FilesystemSnapshotName::periodic(), mark);
 
-        let held = snapshots.admit_periodic(&agent).await.unwrap();
+        let held = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .unwrap();
         let mut refused = ScriptedHost::new();
-        let while_held = outcome(&periodic_snapshot(&mut refused, &snapshots, &agent).await);
+        let while_held =
+            outcome(&periodic_snapshot(&mut refused, &snapshots, &agent, AgentMode::Durable).await);
         drop(held);
         let mut failed_capture = ScriptedHost::new();
-        let capture_failed =
-            outcome(&periodic_snapshot(&mut failed_capture, &snapshots, &agent).await);
+        let capture_failed = outcome(
+            &periodic_snapshot(&mut failed_capture, &snapshots, &agent, AgentMode::Durable).await,
+        );
         let mut initial = ScriptedHost {
             capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles { mark })),
             ..ScriptedHost::new()
         };
-        let initial_files = outcome(&periodic_snapshot(&mut initial, &snapshots, &agent).await);
+        let initial_files =
+            outcome(&periodic_snapshot(&mut initial, &snapshots, &agent, AgentMode::Durable).await);
         let mut unchanged = ScriptedHost {
             since: Some(since.clone()),
             capture: std::sync::Mutex::new(Some(CaptureOutcome::Unchanged)),
             ..ScriptedHost::new()
         };
-        let reused = outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
-        let free_after = snapshots.admit_periodic(&agent).await.is_ok();
+        let reused = outcome(
+            &periodic_snapshot(&mut unchanged, &snapshots, &agent, AgentMode::Durable).await,
+        );
+        let free_after = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .is_ok();
 
         let name = since.name.as_ref().unwrap().as_str().to_string();
         assert_eq!(
@@ -1827,6 +1893,7 @@ mod tests {
             )
         );
         assert!(free_after);
+        shut_down(shutdown).await;
     }
 
     fn update_outcome(result: &UpdateSnapshot<&'static str>) -> String {
@@ -1844,27 +1911,32 @@ mod tests {
 
     #[test]
     async fn a_manual_update_snapshot_saves_the_guest_then_captures_the_whole_tree() {
-        let (disabled, _disabled_shutdown) = disabled_service();
-        let (snapshots, _shutdown) = enabled_service();
+        let (disabled, disabled_shutdown) = disabled_service();
+        let (snapshots, shutdown) = enabled_service();
         let agent = agent_snapshots("update");
 
         let mut without = ScriptedHost::new();
-        let without_snapshots =
-            update_outcome(&update_snapshot(&mut without, &disabled, &agent).await);
+        let without_snapshots = update_outcome(
+            &update_snapshot(&mut without, &disabled, &agent, AgentMode::Durable).await,
+        );
         let mut stopped = ScriptedHost {
             guest: Some(Err("stop")),
             ..ScriptedHost::new()
         };
-        let guest_stop = update_outcome(&update_snapshot(&mut stopped, &snapshots, &agent).await);
+        let guest_stop = update_outcome(
+            &update_snapshot(&mut stopped, &snapshots, &agent, AgentMode::Durable).await,
+        );
         let mut failed = ScriptedHost::new();
-        let capture_failed =
-            update_outcome(&update_snapshot(&mut failed, &snapshots, &agent).await);
+        let capture_failed = update_outcome(
+            &update_snapshot(&mut failed, &snapshots, &agent, AgentMode::Durable).await,
+        );
         let mut initial = ScriptedHost {
             whole: std::sync::Mutex::new(Some(WholeCapture::InitialFiles)),
             ..ScriptedHost::new()
         };
-        let initial_files =
-            update_outcome(&update_snapshot(&mut initial, &snapshots, &agent).await);
+        let initial_files = update_outcome(
+            &update_snapshot(&mut initial, &snapshots, &agent, AgentMode::Durable).await,
+        );
 
         assert_eq!(
             (without_snapshots, without.calls()),
@@ -1882,14 +1954,24 @@ mod tests {
             )
         );
         assert_eq!(initial_files, "Saved(none, false)");
-        assert!(snapshots.admit_periodic(&agent).await.is_ok());
+        assert!(
+            snapshots
+                .admit_periodic(&agent, AgentMode::Durable)
+                .await
+                .is_ok()
+        );
+        shut_down(disabled_shutdown).await;
+        shut_down(shutdown).await;
     }
 
     #[test]
     async fn an_interrupted_wait_of_a_manual_update_fails_it_or_writes_nothing_on_a_lost_shard() {
-        let (snapshots, _shutdown) = enabled_service();
+        let (snapshots, shutdown) = enabled_service();
         let agent = agent_snapshots("update-interrupted");
-        let held = snapshots.admit_periodic(&agent).await.unwrap();
+        let held = snapshots
+            .admit_periodic(&agent, AgentMode::Durable)
+            .await
+            .unwrap();
         let run = |lost_shard| {
             let snapshots = &snapshots;
             let agent = &agent;
@@ -1899,7 +1981,7 @@ mod tests {
                     ..ScriptedHost::new()
                 };
                 host.terminal.send_replace(true);
-                let result = update_snapshot(&mut host, snapshots, agent).await;
+                let result = update_snapshot(&mut host, snapshots, agent, AgentMode::Durable).await;
                 (update_outcome(&result), host.calls())
             }
         };
@@ -1918,30 +2000,32 @@ mod tests {
             )
         );
         assert_eq!(lost, ("WriteNothing".to_string(), Vec::<String>::new()));
+        shut_down(shutdown).await;
     }
 
     #[test]
-    async fn a_failed_update_upload_is_interrupted_while_a_terminal_interrupt_waits() {
-        let store = UploadNowError::Store(crate::filesystem_snapshot::SnapshotStoreError::NotFound);
-        let uploaded = |error: &UploadNowError, terminal: bool, lost_shard: bool| {
-            update_outcome(&failed_update_upload(error, terminal, lost_shard))
+    async fn an_upload_that_a_stop_ended_is_interrupted_and_a_failed_one_fails() {
+        let store = UploadNowError::Store(crate::filesystem_snapshot::SaveError::NameInUse);
+        let uploaded = |error: &UploadNowError, lost_shard: bool| {
+            update_outcome(&failed_update_upload(error, lost_shard))
         };
         assert_eq!(
             [
-                uploaded(&UploadNowError::Stopped, true, false),
-                uploaded(&store, true, false),
-                uploaded(&store, true, true),
-                uploaded(&UploadNowError::Stopped, false, false),
-                uploaded(&store, false, true),
+                uploaded(&UploadNowError::Stopped, false),
+                uploaded(&UploadNowError::Stopped, true),
+                uploaded(&store, false),
+                uploaded(&store, true),
+                uploaded(&UploadNowError::NoSlot, false),
             ],
             [
                 "Fail(the update was interrupted while it uploaded the filesystem snapshot)",
-                "Fail(the update was interrupted while it uploaded the filesystem snapshot)",
                 "WriteNothing",
-                "Fail(failed to upload the filesystem snapshot for the update: the upload of the \
-                 filesystem snapshot was stopped)",
-                "Fail(failed to upload the filesystem snapshot for the update: no complete \
-                 filesystem snapshot has the name)",
+                "Fail(failed to upload the filesystem snapshot for the update: a filesystem \
+                 snapshot already has the name)",
+                "Fail(failed to upload the filesystem snapshot for the update: a filesystem \
+                 snapshot already has the name)",
+                "Fail(failed to upload the filesystem snapshot for the update: no slot of the \
+                 uploads of filesystem snapshots was free in the wait)",
             ]
             .map(String::from)
         );
@@ -2010,7 +2094,7 @@ mod tests {
 
     #[test]
     async fn a_start_restore_of_a_snapshot_that_the_store_does_not_hold_fails() {
-        let (snapshots, _shutdown) = enabled_service();
+        let (snapshots, shutdown) = enabled_service();
         let agent = agent_snapshots("restore-missing");
         let restore = StartRestore::Store(
             snapshots
@@ -2020,14 +2104,17 @@ mod tests {
         let into = tempfile::tempdir().unwrap();
 
         assert!(restore.restore(into.path()).await.is_err());
+        shut_down(shutdown).await;
     }
 
     #[test]
     async fn only_a_service_with_a_store_is_enabled() {
-        let (enabled, _enabled_shutdown) = enabled_service();
-        let (disabled, _disabled_shutdown) = disabled_service();
+        let (enabled, enabled_shutdown) = enabled_service();
+        let (disabled, disabled_shutdown) = disabled_service();
 
         assert_eq!((enabled.is_enabled(), disabled.is_enabled()), (true, false));
+        shut_down(enabled_shutdown).await;
+        shut_down(disabled_shutdown).await;
     }
 
     #[test]
@@ -2083,7 +2170,7 @@ mod tests {
     async fn an_unchanged_tree_of_initial_files_writes_a_record_without_a_name_and_confirms_nothing()
      {
         let (mark, _) = marks();
-        let (snapshots, _shutdown) = enabled_service();
+        let (snapshots, shutdown) = enabled_service();
         let agent = agent_snapshots("periodic-initial-files");
         let mut unchanged = ScriptedHost {
             since: Some(without_name(mark)),
@@ -2096,10 +2183,12 @@ mod tests {
             ..ScriptedHost::new()
         };
 
-        let unchanged_result =
-            outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
-        let not_written_result =
-            outcome(&periodic_snapshot(&mut not_written, &snapshots, &agent).await);
+        let unchanged_result = outcome(
+            &periodic_snapshot(&mut unchanged, &snapshots, &agent, AgentMode::Durable).await,
+        );
+        let not_written_result = outcome(
+            &periodic_snapshot(&mut not_written, &snapshots, &agent, AgentMode::Durable).await,
+        );
 
         assert_eq!(
             (unchanged_result, unchanged.calls()),
@@ -2131,12 +2220,13 @@ mod tests {
                 .to_vec()
             )
         );
+        shut_down(shutdown).await;
     }
 
     #[test]
     async fn a_written_periodic_record_that_uploads_its_capture_asks_for_its_confirmation() {
         let (mark, _) = marks();
-        let (snapshots, _shutdown) = enabled_service();
+        let (snapshots, shutdown) = enabled_service();
         let agent = agent_snapshots("periodic-upload");
         let scratch = crate::services::agent_filesystem::scratch_directory().await;
         let mut host = ScriptedHost {
@@ -2148,12 +2238,14 @@ mod tests {
             ..ScriptedHost::new()
         };
 
-        let result = outcome(&periodic_snapshot(&mut host, &snapshots, &agent).await);
+        let result =
+            outcome(&periodic_snapshot(&mut host, &snapshots, &agent, AgentMode::Durable).await);
 
         assert_eq!(
             (result, host.calls().last().cloned()),
             ("Continue".to_string(), Some("confirm".to_string()))
         );
+        shut_down(shutdown).await;
     }
 
     /// A store over an in-memory store that gives each save a time ten minutes after the time of
@@ -2177,11 +2269,14 @@ mod tests {
                 &crate::filesystem_snapshot::SnapshotName,
                 StoreChangeDetection,
             )>,
-        ) -> Result<
-            crate::filesystem_snapshot::SnapshotInfo,
-            crate::filesystem_snapshot::SnapshotStoreError,
-        > {
-            let info = self.memory.save(agent, name, tree, parent).await?;
+            cancel: &tokio_util::sync::CancellationToken,
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<crate::filesystem_snapshot::SnapshotInfo, crate::filesystem_snapshot::SaveError>
+        {
+            let info = self
+                .memory
+                .save(agent, name, tree, parent, cancel, slots)
+                .await?;
             Ok(self.times.timed(name, info))
         }
 
@@ -2190,11 +2285,12 @@ mod tests {
             agent: &AgentSnapshots,
             name: &crate::filesystem_snapshot::SnapshotName,
             into: &Path,
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
         ) -> Result<
             crate::filesystem_snapshot::SnapshotInfo,
-            crate::filesystem_snapshot::SnapshotStoreError,
+            crate::filesystem_snapshot::RestoreFailure,
         > {
-            self.memory.restore(agent, name, into).await
+            self.memory.restore(agent, name, into, slots).await
         }
 
         async fn stat(
@@ -2203,7 +2299,7 @@ mod tests {
             name: &crate::filesystem_snapshot::SnapshotName,
         ) -> Result<
             Option<crate::filesystem_snapshot::SnapshotInfo>,
-            crate::filesystem_snapshot::SnapshotStoreError,
+            crate::filesystem_snapshot::ReadError,
         > {
             self.memory.stat(agent, name).await
         }
@@ -2211,6 +2307,7 @@ mod tests {
         async fn list(
             &self,
             agent: &AgentSnapshots,
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
         ) -> Result<
             Box<
                 [(
@@ -2218,11 +2315,11 @@ mod tests {
                     crate::filesystem_snapshot::SnapshotInfo,
                 )],
             >,
-            crate::filesystem_snapshot::SnapshotStoreError,
+            crate::filesystem_snapshot::CallError,
         > {
             Ok(self
                 .memory
-                .list(agent)
+                .list(agent, slots)
                 .await?
                 .iter()
                 .map(|(name, info)| (name.clone(), self.times.timed(name, *info)))
@@ -2233,8 +2330,9 @@ mod tests {
             &self,
             agent: &AgentSnapshots,
             names: &[crate::filesystem_snapshot::SnapshotName],
-        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete(agent, names).await?;
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<(), crate::filesystem_snapshot::CallError> {
+            self.memory.delete(agent, names, slots).await?;
             self.deleted.send_modify(|deleted| {
                 deleted.extend(names.iter().map(|name| Box::from(name.as_str())))
             });
@@ -2244,22 +2342,24 @@ mod tests {
         async fn delete_all(
             &self,
             agent: &AgentSnapshots,
-        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.delete_all(agent).await
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<(), crate::filesystem_snapshot::CallError> {
+            self.memory.delete_all(agent, slots).await
         }
 
         async fn copy_all(
             &self,
             from: &AgentSnapshots,
             to: &AgentSnapshots,
-        ) -> Result<(), crate::filesystem_snapshot::SnapshotStoreError> {
-            self.memory.copy_all(from, to).await
+            slots: &dyn crate::filesystem_snapshot::RunSlots,
+        ) -> Result<(), crate::filesystem_snapshot::CallError> {
+            self.memory.copy_all(from, to, slots).await
         }
     }
 
-    #[test]
-    async fn the_retention_of_a_saved_manual_update_deletes_the_update_snapshots_beyond_the_kept_count()
-     {
+    /// Saves `older` update snapshots, then a manual update whose retention keeps the older
+    /// snapshots at the indexes `kept`, and gives the names that the retention deleted.
+    async fn update_retention(older: usize, kept: &[usize]) -> (Vec<Box<str>>, Vec<Box<str>>) {
         let store = Arc::new(SpacedStore::default());
         let shutdown = crate::services::shutdown::Shutdown::new();
         let snapshots = AgentFilesystemSnapshots::bind(
@@ -2274,11 +2374,14 @@ mod tests {
         .unwrap();
         let agent = agent_snapshots("update-retention");
         let tree = tempfile::tempdir().unwrap();
-        let older = [
-            FilesystemSnapshotName::update(),
-            FilesystemSnapshotName::update(),
-        ]
-        .map(|name| crate::filesystem_snapshot::SnapshotName::new(name.as_str()).unwrap());
+        let older = (0..older)
+            .map(|_| {
+                crate::filesystem_snapshot::SnapshotName::new(
+                    FilesystemSnapshotName::update().as_str(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
         let saved = futures::StreamExt::then(futures::stream::iter(&older), |name| {
             crate::filesystem_snapshot::FilesystemSnapshotStore::save(
                 store.as_ref(),
@@ -2286,6 +2389,8 @@ mod tests {
                 name,
                 tree.path(),
                 None,
+                crate::filesystem_snapshot::never_cancelled(),
+                &crate::filesystem_snapshot::Unlimited,
             )
         });
         futures::TryStreamExt::try_collect::<Vec<_>>(saved)
@@ -2303,13 +2408,23 @@ mod tests {
         let UpdateSnapshot::Saved {
             retention: Some(retention),
             ..
-        } = update_snapshot(&mut host, &snapshots, &agent).await
+        } = update_snapshot(&mut host, &snapshots, &agent, AgentMode::Durable).await
         else {
             panic!("the manual update saves its snapshot with a retention");
         };
         let mut deleted = store.deleted.subscribe();
 
-        retention.delete_older_snapshots();
+        retention.delete_older_snapshots(
+            &kept
+                .iter()
+                .map(|index| {
+                    older[*index]
+                        .as_str()
+                        .parse::<FilesystemSnapshotName>()
+                        .unwrap()
+                })
+                .collect::<Box<[_]>>(),
+        );
         let deleted = tokio::time::timeout(
             Duration::from_secs(10),
             deleted.wait_for(|deleted| !deleted.is_empty()),
@@ -2317,8 +2432,140 @@ mod tests {
         .await
         .ok()
         .and_then(Result::ok)
-        .map(|deleted| deleted.clone());
+        .map(|deleted| deleted.clone())
+        .unwrap_or_default();
+        shut_down(shutdown).await;
+        (
+            deleted,
+            older.iter().map(|name| Box::from(name.as_str())).collect(),
+        )
+    }
 
-        assert_eq!(deleted, Some(vec![Box::from(older[0].as_str())]));
+    #[test]
+    async fn the_retention_of_a_saved_manual_update_deletes_the_update_snapshots_beyond_the_kept_count()
+     {
+        let (deleted, older) = update_retention(2, &[]).await;
+
+        assert_eq!(deleted, vec![older[0].clone()]);
+    }
+
+    #[test]
+    async fn update_retention_keeps_every_successful_update_name() {
+        // The oldest name is kept, as the status of a successful update holds it; the next one is
+        // beyond the count.
+        let (deleted, older) = update_retention(3, &[0]).await;
+
+        assert_eq!(deleted, vec![older[1].clone()]);
+    }
+
+    /// A snapshot record with the filesystem snapshot `name`.
+    fn snapshot_record(name: Option<&FilesystemSnapshotName>) -> OplogEntry {
+        OplogEntry::Snapshot {
+            timestamp: golem_common::model::Timestamp::from(1_000),
+            data: golem_common::model::oplog::OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 0,
+            filesystem_snapshot: name.cloned(),
+        }
+    }
+
+    /// A snapshot-based update record with the filesystem snapshot `name`.
+    fn update_record(name: &FilesystemSnapshotName) -> OplogEntry {
+        OplogEntry::pending_update(UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::INITIAL,
+            payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(name.clone()),
+        })
+    }
+
+    fn region(start: u64, end: u64) -> golem_common::model::regions::OplogRegion {
+        golem_common::model::regions::OplogRegion {
+            start: OplogIndex::from_u64(start),
+            end: OplogIndex::from_u64(end),
+        }
+    }
+
+    fn oplog(
+        records: Vec<(u64, OplogEntry)>,
+    ) -> std::collections::BTreeMap<OplogIndex, OplogEntry> {
+        records
+            .into_iter()
+            .map(|(index, entry)| (OplogIndex::from_u64(index), entry))
+            .collect()
+    }
+
+    #[test]
+    fn names_inside_the_dropped_region_are_collected_newest_first() {
+        let [p1, p2, p3] = [(); 3].map(|()| FilesystemSnapshotName::periodic());
+        let entries = oplog(vec![
+            (2, snapshot_record(Some(&p1))),
+            (5, snapshot_record(Some(&p2))),
+            (6, snapshot_record(None)),
+            (8, snapshot_record(Some(&p3))),
+        ]);
+
+        assert_eq!(
+            super::reverted_snapshot_names(
+                &entries,
+                &region(4, 9),
+                &golem_common::model::regions::DeletedRegions::new()
+            ),
+            Box::from([p3, p2])
+        );
+    }
+
+    #[test]
+    fn a_snapshot_based_update_record_in_the_region_gives_its_name() {
+        let u1 = FilesystemSnapshotName::update();
+        let entries = oplog(vec![(5, update_record(&u1))]);
+
+        assert_eq!(
+            super::reverted_snapshot_names(
+                &entries,
+                &region(4, 9),
+                &golem_common::model::regions::DeletedRegions::new()
+            ),
+            Box::from([u1])
+        );
+    }
+
+    #[test]
+    fn a_name_that_a_record_outside_the_region_uses_stays() {
+        let [p1, p2] = [(); 2].map(|()| FilesystemSnapshotName::periodic());
+        let entries = oplog(vec![
+            (2, snapshot_record(Some(&p1))),
+            (5, snapshot_record(Some(&p1))),
+            (6, snapshot_record(Some(&p2))),
+            (7, snapshot_record(Some(&p2))),
+        ]);
+
+        assert_eq!(
+            super::reverted_snapshot_names(
+                &entries,
+                &region(4, 9),
+                &golem_common::model::regions::DeletedRegions::new()
+            ),
+            Box::from([p2])
+        );
+    }
+
+    #[test]
+    fn records_in_an_earlier_deleted_region_do_not_keep_a_name() {
+        let p1 = FilesystemSnapshotName::periodic();
+        let entries = oplog(vec![
+            (2, snapshot_record(Some(&p1))),
+            (6, snapshot_record(Some(&p1))),
+        ]);
+
+        assert_eq!(
+            super::reverted_snapshot_names(
+                &entries,
+                &region(5, 9),
+                &golem_common::model::regions::DeletedRegions::from_regions([region(1, 3)])
+            ),
+            Box::from([p1])
+        );
     }
 }
