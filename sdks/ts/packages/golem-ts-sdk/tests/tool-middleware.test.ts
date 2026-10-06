@@ -16,6 +16,7 @@ import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import { compileSchema } from '../src/schema/adapter';
+import { s } from '../src/schema/markers';
 import { sdkPrincipalFromHost } from '../src/principal';
 import {
   command,
@@ -740,5 +741,31 @@ describe('monomorphic tool middleware dispatch', () => {
       run(wireValue(z.object({ policy: z.string() }), { policy: 'audit' })),
     ).rejects.toMatchObject({ cause: { tag: 'invalid-input' } });
     expect(observed).toHaveLength(2);
+  });
+
+  it('disposes an unexpected owned result from an underlying unit command', async () => {
+    const dispose = vi.fn();
+    const definition = toolDefinition('probe').body((body) => body);
+    definition.middleware({
+      name: 'unit-cleanup',
+      implementation: { probe: async (_args, { underlying }) => underlying.probe({}) },
+    });
+    const result = wireValue(s.secret(z.string()), { [Symbol.dispose]: dispose });
+    await expect(
+      invoke(
+        'unit-cleanup',
+        {
+          commandPath: [],
+          input: commandInput(definition, [], {}),
+          stdin: undefined,
+          principal: anonymous,
+        },
+        { invoke: async () => ({ result }) },
+      ),
+    ).rejects.toMatchObject({
+      cause: { tag: 'invalid-result', val: expect.stringContaining('unexpected result') },
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(result.value.valueNodes[0].val).toBeUndefined();
   });
 });

@@ -96,6 +96,10 @@ function mapToolClientFailure(
   { body, callName }: ToolClientFailureContext,
 ): ToolCallError<unknown> {
   if (error instanceof ToolCallError) return error;
+  const rpc = error as ToolRpcError | null | undefined;
+  // Custom payload validation must run inside the terminal ownership boundary.
+  if (rpc?.tag === 'remote-tool-error' && rpc.val?.tag === 'custom-error')
+    return mapToolRpcError(body, rpc, callName);
   if (isRpcError(error)) return mapToolRpcError(body, error, callName);
   return protocolToolCallError(`${callName}: ${errorMessage(error)}`);
 }

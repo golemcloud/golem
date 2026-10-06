@@ -4,6 +4,7 @@ export { toolGuest } from "./internal/tool/runtime.js"
 
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
+import type * as Core from "golem:core/types@2.0.0"
 import { Cause, Context, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
@@ -15,6 +16,10 @@ import {
   registerToolClientFactory,
 } from "./internal/tool/model.js"
 import { compile, type CompiledWitCodec } from "./WitCodec.js"
+import { abandonGuestQuotaTokenWireHandle } from "./internal/schema-model/quotaTokenHandle.js"
+import { QUOTA_INTERNAL } from "./internal/schema-model/quotaInternal.js"
+import { abandonGuestPermissionCardWireHandle } from "./internal/schema-model/permissionCardHandle.js"
+import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
 
 export { ToolClient } from "./host/ToolClient.js"
 
@@ -217,6 +222,57 @@ interface CompiledToolCommand {
   readonly errors: readonly { name: string; codec: Effect.Effect<ClientWireCodec, unknown, any> }[]
 }
 
+function discardRejectedPayload<A, E, R>(
+  payload: Common.TypedSchemaValue | undefined,
+  decode: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  return Effect.onExit(decode, (exit) =>
+    Exit.isFailure(exit) && payload
+      ? Effect.promise(async () => {
+          const seen = new Set<object>()
+          const nodes = payload.value?.valueNodes
+          if (!Array.isArray(nodes)) return
+          for (const node of nodes) {
+            if (
+              node?.tag !== "secret-value" &&
+              node?.tag !== "quota-token-handle" &&
+              node?.tag !== "permission-card-handle" &&
+              node?.tag !== "stream-value"
+            )
+              continue
+            const raw = node.val
+            ;(node as { val: unknown }).val = undefined
+            if (!raw || seen.has(raw)) continue
+            seen.add(raw)
+            try {
+              if (node.tag === "quota-token-handle")
+                abandonGuestQuotaTokenWireHandle(QUOTA_INTERNAL, raw as Core.QuotaToken, node)
+              else if (node.tag === "permission-card-handle")
+                abandonGuestPermissionCardWireHandle(
+                  PERMISSION_CARD_INTERNAL,
+                  raw as Core.PermissionCard,
+                  node,
+                )
+              if (node.tag === "stream-value") {
+                const { SchemaValueStream } = await import("golem:core/types@2.0.0")
+                const source = await SchemaValueStream.unwrap(raw as Core.SchemaValueStream)
+                await source[Symbol.asyncIterator]().return?.()
+              }
+            } catch {
+              // Continue releasing siblings if a handle is malformed or a stream cannot close.
+            } finally {
+              try {
+                ;(raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.()
+              } catch {
+                // Preserve the rejection and release the remaining resources.
+              }
+            }
+          }
+        })
+      : Effect.void,
+  )
+}
+
 function clientCompiled(
   name: string,
   commands: readonly CompiledToolCommand[],
@@ -313,51 +369,65 @@ function clientCompiled(
                       payload: toolError.val.payload,
                     }),
                   )
-                return Effect.gen(function* () {
-                  const codec = yield* declared.codec.pipe(
-                    Effect.mapError((error) => new ToolClientError("declared-error", error)),
-                  )
-                  if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
-                    return yield* Effect.fail(
-                      new ToolClientError(
-                        "declared-error",
-                        `custom error '${declared.name}' schema does not match`,
-                      ),
+                return discardRejectedPayload(
+                  toolError.val.payload,
+                  Effect.gen(function* () {
+                    const codec = yield* declared.codec.pipe(
+                      Effect.mapError((error) => new ToolClientError("declared-error", error)),
                     )
-                  const value = yield* codec
-                    .decode(toolError.val.payload.value)
-                    .pipe(Effect.mapError((error) => new ToolClientError("declared-error", error)))
-                  return yield* Effect.fail({
-                    _tag: "ToolFailure",
-                    name: declared.name,
-                    value,
-                  } as const)
-                })
+                    if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
+                      return yield* Effect.fail(
+                        new ToolClientError(
+                          "declared-error",
+                          `custom error '${declared.name}' schema does not match`,
+                        ),
+                      )
+                    return yield* codec
+                      .decode(toolError.val.payload.value)
+                      .pipe(
+                        Effect.mapError((error) => new ToolClientError("declared-error", error)),
+                      )
+                  }),
+                ).pipe(
+                  Effect.flatMap((value) =>
+                    Effect.fail({
+                      _tag: "ToolFailure",
+                      name: declared.name,
+                      value,
+                    } as const),
+                  ),
+                )
               }
               return Effect.fail(new ToolClientError("invoke", cause))
             },
           ),
         )
         const decodedResult = invocationResult.pipe(
-          Effect.flatMap((result) => {
-            if (result.stdout !== undefined || result.stderr !== undefined)
-              return Effect.fail(
-                new ToolClientError("result", "tool returned output attachments in its result"),
-              )
-            if (!command.output)
-              return result.result === undefined
-                ? Effect.succeed(undefined)
-                : Effect.fail(new ToolClientError("result", "unexpected remote result"))
-            if (!result.result) return Effect.fail(new ToolClientError("result", "missing result"))
-            return command.output.pipe(
-              Effect.mapError((cause) => new ToolClientError("result", cause)),
-              Effect.flatMap((output) =>
-                output
-                  .decode(result.result!.value)
-                  .pipe(Effect.mapError((cause) => new ToolClientError("result", cause))),
-              ),
-            )
-          }),
+          Effect.flatMap((result) =>
+            discardRejectedPayload(
+              result.result,
+              Effect.suspend(() => {
+                if (result.stdout !== undefined || result.stderr !== undefined)
+                  return Effect.fail(
+                    new ToolClientError("result", "tool returned output attachments in its result"),
+                  )
+                if (!command.output)
+                  return result.result === undefined
+                    ? Effect.succeed(undefined)
+                    : Effect.fail(new ToolClientError("result", "unexpected remote result"))
+                if (!result.result)
+                  return Effect.fail(new ToolClientError("result", "missing result"))
+                return command.output.pipe(
+                  Effect.mapError((cause) => new ToolClientError("result", cause)),
+                  Effect.flatMap((output) =>
+                    output
+                      .decode(result.result!.value)
+                      .pipe(Effect.mapError((cause) => new ToolClientError("result", cause))),
+                  ),
+                )
+              }),
+            ),
+          ),
         )
         const [consumeExits, resultExit] = yield* Effect.all(
           [consume, Effect.exit(decodedResult)] as const,
