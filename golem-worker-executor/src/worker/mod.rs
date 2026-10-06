@@ -11195,9 +11195,9 @@ impl RunningWorker {
     /// automatic snapshot record, or of the manual-update record, when the record names a
     /// filesystem snapshot. The start reads the manual-update record only when no automatic
     /// snapshot record is selected. A manual-update record without a name
-    /// restores the initial files of its source revision when they are all read-only. A record
-    /// that names a filesystem snapshot on an executor without filesystem snapshots fails the
-    /// start with a visible cause.
+    /// restores the initial files of its source revision when they are all read-only. A
+    /// manual-update record that names a filesystem snapshot fails the start with a visible cause
+    /// on an executor with filesystem snapshots disabled.
     async fn start_baseline<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         status: &AgentStatusRecord,
@@ -11339,9 +11339,9 @@ impl RunningWorker {
     /// start skip that record: the start ends with a restart, and the next start selects the
     /// usable record before it. A conflict of the initial-file rule at the start of a pending
     /// manual update records a failed update and restarts on the current revision, unless the
-    /// shard is lost: then it writes nothing and gives the lost-shard interrupt. A
-    /// manual-update baseline that does not restore fails the start with a visible cause, which a
-    /// new start can retry when the store error allows it.
+    /// shard is lost: then it writes nothing and gives the lost-shard interrupt. A non-retryable
+    /// restore error of a manual-update baseline fails the start with a visible cause; a retryable
+    /// one makes the start retry.
     async fn baseline_failure<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         kind: filesystem_snapshots::BaselineKind,

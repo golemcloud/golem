@@ -2417,7 +2417,10 @@ pub struct FilesystemSnapshotUploadConfig {
     max_concurrent_uploads: NonZeroUsize,
     /// The number of restores that run at the same time on one executor.
     max_concurrent_restores: NonZeroUsize,
-    /// How long a start of an agent waits for an upload of the same agent on this executor.
+    /// How long a start of an agent waits for an upload of the same agent on this executor. The
+    /// wait and the check of the store after it take at most this time together. The waits of a
+    /// manual update for a running upload of the agent and for a slot of the uploads also end this
+    /// long after the update started.
     #[serde(with = "humantime_serde")]
     confirmation_wait: Duration,
     /// How long a start checks the store for the snapshot of its newest record when it did not
@@ -2429,7 +2432,9 @@ pub struct FilesystemSnapshotUploadConfig {
     capture_wait: Duration,
     /// The number of periodic snapshots that retention keeps for each agent, the newest first.
     /// A revert restores exactly only from a periodic snapshot that the store still holds, so this
-    /// number sets how far back a revert can go without a full replay.
+    /// number sets how far back a revert can go without a full replay. Names that a start can
+    /// select, and names less than 2 minutes older than the new snapshot, are kept as well and do
+    /// not count toward this number.
     retained_periodic_snapshots: NonZeroUsize,
     /// The number of manual-update snapshots that retention keeps for each agent among those that
     /// no successful or pending update of the agent uses. The snapshot of each successful or
