@@ -869,3 +869,8 @@ run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
   filesystem_snapshots::reflink_xfs_with_filesystem_metering_fails_at_startup
+
+run_unprivileged_test \
+  integration \
+  "${integration_test_binary}" \
+  wasi::reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write
