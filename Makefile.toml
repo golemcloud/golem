@@ -1241,14 +1241,42 @@ moonbit = set "// Copyright 2024-2026 Golem Cloud\n//\n// Licensed under the Gol
 
 check = get_env REFLECTION_CONFORMANCE_CHECK
 if equals ${check} true
+    check_dir = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/reflection-conformance-check"
+    mkdir ${check_dir}
+    expected_scala_path = set "${check_dir}/ReflectionConformanceCorpus.scala"
+    expected_moonbit_path = set "${check_dir}/reflection_conformance_corpus_wbtest.mbt"
+    actual_scala_path = set "${check_dir}/actual-ReflectionConformanceCorpus.scala"
+    actual_moonbit_path = set "${check_dir}/actual-reflection_conformance_corpus_wbtest.mbt"
+    scala_written = writefile ${expected_scala_path} "${scala}"
+    if not ${scala_written}
+        trigger_error "failed to stage reflection conformance embed: ${expected_scala_path}"
+    end
+    moonbit_written = writefile ${expected_moonbit_path} "${moonbit}"
+    if not ${moonbit_written}
+        trigger_error "failed to stage reflection conformance embed: ${expected_moonbit_path}"
+    end
+
     actual_scala = readfile ${scala_path}
     actual_moonbit = readfile ${moonbit_path}
     actual_scala = replace "${actual_scala}" "\r\n" "\n"
     actual_moonbit = replace "${actual_moonbit}" "\r\n" "\n"
-    if not equals "${actual_scala}" "${scala}"
+    actual_scala_written = writefile ${actual_scala_path} "${actual_scala}"
+    if not ${actual_scala_written}
+        trigger_error "failed to stage reflection conformance embed: ${actual_scala_path}"
+    end
+    actual_moonbit_written = writefile ${actual_moonbit_path} "${actual_moonbit}"
+    if not ${actual_moonbit_written}
+        trigger_error "failed to stage reflection conformance embed: ${actual_moonbit_path}"
+    end
+
+    actual_scala_hash = sha256sum ${actual_scala_path}
+    expected_scala_hash = sha256sum ${expected_scala_path}
+    if not equals ${actual_scala_hash} ${expected_scala_hash}
         trigger_error "reflection conformance embed is stale: ${scala_path}; run 'cargo make generate-reflection-conformance'"
     end
-    if not equals "${actual_moonbit}" "${moonbit}"
+    actual_moonbit_hash = sha256sum ${actual_moonbit_path}
+    expected_moonbit_hash = sha256sum ${expected_moonbit_path}
+    if not equals ${actual_moonbit_hash} ${expected_moonbit_hash}
         trigger_error "reflection conformance embed is stale: ${moonbit_path}; run 'cargo make generate-reflection-conformance'"
     end
 else
