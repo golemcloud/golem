@@ -79,7 +79,11 @@ import {
 } from './internal/registry/toolMiddlewareRegistry';
 import { closeAsyncIterable, isAsyncIterable } from './internal/tool/asyncIterable';
 import { compileSchema } from './schema/adapter';
-import { directSchemaValueFromWit, type SchemaCodec } from './schema/codec';
+import {
+  directSchemaValueFromWit,
+  relinquishSchemaValueCapabilities,
+  type SchemaCodec,
+} from './schema/codec';
 import type { StandardSchemaV1 } from './schema/standardSchema';
 
 export type { ToolInputStream } from './internal/tool/startedToolInvocation';
@@ -2239,17 +2243,46 @@ function decodeWireValue(
   wire: WireTypedSchemaValue,
   position: string,
 ): unknown {
-  if (codec.direct) {
-    try {
-      return directSchemaValueFromWit(codec, wire.value);
-    } catch (error) {
-      throw new Error(
-        `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
-      );
+  const resources = new Map<object, Array<{ val: unknown }>>();
+  for (const node of wire.value.valueNodes) {
+    if (
+      (node?.tag === 'secret-value' ||
+        node?.tag === 'quota-token-handle' ||
+        node?.tag === 'permission-card-handle' ||
+        node?.tag === 'stream-value') &&
+      node.val !== undefined
+    ) {
+      const aliases = resources.get(node.val) ?? [];
+      aliases.push(node);
+      resources.set(node.val, aliases);
     }
   }
-  validateWireSchema(codec.graph, wire, position);
-  return decodeTypedValue(codec, typedSchemaValueFromWit(wire), position);
+  let typed: TypedSchemaValue | undefined;
+  try {
+    if (codec.direct) {
+      try {
+        return directSchemaValueFromWit(codec, wire.value);
+      } catch (error) {
+        throw new Error(
+          `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    validateWireSchema(codec.graph, wire, position);
+    typed = typedSchemaValueFromWit(wire);
+    return decodeTypedValue(codec, typed, position);
+  } catch (error) {
+    if (typed !== undefined) relinquishSchemaValueCapabilities(typed.value);
+    for (const [raw, nodes] of resources) {
+      for (const node of nodes) node.val = undefined;
+      try {
+        (raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+      } catch {
+        // Preserve the decoding failure while attempting every resource disposal.
+      }
+    }
+    throw error;
+  }
 }
 
 function validateWireSchema(
@@ -2680,35 +2713,6 @@ function bindToolImplementation(
 
 function pathsEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((segment, index) => segment === right[index]);
-}
-
-/** @internal Bind a compiler-emitted path without reconstructing its descriptor. */
-export function bindConcreteToolCommand(
-  implementation: object,
-  toolName: string,
-  path: readonly string[],
-  nested: boolean,
-): { handler: (input: unknown, context: unknown) => unknown; receiver: object } {
-  let receiver = implementation;
-  let value: unknown = implementation;
-  const segments = path.length ? path : [toolName];
-  for (const [index, segment] of segments.entries()) {
-    if (!isImplementationObject(value)) throw new Error(`missing implementation for ${segment}`);
-    const property = getImplementationProperty(value, segment);
-    if (!property.found) throw new Error(`missing implementation for ${segment}`);
-    receiver = property.receiver ?? value;
-    value = property.value;
-    if (index < segments.length - 1 && !isNestedCommandImplementation(value))
-      throw new Error(`tool dispatcher ${segment} requires command(...)`);
-  }
-  if (path.length && nested) {
-    if (!isNestedCommandImplementation(value))
-      throw new Error(`tool command ${path.join(' ')} requires command(...)`);
-    receiver = value[COMMAND_IMPLEMENTATION].receiver;
-    value = value[COMMAND_IMPLEMENTATION].body;
-  }
-  if (typeof value !== 'function') throw new Error(`missing handler for ${segments.join(' ')}`);
-  return { handler: value as (input: unknown, context: unknown) => unknown, receiver };
 }
 
 function isImplementationObject(value: unknown): value is Record<PropertyKey, unknown> {

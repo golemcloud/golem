@@ -205,12 +205,9 @@ export function client<D extends ToolDefinition<any, any>>(
   return clientCompiled(definition.name, commands, options)
 }
 
-type ClientWireCodec = Pick<CompiledWitCodec<any>, "schemaGraph" | "encodeAsync" | "decode"> & {
-  readonly decodeTyped?: (value: Common.TypedSchemaValue) => Effect.Effect<any, unknown, any>
-}
+type ClientWireCodec = Pick<CompiledWitCodec<any>, "schemaGraph" | "encodeAsync" | "decode">
 
-/** @internal Concrete command codecs supplied by the component compiler. */
-export interface CompiledToolCommand {
+interface CompiledToolCommand {
   readonly path: readonly string[]
   readonly fields: readonly string[]
   readonly stdout: boolean
@@ -220,8 +217,7 @@ export interface CompiledToolCommand {
   readonly errors: readonly { name: string; codec: Effect.Effect<ClientWireCodec, unknown, any> }[]
 }
 
-/** @internal Shared transport for generated and dynamically compiled tool clients. */
-export function clientCompiled(
+function clientCompiled(
   name: string,
   commands: readonly CompiledToolCommand[],
   options: ClientOptions = {},
@@ -321,21 +317,16 @@ export function clientCompiled(
                   const codec = yield* declared.codec.pipe(
                     Effect.mapError((error) => new ToolClientError("declared-error", error)),
                   )
-                  if (
-                    !codec.decodeTyped &&
-                    !sameWireGraph(codec.schemaGraph, toolError.val.payload.graph)
-                  )
+                  if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
                     return yield* Effect.fail(
                       new ToolClientError(
                         "declared-error",
                         `custom error '${declared.name}' schema does not match`,
                       ),
                     )
-                  const value = yield* (
-                    codec.decodeTyped
-                      ? codec.decodeTyped(toolError.val.payload)
-                      : codec.decode(toolError.val.payload.value)
-                  ).pipe(Effect.mapError((error) => new ToolClientError("declared-error", error)))
+                  const value = yield* codec
+                    .decode(toolError.val.payload.value)
+                    .pipe(Effect.mapError((error) => new ToolClientError("declared-error", error)))
                   return yield* Effect.fail({
                     _tag: "ToolFailure",
                     name: declared.name,
@@ -361,10 +352,9 @@ export function clientCompiled(
             return command.output.pipe(
               Effect.mapError((cause) => new ToolClientError("result", cause)),
               Effect.flatMap((output) =>
-                (output.decodeTyped
-                  ? output.decodeTyped(result.result!)
-                  : output.decode(result.result!.value)
-                ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause))),
+                output
+                  .decode(result.result!.value)
+                  .pipe(Effect.mapError((cause) => new ToolClientError("result", cause))),
               ),
             )
           }),

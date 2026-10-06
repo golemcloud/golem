@@ -674,7 +674,6 @@ function typedArrayMarker<TArr, E extends number | bigint>(spec: {
     return {
       graph: { defs: new Map(), root: t.list(itemCodec.graph.root) },
       listItem: itemCodec,
-      concrete: { tag: 'typed-array', constructor: spec.ctor.name },
       toValue: (value) => v.list(Array.from(value as Iterable<E>).map((x) => spec.elemValue(x))),
       fromValue: (sv) => {
         const elements = (sv as Extract<SchemaValue, { tag: 'list' }>).elements;
@@ -873,7 +872,6 @@ function unstructuredTextMarker(
     };
     return {
       graph: { defs: new Map(), root },
-      concrete: { tag: 'unstructured-text' },
       toValue: (value) => {
         const ref = value as TextReferenceValue;
         if (ref.tag === 'url') return v.variant(URL_CASE, { tag: 'url', value: ref.val });
@@ -920,7 +918,6 @@ function unstructuredBinaryMarker(
     };
     return {
       graph: { defs: new Map(), root },
-      concrete: { tag: 'unstructured-binary' },
       toValue: (value) => {
         const ref = value as BinaryReferenceValue;
         if (ref.tag === 'url') return v.variant(URL_CASE, { tag: 'url', value: ref.val });
@@ -986,7 +983,6 @@ function multimodalMarker(
     };
     return {
       graph: { defs, root },
-      concrete: { tag: 'multimodal', cases: caseCodecs },
       toValue: (value) => {
         const elements = (value as MultimodalElement[]).map((item) => {
           const entry = byName.get(item.tag);
@@ -1179,7 +1175,6 @@ function principalMarker(): MarkerSchema<Principal, 'principal'> {
     // supplies it, no wire field); see SchemaCodec.autoInjected. As a return /
     // nested field the codec below carries it as ordinary data.
     autoInjected: 'principal',
-    concrete: { tag: 'principal' },
     toValue: (value) => {
       const h = sdkPrincipalToHost(value as Principal);
       switch (h.tag) {
