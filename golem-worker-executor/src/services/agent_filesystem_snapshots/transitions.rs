@@ -2754,6 +2754,20 @@ mod tests {
                     "ready {ready:?} queued {queued:?}"
                 );
                 assert!(state.pending_names_total <= 4);
+                assert!(
+                    state.pending_entries <= state.limits.pending_cleanups,
+                    "{} agents with pending work past the bound {}",
+                    state.pending_entries,
+                    state.limits.pending_cleanups
+                );
+                assert_eq!(
+                    state.pending_entries,
+                    state
+                        .cleanups
+                        .values()
+                        .filter(|cleanup| cleanup.pending.is_some())
+                        .count()
+                );
             });
             // The queue gives `None` only when no agent is ready.
             let (ready_before, _) = ready_and_queued(&state, &all);
