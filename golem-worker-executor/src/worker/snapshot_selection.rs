@@ -37,7 +37,8 @@ pub(crate) struct SnapshotExclusions {
     /// the set holds at most the two candidates of a start and the entry just rejected.
     rejected: HashSet<OplogIndex>,
     /// The entries whose payload or filesystem snapshot a start could not get. The starts skip
-    /// them until a start prepares the agent with success, which clears them.
+    /// them until a start prepares the agent with success, or until a new startup attempt
+    /// begins. Either clears them.
     unavailable: HashSet<OplogIndex>,
 }
 

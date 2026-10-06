@@ -242,9 +242,10 @@ enum ConflictCause {
 /// The first path, in path order, that stopped an install of initial files.
 ///
 /// The message names the path and what is at it, because the agent, and not an install of initial
-/// files, put it there. The install reads the whole tree before its first change, so an install
-/// that gives this error changed nothing, and it succeeds after the path holds what the old
-/// declarations left.
+/// files, put it there. Before an install that can find a conflict, `observe` reads each path
+/// whose declarations differ and each directory at a path that only the new declarations have. So
+/// an install that gives this error changed nothing, and it no longer stops at that path once the
+/// path, and each object above it, hold what the old declarations left.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct InitialFileConflict {
     /// The path of the conflict, below the root of the agent filesystem.
