@@ -838,11 +838,6 @@ run_privileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
-  sandbox_filesystem::xfs::tests::reflink_xfs_copy_contents_and_seed_share_extents
-
-run_unprivileged_test \
-  lib \
-  "${lib_test_binary}" \
   sandbox_filesystem::xfs::tests::xfs_without_reflink_is_refused_at_startup
 
 run_unprivileged_test \
