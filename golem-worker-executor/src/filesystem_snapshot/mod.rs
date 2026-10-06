@@ -612,9 +612,13 @@ pub(crate) trait FilesystemSnapshotStore: Send + Sync {
     /// Removes every snapshot of the agent, with all their data and metadata.
     ///
     /// When the call gives success, each call of this store for the agent that began before it
-    /// has ended, and none of them changes the snapshots of the agent afterwards. A save that
-    /// begins after the call began is not cancelled, and can start the snapshots of the agent
-    /// again. A call that gives an error can leave some of the snapshots; a new call removes them.
+    /// has ended, and none of them changes the snapshots of the agent afterwards. A delete of
+    /// the call whose try got no answer can still land up to one storage call deadline after the
+    /// call gave success, and a delete of a directory has no such bound. So a caller never saves
+    /// into, copies into, or otherwise writes the agent after a delete of all its snapshots; each
+    /// incarnation of an agent and each fork stage has its own fingerprint, so a caller never
+    /// needs to. A call that gives an error can leave some of the snapshots; a new call removes
+    /// them.
     async fn delete_all(
         &self,
         agent: &AgentSnapshots,

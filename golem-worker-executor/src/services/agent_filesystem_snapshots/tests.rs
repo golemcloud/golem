@@ -123,33 +123,49 @@ struct ScriptedStore {
     unbusy_writes: Arc<Mutex<Vec<&'static str>>>,
 }
 
+/// What the finish step reads of one scripted store: the writes that arrived while their agent
+/// was not busy, and the in-memory store below it, which records each write into an agent after
+/// a delete of all its snapshots.
+type Finished = (Arc<Mutex<Vec<&'static str>>>, InMemorySnapshotStore);
+
 thread_local! {
-    /// The writes that arrived while no work of their agent was counted, of each scripted store
-    /// that the test on this thread made with [`scripted_store`].
-    static UNBUSY_WRITES: std::cell::RefCell<Vec<Arc<Mutex<Vec<&'static str>>>>> =
-        std::cell::RefCell::default();
+    /// What the finish step reads of each scripted store that the test on this thread made with
+    /// [`scripted_store`].
+    static SCRIPTED_STORES: std::cell::RefCell<Vec<Finished>> = std::cell::RefCell::default();
 }
 
 /// A new scripted store, whose writes the end of the test checks.
 fn scripted_store() -> ScriptedStore {
     let store = ScriptedStore::default();
-    UNBUSY_WRITES.with(|stores| stores.borrow_mut().push(Arc::clone(&store.unbusy_writes)));
+    SCRIPTED_STORES.with(|stores| {
+        stores
+            .borrow_mut()
+            .push((Arc::clone(&store.unbusy_writes), store.memory.clone()))
+    });
     store
 }
 
 /// The finish step of each test: every write of each scripted store of the test arrived while
-/// its agent was busy.
+/// its agent was busy, and no write went into an agent after a delete of all its snapshots.
 fn finish_scripted_stores() {
-    let unbusy = UNBUSY_WRITES.with(|stores| {
-        std::mem::take(&mut *stores.borrow_mut())
-            .iter()
-            .flat_map(|writes| writes.lock().unwrap().clone())
-            .collect::<Vec<_>>()
-    });
+    let stores = SCRIPTED_STORES.with(|stores| std::mem::take(&mut *stores.borrow_mut()));
+    let unbusy = stores
+        .iter()
+        .flat_map(|(writes, _)| writes.lock().unwrap().clone())
+        .collect::<Vec<_>>();
+    let after_delete_all = stores
+        .iter()
+        .flat_map(|(_, memory)| memory.writes_after_delete_all())
+        .collect::<Vec<_>>();
     assert_eq!(
         unbusy,
         Vec::<&'static str>::new(),
         "every store write arrives while its agent is busy"
+    );
+    assert_eq!(
+        after_delete_all,
+        Vec::<String>::new(),
+        "no write goes into an agent after a delete of all its snapshots"
     );
 }
 

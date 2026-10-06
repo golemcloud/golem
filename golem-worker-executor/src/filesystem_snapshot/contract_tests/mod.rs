@@ -135,10 +135,9 @@ const CASES: &[(&str, Case)] = &[
         "a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time",
         |open| a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open).boxed(),
     ),
-    (
-        "a_deleted_scope_is_as_unused_as_before_its_first_save",
-        |open| a_deleted_scope_is_as_unused_as_before_its_first_save(open).boxed(),
-    ),
+    ("a_deleted_scope_holds_no_snapshot", |open| {
+        a_deleted_scope_holds_no_snapshot(open).boxed()
+    }),
     (
         "delete_scope_is_idempotent_and_keeps_other_scopes",
         |open| delete_scope_is_idempotent_and_keeps_other_scopes(open).boxed(),
@@ -1179,11 +1178,13 @@ async fn a_save_a_restore_and_a_delete_in_one_scope_run_at_the_same_time(open: O
     );
 }
 
-async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) {
+/// A delete of all snapshots leaves the scope with no snapshot: the listing is empty, and no name
+/// resolves. A caller never writes into the scope after it, because a delete that got no answer
+/// can still land, so the test writes nothing there.
+async fn a_deleted_scope_holds_no_snapshot(open: OpenStore) {
     let store = open();
     let scope = new_scope();
     let old = new_tree(&one_file("old"));
-    let new = new_tree(&one_file("new tree"));
     store
         .save(
             &scope,
@@ -1211,27 +1212,9 @@ async fn a_deleted_scope_is_as_unused_as_before_its_first_save(open: OpenStore) 
     let names = listed_names(&*store, &scope).await;
     let stat = store.stat(&scope, &name("p-1")).await.unwrap();
     let restore = restored(&*store, &scope, &name("p-2")).await;
-    store
-        .save(
-            &scope,
-            &name("p-1"),
-            new.path(),
-            None,
-            crate::filesystem_snapshot::never_cancelled(),
-            &slots(),
-        )
-        .await
-        .unwrap();
 
     assert!(is_not_found(&restore), "{restore:?}");
-    assert_eq!(
-        (
-            names,
-            stat,
-            restored_listing(&*store, &scope, &name("p-1")).await
-        ),
-        (Vec::<String>::new(), None, listing(new.path()))
-    );
+    assert_eq!((names, stat), (Vec::<String>::new(), None));
 }
 
 async fn delete_scope_is_idempotent_and_keeps_other_scopes(open: OpenStore) {

@@ -48,6 +48,10 @@ use tree::{TreeEntry, read_tree, tree_info, write_tree};
 /// a symlink gives `Source` and publishes nothing.
 pub(crate) struct InMemorySnapshotStore {
     agents: Arc<Mutex<HashMap<AgentSnapshots, Arc<[Stored]>>>>,
+    /// The agents whose snapshots a delete of all snapshots removed, and each write that a caller
+    /// then made into one of them. A caller never writes into such an agent, so each write there
+    /// is a misuse that a test surfaces.
+    deleted: Arc<Mutex<Deleted>>,
     clock: Arc<dyn Clock>,
     /// Cancelled when the store shuts down.
     shut_down: CancellationToken,
@@ -59,6 +63,7 @@ impl Clone for InMemorySnapshotStore {
     fn clone(&self) -> Self {
         Self {
             agents: Arc::clone(&self.agents),
+            deleted: Arc::clone(&self.deleted),
             clock: Arc::clone(&self.clock),
             shut_down: CancellationToken::new(),
             works: AgentWorks::default(),
@@ -70,6 +75,30 @@ impl Default for InMemorySnapshotStore {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The agents whose snapshots a delete of all snapshots removed, and the writes into them.
+#[derive(Default)]
+struct Deleted {
+    agents: std::collections::HashSet<AgentSnapshots>,
+    writes: Vec<String>,
+}
+
+/// The misuse of a write `operation` into `agent` after a delete of all its snapshots, when the
+/// store deleted all snapshots of each agent of `deleted`. A delete that ended without an answer
+/// can still land after the delete of all snapshots gave its answer, so a caller never writes
+/// into such an agent.
+fn write_after_delete_all(
+    deleted: &std::collections::HashSet<AgentSnapshots>,
+    agent: &AgentSnapshots,
+    operation: &str,
+) -> Option<String> {
+    deleted.contains(agent).then(|| {
+        format!(
+            "a {operation} into {agent:?} after a delete of all its snapshots: a caller never \
+             writes into an agent whose snapshots were all deleted"
+        )
+    })
 }
 
 /// One snapshot of an agent.
@@ -91,10 +120,36 @@ impl InMemorySnapshotStore {
     fn with_clock(clock: Arc<dyn Clock>) -> Self {
         Self {
             agents: Arc::default(),
+            deleted: Arc::default(),
             clock,
             shut_down: CancellationToken::new(),
             works: AgentWorks::default(),
         }
+    }
+
+    /// Each write that a caller made into an agent after a delete of all its snapshots.
+    pub(crate) fn writes_after_delete_all(&self) -> Vec<String> {
+        self.deleted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .writes
+            .clone()
+    }
+
+    /// Records the write `operation` into `agent` when it comes after a delete of all its
+    /// snapshots, and gives the failure of the call then.
+    fn refuse_write_after_delete_all(
+        &self,
+        agent: &AgentSnapshots,
+        operation: &str,
+    ) -> Option<Failed> {
+        let mut deleted = self
+            .deleted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let misuse = write_after_delete_all(&deleted.agents, agent, operation)?;
+        deleted.writes.push(misuse.clone());
+        Some(Failed::new(anyhow::anyhow!(misuse)))
     }
 
     /// Takes the one slot of a call, or gives why the call stops.
@@ -169,6 +224,9 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         slots: &dyn RunSlots,
     ) -> Result<SnapshotInfo, SaveError> {
         let _work = begin_operation(&self.works, agent);
+        if let Some(misuse) = self.refuse_write_after_delete_all(agent, "save") {
+            return Err(SaveError::Failed(misuse));
+        }
         let _slot = self.slot(slots).await.map_err(SaveError::Stopped)?;
         let snapshots = self.snapshots_of(agent);
         if found(&snapshots, name).is_some() {
@@ -282,6 +340,11 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
         };
         let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         self.agents().remove(agent);
+        self.deleted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .agents
+            .insert(agent.clone());
         Ok(())
     }
 
@@ -295,6 +358,9 @@ impl FilesystemSnapshotStore for InMemorySnapshotStore {
             begin_operation(&self.works, from),
             begin_operation(&self.works, to),
         );
+        if let Some(misuse) = self.refuse_write_after_delete_all(to, "copy") {
+            return Err(CallError::Failed(misuse));
+        }
         let _slot = self.slot(slots).await.map_err(CallError::Stopped)?;
         // The snapshots never change, so the two agents can hold the same slice and stay
         // independent. A change for one agent puts a new slice in place for that agent only. When

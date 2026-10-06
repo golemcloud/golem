@@ -291,7 +291,10 @@ cannot continue deletion against, or evict cache state belonging to, a replaceme
 `AgentId`. The `DurableStateRemoved` stage calls `WorkerService::remove` with a closure that
 requests `delete_all_snapshots` for the deleting incarnation right after the oplog delete, also when
 the stored identity is gone or belongs to another incarnation. A fenced delete requests nothing.
-The store's `delete_all` waits for the store work of the incarnation that began before it.
+The store's `delete_all` waits for the store work of the incarnation that began before it. A
+delete of `delete_all` that got no answer can still land after it answered, so nothing writes a
+scope after a delete of all its snapshots; each incarnation and each fork stage has its own
+fingerprint, so nothing needs to.
 
 The bounded unload result and final cleanup completion are separate facts. An unload timeout
 permanently fails that deletion attempt, while module-owned cleanup continues. A later explicit

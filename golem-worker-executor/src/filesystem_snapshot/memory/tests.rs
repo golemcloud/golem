@@ -206,3 +206,46 @@ mod unix {
         assert!(listed.is_empty(), "{listed:?}");
     }
 }
+
+/// A caller never writes into an agent after a delete of all its snapshots. The test store refuses
+/// such a save or copy, and records it for the finish step of the tests that use it.
+#[test]
+async fn a_save_or_a_copy_into_an_agent_after_a_delete_of_all_its_snapshots_is_refused_and_recorded()
+ {
+    let store = InMemorySnapshotStore::new();
+    let (deleted, other) = (new_scope(), new_scope());
+    let tree = tree_with("tree");
+    store
+        .delete_all(&deleted, &crate::filesystem_snapshot::Unlimited)
+        .await
+        .unwrap();
+
+    let saved = store
+        .save(
+            &deleted,
+            &SnapshotName::new("p-after").unwrap(),
+            tree.path(),
+            None,
+            crate::filesystem_snapshot::never_cancelled(),
+            &crate::filesystem_snapshot::Unlimited,
+        )
+        .await;
+    let copied = store
+        .copy_all(&other, &deleted, &crate::filesystem_snapshot::Unlimited)
+        .await;
+    let read = store
+        .list(&deleted, &crate::filesystem_snapshot::Unlimited)
+        .await;
+
+    assert!(matches!(saved, Err(SaveError::Failed(_))), "{saved:?}");
+    assert!(copied.is_err(), "{copied:?}");
+    assert!(read.is_ok_and(|listed| listed.is_empty()));
+    assert_eq!(
+        store
+            .writes_after_delete_all()
+            .iter()
+            .map(|write| write.split(" into ").next().unwrap_or_default().to_string())
+            .collect::<Vec<_>>(),
+        ["a save", "a copy"]
+    );
+}

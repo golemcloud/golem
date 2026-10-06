@@ -789,8 +789,10 @@ impl AgentFilesystemSnapshots {
     ///
     /// Until the delete ends, with success or with an error, an admission of the agent gives
     /// [`SnapshotSkip::DeletingAllSnapshots`], unless the bound of the clean-ups drops the request,
-    /// which is counted as `overflow`. An agent in `mode` that keeps no files has no
-    /// snapshots, and the call does nothing for it.
+    /// which is counted as `overflow`. A caller asks for it only for an incarnation or a fork
+    /// stage that nothing writes again: a delete that got no answer can still land after the
+    /// delete ended. An agent in `mode` that keeps no files has no snapshots, and the call does
+    /// nothing for it.
     pub(crate) fn delete_all_snapshots(&self, agent: &AgentSnapshots, mode: AgentMode) {
         if let Some(core) = self.enabled_for(mode) {
             let requested = core

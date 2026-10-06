@@ -372,6 +372,12 @@ impl TestFilesystemSnapshotStore {
         .unwrap_or_else(failed)
     }
 
+    /// Each write that a caller made into an agent after a delete of all its snapshots, which the
+    /// store refused. A caller never makes one, so a test can assert that this is empty.
+    pub fn writes_after_delete_all(&self) -> Vec<String> {
+        self.inner.writes_after_delete_all()
+    }
+
     /// Gives this store as the store of the service, with `uploads`, on any storage mode and
     /// whatever the configuration says.
     pub fn source(&self, uploads: FilesystemSnapshotUploadConfig) -> StoreSource {
