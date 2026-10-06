@@ -1429,11 +1429,10 @@ async fn scan_stable_resumes_past_deleted_keys(
     }
 }
 
-/// A drained multi-SQLite namespace keeps its files, so the walk still crosses them a page budget
-/// at a time.
+/// Draining multi-SQLite removes its database files, so later walks do no per-agent database work.
 #[test]
 #[tracing::instrument]
-async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
+async fn multi_sqlite_scan_stable_does_not_reopen_drained_files() {
     async fn walk(
         is: &MultiSqliteIndexedStorage,
         meta: &IndexedStorageMetaNamespace,
@@ -1505,9 +1504,16 @@ async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
     let (pages, seen) = walk(&is, &meta).await;
     assert!(seen.is_empty(), "every key was deleted");
     assert_eq!(
-        pages, 3,
-        "the drained files are still crossed two at a time, not opened all at once"
+        pages, 1,
+        "the drained files were removed, not traversed again"
     );
+    assert!(std::fs::read_dir(tempdir.path()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("durable-oplog-")
+    }));
 }
 
 /// A file created after a listing was cached still shows up in the next walk, because creating a

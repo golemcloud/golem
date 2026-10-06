@@ -27,6 +27,7 @@ use tracing::{error, info, warn};
 pub struct SqlitePool {
     read_pool: sqlx::SqlitePool,
     write_pool: sqlx::SqlitePool,
+    managed_file: bool,
 }
 
 impl SqlitePool {
@@ -34,6 +35,7 @@ impl SqlitePool {
         Self {
             read_pool,
             write_pool,
+            managed_file: false,
         }
     }
 
@@ -50,6 +52,84 @@ impl SqlitePool {
             .await?;
 
         Ok(Self::new(read_pool, write_pool))
+    }
+
+    /// Gracefully closes both pools. Managed-file callers own their operations through settlement
+    /// and disable connection retirement hooks; this is not a guarantee for arbitrary raw handles.
+    pub async fn close(&self) {
+        for pool in [&self.read_pool, &self.write_pool] {
+            loop {
+                pool.close().await;
+                if !self.managed_file || pool.size() == 0 {
+                    break;
+                }
+                // A returned connection can finish its ping after the idle drain. Keep the
+                // file's retirement registration until those late returns are drained too.
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
+    }
+
+    /// Pools whose file lifetime is managed by the multi-SQLite backend.
+    pub async fn configured_managed(config: &DbSqliteConfig) -> Result<Self, anyhow::Error> {
+        let options = config
+            .connect_options()
+            .create_if_missing(false)
+            .optimize_on_close(false, None);
+        let pool_options = SqlitePoolOptions::new()
+            .min_connections(0)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .test_before_acquire(false);
+        let read_pool = pool_options
+            .clone()
+            .max_connections(config.max_connections)
+            .connect_with(options.clone())
+            .await?;
+        match pool_options.max_connections(1).connect_with(options).await {
+            Ok(write_pool) => {
+                let mut pool = Self::new(read_pool, write_pool);
+                pool.managed_file = true;
+                Ok(pool)
+            }
+            Err(error) => {
+                read_pool.close().await;
+                Err(error.into())
+            }
+        }
+    }
+
+    /// Managed files cannot hide a failed rollback behind a business error: retirement would
+    /// otherwise mistake a fencing rejection for a fully settled transaction.
+    pub async fn with_managed_tx_err<R, E, F>(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        f: F,
+    ) -> Result<R, E>
+    where
+        R: Send,
+        E: std::fmt::Debug + Send + From<RepoError>,
+        F: for<'f> FnOnce(
+                &'f mut SqliteLabelledTransaction,
+            ) -> futures::future::BoxFuture<'f, Result<R, E>>
+            + Send,
+    {
+        if !self.managed_file {
+            return super::Pool::with_tx_err(self, svc_name, api_name, f).await;
+        }
+        use super::{LabelledPoolApi, LabelledPoolTransaction};
+        let mut tx = self.with_rw(svc_name, api_name).begin().await?;
+        match f(&mut tx).await {
+            Ok(result) => {
+                tx.commit().await?;
+                Ok(result)
+            }
+            Err(error) => {
+                tx.rollback().await?;
+                Err(error)
+            }
+        }
     }
 
     /// Pins a read connection for SQLite incremental BLOB I/O.
@@ -308,5 +388,19 @@ pub async fn migrate(
     migrator.run_direct(&mut conn).await?;
 
     let _ = conn.close().await;
+    Ok(())
+}
+
+/// Direct initialization for a managed file; close is part of initialization even on failure.
+pub async fn migrate_managed(
+    config: &DbSqliteConfig,
+    migrations: impl MigrationSource<'_>,
+) -> Result<(), anyhow::Error> {
+    let migrator = sqlx::migrate::Migrator::new(migrations).await?;
+    let mut conn = SqliteConnection::connect_with(&config.connect_options()).await?;
+    let result = migrator.run_direct(&mut conn).await;
+    let close = conn.close().await;
+    result?;
+    close?;
     Ok(())
 }

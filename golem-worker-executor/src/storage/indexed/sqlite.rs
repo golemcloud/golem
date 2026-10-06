@@ -23,8 +23,8 @@ use golem_common::SafeDisplay;
 use golem_common::config::DbSqliteConfig;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_common::model::ShardEpoch;
+use golem_service_base::db::PoolApi;
 use golem_service_base::db::sqlite::{SqliteLabelledTransaction, SqlitePool};
-use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::RepoError;
 use include_dir::include_dir;
@@ -47,6 +47,26 @@ pub struct SqliteIndexedStorage {
 }
 
 impl SqliteIndexedStorage {
+    pub(super) async fn configured_managed(
+        config: &DbSqliteConfig,
+    ) -> Result<Self, IndexedStorageError> {
+        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+        golem_service_base::db::sqlite::migrate_managed(config, migrations.sqlite_migrations())
+            .await
+            .map_err(|error| {
+                IndexedStorageError::initialization_failed("Managed SQLite migration failed", error)
+            })?;
+        let pool = SqlitePool::configured_managed(config)
+            .await
+            .map_err(|error| {
+                IndexedStorageError::initialization_failed(
+                    "Managed SQLite pool initialization failed",
+                    error,
+                )
+            })?;
+        Ok(Self { pool })
+    }
+
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, IndexedStorageError> {
         Self::migrate(config).await?;
 
@@ -78,7 +98,136 @@ impl SqliteIndexedStorage {
         Self { pool }
     }
 
-    fn namespace(namespace: IndexedStorageNamespace) -> String {
+    pub(super) async fn close(&self) {
+        self.pool.close().await;
+    }
+
+    #[cfg(test)]
+    pub(super) async fn hold_connection_for_test(&self) -> SqliteLabelledTransaction {
+        use golem_service_base::db::LabelledPoolApi;
+        self.pool
+            .with_ro("test", "retirement_barrier")
+            .begin()
+            .await
+            .unwrap()
+    }
+
+    #[cfg(test)]
+    pub(super) async fn fail_rollback_for_test(&self) -> Result<(), IndexedStorageError> {
+        self.pool
+            .with_managed_tx_err::<(), FencedTxError, _>("test", "rollback_failure", |tx| {
+                Box::pin(async move {
+                    // End the SQL transaction directly to make the subsequent labelled rollback fail.
+                    tx.execute(sqlx::query("ROLLBACK;")).await?;
+                    Err(FencedTxError::Fenced {
+                        key: "key".into(),
+                        expected: ShardEpoch(1),
+                        actual: None,
+                    })
+                })
+            })
+            .await
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
+    }
+
+    /// Presence markers and staged entries keep a database alive, even without visible oplogs.
+    pub(super) async fn empty_database_epochs(
+        &self,
+    ) -> Result<Option<Vec<(String, String, i64)>>, IndexedStorageError> {
+        // The caller holds exclusive file admission across both reads.
+        let mut reader = self.pool.with_ro("multi_sqlite", "empty_database");
+        let (present,): (bool,) = reader
+            .fetch_one_as(sqlx::query_as(
+                "SELECT EXISTS(SELECT 1 FROM index_storage);",
+            ))
+            .await
+            .map_err(Self::classify_repo_error)?;
+        if present {
+            return Ok(None);
+        }
+        reader
+            .fetch_all_as(sqlx::query_as(
+                "SELECT namespace, key, epoch FROM indexed_key_epoch;",
+            ))
+            .await
+            .map(Some)
+            .map_err(Self::classify_repo_error)
+    }
+
+    pub(super) async fn restore_database_epochs(
+        &self,
+        epochs: Vec<(String, String, i64)>,
+    ) -> Result<(), IndexedStorageError> {
+        self.pool
+            .with_managed_tx_err::<_, RepoError, _>("multi_sqlite", "restore_epochs", |tx| {
+                Box::pin(async move {
+                    for (namespace, key, epoch) in epochs {
+                        tx.execute(
+                            sqlx::query(
+                                "INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?);",
+                            )
+                            .bind(namespace)
+                            .bind(key)
+                            .bind(epoch),
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(Self::classify_repo_error)
+    }
+
+    // A record in the shared metadata database transfers authority away from the per-agent file.
+    // It is removed only after that file has been recreated with all its writer generations.
+    pub(super) async fn database_epoch_snapshot(
+        &self,
+        file: &str,
+    ) -> Result<Option<Vec<(String, String, i64)>>, IndexedStorageError> {
+        let row: Option<(Vec<u8>,)> = self.pool.with_ro("multi_sqlite", "epoch_snapshot")
+            .fetch_optional_as(sqlx::query_as(
+                "SELECT value FROM index_storage WHERE namespace = 'database-epochs' AND key = ? AND id = 0;",
+            ).bind(file)).await.map_err(Self::classify_repo_error)?;
+        row.map(|(bytes,)| {
+            serde_json::from_slice(&bytes).map_err(|error| {
+                IndexedStorageError::Other(format!("Invalid epoch snapshot for {file}: {error}"))
+            })
+        })
+        .transpose()
+    }
+
+    pub(super) async fn save_database_epoch_snapshot(
+        &self,
+        file: &str,
+        epochs: Vec<(String, String, i64)>,
+    ) -> Result<(), IndexedStorageError> {
+        let bytes = serde_json::to_vec(&epochs).map_err(|error| {
+            IndexedStorageError::Other(format!("Failed to encode epochs for {file}: {error}"))
+        })?;
+        self.pool.with_rw("multi_sqlite", "save_epochs").execute(sqlx::query(
+            "INSERT INTO index_storage (namespace, key, id, value) VALUES ('database-epochs', ?, 0, ?) ON CONFLICT(namespace, key, id) DO UPDATE SET value = excluded.value;",
+        ).bind(file).bind(bytes)).await.map(|_| ()).map_err(Self::classify_repo_error)
+    }
+
+    pub(super) async fn delete_database_epoch_snapshot(
+        &self,
+        file: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.pool
+            .with_rw("multi_sqlite", "delete_epochs")
+            .execute(
+                sqlx::query(
+                    "DELETE FROM index_storage WHERE namespace = 'database-epochs' AND key = ?;",
+                )
+                .bind(file),
+            )
+            .await
+            .map(|_| ())
+            .map_err(Self::classify_repo_error)
+    }
+
+    pub(super) fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
                 agent_id: _,
@@ -123,7 +272,7 @@ impl SqliteIndexedStorage {
     /// cross to `i64` first. Checked, like Postgres's own `to_i64`: an unchecked `as i64` on a
     /// value above `i64::MAX` wraps to negative, and reading that back `as u64` produces a
     /// spuriously huge epoch instead of failing loudly.
-    fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
+    pub(super) fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
         i64::try_from(value).map_err(|_| {
             IndexedStorageError::Other(format!(
                 "SQLite indexed storage cannot represent {field_name}={value} as i64"
@@ -134,7 +283,7 @@ impl SqliteIndexedStorage {
     /// A stored epoch that will not fit a `u64` is corruption, not a fence: `to_i64` refuses to
     /// write one, so a negative column value came from outside this code, and reading it back as
     /// `u64` would wrap it into a spuriously huge epoch.
-    fn negative_epoch_message(value: i64, key: &str) -> String {
+    pub(super) fn negative_epoch_message(value: i64, key: &str) -> String {
         format!("SQLite indexed storage read a negative epoch {value} for key '{key}'")
     }
 
@@ -167,7 +316,7 @@ impl SqliteIndexedStorage {
         FencedTxError::check_record(key, expected, stored, Self::negative_epoch_message)
     }
 
-    fn classify_repo_error(err: RepoError) -> IndexedStorageError {
+    pub(super) fn classify_repo_error(err: RepoError) -> IndexedStorageError {
         if err.is_transient() {
             IndexedStorageError::Transient(err.to_string())
         } else {
@@ -328,7 +477,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         }
 
         self.pool
-            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+            .with_managed_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
                     // SQLite has no `SELECT ... FOR UPDATE`, and it does not need one here: the
                     // write pool is capped at a single connection (golem-service-base
@@ -442,7 +591,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool
-            .with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
+            .with_managed_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
                     // The single-connection write pool makes the check, the emptiness test and
                     // the delete one step, as it does for an append (see `append_many`).
@@ -485,7 +634,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool
-            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+            .with_managed_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
                     // The single-connection write pool makes the check and the deletes one
                     // step, as it does for an append (see `append_many`).
@@ -564,7 +713,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         let source_key = source_key.to_string();
         let target_key = target_key.to_string();
         let result = self.pool
-            .with_tx(svc_name, api_name, |tx| {
+            .with_managed_tx_err::<bool, RepoError, _>(svc_name, api_name, |tx| {
                 async move {
                     // Acquire the write lock before reading the source. A read-first
                     // transaction cannot upgrade its snapshot after a concurrent write.
@@ -781,7 +930,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool
-            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+            .with_managed_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
                     // The single-connection write pool makes the check and the trim one step,
                     // as it does for an append (see `append_many`).
