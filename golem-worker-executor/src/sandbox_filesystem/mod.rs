@@ -370,6 +370,15 @@ impl FilesystemVolume {
         }
     }
 
+    /// Whether the volume makes copy-on-write copies of files: `copy_contents` and `seed` then
+    /// share extents instead of copying bytes.
+    pub(crate) fn copies_on_write(&self) -> bool {
+        match &self.mode {
+            FilesystemVolumeMode::CopyOnWrite { .. } => true,
+            FilesystemVolumeMode::UnmanagedDevelopment => false,
+        }
+    }
+
     #[cfg(target_os = "linux")]
     fn copy_on_write_root(&self) -> Option<&Arc<File>> {
         match &self.mode {
@@ -1673,6 +1682,17 @@ mod tests {
             storage_profile(&copy_on_write_volume()),
             NativeStorageProfile::KnownLocal
         );
+    }
+
+    #[test]
+    fn a_development_volume_makes_no_copy_on_write_copies() {
+        assert!(!FilesystemVolume::unmanaged_development().copies_on_write());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_copy_on_write_volume_makes_copy_on_write_copies() {
+        assert!(copy_on_write_volume().copies_on_write());
     }
 
     #[cfg(target_os = "linux")]

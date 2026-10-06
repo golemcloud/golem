@@ -1996,6 +1996,7 @@ mod tests {
             provisioning.agent_accounting(),
             AgentAccounting::ProjectQuotas
         );
+        assert!(provisioning.volume().copies_on_write());
         assert!(directories.scratch.path().as_path().is_dir());
         assert!(directories.initial_files.path().as_path().is_dir());
 
@@ -3029,6 +3030,7 @@ mod tests {
             provisioning.agent_accounting(),
             AgentAccounting::Unaccounted
         );
+        assert!(provisioning.volume().copies_on_write());
         [root.join(".scratch"), root.join(".initial-files")]
             .into_iter()
             .for_each(|host_directory| {

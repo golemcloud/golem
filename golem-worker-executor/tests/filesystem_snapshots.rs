@@ -1575,7 +1575,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
 
 #[test]
 #[timeout("2m")]
-async fn managed_snapshots_on_unmanaged_storage_fail_at_startup(
+async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1600,12 +1600,14 @@ async fn managed_snapshots_on_unmanaged_storage_fail_at_startup(
 
     match started {
         Ok(_) => Err(anyhow!(
-            "the executor started with managed snapshots on unmanaged storage"
+            "the executor started with managed snapshots on storage without copy-on-write"
         )),
         Err(error) => {
             let message = format!("{error:#}");
             assert!(
-                message.contains("filesystem snapshots require managed XFS storage"),
+                message.contains(
+                    "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                ),
                 "{message}"
             );
             Ok(())
