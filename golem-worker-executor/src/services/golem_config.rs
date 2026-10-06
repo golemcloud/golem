@@ -2171,26 +2171,47 @@ pub struct FilesystemStorageConfig {
     /// Retry policy for deleting and verifying runtime filesystem directories.
     /// `max_attempts` includes the initial deletion attempt.
     pub cleanup_retry: RetryConfig,
-    /// When set, use deterministic per-agent directory names rooted at this
-    /// path instead of random OS temp directories. The directory structure is:
-    ///
-    /// ```text
-    /// <root>/<environment_id>/<component_id>/<agent_name>/
-    /// ```
-    ///
-    /// This allows external tools to locate an agent's filesystem by its id.
-    /// Directories are cleaned up when the worker is dropped, just like temp
-    /// dirs. When `None` (the default), random temp directories are used.
-    pub deterministic_root_dir: Option<PathBuf>,
-    /// Dedicated XFS root managed through project quotas. Managed mode is
-    /// fail-closed and cannot be combined with `deterministic_root_dir`.
-    pub managed_xfs_root_dir: Option<PathBuf>,
+    /// Where the agent filesystems live, and how the executor accounts for them.
+    pub storage: FilesystemStorageMode,
     /// Private policy for deriving an agent's filesystem-object hard limit
     /// proportionally from its allocated-byte limit, with fixed bounds.
     pub filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
     /// Physical capacity watermarks for managed filesystem pressure recovery.
     #[serde(default)]
     pub pressure: FilesystemPressureConfig,
+}
+
+/// The storage of the agent filesystems. Exactly one mode applies.
+///
+/// With a root, an agent filesystem is the directory `<root>/<environment_id>/<component_id>/<agent_name>/`,
+/// so external tools can find it by the id of the agent. The executor also makes the host
+/// directories `.scratch` and `.initial-files` directly under the root.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum FilesystemStorageMode {
+    /// Development storage in a new temporary directory for each agent filesystem.
+    #[default]
+    Temporary,
+    /// Development storage under `root`, on any filesystem.
+    Directory { root: PathBuf },
+    /// XFS with project quotas, at the root of a dedicated XFS filesystem. Each agent filesystem
+    /// is a project, which enforces its disk limits and measures its usage. Copies are reflinks.
+    ManagedXfs { root: PathBuf },
+    /// XFS with reflink and without project quotas, at the root of a dedicated XFS filesystem.
+    /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
+    /// per-agent usage.
+    ReflinkXfs { root: PathBuf },
+}
+
+impl SafeDisplay for FilesystemStorageMode {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::Temporary => "temporary directories".to_string(),
+            Self::Directory { root } => format!("directory at {}", root.display()),
+            Self::ManagedXfs { root } => format!("managed XFS at {}", root.display()),
+            Self::ReflinkXfs { root } => format!("reflink XFS at {}", root.display()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -3002,12 +3023,7 @@ impl SafeDisplay for FilesystemStorageConfig {
             "{}",
             self.cleanup_retry.to_safe_string_indented()
         );
-        if let Some(root) = &self.deterministic_root_dir {
-            let _ = writeln!(&mut result, "deterministic root dir: {}", root.display());
-        }
-        if let Some(root) = &self.managed_xfs_root_dir {
-            let _ = writeln!(&mut result, "managed XFS root dir: {}", root.display());
-        }
+        let _ = writeln!(&mut result, "storage: {}", self.storage.to_safe_string());
         let _ = writeln!(&mut result, "filesystem object limit policy:");
         let _ = writeln!(
             &mut result,
@@ -3031,8 +3047,7 @@ impl Default for FilesystemStorageConfig {
                 multiplier: 4.0,
                 max_jitter_factor: None,
             },
-            deterministic_root_dir: None,
-            managed_xfs_root_dir: None,
+            storage: FilesystemStorageMode::Temporary,
             filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig::default(),
             pressure: FilesystemPressureConfig::default(),
         }

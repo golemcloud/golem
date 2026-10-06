@@ -1,6 +1,7 @@
 use super::tests::{no_initial_files, scratch_directory};
 use super::*;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::golem_config::FilesystemStorageMode;
 use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
@@ -1261,8 +1262,11 @@ async fn filesystem_workload_benchmark() {
     let quick = std::env::var_os("GOLEM_FILESYSTEM_BENCH_QUICK").is_some_and(|value| value == "1");
     let (provisioning, limits, filesystem_metering) = match mode.as_str() {
         "managed" => (
-            SandboxFilesystemProvisioning::new(None, Some(managed_root), RetryConfig::default())
-                .unwrap(),
+            SandboxFilesystemProvisioning::new(
+                &FilesystemStorageMode::ManagedXfs { root: managed_root },
+                RetryConfig::default(),
+            )
+            .unwrap(),
             ResolvedStorageLimits::Finite(FilesystemLimits {
                 allocated_bytes: STORAGE_LIMIT_BYTES,
                 filesystem_objects: STORAGE_LIMIT_OBJECTS,
@@ -1270,8 +1274,11 @@ async fn filesystem_workload_benchmark() {
             true,
         ),
         "managed-unmetered" => (
-            SandboxFilesystemProvisioning::new(None, Some(managed_root), RetryConfig::default())
-                .unwrap(),
+            SandboxFilesystemProvisioning::new(
+                &FilesystemStorageMode::ManagedXfs { root: managed_root },
+                RetryConfig::default(),
+            )
+            .unwrap(),
             ResolvedStorageLimits::Finite(FilesystemLimits {
                 allocated_bytes: STORAGE_LIMIT_BYTES,
                 filesystem_objects: STORAGE_LIMIT_OBJECTS,
@@ -1282,8 +1289,11 @@ async fn filesystem_workload_benchmark() {
             let root = managed_root.join("unmanaged-workload-benchmark");
             std::fs::create_dir_all(&root).unwrap();
             (
-                SandboxFilesystemProvisioning::new(Some(root), None, RetryConfig::default())
-                    .unwrap(),
+                SandboxFilesystemProvisioning::new(
+                    &FilesystemStorageMode::Directory { root },
+                    RetryConfig::default(),
+                )
+                .unwrap(),
                 ResolvedStorageLimits::Unlimited,
                 false,
             )

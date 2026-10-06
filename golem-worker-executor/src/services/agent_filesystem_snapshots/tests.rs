@@ -21,6 +21,7 @@ use crate::filesystem_snapshot::{
 };
 use crate::services::agent_filesystem::RestoreTree;
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
+use crate::services::golem_config::FilesystemStorageMode;
 use async_trait::async_trait;
 use futures::FutureExt as _;
 use futures::StreamExt as _;
@@ -3348,12 +3349,11 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
         .map(std::path::PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let storage = crate::services::golem_config::FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
+        storage: FilesystemStorageMode::ManagedXfs { root },
         ..crate::services::golem_config::FilesystemStorageConfig::default()
     };
     let provisioning = crate::sandbox_filesystem::SandboxFilesystemProvisioning::new(
-        storage.deterministic_root_dir.clone(),
-        storage.managed_xfs_root_dir.clone(),
+        &storage.storage,
         storage.cleanup_retry.clone(),
     )
     .unwrap();

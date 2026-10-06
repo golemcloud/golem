@@ -6,6 +6,7 @@ use crate::sandbox_filesystem::{
     ScriptedSandboxPathCall,
 };
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::golem_config::FilesystemStorageMode;
 use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
@@ -111,7 +112,9 @@ pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathB
         .join(agent_path_segment(&id.agent_id));
     let created = create_fresh(
         sandbox_provisioning(&FilesystemStorageConfig {
-            deterministic_root_dir: Some(parent.to_path_buf()),
+            storage: FilesystemStorageMode::Directory {
+                root: parent.to_path_buf(),
+            },
             ..FilesystemStorageConfig::default()
         })
         .unwrap(),
@@ -175,18 +178,13 @@ pub(super) fn sandbox_error(
 fn sandbox_provisioning(
     settings: &FilesystemStorageConfig,
 ) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
-    SandboxFilesystemProvisioning::new(
-        settings.deterministic_root_dir.clone(),
-        settings.managed_xfs_root_dir.clone(),
-        settings.cleanup_retry.clone(),
-    )
+    SandboxFilesystemProvisioning::new(&settings.storage, settings.cleanup_retry.clone())
 }
 
 /// Makes the host directories on unmanaged storage with a temporary root.
 async fn host_directories() -> HostDirectories {
     SandboxFilesystemProvisioning::provision(
-        None,
-        None,
+        &FilesystemStorageMode::Temporary,
         golem_common::model::RetryConfig::default(),
     )
     .await
@@ -5637,7 +5635,9 @@ async fn idle_downgrade_over_usage_requires_unload_without_resource_window() {
 async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        storage: FilesystemStorageMode::Directory {
+            root: parent.path().to_path_buf(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -5667,7 +5667,9 @@ async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
     // segments, so the name of the sandbox directory is the path segment of the agent.
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        storage: FilesystemStorageMode::Directory {
+            root: parent.path().to_path_buf(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = OwnedAgentId::new(
@@ -5705,7 +5707,9 @@ async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
 async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent_deletion() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        storage: FilesystemStorageMode::Directory {
+            root: parent.path().to_path_buf(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -5752,7 +5756,9 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
 async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permissions() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        storage: FilesystemStorageMode::Directory {
+            root: parent.path().to_path_buf(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -5955,7 +5961,9 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
 async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read_only_one() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        storage: FilesystemStorageMode::Directory {
+            root: parent.path().to_path_buf(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -6094,7 +6102,7 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
+        storage: FilesystemStorageMode::ManagedXfs { root },
         ..FilesystemStorageConfig::default()
     };
     let initial_limits = limits(128 * 1024 * 1024, 8192);
@@ -6141,7 +6149,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
+        storage: FilesystemStorageMode::ManagedXfs { root },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -7857,8 +7865,9 @@ async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
 async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
     let parent = tempfile::tempdir().unwrap();
     let provisioning = SandboxFilesystemProvisioning::new(
-        Some(parent.path().to_path_buf()),
-        None,
+        &FilesystemStorageMode::Directory {
+            root: parent.path().to_path_buf(),
+        },
         golem_common::model::RetryConfig {
             max_attempts: 1,
             ..Default::default()

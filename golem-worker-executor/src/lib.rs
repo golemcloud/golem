@@ -210,7 +210,7 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
         source,
-        filesystems.volume().is_managed(),
+        filesystems.agent_accounting() == crate::sandbox_filesystem::AgentAccounting::ProjectQuotas,
         shutdown,
     )
     .map_err(|error| anyhow!(error))
@@ -1468,6 +1468,7 @@ mod tests {
     use crate::services::agent_filesystem::file_creation_mask_for_test::{
         thread_file_creation_mask, with_private_file_creation_mask,
     };
+    use crate::services::golem_config::FilesystemStorageMode;
     use crate::workerctx::default::Context;
     use test_r::test;
 
@@ -1513,7 +1514,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let key: Box<str> = "00".repeat(64).into_boxed_str();
         let mut golem_config = GolemConfig::default();
-        golem_config.filesystem_storage.deterministic_root_dir = Some(root.path().to_path_buf());
+        golem_config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+            root: root.path().to_path_buf(),
+        };
         golem_config.filesystem_snapshots =
             services::golem_config::FilesystemSnapshotsConfig::Managed(Box::new(
                 services::golem_config::FilesystemSnapshotStoreConfig::new(
