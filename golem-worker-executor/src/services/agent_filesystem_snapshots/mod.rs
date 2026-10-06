@@ -482,7 +482,8 @@ struct Core {
 impl AgentFilesystemSnapshots {
     /// Makes the service that the configuration asks for, as [`decisions::binding`] says, with the
     /// store of `source`. `copy_on_write` tells whether the volume of the agent filesystems makes
-    /// copy-on-write copies. When `shutdown` ends, the service stops its jobs and shuts the store down.
+    /// copy-on-write copies. When `shutdown` ends, the service stops its jobs and shuts the store
+    /// down.
     /// This is the only constructor of the service.
     pub(crate) fn bind(
         config: &FilesystemSnapshotsConfig,
