@@ -289,7 +289,7 @@ A **filesystem snapshot** fixes this. It is a copy of the agent's [filesystem](/
 The application snapshot and the filesystem snapshot of one snapshot record form one restore point. Golem uses a restore point only when both parts are there:
 
 - For an automatic snapshot: when the filesystem snapshot is missing, is not confirmed yet, or does not restore, or when the application snapshot does not load, Golem uses an older restore point: the previous usable automatic snapshot, then the last manual-update snapshot, then a full replay of the oplog. See [How snapshot restoration runs](#how-snapshot-restoration-runs).
-- For a manual update: when Golem cannot take both parts, the update fails, and the agent stays on its current revision. When the restore point of a completed manual update does not restore, the start of the agent fails with a visible cause, because Golem cannot go back to the history before the update.
+- For a manual update: when Golem cannot take both parts, the update fails, and the agent stays on its current revision. When the restore point of a completed manual update does not restore, Golem cannot go back to the history before the update. After a temporary storage error, the start tries again. After an error that a new try cannot fix, such as a missing snapshot, the start of the agent fails with a visible cause.
 
 A snapshot record without a filesystem snapshot name is also a valid restore point on an executor with filesystem snapshots. It means that the agent's files were exactly the initial files of the component revision. A start from it puts the initial files in place.
 
@@ -311,7 +311,7 @@ Ephemeral agents get no filesystem snapshot. Golem never restores an ephemeral a
 
 ### When a snapshot becomes usable
 
-A snapshot record with a filesystem snapshot name becomes usable only when its confirmation entry follows it in the oplog. A record without a name is usable at once.
+A snapshot record with a filesystem snapshot name becomes usable only when its confirmation record follows it in the oplog. A record without a name is usable at once.
 
 At most one upload runs for each agent. While it runs, Golem skips the next automatic snapshot of the agent: your snapshot code does not run, and Golem writes no record. There is one exception. When an upload failed and waits to try again, the next automatic snapshot replaces it. The record of the replaced upload never becomes usable. Golem also skips an automatic snapshot when the free space of the executor's volume is low.
 
@@ -327,7 +327,7 @@ After a restore, the files are the files that the agent had at the capture. This
 
 ### Manual updates
 
-A manual update also captures the files. The update waits until the upload of the filesystem snapshot is complete, and only then writes its update record. If an automatic snapshot upload of the agent runs at that moment, the update waits for the upload that runs now, but not for later retries of it. The update waits for at most a limit that the operator sets, 60 seconds by default. When the upload still runs after this limit, the update fails. The update also fails at once when the free space of the executor's volume is low, or while Golem deletes the filesystem snapshots of the agent.
+A manual update also captures the files. The update waits until the upload of the filesystem snapshot is complete, and only then writes its update record. If an automatic snapshot upload of the agent runs at that moment, the update waits for that upload for at most a limit that the operator sets, 60 seconds by default. It does not wait for later retries of that upload. When that upload still runs after the limit, the update fails. The update also fails at once when the free space of the executor's volume is low, or while Golem deletes the filesystem snapshots of the agent.
 
 At the start in the target revision, Golem restores the files and then applies the initial files of the target revision. The files that the agent wrote in the old revision are kept. If the target revision changes the declaration of an initial file at a path where the agent wrote or changed the file, the update fails. The error names the path, and the agent stays on its current revision with its files.
 
@@ -338,7 +338,7 @@ At the start in the target revision, Golem restores the files and then applies t
 | Your snapshot code fails                         | Golem writes no snapshot record and restarts the agent. The agent replays its oplog from its last restore point, so each failed save costs a restart and a replay. | The update fails, and the agent stays on its current revision.   |
 | The capture of the files fails or waits too long | Golem writes no snapshot record. The agent continues, and the next snapshot boundary tries again.                                                | The update fails, and the agent stays on its current revision.   |
 | The upload fails after its retries               | The snapshot record stays without a confirmation. A start uses an older restore point.                                                          | The update fails, and the agent stays on its current revision.   |
-| The filesystem snapshot does not restore         | The start uses an older restore point.                                                                                                          | The start of the agent fails with a visible cause.               |
+| The filesystem snapshot does not restore         | The start uses an older restore point.                                                                                                          | The start tries again after a temporary error. Otherwise it fails with a visible cause. |
 
 ### Code that leaves a stream write unflushed
 
@@ -381,6 +381,7 @@ A typed snapshot with a file-backed database relies on filesystem snapshots. An 
 These cases make the save fail:
 
 - A database with an open transaction, also a file-backed one. Commit or roll back before the invocation ends.
+- A field that holds a closed `DatabaseSync`. Remove the field, or set it to an open database, before the invocation ends.
 - A field that holds a `StatementSync`, a `Session` or a `SQLTagStore`.
 
 A failed save has the effect in [When a snapshot fails](#when-a-snapshot-fails): for an automatic snapshot, Golem restarts the agent, which replays its oplog; for a manual update, the update fails.
