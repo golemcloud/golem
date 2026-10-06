@@ -128,7 +128,7 @@ For configuration, recovery, and deletion diagnostics, see [Operating Durable St
 
 | Metric                                            | Type      | Labels            | Description                                                                      |
 | ------------------------------------------------- | --------- | ----------------- | -------------------------------------------------------------------------------- |
-| `filesystem_snapshot_capture_seconds`             | histogram | `outcome`         | Time that a capture of an agent filesystem stops the file calls                  |
+| `filesystem_snapshot_capture_seconds`             | histogram | `outcome`         | Time that a capture of an agent filesystem, or a check of its initial files on an executor without filesystem snapshots, stops the file calls |
 | `filesystem_snapshot_upload_seconds`              | histogram | `kind`, `outcome` | Time of an upload of a filesystem snapshot, with its retries                     |
 | `filesystem_snapshot_uploaded_bytes_total`        | counter   | `kind`            | File sizes of the trees of the uploaded filesystem snapshots                     |
 | `filesystem_snapshot_uploads_in_progress`         | gauge     |                   | Runs of uploads that hold a slot now                                             |
