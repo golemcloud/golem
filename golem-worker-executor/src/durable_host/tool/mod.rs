@@ -4163,9 +4163,7 @@ where
             return Err(error.into());
         }
     };
-    if replaying_incomplete
-        && let Some(started) = completed_supervisor_started.take()
-    {
+    if replaying_incomplete && let Some(started) = completed_supervisor_started.take() {
         let _ = started.send(());
     }
     let outcome = durability
