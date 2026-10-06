@@ -34,3 +34,17 @@ modes must not silently discard user parts; unsupported DB composition fails.
 expectations. Generic host rendering consumes the framing cases but does not
 enforce SDK envelope, namespace, or principal policy. SDK envelope tests belong
 at each SDK's envelope boundary, separately from these generic framing cases.
+
+Effect, TypeScript, Rust, Scala and the host renderer read this corpus directly
+in their scoped multipart tests. MoonBit WASM tests cannot read repository files;
+run `python3 test-data/snapshot-multipart/check-moonbit.py` from the repository
+root to translate the corpus into temporary whitebox tests, execute them with
+the SDK host-import runner, and remove the generated file. Expectations still
+come from the shared hex values, independently of the decoder and wire builder.
+
+Real recovery and revision-changing manual updates for all five SDKs run with
+`cargo test -p golem-cli --test integration -- multipart_recovery_and_manual_update --report-time`.
+Build local SDK artifacts and the `golem` and `golem-cli` test binaries first,
+as for the other CLI integration suites. These tests assert a saved snapshot,
+replay-only suffix bytes, a loader-only restoration flag, and a successful manual
+update to revision 1 before checking recovery again.

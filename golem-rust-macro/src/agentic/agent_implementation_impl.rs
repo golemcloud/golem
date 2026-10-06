@@ -423,7 +423,7 @@ fn generate_base_agent_impl(
     let snapshot_impl = match snapshot_mode {
         SnapshotMode::Multipart => quote! {
               async fn save_snapshot_base(&self) -> Result<golem_rust::agentic::SnapshotData, String> {
-                  Ok(golem_rust::agentic::SnapshotData::Multipart(self.save_snapshot_parts().await?))
+                  self.save_snapshot_parts().await?.try_into()
               }
         },
         SnapshotMode::Bytes => {
@@ -517,7 +517,7 @@ fn generate_initiator_impl(
 ) -> proc_macro2::TokenStream {
     let restore = match snapshot_mode {
         SnapshotMode::Multipart => quote! {
-          let golem_rust::agentic::SnapshotData::Multipart(snapshot) = snapshot else { return Err("expected multipart snapshot".to_string()); };
+          let snapshot: golem_rust::agentic::MultipartSnapshot = snapshot.try_into()?;
           <#self_ty as #trait_path>::load_snapshot_parts(snapshot, context).await?
         },
         SnapshotMode::Bytes => quote! {

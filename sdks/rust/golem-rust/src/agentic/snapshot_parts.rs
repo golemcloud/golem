@@ -18,6 +18,31 @@ pub struct MultipartSnapshot {
     pub parts: BTreeMap<String, SnapshotPart>,
 }
 
+impl TryFrom<MultipartSnapshot> for super::SnapshotData {
+    type Error = String;
+
+    fn try_from(snapshot: MultipartSnapshot) -> Result<Self, Self::Error> {
+        Ok(Self::Multipart {
+            state: serde_json::to_vec(&snapshot.state).map_err(|e| e.to_string())?,
+            parts: snapshot.parts,
+        })
+    }
+}
+
+impl TryFrom<super::SnapshotData> for MultipartSnapshot {
+    type Error = String;
+
+    fn try_from(snapshot: super::SnapshotData) -> Result<Self, Self::Error> {
+        let super::SnapshotData::Multipart { state, parts } = snapshot else {
+            return Err("expected multipart snapshot".to_string());
+        };
+        Ok(Self {
+            state: serde_json::from_slice(&state).map_err(|e| e.to_string())?,
+            parts,
+        })
+    }
+}
+
 impl MultipartSnapshot {
     pub fn from_state<S: Serialize>(
         state: &S,
@@ -228,19 +253,29 @@ pub(super) fn parse_parts<'a>(boundary: &str, data: &'a [u8]) -> Option<Vec<Wire
 }
 
 pub(super) fn encode(
-    snapshot: &MultipartSnapshot,
+    state: &[u8],
+    user_parts: &BTreeMap<String, SnapshotPart>,
     principal: &super::Principal,
 ) -> Result<(Vec<u8>, String), String> {
-    let state = serde_json::to_vec(
-        &serde_json::json!({ "version": 1, "principal": principal, "state": snapshot.state }),
-    )
+    #[derive(serde::Serialize)]
+    struct Envelope<'a> {
+        version: u8,
+        principal: &'a super::Principal,
+        state: &'a serde_json::value::RawValue,
+    }
+    let state = serde_json::from_slice(state).map_err(|e| e.to_string())?;
+    let state = serde_json::to_vec(&Envelope {
+        version: 1,
+        principal,
+        state,
+    })
     .map_err(|e| e.to_string())?;
     let mut parts = vec![(
         "state".to_string(),
         "application/json".to_string(),
         state.as_slice(),
     )];
-    for (name, part) in &snapshot.parts {
+    for (name, part) in user_parts {
         if !valid_name(name) {
             return Err(format!("invalid snapshot part name '{name}'"));
         }
@@ -281,7 +316,7 @@ pub(super) fn encode(
 pub(super) fn decode(
     data: &[u8],
     mime: &str,
-) -> Result<(super::Principal, MultipartSnapshot), String> {
+) -> Result<(super::Principal, super::SnapshotData), String> {
     let invalid = || "invalid multipart snapshot".to_string();
     let boundary = extract_boundary(mime).ok_or_else(invalid)?;
     let parts = parse_parts(boundary, data).ok_or_else(invalid)?;
@@ -330,7 +365,7 @@ pub(super) fn decode(
     }
     let principal = super::principal_serde::from_json_bytes(envelope.principal.get().as_bytes())
         .map_err(|e| e.to_string())?;
-    let state = serde_json::from_str(envelope.state.get()).map_err(|e| e.to_string())?;
+    let state = envelope.state.get().as_bytes().to_vec();
     let mut user_parts = BTreeMap::new();
     for part in parts {
         if part.name == "state" {
@@ -351,7 +386,7 @@ pub(super) fn decode(
     }
     Ok((
         principal,
-        MultipartSnapshot {
+        super::SnapshotData::Multipart {
             state,
             parts: user_parts,
         },
@@ -362,6 +397,54 @@ pub(super) fn decode(
 mod tests {
     use super::*;
     use test_r::test;
+
+    fn encode(
+        snapshot: &MultipartSnapshot,
+        principal: &super::super::Principal,
+    ) -> Result<(Vec<u8>, String), String> {
+        super::encode(
+            &serde_json::to_vec(&snapshot.state).unwrap(),
+            &snapshot.parts,
+            principal,
+        )
+    }
+
+    fn decode(
+        data: &[u8],
+        mime: &str,
+    ) -> Result<(super::super::Principal, MultipartSnapshot), String> {
+        let (principal, transport) = super::decode(data, mime)?;
+        Ok((principal, transport.try_into()?))
+    }
+
+    #[test]
+    fn multipart_transport_embeds_raw_state_once_and_defers_ast_to_adapter() {
+        let state = br#"{ "revision" : 1e0, "label" : "\u0061" }"#;
+        let (data, mime) =
+            super::encode(state, &BTreeMap::new(), &super::super::Principal::Anonymous).unwrap();
+        let parts = parse_parts(extract_boundary(&mime).unwrap(), &data).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].body, br#"{"version":1,"principal":{"tag":"anonymous"},"state":{ "revision" : 1e0, "label" : "\u0061" }}"#);
+        let (
+            _,
+            super::super::SnapshotData::Multipart {
+                state: restored,
+                parts,
+            },
+        ) = super::decode(&data, &mime).unwrap()
+        else {
+            panic!("multipart transport expected")
+        };
+        assert_eq!(restored, state);
+        assert!(parts.is_empty());
+        for state in [b"1e400".as_slice(), br#""\uD800""#] {
+            let (data, mime) =
+                super::encode(state, &BTreeMap::new(), &super::super::Principal::Anonymous)
+                    .unwrap();
+            let (_, transport) = super::decode(&data, &mime).unwrap();
+            assert!(MultipartSnapshot::try_from(transport).is_err());
+        }
+    }
 
     #[test]
     fn multipart_carrier_roundtrip_preserves_dynamic_opaque_parts() {

@@ -208,6 +208,174 @@ You can implement custom saving and restoration to control exactly how agent sta
     </Tabs.Tab>
 </Tabs>
 
+## Multipart snapshots: JSON state and named bytes
+
+Use explicit multipart snapshots when the live instance contains binary resources that should not be serialized into JSON. Save a small schema-backed state projection separately from a dynamic map of named `{bytes, contentType}` parts. This is an additional mode: the simpler JSON, byte-only, and existing SQLite snapshot modes remain available.
+
+These examples save a revision counter and an in-memory binary index. The loaders construct fresh live state; ordinary initialization is skipped.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        Select `multipart.state` in the definition. Both `save` and `load` are required, and may be async. The live state returned by `init` is independent of the saved schema.
+
+        ```typescript
+        import { Snapshot } from '@golemcloud/golem-ts-sdk';
+
+        // In defineAgent({ ... }):
+        snapshotting: {
+          multipart: { state: z.object({ revision: z.number() }) },
+          policy: { everyNInvocations: 10 },
+        }
+
+        // In .implement({ ... }), with live { revision, index }:
+        snapshot: {
+          async save() {
+            return {
+              state: { revision: this.revision },
+              parts: new Map([
+                ['index', { bytes: this.index, contentType: 'application/octet-stream' }],
+              ]),
+            };
+          },
+          async load(saved, _context) {
+            return {
+              revision: saved.state.revision,
+              index: Snapshot.requirePart(saved.parts, 'index', 'application/octet-stream'),
+            };
+          },
+        }
+        ```
+
+        Standard Schema validates the input on save, but the SDK persists that input JSON, not a transformed validation result. On load, the schema validates stored JSON and the loader receives its output type. There is no reverse encoding. Do not combine `state` and `multipart` configuration. Explicit multipart does not automatically discover SQLite databases and rejects managed `db:` parts.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        `Snapshot.multipart` requires an explicit strategy. Effect Schema encodes the saved state and decodes it before restoration.
+
+        ```typescript
+        // In defineAgent({ ... }):
+        snapshotting: Snapshot.multipart({
+          schema: Schema.Struct({ revision: Schema.Number }),
+          policy: Snapshot.policy.everyN(10),
+        })
+
+        // In .implement({ ... }), with a Ref of { revision, index }:
+        snapshot: {
+          save: (ref) => Ref.get(ref).pipe(Effect.map((live) => ({
+            state: { revision: live.revision },
+            parts: new Map([
+              ['index', { bytes: live.index, contentType: 'application/octet-stream' }],
+            ]),
+          }))),
+          restore: (saved, _context) => Effect.gen(function* () {
+            const index = yield* Snapshot.requirePart(saved.parts, 'index', 'application/octet-stream')
+            return yield* Ref.make({ revision: saved.state.revision, index })
+          }),
+        }
+        ```
+
+        To compose managed SQLite images, add `databases: ["main"] as const` to `Snapshot.multipart` and expose `databases: live => ({ main: live.database })` on the strategy. Before user restoration, the SDK validates the complete declared database part set and content types. Your restore strategy constructs database handles, then the SDK hydrates their images and warms schema caches **before** constructing method handlers. Do not query restored database contents inside `restore`: hydration has not happened yet. Existing autocommit and attached-schema restrictions still apply.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Define both async hooks inside the `#[agent_implementation]` block. The live implementation does not need Serde; only the saved projection does.
+
+        ```rust
+        use golem_rust::agentic::{MultipartSnapshot, SnapshotPart, SnapshotRestoreContext};
+
+        #[derive(golem_rust::serde::Serialize, golem_rust::serde::Deserialize)]
+        struct SavedState { revision: u32 }
+
+        async fn save_snapshot_parts(&self) -> Result<MultipartSnapshot, String> {
+            MultipartSnapshot::from_state(
+                &SavedState { revision: self.revision },
+                std::collections::BTreeMap::from([(
+                    "index".into(),
+                    SnapshotPart { bytes: self.index.clone(), content_type: "application/octet-stream".into() },
+                )]),
+            )
+        }
+
+        async fn load_snapshot_parts(
+            snapshot: MultipartSnapshot,
+            _context: SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            let saved: SavedState = snapshot.decode_state()?;
+            let index = snapshot.require_part("index", "application/octet-stream")?.to_vec();
+            Ok(Self { revision: saved.revision, index })
+        }
+        ```
+
+        Keep the normal snapshot policy annotation. An incomplete hook pair, or combining explicit byte-only and multipart hooks, is a compile error.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Add the instance saver and companion loader without a new mixin. `Schema` is needed for the saved projection, not the live instance.
+
+        ```scala
+        import golem.runtime.{MultipartSnapshot, SnapshotPart, SnapshotRestoreContext}
+        import zio.blocks.schema.Schema
+        import scala.concurrent.Future
+
+        final case class SavedState(revision: Int) derives Schema
+
+        // On IndexImpl:
+        def saveSnapshotParts(): Future[MultipartSnapshot] = Future.fromTry(
+          MultipartSnapshot.fromState(SavedState(revision), Map(
+            "index" -> SnapshotPart(index.clone(), "application/octet-stream")
+          )).toTry
+        )
+
+        // On companion object IndexImpl, with a constructor accepting saved fields:
+        def loadSnapshotParts(snapshot: MultipartSnapshot, context: SnapshotRestoreContext): Future[IndexImpl] =
+          Future.fromTry((for {
+            saved <- snapshot.decodeState[SavedState]
+            bytes <- snapshot.requirePart("index", "application/octet-stream")
+          } yield new IndexImpl(context.identity[String](0), saved.revision, bytes)).toTry)
+        ```
+
+        Keep the normal policy annotation and registration. Incomplete or conflicting explicit hooks, including multipart combined with `Snapshotted[S]`, are compile errors.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Implement the async saving trait and a separate static async loader. The generator suppresses automatic JSON hooks for this explicit pair; the existing synchronous `Snapshottable` trait is unchanged.
+
+        ```moonbit
+        priv struct SavedState { revision : Int } derive(ToJson, FromJson)
+
+        impl @agents.MultipartSnapshottable for Index with fn save_snapshot_parts(self) {
+          Ok(@agents.MultipartSnapshot::from_state(SavedState::{revision: self.revision}, {
+            "index": { bytes: self.index, content_type: "application/octet-stream" },
+          }))
+        }
+
+        pub async fn Index::load_snapshot_parts(
+          snapshot : @agents.MultipartSnapshot,
+          context : @agents.SnapshotRestoreContext,
+        ) -> Result[Index, String] {
+          let saved : SavedState = match snapshot.decode_state() {
+            Ok(saved) => saved
+            Err(error) => return Err(error)
+          }
+          let index = match snapshot.require_part("index", "application/octet-stream") {
+            Ok(index) => index
+            Err(error) => return Err(error)
+          }
+          let name : String = context.identity(0)
+          Ok({ name, revision: saved.revision, index })
+        }
+        ```
+
+        Keep `#derive.agent` and the normal snapshot policy. Merely deriving JSON traits on the live instance does not conflict with the explicit multipart pair.
+    </Tabs.Tab>
+</Tabs>
+
+### Part and envelope rules
+
+- Names are case-sensitive and match `[A-Za-z0-9_][A-Za-z0-9_.-]*`. Logical names `state` and `__proto__` are valid. Parts have no automatic resource semantics; applications decide what they mean and whether to accept extra parts.
+- Content types must be bare ASCII MIME type/subtype strings, such as `application/octet-stream`. They are normalized to lowercase; parameters such as `; charset=utf-8` are rejected. `requirePart` checks both presence and content type, returning the SDK's normal snapshot error on failure.
+- Multipart is emitted even when there are no binary parts. Binary-only applications use JSON `null` state. Empty bytes and trailing CR, LF, or CRLF are preserved exactly.
+- The SDK owns the principal envelope. On the wire, one `state` part contains UTF-8 JSON `{version:1, principal, state}`, user names become `part:<name>`, and managed SQLite images use `db:<name>`. Do not construct these prefixes or envelope metadata yourself.
+- The SDK validates framing, metadata, names, duplicate structural fields, and supported namespaces before invoking user restoration. Changing snapshot modes does not enable fallback parsing or historical-format migration.
+
+Snapshots are whole-buffer operations. Copies of state, part bytes, encoded payloads, and restored resources can amplify peak memory usage. The host's 64 KiB inline/blob-spill setting is a storage threshold, **not** a maximum snapshot size. Save and load hooks are unpersisted lifecycle operations and may be retried; async hooks do not make external effects exactly-once.
+
 ## How snapshot restoration runs
 
 Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent identity and restored principal, plus the phantom ID and fresh configuration where applicable.

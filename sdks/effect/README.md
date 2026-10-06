@@ -252,6 +252,22 @@ Auto snapshots can declare `databases: ["main"] as const`; expose the correspond
 declared database must be present, be in autocommit mode, and have no extra attached schemas.
 External Postgres/MySQL/Ignite data is not part of a worker snapshot.
 
+For schema state plus arbitrary named bytes, opt into `Snapshot.multipart({ schema, policy,
+databases? })` and provide an explicit strategy. `save(ref)` returns an Effect of
+`{ state, parts: new Map([["index", { bytes, contentType: "application/octet-stream" }]]) }`;
+`restore(saved, context)` receives decoded state and the complete user-part Map.
+`yield* Snapshot.requirePart(saved.parts, "index", "application/octet-stream")` checks both presence
+and MIME type. Binary-only applications use `Schema.Null` state. Logical names are case-sensitive
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`; content types are bare ASCII MIME types without parameters.
+The SDK owns the envelope and principal, always emits multipart (including zero parts), and never
+interprets user parts as resources. Existing JSON and byte-only modes are unchanged.
+
+Optional managed SQLite composition uses the same `databases` accessor as above. Images are
+validated before `restore`, then hydrated before `methods`; restored contents are not available
+inside the user restore effect. Snapshot hooks run unpersisted and may be retried. Whole-buffer
+copies amplify peak memory use; the host's 64 KiB inline/blob-spill threshold is not a size cap.
+See the [multipart examples](https://learn.golem.cloud/next/develop/snapshotting) for all SDKs.
+
 ## Agent streams
 
 Use `WitTypes.AgentStream(itemSchema)` inside any input or output schema and pass native Effect

@@ -2815,9 +2815,8 @@ mod tests {
             revision: 17,
             index: bytes.clone(),
         };
-        let SnapshotData::Multipart(saved) = instance.save_snapshot_base().await.unwrap() else {
-            panic!("expected multipart");
-        };
+        let saved = instance.save_snapshot_base().await.unwrap();
+        assert!(matches!(&saved, SnapshotData::Multipart { .. }));
         let agent_type = AgentTypeName("MultipartIndexAgent".to_string());
         let context = || SnapshotRestoreContext {
             principal: Principal::Anonymous,
@@ -2828,6 +2827,18 @@ mod tests {
         for wrong in [
             SnapshotData::Json(b"null".to_vec()),
             SnapshotData::Bytes(vec![]),
+            SnapshotData::Multipart {
+                state: b"1e400".to_vec(),
+                parts: Default::default(),
+            },
+            SnapshotData::Multipart {
+                state: br#""\uD800""#.to_vec(),
+                parts: Default::default(),
+            },
+            SnapshotData::Multipart {
+                state: b"{".to_vec(),
+                parts: Default::default(),
+            },
         ] {
             let context = context();
             let result = with_agent_initiator(
@@ -2840,22 +2851,21 @@ mod tests {
         assert_eq!(PARTS_RESTORATIONS.load(Ordering::SeqCst), 0);
         let context = context();
         let restored = with_agent_initiator(
-            |initiator| async move {
-                initiator
-                    .restore(SnapshotData::Multipart(saved), context)
-                    .await
-            },
+            |initiator| async move { initiator.restore(saved, context).await },
             &agent_type,
         )
         .await
         .unwrap();
         assert_eq!(PARTS_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
         assert_eq!(PARTS_RESTORATIONS.load(Ordering::SeqCst), 1);
-        let SnapshotData::Multipart(saved) =
-            restored.agent.borrow().save_snapshot_base().await.unwrap()
-        else {
-            panic!("expected multipart");
-        };
+        let saved: golem_rust::agentic::MultipartSnapshot = restored
+            .agent
+            .borrow()
+            .save_snapshot_base()
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
         assert_eq!(saved.state, serde_json::json!({ "revision": 17 }));
         assert_eq!(
             saved

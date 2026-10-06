@@ -8,7 +8,6 @@
 import type { TestCase } from "../harness/case.ts"
 import { case_ as counter } from "./counter.ts"
 import { case_ as caller } from "./caller.ts"
-import { case_ as multipart } from "./multipart.ts"
 import { case_ as hostFeatures } from "./host-features.ts"
 import { case_ as bookingSaga } from "./booking-saga.ts"
 import { case_ as quota } from "./quota.ts"
@@ -29,7 +28,6 @@ import { case_ as durableStreams } from "./durable-streams.ts"
 export const allCases: ReadonlyArray<TestCase> = [
   counter,
   caller,
-  multipart,
   hostFeatures,
   bookingSaga,
   quota,

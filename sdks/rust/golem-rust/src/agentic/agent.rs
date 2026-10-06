@@ -206,7 +206,10 @@ impl WriteAgentParameter for &AgentArgument<'_, Principal> {
 pub enum SnapshotData {
     Json(Vec<u8>),
     Bytes(Vec<u8>),
-    Multipart(super::MultipartSnapshot),
+    Multipart {
+        state: Vec<u8>,
+        parts: std::collections::BTreeMap<String, super::SnapshotPart>,
+    },
 }
 
 #[derive(Debug)]

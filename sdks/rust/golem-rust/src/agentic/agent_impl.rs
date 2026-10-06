@@ -77,8 +77,7 @@ fn decode_snapshot(
         .next()
         .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("multipart/mixed"))
     {
-        return super::snapshot_parts::decode(&snapshot.payload, &snapshot.mime_type)
-            .map(|(principal, parts)| (principal, super::SnapshotData::Multipart(parts)));
+        return super::snapshot_parts::decode(&snapshot.payload, &snapshot.mime_type);
     }
     let bytes = snapshot.payload;
     let is_json = snapshot.mime_type == "application/json";
@@ -297,9 +296,10 @@ impl SaveSnapshotGuest for AgentRuntime {
             let principal = get_principal().unwrap_or(Principal::Anonymous);
 
             match snapshot_data {
-                super::SnapshotData::Multipart(parts) => {
-                    let (payload, mime_type) = super::snapshot_parts::encode(&parts, &principal)
-                        .expect("Failed to encode multipart snapshot");
+                super::SnapshotData::Multipart { state, parts } => {
+                    let (payload, mime_type) =
+                        super::snapshot_parts::encode(&state, &parts, &principal)
+                            .expect("Failed to encode multipart snapshot");
                     crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
                         payload,
                         mime_type,
