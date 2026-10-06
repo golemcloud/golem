@@ -131,10 +131,10 @@ pub fn parse_multipart_mixed<'a>(boundary: &str, data: &'a [u8]) -> Option<Vec<M
                 _ => {}
             }
         }
-        if let Some(name) = &name {
-            if !names.insert(name.clone()) {
-                return None;
-            }
+        if let Some(name) = &name
+            && !names.insert(name.clone())
+        {
+            return None;
         }
         let (body_end, next_pos, next_closing) = (pos..data.len()).find_map(|i| {
             if data[i..].starts_with(newline) {
