@@ -9,17 +9,12 @@ components:
     templates: rust
     customCommands:
       copy:
-        - command: cp golem-temp/agents/golem_audit_middleware_release.wasm ../audit-middleware.wasm
-        - command: cp golem-temp/agents/golem_audit_middleware_release.wasm ../../test-components/golem_audit_middleware_release.wasm
+        - command: cp golem-temp/agents/golem_audit_middleware_release.wasm ../golem_audit_middleware_release.wasm
 
 tools:
   middleware:
     audit:
       component: golem:audit-middleware
-
-toolMiddlewareReleases:
-  local:
-    audit: {}
 
 environments:
   local:

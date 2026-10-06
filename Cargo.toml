@@ -5,7 +5,7 @@ members = [
     "golem-api-grpc",
     "golem-client",
     "golem-common",
-    "golem-human-approval",
+    "test-components/human-approval-service",
     "golem-mcp-import",
     "golem-native-tool",
     "golem-rust-macro",
@@ -40,7 +40,7 @@ golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
-golem-human-approval = { version = "=0.0.0", path = "golem-human-approval" }
+golem-human-approval = { version = "=0.0.0", path = "test-components/human-approval-service" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-mcp-import = { version = "=0.0.0", path = "golem-mcp-import" }
 golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }

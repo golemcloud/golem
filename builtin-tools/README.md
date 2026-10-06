@@ -13,18 +13,9 @@ The filesystem component is implemented in Rust under `builtin-tools/filesystem-
 component provides the `read-file`, `write-file`, `edit-file`, `ls`, and `grep` tools and the
 universal `path-policy` middleware.
 
-The reusable Audit policy is implemented under `builtin-tools/audit-middleware/`. Its package
-README defines the sink and idempotency contract and includes a runnable duplicate-occurrence
-binding.
-
-The reusable output-redaction middleware lives under `builtin-tools/output-redaction/`. It is
-published and installed through the normal tool middleware release and binding flow; unlike the
-provisioned filesystem releases, it is not automatically available to environments. Its README
-defines the supported selector and literal-pattern policy and includes a complete binding example.
-
-The reusable persistent rate-limit middleware lives under `builtin-tools/rate-limit-middleware/`.
-It uses one durable backend agent per policy to serialize fixed-window admission across owners and
-records decisions by logical invocation ID so replay does not charge an invocation twice.
+Audit, output-redaction, persistent-rate-limit, and human-approval middleware are test-only
+fixtures under `test-components/`, not built-in exports. They are not published or provisioned as
+built-ins and are not intended for production reuse.
 
 The JavaScript and TypeScript tools are implemented under `builtin-tools/js-ts-tools/`. The
 `javascript-tools` component provides `node`, `npm`, and `npx`; the `typescript-tools` component

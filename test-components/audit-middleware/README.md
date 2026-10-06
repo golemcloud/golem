@@ -1,4 +1,7 @@
-# Audit tool middleware
+# Audit test middleware
+
+This is a test-only fixture, not a built-in or a production middleware release. It is built and
+copied by the normal test-component workflow and is not provisioned at registry startup.
 
 `audit` is a universal tool middleware that emits one versioned JSON record after the underlying
 tool and its declared stdout/stderr streams settle. It forwards inputs, host-managed resources,
@@ -24,43 +27,20 @@ The middleware is fail-closed: a transport failure or non-2xx response fails the
 A 2xx response acknowledges a committed record. Sink implementations must not acknowledge before
 the deduplicated record is durable.
 
-## Build and publish
+## Build and test
 
 ```sh
 golem build -P release --force-build --yes
 golem exec -P release copy
-golem deploy -e local --yes
 ```
 
-The included `golem.yaml` publishes `audit@0.1.0` from the local environment. A consuming
-application can bind the published release more than once with independent configuration:
+The manifest copies `golem_audit_middleware_release.wasm` into the parent `test-components`
+directory. The artifact suffix does not imply a published release. Automated worker executor tests
+install it directly, provide an in-process sink, and exercise duplicate occurrences, stream
+transparency, identity attribution, and replay deduplication.
 
-```yaml
-tools:
-  middleware:
-    audit:
-      release:
-        account: builtin-tool-owner@golem.cloud
-        name: audit
-        version: "0.1.0"
-
-environments:
-  production:
-    server: cloud
-    tools:
-      middleware:
-        - name: audit
-          parameters:
-            label: security
-            sinkUrl: https://audit.example/v1/records
-          secretKeysReadable: []
-          secretKeysRevealable: []
-        - name: audit
-          parameters:
-            label: operations
-            sinkUrl: https://audit.example/v1/records
-          secretKeysReadable: []
-          secretKeysRevealable: []
+```sh
+cargo make test-component-middleware-unit-tests
 ```
 
 Audit needs no config or secret capability. Keep both secret scopes empty; opaque handles still

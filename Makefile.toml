@@ -592,19 +592,19 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
-dependencies = ["wit", "builtin-tool-middleware-unit-tests"]
+dependencies = ["wit", "test-component-middleware-unit-tests"]
 description = "Runs unit tests only"
 script = '''
 cargo-test-r run --workspace --exclude golem-schema-derive --lib -- --nocapture --report-time $JUNIT_OPTS
 '''
 
-[tasks.builtin-tool-middleware-unit-tests]
-description = "Runs unit and contract tests for independently built middleware components"
+[tasks.test-component-middleware-unit-tests]
+description = "Runs unit and contract tests for test-only middleware components"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --manifest-path builtin-tools/audit-middleware/Cargo.toml --lib --tests
-exec --fail-on-error cargo test --manifest-path builtin-tools/output-redaction/Cargo.toml --lib
-exec --fail-on-error cargo test --manifest-path builtin-tools/rate-limit-middleware/Cargo.toml --lib
+exec --fail-on-error cargo test --manifest-path test-components/audit-middleware/Cargo.toml --lib --tests
+exec --fail-on-error cargo test --manifest-path test-components/output-redaction/Cargo.toml --lib
+exec --fail-on-error cargo test --manifest-path test-components/rate-limit-middleware/Cargo.toml --lib
 '''
 
 [tasks.dev-tools-tests]
@@ -1681,18 +1681,12 @@ description = "Builds all built-in plugins"
 ## BUILT-IN TOOLS
 [tasks.build-filesystem-tools]
 dependencies = ["wit"]
-description = "Builds the built-in tool and reusable middleware components"
+description = "Builds the built-in filesystem tools and path-policy middleware"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build -p golem --bin golem
 golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem"
 cd builtin-tools/filesystem-tools
-exec --fail-on-error ${golem} build -P release --force-build --yes
-exec --fail-on-error ${golem} exec -P release copy
-cd ../audit-middleware
-exec --fail-on-error ${golem} build -P release --force-build --yes
-exec --fail-on-error ${golem} exec -P release copy
-cd ../output-redaction
 exec --fail-on-error ${golem} build -P release --force-build --yes
 exec --fail-on-error ${golem} exec -P release copy
 cd ../..

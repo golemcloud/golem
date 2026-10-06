@@ -3,9 +3,10 @@ resolver = "2"
 members = ["."]
 
 [package]
-name = "golem_rate_limit_middleware"
+name = "golem-output-redaction"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -17,7 +18,8 @@ lto = true
 strip = "symbols"
 
 [dependencies]
-golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+futures-concurrency = "7.6.3"
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic", "rich-validation"] }
 
 [dev-dependencies]
 test-r = "3.0.12"

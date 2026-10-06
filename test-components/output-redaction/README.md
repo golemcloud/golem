@@ -1,4 +1,7 @@
-# Output-redaction middleware
+# Output-redaction test middleware
+
+This is a test-only fixture, not a built-in or a production middleware release. It is built and
+copied by the normal test-component workflow and is not provisioned at registry startup.
 
 `output-redaction` is a universal tool middleware that replaces configured literal byte sequences
 from stdout and literal UTF-8 substrings from selected structured result fields before they reach
@@ -43,7 +46,7 @@ underlying chunks, so a partial sensitive value cannot escape at a chunk boundar
 chunk is processed immediately and is not counted as retained state. Clean finish and every
 underlying failure terminal are relayed exactly; stderr is forwarded without inspection.
 
-## Build, publish, and bind
+## Build and test
 
 Build the component with the repository CLI:
 
@@ -52,42 +55,11 @@ golem build -P release --force-build --yes
 golem exec -P release copy
 ```
 
-Declare and publish the local middleware, then bind it universally in an environment:
+The manifest copies `golem_output_redaction_release.wasm` into the parent `test-components`
+directory. The artifact suffix does not imply a published release. Automated worker executor tests
+install it directly and check structured selectors, arbitrary stream chunk boundaries, schema
+constraints, and terminal forwarding.
 
-```yaml
-tools:
-  middleware:
-    output-redaction:
-      component: golem:output-redaction
-      config:
-        structured:
-          - selector: $.customer.token
-            pattern: sk_live_
-            replacement: "[redacted]"
-        stdout:
-          - pattern: sk_live_
-            replacement: "[redacted]"
-
-toolMiddlewareReleases:
-  production:
-    output-redaction: {}
-
-environments:
-  production:
-    server: cloud
-    tools:
-      middleware:
-        - name: output-redaction
-          parameters:
-            structured:
-              - selector: $.customer.token
-                pattern: sk_live_
-                replacement: "[redacted]"
-            stdout:
-              - pattern: sk_live_
-                replacement: "[redacted]"
+```sh
+cargo make test-component-middleware-unit-tests
 ```
-
-The component is also usable as a source dependency: the public `Policy` and `StreamingRedactor`
-types contain the schema-aware structured and bounded streaming engines used by the exported
-middleware.

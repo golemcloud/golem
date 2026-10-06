@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::{Path as FilePath, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
@@ -616,10 +616,6 @@ fn store_error_response(error: StoreError) -> (StatusCode, String) {
         StoreError::NotFound => (StatusCode::NOT_FOUND, "request not found".to_string()),
         StoreError::Io(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
     }
-}
-
-pub fn default_store_path() -> &'static FilePath {
-    FilePath::new("human-approvals.json")
 }
 
 #[cfg(test)]

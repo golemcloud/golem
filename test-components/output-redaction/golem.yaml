@@ -9,8 +9,7 @@ components:
     templates: rust
     customCommands:
       copy:
-        - command: cp golem-temp/agents/golem_output_redaction_release.wasm ../output-redaction.wasm
-        - command: cp golem-temp/agents/golem_output_redaction_release.wasm ../../test-components/golem_output_redaction_release.wasm
+        - command: cp golem-temp/agents/golem_output_redaction_release.wasm ../golem_output_redaction_release.wasm
 
 environments:
   local:

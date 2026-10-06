@@ -2,7 +2,8 @@
 name = "golem-human-approval"
 version = "0.0.0"
 edition = "2024"
-license-file = "../LICENSE"
+license-file = "../../LICENSE"
+publish = false
 
 [lib]
 harness = false
@@ -18,7 +19,3 @@ uuid = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 test-r = { workspace = true }
-
-[[bin]]
-name = "golem-human-approval-service"
-path = "src/main.rs"
