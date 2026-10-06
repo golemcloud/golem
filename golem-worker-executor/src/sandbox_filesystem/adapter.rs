@@ -2257,8 +2257,7 @@ fn xfs_name_mode_shortcut_enabled() -> bool {
 fn xfs_name_mode_shortcut_disabled_for_test() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DISABLED.get_or_init(|| {
-        std::env::var("GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT").as_deref()
-            == Ok("1")
+        std::env::var("GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT").as_deref() == Ok("1")
     })
 }
 
@@ -3599,14 +3598,19 @@ mod tests {
     }
 
     fn unmanaged_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
-        SandboxFilesystemProvisioning::new(Some(root), None, RetryConfig::default()).unwrap()
+        SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Directory { root },
+            RetryConfig::default(),
+        )
+        .unwrap()
     }
 
     /// Makes the host directories under `root` on unmanaged storage, and gives `.scratch`.
     async fn host_directory_at(root: &Path) -> HostDirectory {
         SandboxFilesystemProvisioning::provision(
-            Some(root.to_path_buf()),
-            None,
+            &FilesystemStorageMode::Directory {
+                root: root.to_path_buf(),
+            },
             RetryConfig::default(),
         )
         .await
@@ -3678,9 +3682,7 @@ mod tests {
             },
             FilesystemVolume::unmanaged_development(),
             QuotaAuthority::Unsupported,
-            NativeNameModeSource::ValidatedXfs(
-                xfs::validated_xfs_name_mode_for_test(device),
-            ),
+            NativeNameModeSource::ValidatedXfs(xfs::validated_xfs_name_mode_for_test(device)),
         )
     }
 
@@ -4143,9 +4145,7 @@ mod tests {
     #[test]
     fn validated_xfs_name_mode_skips_native_detection() {
         let parent = linux_parent_key(17);
-        let source = NativeNameModeSource::ValidatedXfs(
-            xfs::validated_xfs_name_mode_for_test(17),
-        );
+        let source = NativeNameModeSource::ValidatedXfs(xfs::validated_xfs_name_mode_for_test(17));
         let probes = std::cell::Cell::new(0);
 
         assert_eq!(
@@ -4213,9 +4213,7 @@ mod tests {
     #[test]
     fn benchmark_disable_control_restores_managed_xfs_native_detection() {
         let parent = linux_parent_key(17);
-        let source = NativeNameModeSource::ValidatedXfs(
-            xfs::validated_xfs_name_mode_for_test(17),
-        );
+        let source = NativeNameModeSource::ValidatedXfs(xfs::validated_xfs_name_mode_for_test(17));
         let probes = std::cell::Cell::new(0);
 
         assert_eq!(

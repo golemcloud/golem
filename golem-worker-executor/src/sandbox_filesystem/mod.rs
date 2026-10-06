@@ -23,10 +23,12 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
+pub(crate) use crate::services::golem_config::FilesystemStorageMode;
+
 mod adapter;
+mod directories;
 mod host_directory;
 mod tree_copy;
-mod directories;
 
 #[allow(unused_imports)]
 pub(crate) use adapter::*;
@@ -342,7 +344,8 @@ pub(crate) struct FilesystemVolume {
 #[derive(Clone)]
 enum FilesystemVolumeMode {
     UnmanagedDevelopment,
-    Managed {
+    /// The root of an XFS volume with reflink, which an XFS storage mode opened and checked.
+    CopyOnWrite {
         root: Arc<File>,
         identity: FilesystemIdentity,
     },
@@ -361,24 +364,16 @@ impl FilesystemVolume {
     }
 
     #[cfg(target_os = "linux")]
-    fn managed(root: Arc<File>, identity: FilesystemIdentity) -> Self {
+    fn copy_on_write(root: Arc<File>, identity: FilesystemIdentity) -> Self {
         Self {
-            mode: FilesystemVolumeMode::Managed { root, identity },
-        }
-    }
-
-    /// Whether the volume is managed XFS storage.
-    pub(crate) fn is_managed(&self) -> bool {
-        match &self.mode {
-            FilesystemVolumeMode::Managed { .. } => true,
-            FilesystemVolumeMode::UnmanagedDevelopment => false,
+            mode: FilesystemVolumeMode::CopyOnWrite { root, identity },
         }
     }
 
     #[cfg(target_os = "linux")]
-    fn managed_root(&self) -> Option<&Arc<File>> {
+    fn copy_on_write_root(&self) -> Option<&Arc<File>> {
         match &self.mode {
-            FilesystemVolumeMode::Managed { root, .. } => Some(root),
+            FilesystemVolumeMode::CopyOnWrite { root, .. } => Some(root),
             FilesystemVolumeMode::UnmanagedDevelopment => None,
         }
     }
@@ -715,31 +710,6 @@ enum QuotaAuthority {
     },
 }
 
-/// The storage mode that the settings select.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum StorageMode<'a> {
-    /// Managed XFS storage at this root.
-    Managed(&'a Path),
-    /// Unmanaged storage, at the deterministic root when one is given.
-    Unmanaged,
-}
-
-/// Gives the storage mode of the settings. A managed root selects managed XFS storage, and no
-/// managed root selects unmanaged storage. Both roots together give a verification error.
-fn storage_mode<'a>(
-    deterministic_root: Option<&Path>,
-    managed_xfs_root: Option<&'a Path>,
-) -> Result<StorageMode<'a>, FilesystemStorageError> {
-    match (deterministic_root, managed_xfs_root) {
-        (Some(_), Some(_)) => Err(FilesystemStorageError::verification(
-            "select exactly one filesystem storage mode",
-            Path::new("<configuration>"),
-        )),
-        (None, Some(root)) => Ok(StorageMode::Managed(root)),
-        (_, None) => Ok(StorageMode::Unmanaged),
-    }
-}
-
 /// Gives the storage profile of the native calls on a sandbox with `authority`. A sandbox with a
 /// project identity is on known local storage. The storage of a sandbox without one is unknown.
 fn storage_profile(authority: QuotaAuthority) -> NativeStorageProfile {
@@ -767,10 +737,35 @@ fn file_copy_mode(authority: QuotaAuthority) -> FileCopyMode {
     }
 }
 
+/// How the storage accounts for the files of each agent. Each storage mode states it when it is
+/// bound.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgentAccounting {
+    /// Project quotas enforce the disk limits of each agent and measure its usage.
+    ProjectQuotas,
+    /// Development storage. It has no per-agent accounting, and a finite disk limit fails the start
+    /// of the agent.
+    Development,
+    /// Production storage without per-agent accounting. It enforces no per-agent disk limit and
+    /// measures no per-agent usage.
+    Unaccounted,
+}
+
+/// Whether the host directories of a storage mode must be checked for a project identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostDirectoryCheck {
+    /// The volume has no projects.
+    None,
+    /// The volume is XFS. A host directory with a project id or the project-inherit flag is refused.
+    NoXfsProject,
+}
+
 #[derive(Clone)]
 pub(crate) struct SandboxFilesystemProvisioning {
     volume: FilesystemVolume,
     mode: SandboxFilesystemProvisioningMode,
+    accounting: AgentAccounting,
+    host_directory_check: HostDirectoryCheck,
 }
 
 #[derive(Clone)]
@@ -781,57 +776,51 @@ enum SandboxFilesystemProvisioningMode {
 }
 
 impl SandboxFilesystemProvisioning {
-    /// Binds the storage settings and makes the host directories `.scratch` and
+    /// Binds the storage mode `storage` and makes the host directories `.scratch` and
     /// `.initial-files` directly under the volume root.
     ///
-    /// Exactly one storage mode applies: managed XFS at `managed_xfs_root_dir`, unmanaged storage
-    /// at `deterministic_root_dir`, or unmanaged storage in temporary directories when neither is
-    /// given. The binding comes first, so on managed storage a root that another provisioning
-    /// holds gives an error before any host directory changes. What an earlier process left under
-    /// the two names is removed. See [`HostDirectories`].
+    /// The binding comes first, so on XFS storage a root that another provisioning holds, or that
+    /// fails a startup check, gives an error before any host directory changes. What an earlier
+    /// process left under the two names is removed. See [`HostDirectories`].
     pub(crate) async fn provision(
-        deterministic_root_dir: Option<PathBuf>,
-        managed_xfs_root_dir: Option<PathBuf>,
+        storage: &FilesystemStorageMode,
         cleanup_retry: RetryConfig,
     ) -> Result<(Self, HostDirectories), FilesystemStorageError> {
-        let provisioning = Self::bind(deterministic_root_dir, managed_xfs_root_dir, cleanup_retry)?;
+        let provisioning = Self::bind(storage, cleanup_retry)?;
         let directories = host_directory::make_host_directories(&provisioning).await?;
         Ok((provisioning, directories))
     }
 
-    /// Binds the storage settings without host directories.
+    /// Binds the storage mode `storage` without host directories.
     #[cfg(test)]
     pub(crate) fn new(
-        deterministic_root_dir: Option<PathBuf>,
-        managed_xfs_root_dir: Option<PathBuf>,
+        storage: &FilesystemStorageMode,
         cleanup_retry: RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
-        Self::bind(deterministic_root_dir, managed_xfs_root_dir, cleanup_retry)
+        Self::bind(storage, cleanup_retry)
     }
 
     fn bind(
-        deterministic_root_dir: Option<PathBuf>,
-        managed_xfs_root_dir: Option<PathBuf>,
+        storage: &FilesystemStorageMode,
         cleanup_retry: RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
-        match storage_mode(
-            deterministic_root_dir.as_deref(),
-            managed_xfs_root_dir.as_deref(),
-        )? {
-            StorageMode::Managed(root) => configured_managed(root, &cleanup_retry),
-            StorageMode::Unmanaged => {
-                let unmanaged =
-                    directories::DirectoryProvisioning::new(deterministic_root_dir, cleanup_retry);
-                Ok(Self {
-                    volume: FilesystemVolume::unmanaged_development(),
-                    mode: SandboxFilesystemProvisioningMode::Directories(unmanaged),
-                })
+        match storage {
+            FilesystemStorageMode::Temporary => Ok(development(None, cleanup_retry)),
+            FilesystemStorageMode::Directory { root } => {
+                Ok(development(Some(root.clone()), cleanup_retry))
             }
+            FilesystemStorageMode::ManagedXfs { root } => configured_managed(root, &cleanup_retry),
+            FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry),
         }
     }
 
     pub(crate) fn volume(&self) -> &FilesystemVolume {
         &self.volume
+    }
+
+    /// How this storage accounts for the files of each agent.
+    pub(crate) fn agent_accounting(&self) -> AgentAccounting {
+        self.accounting
     }
 
     pub(crate) async fn create_fresh(
@@ -858,6 +847,22 @@ impl SandboxFilesystemProvisioning {
     }
 }
 
+/// Development storage: plain directories under `root`, or in temporary directories without one.
+fn development(root: Option<PathBuf>, cleanup_retry: RetryConfig) -> SandboxFilesystemProvisioning {
+    SandboxFilesystemProvisioning {
+        volume: FilesystemVolume::unmanaged_development(),
+        mode: SandboxFilesystemProvisioningMode::Directories(
+            directories::DirectoryProvisioning::new(
+                root,
+                cleanup_retry,
+                NativeNameModeSource::NativeDetection,
+            ),
+        ),
+        accounting: AgentAccounting::Development,
+        host_directory_check: HostDirectoryCheck::None,
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
@@ -868,6 +873,22 @@ fn configured_managed(
     Ok(SandboxFilesystemProvisioning {
         volume,
         mode: SandboxFilesystemProvisioningMode::ProjectQuotas(managed),
+        accounting: AgentAccounting::ProjectQuotas,
+        host_directory_check: HostDirectoryCheck::NoXfsProject,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn configured_reflink(
+    root: &Path,
+    cleanup_retry: RetryConfig,
+) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
+    let (volume, directories) = xfs::bind_reflink(xfs::XfsRoot::open(root)?, cleanup_retry)?;
+    Ok(SandboxFilesystemProvisioning {
+        volume,
+        mode: SandboxFilesystemProvisioningMode::Directories(directories),
+        accounting: AgentAccounting::Unaccounted,
+        host_directory_check: HostDirectoryCheck::NoXfsProject,
     })
 }
 
@@ -877,7 +898,18 @@ fn configured_managed(
     _cleanup_retry: &RetryConfig,
 ) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
-        "initialize managed XFS storage on a non-Linux platform",
+        "initialize XFS storage on a non-Linux platform",
+        root,
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configured_reflink(
+    root: &Path,
+    _cleanup_retry: RetryConfig,
+) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
+    Err(FilesystemStorageError::verification(
+        "initialize XFS storage on a non-Linux platform",
         root,
     ))
 }
@@ -1079,7 +1111,7 @@ pub(crate) async fn observe_space(
 ) -> Result<FilesystemSpace, FilesystemStorageError> {
     match &volume.mode {
         FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
-        FilesystemVolumeMode::Managed { root, identity } => {
+        FilesystemVolumeMode::CopyOnWrite { root, identity } => {
             #[cfg(target_os = "linux")]
             {
                 let root = Arc::clone(root);
@@ -1119,7 +1151,7 @@ pub(crate) fn observe_space_blocking(
 ) -> Result<FilesystemSpace, FilesystemStorageError> {
     match &volume.mode {
         FilesystemVolumeMode::UnmanagedDevelopment => Ok(FilesystemSpace::Unlimited),
-        FilesystemVolumeMode::Managed { root, identity } => {
+        FilesystemVolumeMode::CopyOnWrite { root, identity } => {
             #[cfg(target_os = "linux")]
             {
                 xfs::observe_space(root, *identity).map_err(|error| {
@@ -1585,26 +1617,24 @@ mod tests {
     use test_r::test;
 
     #[test]
-    fn storage_mode_selects_one_mode_and_refuses_both_roots() {
-        let deterministic = Path::new("/deterministic");
-        let managed = Path::new("/managed");
-
-        assert_eq!(storage_mode(None, None).unwrap(), StorageMode::Unmanaged);
-        assert_eq!(
-            storage_mode(Some(deterministic), None).unwrap(),
-            StorageMode::Unmanaged
-        );
-        assert_eq!(
-            storage_mode(None, Some(managed)).unwrap(),
-            StorageMode::Managed(managed)
-        );
-        let error = storage_mode(Some(deterministic), Some(managed)).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("select exactly one filesystem storage mode"),
-            "{error}"
-        );
+    fn development_storage_has_development_accounting_and_no_project_check() {
+        let root = tempfile::tempdir().unwrap();
+        [
+            FilesystemStorageMode::Temporary,
+            FilesystemStorageMode::Directory {
+                root: root.path().to_path_buf(),
+            },
+        ]
+        .iter()
+        .for_each(|storage| {
+            let provisioning =
+                SandboxFilesystemProvisioning::new(storage, RetryConfig::default()).unwrap();
+            assert_eq!(
+                provisioning.agent_accounting(),
+                AgentAccounting::Development
+            );
+            assert_eq!(provisioning.host_directory_check, HostDirectoryCheck::None);
+        });
     }
 
     #[test]
@@ -1650,11 +1680,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_unmanaged_volume_is_not_managed() {
-        assert!(!FilesystemVolume::unmanaged_development().is_managed());
-    }
-
     fn name() -> SandboxFilesystemName {
         SandboxFilesystemName::new(
             "environment".to_string(),
@@ -1665,7 +1690,11 @@ mod tests {
     }
 
     fn unmanaged_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
-        SandboxFilesystemProvisioning::new(Some(root), None, RetryConfig::default()).unwrap()
+        SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Directory { root },
+            RetryConfig::default(),
+        )
+        .unwrap()
     }
 
     #[test]

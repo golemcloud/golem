@@ -18,15 +18,21 @@ use super::*;
 pub(super) struct DirectoryProvisioning {
     deterministic_root: Option<PathBuf>,
     cleanup_retry: RetryConfig,
+    name_mode: NativeNameModeSource,
 }
 
 impl DirectoryProvisioning {
     /// Keeps the storage settings. Without a deterministic root, each sandbox gets its own
-    /// temporary directory.
-    pub(super) fn new(deterministic_root: Option<PathBuf>, cleanup_retry: RetryConfig) -> Self {
+    /// temporary directory. `name_mode` tells how the sandboxes compare names.
+    pub(super) fn new(
+        deterministic_root: Option<PathBuf>,
+        cleanup_retry: RetryConfig,
+        name_mode: NativeNameModeSource,
+    ) -> Self {
         Self {
             deterministic_root,
             cleanup_retry,
+            name_mode,
         }
     }
 
@@ -87,12 +93,7 @@ impl DirectoryProvisioning {
         root: PathBuf,
         lifecycle: OwnedMutexGuard<()>,
     ) -> Result<SandboxFilesystem, FilesystemStorageError> {
-        remove_and_verify(
-            &root,
-            "remove stale runtime directory",
-            &self.cleanup_retry,
-        )
-        .await?;
+        remove_and_verify(&root, "remove stale runtime directory", &self.cleanup_retry).await?;
         let parent = root
             .parent()
             .expect("deterministic sandbox filesystem path must have a parent");
@@ -126,11 +127,7 @@ impl DirectoryProvisioning {
             Err(error) => {
                 return Err(rollback_creation(
                     &root,
-                    FilesystemStorageError::io(
-                        "open fresh runtime directory",
-                        &root,
-                        error,
-                    ),
+                    FilesystemStorageError::io("open fresh runtime directory", &root, error),
                     &self.cleanup_retry,
                 )
                 .await);
@@ -147,7 +144,7 @@ impl DirectoryProvisioning {
             },
             volume,
             QuotaAuthority::Unsupported,
-            NativeNameModeSource::NativeDetection,
+            self.name_mode,
         );
         if let Err(error) = verify_fresh_directory(filesystem.root()).await {
             return Err(rollback_created_filesystem(filesystem, error).await);

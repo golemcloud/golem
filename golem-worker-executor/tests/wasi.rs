@@ -35,7 +35,7 @@ use golem_test_framework::dsl::{
     TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events, stdout_events,
 };
 use golem_test_framework::model::IFSEntry;
-use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor::services::golem_config::{FilesystemStorageMode, SnapshotPolicy};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
@@ -1625,7 +1625,8 @@ async fn start_on_empty_root_without_snapshots(
         context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.storage =
+                    FilesystemStorageMode::Directory { root: root.clone() };
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
             })),
@@ -1854,8 +1855,9 @@ async fn filesystem_guest_latency_benchmark(
                 &context,
                 TestExecutorOverrides {
                     configure: Some(Arc::new(move |config| {
-                        config.filesystem_storage.deterministic_root_dir =
-                            Some(unmanaged_root.clone());
+                        config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+                            root: unmanaged_root.clone(),
+                        };
                         config.resource_usage_metering = Default::default();
                         config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                         config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
@@ -2410,7 +2412,8 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.storage =
+                    FilesystemStorageMode::Directory { root: root.clone() };
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()
@@ -2508,7 +2511,8 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.storage =
+                    FilesystemStorageMode::Directory { root: root.clone() };
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()
