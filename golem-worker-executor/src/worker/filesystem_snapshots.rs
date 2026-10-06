@@ -507,14 +507,14 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
             }
         }
         Admit::InitialFilesOnly(wait) => {
-            let check = checked_tree(host.check_initial_files(wait).await);
-            if check == InitialFilesCheck::Changed {
+            let checked = host.check_initial_files(wait).await;
+            if matches!(checked, Ok(InitialFilesCheck::Changed)) {
                 tracing::debug!(
                     "Skipping periodic snapshot: the files of the agent differ from its initial \
                      files, and filesystem snapshots are disabled on this executor"
                 );
             }
-            checked_record(check).map(PeriodicPlan)
+            checked_record(checked_tree(checked)).map(PeriodicPlan)
         }
     };
     let Some(plan) = plan else {

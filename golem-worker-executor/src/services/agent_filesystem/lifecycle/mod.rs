@@ -1330,9 +1330,9 @@ enum Counted {
     Installed,
     /// The change puts an existing or a chosen modification time at a path outside an install.
     Chosen,
-    /// A replay puts back a time that the live run had at a path. A start from initial files does
-    /// not hold that time, but the live run did not choose it either: a replay of the same history
-    /// puts it back again, so it does not count as a chosen time.
+    /// The times that a stat recorded are put back at a path, live or in a replay. A start from
+    /// initial files does not hold such a time, but the agent did not choose it either: a replay
+    /// of the same history puts it back again, so it does not count as a chosen time.
     Replayed,
 }
 
@@ -1341,7 +1341,7 @@ enum Counted {
 enum TimeOrigin {
     /// A call of the agent.
     Call,
-    /// A replay that puts back the recorded times of a stat.
+    /// The times that a stat recorded, put back live or in a replay.
     Replay,
 }
 
@@ -1376,7 +1376,9 @@ struct TreeCounters {
     /// path.
     carried: u64,
     /// The number of changes that could put a chosen modification time at a path outside an
-    /// install of initial files: a rename, a hard link, a set of a given time, and a restore.
+    /// install of initial files: a rename, a hard link, a set of a given time by a call of the
+    /// agent, and a restore of the times of a save. A time that a stat recorded and that is put
+    /// back does not count.
     chosen: u64,
     /// Whether the baseline is a restored tree with the modification times of its save.
     restored_times: bool,
@@ -1441,7 +1443,7 @@ impl TreeCounters {
 /// What a change of the times of an object with the modification time `before_modified` counts,
 /// when `origin` asks for it. A snapshot keeps no access time, so only a change of the modification
 /// time changes the tree. A given time is a chosen time when a call of the agent asks for it, and a
-/// replayed time when a replay puts it back.
+/// replayed time when it is a time that a stat recorded, put back live or in a replay.
 fn set_times_change(
     before_modified: Option<std::time::SystemTime>,
     requested: TimeChange,
@@ -2549,10 +2551,10 @@ pub(crate) fn set_attributes<Adapter: SandboxFilesystemAdapter>(
     }))
 }
 
-/// Restores recorded timestamps on an open or path target during durable replay.
+/// Puts back the times that a stat recorded on an open or path target, live or in a replay.
 ///
 /// Replay adapters call this with a reconstruction handle after replaying the matching metadata
-/// operation. Path targets obey `Follow`; `Keep` leaves a timestamp unchanged. Generation and
+/// operation. A live stat calls it too, and then the times already match, so nothing changes. Path targets obey `Follow`; `Keep` leaves a timestamp unchanged. Generation and
 /// admission errors are immediate, while restoration or invalidation errors are deferred.
 pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,

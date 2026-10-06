@@ -884,8 +884,10 @@ An application snapshot is used only when the files of the agent can come back w
 the tree in place of the capture (`agent_filesystem::check_initial_files`): the same fence and
 the same rule as a capture, with no host directory, copy or store call. The tree holds only
 initial files when each declaration is a read-only initial file that is untouched and has a single
-name, no entity-provisioned file exists, and the tree holds nothing else; a read-write initial
-file counts as a change. A tree of initial files gives a record without a name. Any other tree,
+name, no entity-provisioned file exists, no call set a chosen modification time, and the tree
+holds nothing else; a read-write initial file counts as a change. A rename or hard link of any
+file, or a given time that the agent sets, counts as a change; a time that Golem puts back from a
+recorded stat does not. A tree of initial files gives a record without a name. Any other tree,
 or a check that cannot decide (a file call that stays open, a sandbox error), gives no periodic
 record, so a start uses an older usable record or replays the whole oplog; a snapshot-based manual
 update fails as a failed update, with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` for changed files and with
