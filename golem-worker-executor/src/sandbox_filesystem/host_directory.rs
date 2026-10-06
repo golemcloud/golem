@@ -175,11 +175,11 @@ pub(super) async fn make_host_directories(
     provisioning: &SandboxFilesystemProvisioning,
 ) -> Result<HostDirectories, FilesystemStorageError> {
     let (root, anchor, verify_no_project) = match &provisioning.mode {
-        SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => {
-            (unmanaged.deterministic_root().map(Arc::from), None, false)
+        SandboxFilesystemProvisioningMode::Directories(directories) => {
+            (directories.deterministic_root().map(Arc::from), None, false)
         }
         #[cfg(target_os = "linux")]
-        SandboxFilesystemProvisioningMode::Managed(managed) => (
+        SandboxFilesystemProvisioningMode::ProjectQuotas(managed) => (
             Some(Arc::from(managed.root())),
             provisioning.volume.managed_root().cloned(),
             true,
