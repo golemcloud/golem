@@ -216,6 +216,31 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+The primary Store and every current entity Store are one resident lifecycle unit. Establishing a
+lifecycle event queues it behind earlier establishment, fences the matching owner's entity
+admission and runtime resources, signals the primary Store, drains the fenced entity bodies, then
+completes establishment. The outer loop takes any pending event and waits for that establishment
+before creating another Store. This check is unconditional: a loop that retained its
+concurrent-agent permit must not skip it. Restart and suspend therefore discard the complete unit,
+and reconstruction recreates entity Stores from the owner's oplog rather than carrying resident
+entity state across generations.
+
+Three identities at this boundary are deliberately different:
+
+- `AgentFingerprint` is the persistent `Create` identity and namespaces durable derived state.
+- The cached `Arc<Worker>` identifies the concrete owner shell in `ActiveAgents`; stale shell A
+  can remove or fence only itself, never replacement B cached under the same `AgentId`.
+- `ActiveAgent::entity_fence_generation` identifies a resident entity-admission epoch within that
+  shell. Reopening admission succeeds only for the generation that was fenced.
+
+An oplog shutdown handle is a fourth, narrower capability: it targets the captured open-oplog
+generation. It is not a worker identity or entity-fence generation, and ordinary worker retirement
+may reuse the same open oplog. Executor shutdown fences every registered oplog generation before
+cancelling executor-owned task execution, abandons transient entity work without semantic
+finalization, joins Store destruction and retained callbacks, then joins those captured oplog
+layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
+state for its replacement without adding a second recovery path.
+
 Explicit interruption retires the cached owner and fences its replacement startup. Automatic
 shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or
 updates; an executor restart or shard move is not a request to resume them. If the worker
@@ -229,6 +254,14 @@ or failed invocation is not overwritten. Test:
 turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
 remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
 restart does not fail the invocation waiter or append `Interrupted`.
+
+When a trap chooses `RetryDecision::Delayed`, the invocation loop snapshots the finite command
+prefix already queued before teardown. Duplicate `WorkAvailable` edges in that prefix collapse to
+one resident-work hint; commands arriving after the snapshot remain queued and can shorten the
+delay. `ResumeReplay` is retained separately and applied after successful unload even if a newer
+restart or jump changes the retry decision. This preserves replay requests and lifecycle-control
+semantics without treating every edge notification as independent work or claiming blanket FIFO
+ordering between coalesced hints and replay requests.
 
 Environment and application deletion invalidate component metadata, environment state and agent
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
@@ -325,7 +358,10 @@ lifecycle lock is taken for individual stream items, oplog reads, or replay step
 `Oplog::stop_and_wait` closes admission and joins work associated with the actual open oplog
 generation, including tasks belonging to older worker shells removed from the active cache.
 Transport roots are cancelled and their children joined without waiting for client IO. Invocation
-loops are joined, not cancelled: their final commits, state destruction, and panic cleanup must finish.
+loops on this ordinary oplog-stop path are joined, not cancelled: their final commits, state
+destruction, and panic cleanup must finish. Executor shutdown is different: it first fences the
+captured oplog generations, then cancels executor-owned invocation and entity tasks as described
+above, and joins their destruction before closing those generations.
 Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
 cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
 queries. Attachment queries may spawn every time. Worker-state actors register once at construction

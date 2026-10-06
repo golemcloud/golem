@@ -462,6 +462,7 @@ pub trait ToolStreamingCaller {
     async fn capable_modes_and_cohorts(&self) -> Vec<String>;
     async fn collect_capable(&self, path: String, input: Vec<u8>) -> StreamEvidence;
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
+    async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
     async fn clean_stdout_then_trap(&self);
     async fn trap_with_blocked_sibling(&self);
     async fn drop_trapping_result(&self);
@@ -2937,6 +2938,24 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .expect("collect capable dual-output stderr")
                 .expect("capable dual tool has stderr"),
         ]
+    }
+
+    async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8> {
+        let invocation = CapableStreamingClient::default()
+            .run_capable(path, input_stream(vec![input.clone()]))
+            .await
+            .expect("start capable tool before durable promise");
+        let collected = invocation.collect().await;
+        let result = collected
+            .result
+            .expect("complete capable tool before durable promise");
+        assert_eq!(result.bytes_read, input.len() as u64);
+        let output = collected
+            .stdout
+            .expect("collect capable stdout before durable promise")
+            .expect("capable tool has stdout");
+        wait_at_promise_checkpoint("completed-capable-tool").await;
+        output
     }
 
     async fn clean_stdout_then_trap(&self) {

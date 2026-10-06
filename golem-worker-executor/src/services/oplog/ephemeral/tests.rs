@@ -381,6 +381,116 @@ async fn bounded_writer_queue_backpressures_fourth_threshold_flush_and_close_dra
 
 #[test]
 #[timeout("30s")]
+async fn shutdown_waits_for_handed_off_writes_without_flushing_buffered_tail() {
+    let fixture = fixture(1).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.oplog.add(entry(1)).await.unwrap();
+    fixture.archive.wait_for_appends(1).await;
+    fixture.oplog.add(entry(2)).await.unwrap();
+    let shutdown_handle = fixture.oplog.executor_shutdown_handle();
+
+    shutdown_handle.fence();
+    let shutdown = tokio::spawn(async move { shutdown_handle.close_and_wait().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), fixture.oplog.closed())
+            .await
+            .is_err()
+    );
+
+    fixture.archive.release(1);
+    shutdown.await.unwrap().unwrap();
+    assert_eq!(fixture.archive.length().await.unwrap(), 2);
+    assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[timeout("30s")]
+async fn executor_shutdown_marks_last_handle_drop_as_non_flushing() {
+    let fixture = fixture(10).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
+    let archive = fixture.archive.clone();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let tasks = crate::services::active_agents::InvocationLoops::new(shutdown.clone());
+    let registered: Arc<dyn Oplog> = fixture.oplog.clone();
+    tasks.register_owner_oplog(registered);
+    let task = tasks.spawn_entity({
+        let oplog = fixture.oplog.clone();
+        async move {
+            let _oplog = oplog;
+            std::future::pending::<()>().await;
+        }
+    });
+    drop(fixture.oplog);
+
+    shutdown.cancel();
+    tasks.wait_for_exit().await.unwrap();
+    assert_eq!(task.await.unwrap(), None);
+    assert_eq!(archive.length().await.unwrap(), 0);
+    assert_eq!(archive.append_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+#[timeout("30s")]
+async fn saved_executor_shutdown_fence_preserves_admitted_writer_append() {
+    let fixture = fixture(0).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.archive.wait_for_appends(1).await;
+    let shutdown = fixture.oplog.executor_shutdown_handle();
+    let weak = Arc::downgrade(&fixture.oplog);
+    let archive = fixture.archive.clone();
+
+    drop(fixture.oplog);
+    assert!(weak.upgrade().is_none());
+    shutdown.fence();
+    let mut shutdown_close = Box::pin(shutdown.close_and_wait());
+    assert!(futures::poll!(shutdown_close.as_mut()).is_pending());
+
+    archive.release(1);
+    shutdown_close.await.unwrap();
+    assert_eq!(archive.length().await.unwrap(), 1);
+}
+
+#[test]
+#[timeout("30s")]
+async fn stale_executor_shutdown_fence_does_not_stop_newer_transfer() {
+    let fixture = fixture(10).await;
+    let shutdown = fixture.oplog.executor_shutdown_handle();
+    let service = fixture.oplog.multi_layer_oplog_service.clone();
+    let agent_id = fixture.oplog.owned_agent_id.agent_id.clone();
+    let old = fixture.oplog.transfer_fiber.clone();
+    let newer = new_transfer_fiber();
+    service.register_transfer(agent_id.clone(), &newer);
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let transfer = tokio::spawn(async move {
+        if start_rx.await.is_ok() {
+            let _ = release_rx.await;
+        }
+    });
+    MultiLayerOplogService::start_transfer(&newer, start_tx, transfer).await;
+
+    shutdown.fence();
+    shutdown.fence();
+    shutdown.close_and_wait().await.unwrap();
+
+    assert!(service.has_registered_transfer(&agent_id, &newer));
+    MultiLayerOplogService::transfer_closed(&old).await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            MultiLayerOplogService::transfer_closed(&newer),
+        )
+        .await
+        .is_err()
+    );
+    release_tx.send(()).unwrap();
+    MultiLayerOplogService::transfer_closed(&newer)
+        .await
+        .unwrap();
+}
+
+#[test]
+#[timeout("30s")]
 async fn receipt_overflow_retains_a_detectable_gap_and_storage_barrier_covers_it() {
     let fixture = fixture(0).await;
     let count = MAX_RETAINED_RECEIPT_BATCHES + 7;

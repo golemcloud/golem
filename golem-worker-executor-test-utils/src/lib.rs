@@ -192,7 +192,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
-use tracing::{Level, debug, info, warn};
+use tracing::{Level, debug, info};
 use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
@@ -676,7 +676,8 @@ impl TestWorkerExecutor {
             self._run_details.invocation_loops.wait_for_exit(),
         )
         .await
-        .map_err(|_| anyhow!("executor invocation loops did not retire within 10s"))
+        .map_err(|_| anyhow!("executor tasks did not retire within 10s"))?
+        .map_err(anyhow::Error::msg)
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
@@ -1908,28 +1909,26 @@ impl TestContext {
 
     /// Waits until the workers of every shut-down executor previously started on this context
     /// stopped executing. Executors that are still running are left alone.
-    async fn wait_for_shut_down_executors(&self) {
-        let previous = std::mem::take(&mut *self.executor_invocation_loops.lock().unwrap());
-        let mut still_running = Vec::new();
-        for loops in previous {
+    async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
+        let previous = self.executor_invocation_loops.lock().unwrap().clone();
+        let mut drained = Vec::new();
+        for loops in &previous {
             if !loops.is_shut_down() {
-                still_running.push(loops);
                 continue;
             }
-            if tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
+            let result = tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
                 .await
-                .is_err()
-            {
-                warn!(
-                    "Invocation loops of a previous executor did not exit within 10s; \
-                     starting the next executor over the same storage anyway"
-                );
-            }
+                .map_err(|_| anyhow!(
+                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage"
+                ))?;
+            result.map_err(anyhow::Error::msg)?;
+            drained.push(loops.clone());
         }
         self.executor_invocation_loops
             .lock()
             .unwrap()
-            .extend(still_running);
+            .retain(|loops| !drained.iter().any(|drained| loops.same_executor(drained)));
+        Ok(())
     }
 
     fn register_executor(&self, invocation_loops: InvocationLoops) {
@@ -2228,7 +2227,7 @@ async fn start_executor_with_config(
     let additional_test_deps = AdditionalTestDeps::new();
     let services = Arc::new(Mutex::new(None));
 
-    context.wait_for_shut_down_executors().await;
+    context.wait_for_shut_down_executors().await?;
     let details = run(
         config,
         prometheus.clone(),
@@ -3589,10 +3588,12 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
+    wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
     active_agents: Arc<
         std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     >,
+    additional_deps: NoAdditionalDeps,
 }
 
 #[async_trait]
@@ -3647,12 +3648,17 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
-        Arc::new(ComponentServiceLocalFileSystem::new(
+        let service = Arc::new(ComponentServiceLocalFileSystem::new(
             &self.component_service_directory,
             10000,
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
-        ))
+        ));
+        if let Some(wrap) = &self.wrap_component_service {
+            wrap(service)
+        } else {
+            service
+        }
     }
 
     fn create_card_service(
@@ -3683,7 +3689,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> NoAdditionalDeps {
-        NoAdditionalDeps {}
+        self.additional_deps.clone()
     }
 
     fn create_direct_invocation_auth_service(
@@ -3846,12 +3852,16 @@ async fn run_production_context_bootstrap(
     let mut join_set = tokio::task::JoinSet::new();
 
     let active_agents = Arc::new(std::sync::OnceLock::new());
+    let additional_deps = NoAdditionalDeps::new();
+    context.wait_for_shut_down_executors().await?;
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
+            wrap_component_service: overrides.wrap_component_service,
             wrap_rpc: overrides.wrap_rpc,
             active_agents: active_agents.clone(),
+            additional_deps: additional_deps.clone(),
         },
         config,
         prometheus.clone(),
@@ -3860,6 +3870,7 @@ async fn run_production_context_bootstrap(
         false,
     )
     .await?;
+    context.register_executor(details.invocation_loops.clone());
 
     let grpc_port = details.grpc_port;
     let leak_detector = details.leak_detector.clone();
@@ -4729,6 +4740,12 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
+    fn executor_shutdown_handle(
+        &self,
+    ) -> golem_worker_executor::services::oplog::OplogShutdownHandle {
+        self.oplog.executor_shutdown_handle()
+    }
+
     fn retire(&self) {
         self.oplog.retire();
     }

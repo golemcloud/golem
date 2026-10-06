@@ -691,7 +691,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     }
     worker
         .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
-        .await;
+        .await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_is_loaded(&owned).await {
             tokio::task::yield_now().await;
@@ -714,7 +714,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     );
     worker
         .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
-        .await;
+        .await?;
     assert!(
         executor.worker_has_pending_startup(&owned).await,
         "Suspend waits for normal permit wakeup before startup can process it"
