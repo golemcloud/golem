@@ -62,6 +62,10 @@ type codec struct {
 
 	encode func(*valBuilder, reflect.Value) int32
 	decode func(*decoder, reflect.Value, int32) error
+
+	// metadata, when set, is attached to the type's node: the role of an
+	// unstructured or multimodal value.
+	metadata *types.MetadataEnvelope
 }
 
 // compile returns the codec for t, building it if this is the first request.
@@ -155,6 +159,15 @@ func (d *definitions) buildCodec(c *codec) {
 	// zero value, done once here rather than per value.
 	if d.sdkComposite(c) {
 		return
+	}
+
+	// A multimodal list is a slice, recognised before the kind switch would
+	// read it as a plain list.
+	if c.typ.Kind() == reflect.Slice {
+		if elem, ok := values.MultimodalElem(reflect.New(c.typ).Elem().Interface()); ok {
+			d.compileMultimodal(c, elem)
+			return
+		}
 	}
 
 	// Concrete named types are matched exactly, before the kind switch would
@@ -313,6 +326,14 @@ func (d *definitions) sdkComposite(c *codec) bool {
 	// core module, whose plumbing is reached through package-level functions:
 	// their interfaces are sealed there, so their methods are not callable from
 	// here.
+	if languages, ok := values.UnstructuredTextLanguages(zero); ok {
+		compileUnstructuredText(c, languages)
+		return true
+	}
+	if mimeTypes, ok := values.UnstructuredBinaryMimeTypes(zero); ok {
+		compileUnstructuredBinary(c, mimeTypes)
+		return true
+	}
 	switch z := zero.(type) {
 	case secretish:
 		compileSecret(c, d.compile(z.secretElem()))

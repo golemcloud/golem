@@ -77,6 +77,9 @@ func (g *graphBuilder) node(c *codec) int32 {
 	// so the destination must be indexed only after it returns.
 	body := c.body(g)
 	g.nodes[idx].Body = body
+	if c.metadata != nil {
+		g.nodes[idx].Metadata = *c.metadata
+	}
 	return idx
 }
 

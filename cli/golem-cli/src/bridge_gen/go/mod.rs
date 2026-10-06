@@ -36,6 +36,7 @@
 //! RPC values are positional, so a generated field or parameter name never has
 //! to match the schema's: only order and type travel.
 
+pub mod content;
 pub mod decl;
 pub mod external;
 #[allow(clippy::module_inception)]
@@ -50,8 +51,8 @@ pub mod type_ref;
 pub use type_name::GoTypeName;
 
 use crate::bridge_gen::go::go::{
-    go_string, lower_first, to_exported_ident, to_field_ident, to_param_ident, unique_idents,
-    unique_idents_with_reserved,
+    go_string, lower_first, one_field_struct, to_exported_ident, to_field_ident, to_param_ident,
+    unique_idents, unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
 use crate::bridge_gen::go::type_ref::{VALUES, VALUES_PKG};
@@ -97,6 +98,10 @@ pub struct GoBridgeGenerator {
     type_naming: TypeNaming<GoTypeName>,
     names: AgentNames,
     quantity_units: quantity::QuantityUnits,
+    content_markers: content::ContentMarkers,
+    /// Names for the item variants of multimodal lists that are a method's
+    /// only input or its output, which the shared type naming leaves unnamed.
+    modality_names: Vec<(SchemaType, String)>,
     /// The client directory when it is not derived from the agent type: a tool
     /// client is named after the tool.
     client_dir: Option<String>,
@@ -215,6 +220,14 @@ impl GoBridgeGenerator {
         }
         let names = AgentNames::new(&agent_type);
         let quantity_units = quantity::QuantityUnits::collect(&agent_type, &names.reserved());
+        let content_markers = content::ContentMarkers::collect(
+            &agent_type,
+            &names
+                .reserved()
+                .into_iter()
+                .chain(quantity_units.names())
+                .collect::<Vec<_>>(),
+        );
         let same_language = agent_type.source_language.eq_ignore_ascii_case("go");
         let type_naming = TypeNaming::new_with_reserved_names(
             &agent_type,
@@ -223,18 +236,23 @@ impl GoBridgeGenerator {
                 .reserved()
                 .into_iter()
                 .chain(quantity_units.names())
+                .chain(content_markers.names())
                 .map(GoTypeName::from),
         )?;
 
-        Ok(Self {
+        let mut generator = Self {
             target_path: target_path.to_path_buf(),
             agent_type,
             mode,
             type_naming,
             names,
             quantity_units,
+            content_markers,
+            modality_names: Vec::new(),
             client_dir: None,
-        })
+        };
+        generator.modality_names = generator.name_modalities();
+        Ok(generator)
     }
 
     /// A guest generator for the types of a tool client: the agent type is the
@@ -248,12 +266,21 @@ impl GoBridgeGenerator {
     ) -> anyhow::Result<Self> {
         let names = AgentNames::new(&agent_type);
         let quantity_units = quantity::QuantityUnits::collect(&agent_type, &reserved);
+        let content_markers = content::ContentMarkers::collect(
+            &agent_type,
+            &reserved
+                .iter()
+                .cloned()
+                .chain(quantity_units.names())
+                .collect::<Vec<_>>(),
+        );
         let type_naming = TypeNaming::new_with_reserved_names(
             &agent_type,
             false,
             reserved
                 .into_iter()
                 .chain(quantity_units.names())
+                .chain(content_markers.names())
                 .map(GoTypeName::from),
         )?;
         Ok(Self {
@@ -263,6 +290,8 @@ impl GoBridgeGenerator {
             type_naming,
             names,
             quantity_units,
+            content_markers,
+            modality_names: Vec::new(),
             client_dir: Some(client_dir),
         })
     }
@@ -308,6 +337,16 @@ impl GoBridgeGenerator {
     ///
     /// A quantity's name is that of its unit marker.
     fn named(&self, typ: &SchemaType) -> Option<String> {
+        if let Some(spelled) = self.content_type(typ) {
+            return Some(spelled);
+        }
+        if let Some((_, name)) = self
+            .modality_names
+            .iter()
+            .find(|(t, _)| t == typ || t == self.resolve(typ))
+        {
+            return Some(name.clone());
+        }
         if let SchemaType::Quantity { spec, .. } = self.resolve(typ) {
             return self.quantity_units.name_for(spec).map(str::to_string);
         }
@@ -322,6 +361,85 @@ impl GoBridgeGenerator {
                 .map(|n| n.name.clone());
         }
         None
+    }
+
+    /// Names the custom item variants of multimodal lists the shared type
+    /// naming left unnamed: `<Agent><Method>Modality`, or `…InputModality`
+    /// for an input.
+    fn name_modalities(&self) -> Vec<(SchemaType, String)> {
+        let mut found: Vec<(SchemaType, String)> = Vec::new();
+        let mut consider = |typ: &SchemaType, stem: String| {
+            if let Some(content::Content::Multimodal(element)) =
+                content::content(self.resolve(typ), &|t| self.resolve(t))
+                && self.type_naming.type_name_for_type(element).is_none()
+                && !found.iter().any(|(t, _)| t == element)
+            {
+                found.push((element.clone(), stem));
+            }
+        };
+        for (idx, method) in self.agent_type.methods.iter().enumerate() {
+            let stem = format!("{}{}", self.names.agent, self.names.methods[idx]);
+            if let [field] = user_supplied_fields(&method.input_schema).as_slice() {
+                consider(&field.schema, format!("{stem}InputModality"));
+            }
+            if let OutputSchema::Single(output) = &method.output_schema {
+                consider(output, format!("{stem}Modality"));
+            }
+        }
+        let taken = self
+            .type_naming
+            .types()
+            .map(|(_, n)| n.name.clone())
+            .chain(self.names.reserved())
+            .chain(self.quantity_units.names())
+            .chain(self.content_markers.names())
+            .collect::<Vec<_>>();
+        let taken = taken.iter().map(String::as_str).collect::<Vec<_>>();
+        let idents =
+            unique_idents_with_reserved(found.iter().map(|(_, n)| n.clone()).collect(), &taken);
+        found
+            .into_iter()
+            .zip(idents)
+            .map(|((typ, _), name)| (typ, name))
+            .collect()
+    }
+
+    /// Every type the package declares: the shared naming's, then the
+    /// multimodal item variants named here.
+    fn named_types(&self) -> Vec<(&SchemaType, String)> {
+        self.type_naming
+            .types()
+            .map(|(t, n)| (t, n.name.clone()))
+            .chain(self.modality_names.iter().map(|(t, n)| (t, n.clone())))
+            .collect()
+    }
+
+    /// The shared Go type of role-marked content, which the SDK spells itself.
+    fn content_type(&self, typ: &SchemaType) -> Option<String> {
+        Some(
+            match content::content(self.resolve(typ), &|t| self.resolve(t))? {
+                content::Content::Text(languages) => format!(
+                    "values.UnstructuredText[{}]",
+                    self.content_markers.marker(true, &languages)
+                ),
+                content::Content::Binary(mime_types) => format!(
+                    "values.UnstructuredBinary[{}]",
+                    self.content_markers.marker(false, &mime_types)
+                ),
+                content::Content::BasicMultimodal => "values.Multimodal".to_string(),
+                content::Content::Multimodal(element) => {
+                    format!("values.MultimodalOf[{}]", self.named(element)?)
+                }
+            },
+        )
+    }
+
+    /// True for a named type the SDK's content types replace: role-marked
+    /// content, and the modality variant of a basic multimodal list.
+    fn spelled_by_sdk(&self, typ: &SchemaType) -> bool {
+        let resolved = self.resolve(typ);
+        content::content(resolved, &|t| self.resolve(t)).is_some()
+            || content::is_basic_modality(resolved, &|t| self.resolve(t))
     }
 
     fn restriction_tag(&self, typ: &SchemaType) -> anyhow::Result<Option<String>> {
@@ -377,11 +495,15 @@ impl GoBridgeGenerator {
         let mut writer = GoWriter::new();
         let render = |t: &SchemaType, w: &mut GoWriter| self.render(t, w);
         let tag = |t: &SchemaType| self.restriction_tag(t);
-        for (typ, name) in self.type_naming.types() {
+        for (typ, name) in self.named_types() {
+            if self.spelled_by_sdk(typ) {
+                continue;
+            }
             let body = self.resolve(typ);
-            decl::write(&name.name, body, &render, &tag, &mut writer)?;
+            decl::write(&name, body, &render, &tag, &mut writer)?;
         }
         self.quantity_units.write(&mut writer);
+        self.content_markers.write(&mut writer);
         Ok(writer.finish(&self.package_name()))
     }
 
@@ -393,8 +515,11 @@ impl GoBridgeGenerator {
     fn registry_file(&self) -> anyhow::Result<String> {
         let mut writer = GoWriter::new();
         let mut any = false;
-        for (typ, name) in self.type_naming.types() {
-            let name = &name.name;
+        for (typ, name) in self.named_types() {
+            if self.spelled_by_sdk(typ) {
+                continue;
+            }
+            let name = &name;
             match self.resolve(typ) {
                 SchemaType::Enum { cases, .. } => {
                     writer.import(GOLEM_PKG);
@@ -614,8 +739,9 @@ impl GoBridgeGenerator {
             n.client
         ));
         writer.line(format!(
-            "type {} struct{{ client golem.Client[{}] }}",
-            n.client, n.id
+            "type {} {}",
+            n.client,
+            one_field_struct("client", &format!("golem.Client[{}]", n.id))
         ));
         writer.blank();
 

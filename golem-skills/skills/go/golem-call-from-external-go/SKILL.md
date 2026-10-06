@@ -111,7 +111,7 @@ An **ephemeral** agent has no durable instance to get: its client is constructed
 
 Parameter and return types are generated in the client package, using the same Go spelling a Go agent would: records are structs, enums are `uint32` constants (`StatusInTransit`), flags are structs of `bool`, and variants and unions are sealed interfaces with one struct per case (`EventNote{Value: "hi"}`; a case without a payload is an empty struct). Options, results and tuples are `values.Option[T]`, `values.Result[T, E]` and `values.Tuple2[A, B]`… from `github.com/golemcloud/golem/sdks/go/core/values`; `text`, `char`, `binary`, `path`, `url` and `uuid` are `values.Text`, `values.Char`, `values.Binary`, `values.Path`, `values.URL`, `values.UUID`; datetimes and durations are `time.Time` and `time.Duration`.
 
-A quantity is `values.Quantity[U]`, where `U` is a generated unit marker named after the base unit (`values.Quantity[UnitKg]`). An empty `Unit` sends the base unit.
+Unstructured and multimodal content uses the shared content types: `values.UnstructuredText[L]`, `values.UnstructuredBinary[M]` (with generated language and media-type markers such as `LanguagesEnDe`, or `values.AnyLanguage` / `values.AnyMimeType`), `values.Multimodal`, and `values.MultimodalOf[T]` for a custom set of modalities. A quantity is `values.Quantity[U]`, where `U` is a generated unit marker named after the base unit (`values.Quantity[UnitKg]`). An empty `Unit` sends the base unit.
 
 ### Streaming methods
 

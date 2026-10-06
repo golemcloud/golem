@@ -58,6 +58,14 @@ pub fn render<'a>(
     streams: Streams,
     writer: &mut GoWriter,
 ) -> anyhow::Result<String> {
+    // Role-marked content is spelled with the shared content types, which the
+    // caller names in full.
+    if resolve(typ).metadata().role.is_some()
+        && let Some(spelled) = named(typ)
+    {
+        writer.import(VALUES_PKG);
+        return Ok(spelled);
+    }
     // A quantity is named by its unit marker, which parameterises the
     // shared quantity type.
     if let SchemaType::Quantity { .. } = resolve(typ) {

@@ -80,7 +80,7 @@ type definitions struct {
 }
 
 func newDefinitions() *definitions {
-	return &definitions{
+	d := &definitions{
 		agents:    map[string]*agentEntry{},
 		idToAgent: map[reflect.Type]string{},
 		variants:  map[reflect.Type]*variantDef{},
@@ -90,6 +90,9 @@ func newDefinitions() *definitions {
 		pins:      map[reflect.Type]string{},
 		codecs:    map[reflect.Type]*codec{},
 	}
+	// The modalities of a basic multimodal list are the SDK's own variant.
+	defineVariantInto[Modality](d, WrappedCase[TextModality]("Text"), WrappedCase[BinaryModality]("Binary"))
+	return d
 }
 
 // defs is the process-wide definition state the public API builds into.

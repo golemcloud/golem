@@ -43,6 +43,19 @@ var Relay = Source.Method[CardIn, golem.PermissionCard]("relay")
 // Slow sleeps for two seconds.
 var Slow = Source.Method[golem.Unit, string]("slow")
 
+type EnOrDe struct{}
+
+func (EnOrDe) Languages() []string { return []string{"en", "de"} }
+
+// ContentIn carries unstructured and multimodal content.
+type ContentIn struct {
+	Doc   golem.UnstructuredText[EnOrDe]
+	Media golem.Multimodal
+}
+
+// EchoContent returns the content it was sent.
+var EchoContent = Source.Method[ContentIn, ContentIn]("echoContent")
+
 type sourceState struct{}
 
 type GreeterID struct{ Name string }
@@ -89,6 +102,7 @@ var (
 	Sleepy      = Ops.Method[golem.Unit, string]("sleepy")
 	Quota       = Ops.Method[golem.Unit, string]("quota")
 	Bounded     = Ops.Method[BoundedIn, uint32]("bounded")
+	Content     = Ops.Method[golem.Unit, string]("content")
 )
 
 type counterState struct{ N int64 }
@@ -127,6 +141,8 @@ func init() {
 		return ctx.State.greeting + " " + ctx.State.name
 	})
 
+	source.Handle(EchoContent, func(_ *golem.Context[sourceState], in ContentIn) ContentIn { return in })
+
 	source.Handle(Slow, func(*golem.Context[sourceState], golem.Unit) string {
 		time.Sleep(2 * time.Second)
 		return "slow-done"
@@ -144,6 +160,21 @@ func init() {
 	// The api-calls resource holds three units and rejects beyond them: two are
 	// spent here, one by another agent through a split token.
 	ops.Handle(Bounded, func(_ *golem.Context[opsState], in BoundedIn) uint32 { return in.N })
+
+	// Unstructured and multimodal content round-trips through another agent.
+	ops.Handle(Content, func(*golem.Context[opsState], golem.Unit) string {
+		out := EchoContent.Call(Source.Get(SourceID{Name: "content"}), ContentIn{
+			Doc: golem.UnstructuredText[EnOrDe]{Text: "hallo", Language: "de"},
+			Media: golem.Multimodal{
+				golem.TextModality{Value: golem.UnstructuredText[golem.AnyLanguage]{URL: "https://example.com/a.txt"}},
+				golem.BinaryModality{Value: golem.UnstructuredBinary[golem.AnyMimeType]{Data: []byte{1, 2}, MimeType: "image/png"}},
+			},
+		})
+		text, ok := out.Media[0].(golem.TextModality)
+		binary, ok2 := out.Media[1].(golem.BinaryModality)
+		return fmt.Sprintf("content:%s/%s|%s|%v|%s|%v", out.Doc.Text, out.Doc.Language,
+			text.Value.URL, binary.Value.Data, binary.Value.MimeType, ok && ok2)
+	})
 
 	ops.Handle(Quota, func(*golem.Context[opsState], golem.Unit) string {
 		tok := golem.NewQuotaToken("api-calls", 1)

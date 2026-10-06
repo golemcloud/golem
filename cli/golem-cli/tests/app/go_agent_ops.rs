@@ -190,6 +190,12 @@ async fn test_go_agent_ops() {
         "an out-of-range argument was not rejected by its restriction: {rejection}"
     );
 
+    let content = invoke("content", &[]).await;
+    assert!(
+        content.contains("content:hallo/de|https://example.com/a.txt|[1 2]|image/png|true"),
+        "{content}"
+    );
+
     let reflected = invoke("reflected", &[]).await;
     assert!(reflected.contains("hej r|hej r|true"), "{reflected}");
 

@@ -82,6 +82,21 @@ type QuantityUnit = values.QuantityUnit
 // quantity type. See [values.Quantity].
 type Quantity[U QuantityUnit] = values.Quantity[U]
 
+// Unstructured and multimodal content; see the core values package.
+type (
+	Languages                       = values.Languages
+	AnyLanguage                     = values.AnyLanguage
+	UnstructuredText[L Languages]   = values.UnstructuredText[L]
+	MimeTypes                       = values.MimeTypes
+	AnyMimeType                     = values.AnyMimeType
+	UnstructuredBinary[M MimeTypes] = values.UnstructuredBinary[M]
+	Modality                        = values.Modality
+	TextModality                    = values.TextModality
+	BinaryModality                  = values.BinaryModality
+	MultimodalOf[T any]             = values.MultimodalOf[T]
+	Multimodal                      = values.Multimodal
+)
+
 // Secret is a handle to a secret, obtained from the agent's config ([Config] /
 // [InitContext.Config]) or received as a field of a method's input or output.
 // It lowers to the WIT secret type. [Secret.Get] reads the plaintext from the

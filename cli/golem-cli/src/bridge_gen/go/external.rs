@@ -30,7 +30,9 @@ use crate::bridge_gen::go::go::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
-use crate::bridge_gen::go::{AgentNames, GoBridgeGenerator, case_idents, method_uses_streams};
+use crate::bridge_gen::go::{
+    AgentNames, GoBridgeGenerator, case_idents, content, method_uses_streams,
+};
 use crate::bridge_gen::type_naming::user_supplied_fields;
 use crate::sdk_overrides::{GO_BRIDGE_MODULE, GO_CORE_MODULE, sdk_overrides};
 use crate::versions;
@@ -90,6 +92,24 @@ impl<'g> Codecs<'g> {
     /// `dir`: a `bridge` leaf, a named type's pair, or a helper written here.
     fn func(&mut self, dir: Dir, typ: &SchemaType) -> anyhow::Result<String> {
         let g = self.generator;
+        match content::content(g.resolve(typ), &|t| g.resolve(t)) {
+            Some(content::Content::Text(languages)) => {
+                let marker = g.content_markers.marker(true, &languages);
+                return Ok(match dir {
+                    Dir::Encode => format!("bridge.EncodeUnstructuredText[{marker}]"),
+                    Dir::Decode => format!("bridge.DecodeUnstructuredText[{marker}]"),
+                });
+            }
+            Some(content::Content::Binary(mime_types)) => {
+                let marker = g.content_markers.marker(false, &mime_types);
+                return Ok(match dir {
+                    Dir::Encode => format!("bridge.EncodeUnstructuredBinary[{marker}]"),
+                    Dir::Decode => format!("bridge.DecodeUnstructuredBinary[{marker}]"),
+                });
+            }
+            Some(_) => return self.helper(dir, typ),
+            None => {}
+        }
         if let SchemaType::Quantity { .. } = g.resolve(typ) {
             let unit = g.named(typ).ok_or_else(|| {
                 anyhow::anyhow!("a quantity reached the Go codec without a unit marker")
@@ -149,7 +169,26 @@ impl<'g> Codecs<'g> {
             return Ok(name.clone());
         }
 
+        let multimodal =
+            content::content(self.generator.resolve(typ), &|t| self.generator.resolve(t));
         let body = match (dir, typ) {
+            _ if matches!(
+                multimodal,
+                Some(content::Content::BasicMultimodal | content::Content::Multimodal(_))
+            ) =>
+            {
+                let item = match &multimodal {
+                    Some(content::Content::Multimodal(element)) => self.func(dir, element)?,
+                    _ => match dir {
+                        Dir::Encode => "bridge.EncodeModality".to_string(),
+                        Dir::Decode => "bridge.DecodeModality".to_string(),
+                    },
+                };
+                match dir {
+                    Dir::Encode => format!("return bridge.EncodeMultimodal(v, {item})"),
+                    Dir::Decode => format!("return bridge.DecodeMultimodal(sv, {item})"),
+                }
+            }
             (Dir::Encode, SchemaType::Option { inner, .. }) => {
                 format!("return bridge.EncodeOption(v, {})", self.func(dir, inner)?)
             }
@@ -714,8 +753,11 @@ impl GoBridgeGenerator {
             self.write_external_method(idx, method, &names, &mut codecs, &mut w)?;
         }
 
-        for (typ, name) in self.type_naming.types() {
-            codecs.write_named(&name.name, self.resolve(typ))?;
+        for (typ, name) in self.named_types() {
+            if self.spelled_by_sdk(typ) {
+                continue;
+            }
+            codecs.write_named(&name, self.resolve(typ))?;
         }
         codecs.flush();
         let mut codec = codecs.w;

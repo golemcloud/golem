@@ -35,7 +35,7 @@
 //! concurrent use, so the suite runs in parallel.
 
 use crate::bridge_gen::fixtures::{
-    agent, def, field, local_config, method, named_field, ref_to, variant_case,
+    agent, def, field, local_config, method, multimodal, named_field, ref_to, variant_case,
 };
 use crate::bridge_gen::scala::{command_node, doc, grep_tool, option, positional, tool_body};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -59,7 +59,7 @@ use golem_common::schema::tool::{
     OptionSpec, Positional, Positionals, RepeatableMapShape, Repetition,
     ResultSpec as ToolResultSpec, StreamSpec, Tool,
 };
-use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, SchemaType};
+use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, Role, SchemaType};
 use std::process::Command;
 use tempfile::TempDir;
 use test_r::{test, test_dep};
@@ -1460,4 +1460,97 @@ fn go_clients_tag_restricted_fields(env: &GoEnv) {
         );
     }
     guest.assert_vets_for_wasip1(env);
+}
+
+fn unstructured(role: Role, inline: SchemaType) -> SchemaType {
+    let mut typ = SchemaType::variant(vec![
+        variant_case("inline", Some(inline)),
+        variant_case("url", Some(SchemaType::url(Default::default()))),
+    ]);
+    typ.metadata_mut().role = Some(role);
+    typ
+}
+
+fn content_agent() -> AgentTypeSchema {
+    let any_text = || unstructured(Role::UnstructuredText, SchemaType::text(Default::default()));
+    let any_binary = || {
+        unstructured(
+            Role::UnstructuredBinary,
+            SchemaType::binary(Default::default()),
+        )
+    };
+    let doc = unstructured(
+        Role::UnstructuredText,
+        SchemaType::text(TextRestrictions {
+            languages: Some(vec!["en".into(), "de".into()]),
+            min_length: None,
+            max_length: None,
+            regex: None,
+        }),
+    );
+    let basic = multimodal(vec![
+        variant_case("Text", Some(any_text())),
+        variant_case("Binary", Some(any_binary())),
+    ]);
+    let figures = multimodal(vec![
+        variant_case("Caption", Some(any_text())),
+        variant_case("Chart", Some(SchemaType::list(SchemaType::s32()))),
+    ]);
+    agent(
+        "ContentAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![
+            method(
+                "summarize",
+                vec![field("doc", doc), field("photo", any_binary())],
+                Some(basic),
+            ),
+            method("figures", vec![], Some(figures)),
+        ],
+        vec![],
+        AgentMode::Durable,
+    )
+}
+
+/// Role-marked content is spelled with the SDK's shared content types, not
+/// declared as variants, with a generated marker for a language list.
+#[test]
+fn go_clients_spell_unstructured_and_multimodal_content(env: &GoEnv) {
+    for generated in [
+        GeneratedGo::guest(env, content_agent()),
+        GeneratedGo::external(env, content_agent()),
+    ] {
+        let client = generated.read("client.go");
+        for expected in [
+            "values.UnstructuredText[LanguagesEnDe]",
+            "values.UnstructuredBinary[values.AnyMimeType]",
+            "values.Multimodal",
+            "values.MultimodalOf[",
+        ] {
+            assert!(
+                client.contains(expected),
+                "missing {expected} in:\n{client}"
+            );
+        }
+        let types = generated.read("types.go");
+        assert!(types.contains("type LanguagesEnDe struct{}"), "{types}");
+        assert!(types.contains("Caption"), "{types}");
+        assert!(
+            !types.contains("Inline"),
+            "an unstructured variant was declared:\n{types}"
+        );
+        generated.assert_gofmt_clean(env);
+    }
+    let guest = GeneratedGo::guest(env, content_agent());
+    guest.assert_vets_for_wasip1(env);
+    let external = GeneratedGo::external(env, content_agent());
+    external.assert_vets_natively(env);
+    let code = external.read("client.go") + &external.read("codec.go");
+    for expected in [
+        "bridge.EncodeUnstructuredText[LanguagesEnDe]",
+        "bridge.DecodeMultimodal(sv, bridge.DecodeModality)",
+    ] {
+        assert!(code.contains(expected), "missing {expected} in:\n{code}");
+    }
 }

@@ -122,6 +122,29 @@ Parameter and result types are Go structs; each exported field becomes one WIT f
 - Variants/enums are declared with `golem.DefineVariant` / `golem.DefineEnum`. A variant case type is its payload; a case with no payload is an empty struct (`type Cash struct{}`).
 - When the payload cannot carry the variant's marker method without changing what it is — a `time.Time`, a `golem.Text`, an `Option`, another variant — wrap it in a one-field struct and register it with `golem.WrappedCase`. `type At time.Time` would publish a different schema; `type At struct{ Value time.Time }` with `WrappedCase[At]("at")` publishes `at(datetime)`. Unions have `golem.WrappedBranch` for the same reason.
 
+### Unstructured and Multimodal Content
+
+For content a model or a person reads, use the content types. Tools and UIs recognise them by their role:
+
+```go
+type EnOrDe struct{}
+
+func (EnOrDe) Languages() []string { return []string{"en", "de"} }
+
+type SummarizeIn struct {
+	Doc   golem.UnstructuredText[EnOrDe]             // golem.AnyLanguage for any
+	Photo golem.UnstructuredBinary[golem.AnyMimeType] // or a marker with MimeTypes()
+	Media golem.Multimodal                            // text and binary items
+}
+
+doc := golem.UnstructuredText[EnOrDe]{Text: "hallo", Language: "de"}       // inline
+ref := golem.UnstructuredBinary[golem.AnyMimeType]{URL: "https://…/a.png"} // by URL
+media := golem.Multimodal{golem.TextModality{Value: …}, golem.BinaryModality{Value: …}}
+```
+
+- A non-empty `URL` refers to the content; otherwise `Text` or `Data` carries it inline.
+- `golem.MultimodalOf[T]` is a list of your own modalities, where `T` is a variant registered with `golem.DefineVariant`.
+
 ### Restricting Values
 
 A `golem` struct tag restricts a field, on a method's parameters or on a record. The restriction is published in the schema, and the platform rejects a value outside it before the method runs:

@@ -45,7 +45,7 @@
 //! linter check that would object to `OrderId` skips them anyway.
 
 use crate::bridge_gen::go::go::{
-    go_string, lower_first, to_exported_ident, to_field_ident, unique_idents,
+    go_string, lower_first, one_field_struct, to_exported_ident, to_field_ident, unique_idents,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
 use crate::bridge_gen::go::restriction;
@@ -275,7 +275,10 @@ fn write_variant(
         match &payloads[idx] {
             // A case with a payload carries it as Value, so a caller writes
             // ShapeCircle{Value: r} whatever the payload's shape is.
-            Some(payload) => writer.line(format!("type {ident} struct{{ Value {payload} }}")),
+            Some(payload) => writer.line(format!(
+                "type {ident} {}",
+                one_field_struct("Value", payload)
+            )),
             None => writer.line(format!("type {ident} struct{{}}")),
         }
         writer.blank();

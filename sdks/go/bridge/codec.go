@@ -194,6 +194,153 @@ func DecodeQuantity[U values.QuantityUnit](sv schema.SchemaValue) (values.Quanti
 	return values.Quantity[U]{Mantissa: v.Value.Mantissa, Scale: v.Value.Scale, Unit: v.Value.Unit}, nil
 }
 
+// --- unstructured and multimodal content -------------------------------------
+
+func unstructured(which uint32, payload schema.SchemaValue) schema.SchemaValue {
+	return schema.VariantValue{Case: which, Payload: &payload}
+}
+
+func unstructuredParts(sv schema.SchemaValue, what string) (uint32, schema.SchemaValue, error) {
+	v, ok := sv.(schema.VariantValue)
+	if !ok || v.Payload == nil {
+		return 0, nil, Mismatch(what, sv)
+	}
+	return v.Case, *v.Payload, nil
+}
+
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// EncodeUnstructuredText sends text inline, or its URL when it has one.
+func EncodeUnstructuredText[L values.Languages](v values.UnstructuredText[L]) schema.SchemaValue {
+	if v.URL != "" {
+		return unstructured(1, schema.UrlValue{Value: v.URL})
+	}
+	return unstructured(0, schema.TextValue{Text: v.Text, Language: optionalString(v.Language)})
+}
+
+// DecodeUnstructuredText reads inline text or a URL, checking the language is
+// one L accepts.
+func DecodeUnstructuredText[L values.Languages](sv schema.SchemaValue) (values.UnstructuredText[L], error) {
+	var out values.UnstructuredText[L]
+	which, payload, err := unstructuredParts(sv, "unstructured text")
+	if err != nil {
+		return out, err
+	}
+	switch p := payload.(type) {
+	case schema.TextValue:
+		if which != 0 {
+			break
+		}
+		out.Text = p.Text
+		if p.Language != nil {
+			var l L
+			if allowed := l.Languages(); len(allowed) > 0 && !slices.Contains(allowed, *p.Language) {
+				return out, fmt.Errorf("golem: language %q is not accepted", *p.Language)
+			}
+			out.Language = *p.Language
+		}
+		return out, nil
+	case schema.UrlValue:
+		if which == 1 {
+			out.URL = p.Value
+			return out, nil
+		}
+	}
+	return out, Mismatch("unstructured text", sv)
+}
+
+// EncodeUnstructuredBinary sends data inline, or its URL when it has one.
+func EncodeUnstructuredBinary[M values.MimeTypes](v values.UnstructuredBinary[M]) schema.SchemaValue {
+	if v.URL != "" {
+		return unstructured(1, schema.UrlValue{Value: v.URL})
+	}
+	return unstructured(0, schema.BinaryValue{Bytes: v.Data, MimeType: optionalString(v.MimeType)})
+}
+
+// DecodeUnstructuredBinary reads inline data or a URL, checking the media type
+// is one M accepts.
+func DecodeUnstructuredBinary[M values.MimeTypes](sv schema.SchemaValue) (values.UnstructuredBinary[M], error) {
+	var out values.UnstructuredBinary[M]
+	which, payload, err := unstructuredParts(sv, "unstructured binary")
+	if err != nil {
+		return out, err
+	}
+	switch p := payload.(type) {
+	case schema.BinaryValue:
+		if which != 0 {
+			break
+		}
+		out.Data = p.Bytes
+		if p.MimeType != nil {
+			var m M
+			if allowed := m.MimeTypes(); len(allowed) > 0 && !slices.Contains(allowed, *p.MimeType) {
+				return out, fmt.Errorf("golem: media type %q is not accepted", *p.MimeType)
+			}
+			out.MimeType = *p.MimeType
+		}
+		return out, nil
+	case schema.UrlValue:
+		if which == 1 {
+			out.URL = p.Value
+			return out, nil
+		}
+	}
+	return out, Mismatch("unstructured binary", sv)
+}
+
+// EncodeModality sends one item of a basic multimodal list.
+func EncodeModality(v values.Modality) schema.SchemaValue {
+	switch m := v.(type) {
+	case values.TextModality:
+		return VariantCase(0, EncodeUnstructuredText(m.Value))
+	case values.BinaryModality:
+		return VariantCase(1, EncodeUnstructuredBinary(m.Value))
+	}
+	NotACase("values.Modality", v)
+	return nil
+}
+
+// DecodeModality reads one item of a basic multimodal list.
+func DecodeModality(sv schema.SchemaValue) (values.Modality, error) {
+	which, payload, err := VariantParts(sv, "values.Modality")
+	if err != nil {
+		return nil, err
+	}
+	switch which {
+	case 0:
+		p, err := CasePayload(payload, "values.Modality", "Text")
+		if err != nil {
+			return nil, err
+		}
+		text, err := DecodeUnstructuredText[values.AnyLanguage](p)
+		return values.TextModality{Value: text}, err
+	case 1:
+		p, err := CasePayload(payload, "values.Modality", "Binary")
+		if err != nil {
+			return nil, err
+		}
+		data, err := DecodeUnstructuredBinary[values.AnyMimeType](p)
+		return values.BinaryModality{Value: data}, err
+	}
+	return nil, UnknownCase("values.Modality", which)
+}
+
+// EncodeMultimodal sends a multimodal list, each item with f.
+func EncodeMultimodal[T any](v values.MultimodalOf[T], f Encoder[T]) schema.SchemaValue {
+	return schema.ListValue{Items: encodeAll([]T(v), f)}
+}
+
+// DecodeMultimodal reads a multimodal list, each item with f.
+func DecodeMultimodal[T any](sv schema.SchemaValue, f Decoder[T]) (values.MultimodalOf[T], error) {
+	items, err := DecodeList(sv, f)
+	return values.MultimodalOf[T](items), err
+}
+
 // --- sequences ---------------------------------------------------------------
 
 func EncodeList[T any](xs []T, f Encoder[T]) schema.SchemaValue {

@@ -242,6 +242,18 @@ pub fn lower_first(s: &str) -> String {
 
 /// A Go string literal. Schema names are identifiers, but a quote or a
 /// backslash would still produce source that does not parse.
+/// A struct type of one untagged field, as gofmt writes it: on one line while
+/// the field's type is short (go/printer's `isOneLineFieldList` allows 30
+/// columns for the name and type, counting the name as one), expanded
+/// otherwise.
+pub fn one_field_struct(field: &str, typ: &str) -> String {
+    if typ.chars().count() < 30 {
+        format!("struct{{ {field} {typ} }}")
+    } else {
+        format!("struct {{\n\t{field} {typ}\n}}")
+    }
+}
+
 pub fn go_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
