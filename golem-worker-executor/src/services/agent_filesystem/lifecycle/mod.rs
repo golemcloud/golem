@@ -462,7 +462,8 @@ pub(crate) fn create_fresh(
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits)
+    let accounting = provisioning.agent_accounting();
+    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits, accounting)
 }
 
 /// Creates an empty sandbox filesystem and returns it in the `Created` stage.
@@ -494,15 +495,9 @@ fn create_fresh_with<Adapter: SandboxFilesystemAdapter>(
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
+    accounting: AgentAccounting,
 ) -> impl Future<Output = Result<CreatedFilesystem<Adapter>, CreateFailure>> + Send + 'static {
-    create_fresh_with_recovery::<Adapter>(
-        provisioning,
-        scratch,
-        agent,
-        limits,
-        None,
-        AgentAccounting::Development,
-    )
+    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None, accounting)
 }
 
 /// Creates a generation on storage that accounts for each agent as `accounting` says.
