@@ -745,7 +745,9 @@ its index, time, revision, filesystem snapshot name and confirmation), and
 `previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it
 has no filesystem snapshot name, or when a `SnapshotConfirmed` entry confirms its name. A start takes the first of the two that is usable, has
 the current revision, is not in the rejected set, is not unavailable for this start, and has no
-name when filesystem snapshots are disabled. It skips `INITIAL+1..=snapshot_idx`. No automatic
+name when filesystem snapshots are disabled. An ephemeral agent never has an automatic record:
+`resolve_agent_properties` gives it `SnapshotPolicy::Disabled`, because its restart replays only
+its initialization and never loads an application snapshot. It skips `INITIAL+1..=snapshot_idx`. No automatic
 record is used while an update is pending. Without a selected record, the last manual-update
 snapshot is the baseline, else `OplogIndex::INITIAL`. `prepare_instance` (`durable_host/mod.rs`)
 then branches on `PendingUpdate`:
@@ -781,7 +783,7 @@ underlying cause.
 With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
 (`services/agent_filesystem_snapshots`). The snapshots belong to one agent incarnation: they are
 keyed by `AgentSnapshots::agent(agent, fingerprint)`, and a fork target uses its stage id as its
-fingerprint. Ephemeral agents take no filesystem snapshot. `invocation_loop.rs::take_guest_snapshot` calls one function,
+fingerprint. `invocation_loop.rs::take_guest_snapshot` calls one function,
 `worker/filesystem_snapshots.rs::periodic_snapshot`, which asks the service for admission, runs
 the guest snapshot hook (`snapshot_guest`), captures the tree (`agent_filesystem::capture`), appends the
 `Snapshot` entry, commits, and gives the capture to an upload job. The record has no name when the
@@ -875,6 +877,20 @@ filesystem through `materialize_baseline`: the filesystem snapshot of a named re
 initial files for a record without a name. A
 manual-update record without a name restores the initial files of the source revision when they
 are all read-only, and then applies the initial files of the target revision.
+
+An application snapshot is used only when the files of the agent can come back with it. With
+`filesystem_snapshots` disabled, the admission answers `InitialFilesOnly`, and the snapshot checks
+the tree in place of the capture (`agent_filesystem::check_initial_files`): the same fence and
+the same rule as a capture, with no host directory and no copy. A tree of initial files gives a
+record without a name. Any other tree, or a check that fails, gives no periodic record, so a
+restart replays from an older record without a name or from the start; a snapshot-based manual
+update fails as a failed update (`UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`), and the agent stays on its
+revision. A periodic snapshot that writes no record waits a period before the next one
+(`invocation_loop.rs::snapshot_baseline_timestamp`). A start from the initial files of the source
+revision of a manual update counts as an install, not a restore of saved times
+(`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
+A record without a name that an executor wrote before this rule, while the files had changed, is
+still usable, and its start does not get those files back.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
 open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
