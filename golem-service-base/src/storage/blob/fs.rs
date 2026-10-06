@@ -802,7 +802,8 @@ fn copy_staged(
     }
     std::fs::create_dir_all(staging)?;
     let mut staged = tempfile::NamedTempFile::new_in(staging)?;
-    std::io::copy(&mut source, &mut staged)?;
+    // A copy between two `File`s lets the standard library use the copy of the kernel.
+    std::io::copy(&mut source, staged.as_file_mut())?;
     commit.before_commit()?;
     staged.persist(target).map_err(|error| error.error)?;
     Ok(true)
