@@ -180,7 +180,7 @@ pub(super) async fn make_host_directories(
         }
         #[cfg(target_os = "linux")]
         SandboxFilesystemProvisioningMode::ProjectQuotas(managed) => {
-            Some(Arc::from(managed.root()))
+            Some(Arc::clone(managed.root()))
         }
     };
     #[cfg(target_os = "linux")]

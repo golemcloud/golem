@@ -4099,6 +4099,7 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
     reflink_xfs_root: PathBuf,
     filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4108,7 +4109,7 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ReflinkXfs {
-                    root: reflink_xfs_root.clone().into(),
+                    root: reflink_xfs_root.clone(),
                 };
                 config.resource_usage_metering.filesystem = false;
                 config.filesystem_snapshots = filesystem_snapshots.clone();
@@ -4131,6 +4132,7 @@ pub async fn start_with_filesystem_metering_on_reflink_xfs(
     context: &TestContext,
     reflink_xfs_root: PathBuf,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4140,7 +4142,7 @@ pub async fn start_with_filesystem_metering_on_reflink_xfs(
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ReflinkXfs {
-                    root: reflink_xfs_root.clone().into(),
+                    root: reflink_xfs_root.clone(),
                 };
                 config.resource_usage_metering = ResourceUsageMeteringConfig::all_enabled();
             })),

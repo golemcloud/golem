@@ -218,7 +218,7 @@ impl AgentFilesystems {
     /// The service changes no state of the process. Making the host directories removes what an
     /// earlier process left under their names. Returns an error for invalid provisioning settings,
     /// host directories that cannot be made, failed volume observation, or a pressure target
-    /// larger than the observed managed volume. After a failed space check, it discards both host
+    /// larger than the observed volume. After a failed space check, it discards both host
     /// directories, logs a failed discard, and returns the error of the check.
     pub(crate) async fn new(
         settings: &FilesystemStorageConfig,
@@ -250,7 +250,7 @@ impl AgentFilesystems {
         }
         if provisioning.agent_accounting() == AgentAccounting::Unaccounted {
             tracing::info!(
-                "Per-agent disk limits are not enforced on XFS storage without project quotas"
+                "Per-agent disk limits are not enforced on storage without per-agent accounting"
             );
         }
         Ok(Self {
@@ -293,9 +293,11 @@ impl AgentFilesystems {
 
     /// Resolves an agent's byte allocation into the limits installed on a new generation.
     ///
-    /// Allocations at or above the resource service's effectively-unlimited sentinel produce
-    /// `Unlimited`; smaller allocations also derive a bounded object limit. Zero or unrepresentable
-    /// finite allocations return a verification error and must be rejected before creation.
+    /// Storage without per-agent accounting gives `Unlimited` for every allocation. On other
+    /// storage, allocations at or above the resource service's effectively-unlimited sentinel
+    /// produce `Unlimited`; smaller allocations also derive a bounded object limit. Zero or
+    /// unrepresentable finite allocations return a verification error and must be rejected before
+    /// creation.
     pub(crate) fn resolved_limits(
         &self,
         allocated_bytes: u64,
