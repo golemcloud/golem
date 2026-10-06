@@ -4,7 +4,7 @@ export { toolGuest } from "./internal/tool/runtime.js"
 
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
-import { Cause, Context, Effect, Exit, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
@@ -169,6 +169,13 @@ export const liveToolStart = (
     }
   })
 
+const cachedCompile = <S extends Schema.Top>(schema: S) =>
+  Effect.runSync(
+    Effect.cachedWithTTL(compile(schema), (exit) =>
+      Exit.hasInterrupts(exit) ? Duration.zero : Duration.infinity,
+    ),
+  )
+
 /** Construct an Effect client from a local definition. @since 1.6.0 @category constructors */
 export function client<D extends ToolDefinition<any, any>>(
   definition: D,
@@ -191,11 +198,11 @@ export function client<D extends ToolDefinition<any, any>>(
         fields: Object.keys(fields),
         stdout: !!model.body.stdout,
         stderr: !!model.body.stderr,
-        input: compile(Schema.Struct(fields)),
-        output: model.body.output ? compile(model.body.output) : undefined,
+        input: cachedCompile(Schema.Struct(fields)),
+        output: model.body.output ? cachedCompile(model.body.output) : undefined,
         errors: model.body.errors.map((entry) => ({
           name: entry.name,
-          codec: compile(entry.schema),
+          codec: cachedCompile(entry.schema),
         })),
       })
     }
