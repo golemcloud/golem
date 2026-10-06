@@ -69,6 +69,7 @@ Typed state snapshotting handles each top-level `DatabaseSync` field of the agen
 - **File-backed database** (`new DatabaseSync('/app.db')`): the snapshot holds only the location of the file. The executor's filesystem snapshot restores the file before the load. The load then opens the database again at that location.
 - A database with an open transaction makes the save fail. This also applies to a file-backed database. Commit or roll back before the invocation ends.
 - A closed `DatabaseSync` in a field makes the save fail. Remove the field, or set it to an open database, before the invocation ends.
+- A save that fails has these effects. For an automatic snapshot, Golem writes no snapshot record and restarts the agent, which replays its oplog. Each failed save costs a restart and a replay. For a manual update, the update fails, and the agent stays on its current revision.
 
 The load reads each file-backed database to fill SQLite's page cache:
 

@@ -131,10 +131,13 @@ For configuration, recovery, and deletion diagnostics, see [Operating Durable St
 | `filesystem_snapshot_capture_seconds`             | histogram | `outcome`         | Time that a capture of an agent filesystem stops the file calls             |
 | `filesystem_snapshot_upload_seconds`              | histogram | `kind`, `outcome` | Time of an upload of a filesystem snapshot, with its retries                |
 | `filesystem_snapshot_uploaded_bytes_total`        | counter   | `kind`            | Bytes of the trees of the uploaded filesystem snapshots                     |
-| `filesystem_snapshot_uploads_in_progress`         | gauge     |                   | Store attempts of uploads that hold a slot now                              |
+| `filesystem_snapshot_uploads_in_progress`         | gauge     |                   | Runs of uploads that hold a slot now                                       |
 | `filesystem_snapshot_restore_seconds`             | histogram | `outcome`         | Time of a restore of a filesystem snapshot, without the wait for a slot     |
 | `filesystem_snapshot_dropped_confirmations_total` | counter   | `reason`          | Uploaded filesystem snapshots that no confirmation entry names              |
-| `filesystem_snapshot_leaked_cleanups_total`       | counter   | `operation`       | Deletes of filesystem snapshots that failed after their retries             |
+| `filesystem_snapshot_leaked_cleanups_total`       | counter   | `operation`       | Clean-ups of filesystem snapshots that left snapshots in blob storage             |
+| `filesystem_snapshot_cleanups_pending` | gauge | | Agents with clean-up work of filesystem snapshots that waits or runs |
+| `filesystem_snapshot_copy_seconds` | histogram | `outcome` | Time of a copy of the filesystem snapshots of a fork source |
+| `filesystem_snapshot_failed_space_reclaims_total` | counter | | Deletes of filesystem snapshots after which the release of unused storage failed |
 
 For the label values and what to watch, see [Filesystem Snapshots](/next/operate/filesystem_snapshots#metrics).
 
