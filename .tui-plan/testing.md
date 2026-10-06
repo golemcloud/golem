@@ -54,8 +54,12 @@ High-value scenarios:
   paths, availability reasons, and risk metadata;
 - ctrl+x w/v/l/a/j/e opens the correct hierarchical group and scales without
   assigning top-level numeric shortcuts to destinations;
-- ctrl+p and ctrl+x a switch an open palette between All and Context without
-  losing its query;
+- ctrl+p reopens the session-remembered palette scope, ctrl+x a explicitly
+  opens Context, and left/right switches an open palette without losing its
+  query;
+- palette results follow exact/prefix/word-prefix/substring/fuzzy ranking,
+  preserve registry order for empty queries, and highlight matches only in
+  visible row text;
 - tab and shift+tab move pane focus only, including while Layout mode selects
   and resizes physical dividers;
 - Dev restores primary view, visible subviews, right/bottom placement, focus,
@@ -67,6 +71,13 @@ High-value scenarios:
 - nested Plan/Build/Deploy/Clean, Server, and interactive REPL sessions receive
   the actual pane content size, preserve ANSI, expose 2,000 lines of scrollback,
   and never spawn a real child process from a unit test;
+- finite commands and REPL begin in CLI input while Server begins in TUI input;
+  the normal Server footer and status expose Enter-to-CLI ownership transfer;
+- review forms keep Run and confirmation fields in their locked order, expose
+  an active Run style, render a real cursor for edited values, apply with Enter,
+  discard with esc, and move/delete safely across Unicode boundaries;
+- Server omits `--ports-file` by default, treats a successful spawn as Running,
+  and uses an explicitly supplied fresh file only as optional port metadata;
 - local and remote resource actions exercise availability, target review,
   remote unlock, risk confirmation, masking, cancellation, and stale-result
   handling;
@@ -87,6 +98,8 @@ High-value scenarios:
 - non-manifest, unreachable, and incomplete contexts keep unavailable views
   and actions discoverable with concrete reasons;
 - only visual preferences survive restart; operational session state does not;
+- divider rails remain disjoint from content and scrollbars, expose a visible
+  grip, and retain hit-test priority across right and bottom placement;
 - active-work quit defaults to Return and requires an explicit Force quit for
   every implemented TUI-owned Job/session combination; Live joins this matrix
   when implemented.

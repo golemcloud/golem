@@ -1,5 +1,43 @@
 # Progress
 
+## 2026-10-06: Locked Review Editing, Palette Search, And Server Input
+
+- Centered semantic notice lines in content-sized review and quit popups while
+  retaining left-aligned form rows. Styled notice wrapping now participates in
+  popup height and cursor geometry.
+- Added a shared typed review-row primitive and transactional free-text editor
+  with visible cursor, input surface, Unicode-safe navigation/deletion,
+  horizontal viewport tracking, Enter-to-apply, and esc-to-discard.
+- Kept centered Run as the initial primary action with an active orange style,
+  placed per-launch confirmation options first, and placed Server clean then
+  `--yes` before value fields.
+- Made Server ports-file opt-in. Successful process spawn now establishes
+  Running independently; an explicitly supplied fresh ports file enriches the
+  summary without gating lifecycle or claiming HTTP readiness.
+- Server now launches with TUI keyboard ownership and visibly offers Enter to
+  hand input to the CLI. Finite commands and REPL retain launch-time CLI input.
+- Made pane dividers disjoint in bottom layouts, gave resize regions hit-test
+  priority, and rendered a short orange grip while retaining the full neutral
+  divider as the mouse target.
+- Made ctrl+p reopen the Commands scope last used in the current session while
+  ctrl+x a remains an explicit Context entry. Palette results now use stable
+  exact/prefix/word-prefix/substring/fuzzy tiers and visibly highlight matched
+  characters in labels and metadata.
+
+Validation:
+
+- `cargo fmt --package golem-cli`
+- `cargo test -p golem-cli --lib --features tui-preview -- tui:: --report-time`
+  (250 passed)
+- `cargo test -p golem-cli --lib --features tui-preview -- --report-time`
+  (915 passed)
+- `cargo check -p golem-cli --features tui-preview`
+- `cargo fmt --package golem-cli -- --check`
+- `git diff --check`
+
+Matching dev-release installation and real-terminal acceptance follow this
+checkpoint.
+
 ## 2026-10-05: Unified Commands And Nested Terminal Ownership
 
 - Collapsed global and contextual command palettes into one Commands overlay
@@ -7,9 +45,10 @@
 - Made the leader own and clear every footer shortcut row so shorter transient
   menus never reveal unrelated shortcuts behind them.
 - Unified finite commands, Server, and REPL around one nested-terminal input
-  contract: launch enters CLI input, ctrl+x returns to TUI control, and Enter or
-  clicking the running pane re-enters CLI input. Every other key reaches the
-  PTY while CLI input owns the keyboard.
+  contract: finite commands and REPL launch into CLI input, Server stays in TUI
+  control, ctrl+x returns input to TUI control, and Enter or clicking a running
+  pane enters CLI input. Every other key reaches the PTY while CLI input owns
+  the keyboard.
 - Removed the synthetic stdin row, exposed the real PTY cursor in every nested
   terminal, reserved stable terminal scrollbar geometry, and synchronize PTY
   dimensions after all rendered layout changes.

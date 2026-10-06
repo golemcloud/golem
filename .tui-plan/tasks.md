@@ -117,7 +117,11 @@ gate for later Ops actions.
 - [x] Extend action metadata with hierarchical leader path, palette relevance,
   risk class, target resolution, review requirement, and availability reason.
 - [x] Make global and contextual palettes filters over the same action registry;
-  preserve query while switching scope.
+  preserve query while switching scope, remember scope for the session, and
+  keep ctrl+x a as an explicit Context entry.
+- [x] Rank typed palette queries by exact/prefix/word-prefix/substring/fuzzy
+  tiers with deterministic availability/registry tie-breaking, and highlight
+  matched characters in visible row text.
 - [x] Keep modified shortcuts active inside text-editing modes; nested PTY input
   owns every key except the ctrl+x handoff to TUI control.
 - [x] Add reducer/state tests for workspace, view, subject, breadcrumb, palette,
@@ -148,8 +152,8 @@ extreme fallback.
 - [x] Reuse the recursive split model for Ops collection/details layouts.
 - [x] Render Dev and Ops through the accepted shared pane titles, neutral
   spines/dividers, semantic status markers, and trailing-right scrollbars;
-  stacked title rows also own their resize boundary instead of adding a second
-  horizontal rule.
+  stacked title rows remain disjoint from their explicit horizontal resize
+  divider.
 - [x] Implement temporary Layout mode, mouse dragging, one-cell and five-cell
   keyboard movement, placement flip, focus-only, show/hide, clamping, and
   compact retention.
@@ -157,6 +161,9 @@ extreme fallback.
   do not write project files.
 - [x] Render all shell/layout states at wide, short, narrow, compact, and 1x1
   sizes and test hit rectangles, dividers, spines, and scrollbars.
+- [x] Make the complete divider the pointer target, keep it disjoint from pane
+  and scrollbar rectangles, and render a short accent resize grip on its
+  neutral rail.
 
 Recommended commit checkpoint: shell, navigation, layout, and preferences.
 
@@ -210,6 +217,9 @@ Planning prerequisite: Dev view-content gate. Complete.
 - [x] Render the current or selected Job, exact nested-CLI terminal, status,
   error, exit metadata, and bounded history projection without parsing the
   human diff into a second representation.
+- [x] Use typed review-field order, centered active Run, confirmation options
+  first, and transactional cursor-backed free-text editing with Unicode-safe
+  movement and Enter/apply versus esc/discard behavior.
 - [~] Apply remote write unlock and risk policy to Deploy modes; never retain a
   global yes/reset toggle. Per-launch review and local-only availability are
   live; remote unlock is deliberately still gated.
@@ -219,9 +229,12 @@ Planning prerequisite: Dev view-content gate. Complete.
 - [x] Show local availability, process state, resolved ports, data
   directory, launch mode, and bounded logs.
 - [x] Support start, stop, restart, and clean-start through reviewed actions.
-- [~] Preserve the same server across workspace/context changes only when the
-  server target identity remains the same. Same-target preservation works;
-  cross-target switching still needs pre-switch stop/cancel enforcement.
+- [x] Start Server with TUI keyboard ownership, expose Enter-to-CLI input, omit
+  ports-file by default, mark successful spawn Running independently of port
+  observation, and treat an explicit fresh ports file as optional metadata.
+- [x] Preserve the same server across workspace/context changes only when the
+  server target identity remains the same, and enforce stop-or-cancel before a
+  cross-target switch.
 
 ### REPL
 

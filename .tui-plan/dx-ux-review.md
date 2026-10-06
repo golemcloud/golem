@@ -637,3 +637,10 @@ renderers are no longer live contracts.
   ownership visible for every nested terminal, adds exact pane-driven PTY
   resize, content-sized review dialogs with Run first, and a safe/default
   Return plus explicit Force quit dialog. Terminal acceptance remains pending.
+- Second interaction pass makes popup notices centered and wrap-aware, adds
+  cursor-backed transactional value editing, moves confirmation options to the
+  top, keeps Server input TUI-owned on launch, makes ports observation optional,
+  exposes a full-rail resize target with an accent grip, and gives Commands
+  remembered scope plus deterministic visible match ranking/highlighting.
+  Focused automated acceptance is green; real-terminal acceptance remains
+  pending.

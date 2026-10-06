@@ -52,7 +52,9 @@ content-inset, and scrollbar ownership rules to recursive right/bottom layouts.
 Pane content must not add a rail beside an internal divider. The
 terminal-facing right edge remains title-only `┐` plus the workspace-row `┘`,
 with no body rail. Body boundaries render after pane content so content cannot
-punch blank cells through the outer left spine or shared dividers.
+punch blank cells through the outer left spine or shared dividers. Each visible
+divider has a short orange heavy-line grip centered on the otherwise neutral
+rail; the entire divider rectangle remains the resize hit target.
 
 When a decision is revisited, change its existing representation and focused
 tests. Temporary lab alternatives are removed when the choice is locked.
@@ -149,7 +151,8 @@ Settings must be reachable through palette, modal, or scoped actions. Settings
 must not be a top-level workspace unless this document is revised.
 
 Commands is one universal jump surface with All and Context scopes. `ctrl+p`
-opens All, `ctrl+x a` opens Context, and left/right or mouse switches the scope
+opens the scope last used in the current TUI session (All in a fresh session),
+`ctrl+x a` always opens Context, and left/right or mouse switches the scope
 without clearing the current query. It should be able to search
 and open:
 
@@ -170,6 +173,13 @@ must be disabled and explain the reason.
 
 Confirmations must use a consistent inline modal. Confirmation modals must
 state the action, the affected jobs or resources, and the confirm/cancel keys.
+
+Command and session review forms use a centered `[ Run ]` primary action with
+the orange active background, followed by the standard left-aligned selectable
+field table. Per-launch confirmation options stay at the top: `--yes` first for
+commands and REPL, and clean then `--yes` for Server. Free-text fields enter a
+transactional editor with the shared input background and a visible terminal
+cursor; Enter applies and esc discards the draft.
 
 ## Workspaces
 
@@ -329,7 +339,8 @@ keeps the canonical short workspace name without clipping.
 production render tests are the executable contract for these reductions.
 
 Structural decorators never change color to communicate focus or mode. Rails,
-junctions, rules, and popup borders use one neutral decorator color; semantic
+junctions, rules, and popup borders use one neutral decorator color; the short
+resize grip is an accent affordance on top of a neutral divider. Semantic
 status glyphs and active pane titles may still use semantic or accent colors.
 The top terminal-facing pane-title rule ends with `┐`, additional stacked title
 rules end with `┤`, and the workspace-selector row ends with `┘`.
@@ -369,9 +380,10 @@ Search inputs use a muted `›` prompt and a darker green query color derived fr
 the active/success family. Search results use equal-width centered rows with a
 two-cell marker slot, keeping every label on the same left edge. Selection uses
 `▌` without shifting the label and fills the entire fixed row with a slightly
-darkened light-gray background and dark text. Popup content is centered except
-for text typed inside the full-width input field. Popup shortcut rows reuse the
-main footer grammar:
+darkened light-gray background and dark text. Semantic notices and primary
+actions are centered in popups; form, help, command, and decision-table rows
+retain their shared left-aligned columns. Popup shortcut rows reuse the main
+footer grammar:
 lowercase key notation in subdued amber, capitalized muted labels, and centered
 row alignment.
 
@@ -414,7 +426,8 @@ loading, `!` warning, `×` error, `—` unavailable, and `○` empty. The glyph 
 label form a bracketed badge—such as `[i Notice] message` or `[○ Empty]
 message`—so the marker, state name, and message have explicit visual
 boundaries. The glyph keeps its semantic color while the label and brackets use
-the shared muted structural hierarchy. Content tables own
+the shared muted structural hierarchy. Popup notices wrap as centered styled
+lines, while inline notices remain left-aligned. Content tables own
 their marker slot, fixed column starts, character-safe ellipsis, and full-row
 selection surface. Log and output rows reserve a muted stream prefix and
 truncate safely to the available row width. These rules are identical in
@@ -535,11 +548,12 @@ other text field is focused, printable keys must type into that field. Only
 escape, control keys, leader commands, and explicit accept/cancel keys should
 interrupt text entry.
 
-All nested terminals use the same explicit ownership model. Launch gives input
-to the CLI automatically and the pane shows that ownership. ctrl+x returns to
-persistent TUI control; Enter or clicking the running pane returns to CLI input.
-While the CLI owns input, every other key, including tab and ctrl+c, reaches the
-PTY. The same rules apply to finite commands, Server, and REPL.
+All nested terminals use the same explicit ownership model and display the
+current owner. Finite commands and REPL give input to the CLI on launch; Server
+starts in TUI control so an unexpected server prompt cannot capture shell
+navigation. ctrl+x returns to persistent TUI control; Enter or clicking a
+running pane gives input to the CLI. While the CLI owns input, every other key,
+including tab and ctrl+c, reaches the PTY.
 
 Lists and tables should use arrow-first navigation:
 
@@ -624,6 +638,11 @@ between environments on the same server may preserve it; changing server target
 requires stopping it or cancelling the switch. Selecting an unreachable local
 target reports unavailability and never auto-starts it.
 
+Server process lifecycle and bound-port observation are independent. Successful
+spawn is Running even when no ports file was requested. Ports file starts empty
+and adds `--ports-file` only when the user supplies a path; a fresh parseable
+file enriches the summary without acting as a readiness gate.
+
 The selected-context model must account for all global selector inputs that can
 change available options or context semantics:
 
@@ -679,10 +698,16 @@ define:
 Palette rows, footer hints, leader hints, and help should derive from action
 metadata where practical.
 
-ctrl+p opens the All palette scope and ctrl+x a opens Context. Using either
-shortcut while the palette is open switches scope, preserves the query, and
-resets selection to the best first match. Context includes relevant unavailable
-actions and their reasons.
+ctrl+p opens the palette's session-remembered scope and ctrl+x a opens Context.
+Left/right or the scope tabs switch scope, preserve the query, and reset
+selection to the best first match. Context includes relevant unavailable
+actions and their reasons. A fresh session starts on All.
+
+Non-empty palette queries rank exact labels, label prefixes, word-prefix label
+matches, label substrings, fuzzy labels, then fuzzy visible metadata. Score,
+availability, and registry order break ties in that order. Empty queries retain
+registry order. Only visible row text is searchable, and every matched
+character receives the dedicated dark-amber match background.
 
 Non-local mutations are disabled until the exact app/env is unlocked for the
 current session. Read-only, routine-write, disruptive, and destructive actions

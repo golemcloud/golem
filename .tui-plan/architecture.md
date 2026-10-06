@@ -107,9 +107,13 @@ One action registry is the source of truth for:
 - availability and disabled reason;
 - execution kind and input/review flow.
 
-Global and contextual palettes are two filters over this registry. Switching
-palette scope preserves the query. Help, leader hints, footer hints, action
-tables, and availability tests derive from the same metadata where practical.
+Global and contextual palettes are two filters over this registry. Palette
+scope is remembered for the TUI session; ctrl+p reopens it, ctrl+x a explicitly
+selects Context, and switching scope preserves the query. Search ranking is a
+deterministic tiered comparison over visible labels and visible row metadata,
+with registry order as the final tie-breaker. Help, leader hints, footer hints,
+action tables, and availability tests derive from the same metadata where
+practical.
 
 Action execution never bypasses risk policy. A contextual action resolves its
 immutable target before presenting review. Remote write unlock is a
@@ -140,7 +144,9 @@ Server, REPL, and Live have independent lifecycle models because they are not
 finite Jobs:
 
 - Server owns process control, bound ports, data directory, and terminal
-  buffer. Process/ports-file evidence is not presented as HTTP health.
+  buffer. Successful process spawn establishes Running; an optional fresh
+  ports file may add bound-port details but never gates lifecycle or represents
+  HTTP health.
 - Each nested command or session owns a PTY screen, input mode, scrollback,
   resize, and process lifecycle through the same terminal interaction model.
 - Live owns exact Agent identity, connection/retry state, follow state, and a
@@ -156,7 +162,9 @@ or clients, retain their cache semantics, and never parse human or ANSI output.
 If a TUI freshness rule conflicts with an existing cache, change the shared
 cache contract with focused tests instead of bypassing it in the renderer.
 
-Each PTY has one TerminalScreen with 2,000 lines of scrollback and is resized to
+Finite command and REPL launches initially give keyboard ownership to the PTY.
+Server launches remain TUI-owned until Enter or a pointer click explicitly
+hands input to the child. Each PTY has one TerminalScreen with 2,000 lines of scrollback and is resized to
 the exact visible terminal rectangle from LayoutSnapshot after every layout
 change, not only outer-terminal resize. A finite Job keeps its terminal
 after completion. The registry keeps active Jobs and the latest 20 completed
@@ -184,6 +192,9 @@ Dev layout is derived from primary view, visible set, and placement:
 Ops collection layouts use one collection pane plus an optional right or bottom
 Details pane. Both layout families use the same recursive split representation,
 ratio clamping, mouse dragging, compact fallback, and keyboard Layout mode.
+Divider rectangles are disjoint from pane and scrollbar rectangles and win hit
+testing if a future geometry regression introduces overlap. PaneChrome renders
+their neutral rails plus a short accent grip; the complete rail is draggable.
 
 Layout mode selects a focused leaf and moves the unique applicable ancestor
 divider in the requested physical direction. Unsupported directions leave
@@ -206,6 +217,12 @@ Product views compose shared blocks rather than drawing local variants:
 The existing widget and PaneRegion foundation remains authoritative. A pane
 region is computed once and owns content width, scrollbar, divider boundaries,
 and hit metadata.
+
+Review forms share typed field identifiers, field-order tables, a centered Run
+button, and `ReviewFieldRow`. Free-text fields use a transactional editor with
+Unicode-safe byte boundaries, horizontal viewport tracking, visible cursor,
+Enter-to-apply, and esc-to-discard. Styled popup notices are wrapped before
+layout so their centered rows, form cursor, and content-sized height agree.
 
 ## Collections And Paging
 

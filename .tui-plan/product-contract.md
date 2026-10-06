@@ -117,7 +117,8 @@ inside the group rather than consuming the top-level ctrl+x namespace.
 
 ### Palettes
 
-- ctrl+p opens Commands on the All scope.
+- ctrl+p opens Commands on the scope last used in the current TUI session. A
+  fresh session starts on All.
 - ctrl+x a opens the same Commands overlay on the Context scope.
 - Left and right switch between All and Context without closing the overlay or
   clearing the query.
@@ -126,8 +127,8 @@ inside the group rather than consuming the top-level ctrl+x namespace.
 - All scope includes navigation, context, layout, Jobs, resource actions, and
   system commands.
 - Modified shortcuts remain active while palette, quick-find, or form text is
-  being edited. A nested terminal owns every key except ctrl+x while its input
-  mode is active.
+  being edited. A nested terminal owns every key except ctrl+x only after the
+  user explicitly gives it input ownership.
 
 ## Dev Workspace
 
@@ -160,6 +161,8 @@ session.
 ### Layout control
 
 - Mouse dragging resizes every internal divider.
+- The full divider cell is the drag target. A short orange grip identifies the
+  resize affordance without turning the complete structural rail into accent.
 - ctrl+x l enters temporary Layout mode.
 - Tab and shift+tab choose a pane in Layout mode.
 - Arrows move the applicable divider by one cell in the physical direction;
@@ -178,9 +181,10 @@ session.
 - Each launch uses an immutable context, the application root as working
   directory, and a fresh terminal. The PTY receives the actual pane content
   size rather than the outer terminal size.
-- A newly launched nested process automatically owns input until it stops.
-  Its pane labels the owner as CLI or TUI. While CLI owns input, every key,
-  including tab and ctrl+c, reaches the PTY except ctrl+x.
+- A newly launched finite command or REPL automatically owns input until it
+  stops. Server starts with TUI input ownership so prompts cannot capture the
+  shell unexpectedly. Every pane labels the owner as CLI or TUI. While CLI owns
+  input, every key, including tab and ctrl+c, reaches the PTY except ctrl+x.
 - ctrl+x returns input to persistent TUI control. Enter or a click in the
   running terminal pane returns input to the CLI. A second ctrl+x from TUI
   control opens the visible leader menu.
@@ -205,6 +209,11 @@ session.
   Run is the first, centered, initially selected action; options remain in the
   standard selectable table below it. Cancel is transactional, and --yes
   always reopens disabled.
+- Per-launch --yes is the first option for Build, Plan, Deploy, Clean, and
+  REPL. Server places clean then --yes before its value fields.
+- Enter starts editing a free-text value with a visible terminal cursor;
+  arrows, home/end, backspace, delete, and ctrl+u edit the draft. Enter applies
+  the draft and esc discards it without changing the reviewed value.
 - Only one Plan, Build, Deploy, or Clean command may run for an application at
   a time. Later commands are unavailable rather than queued.
 - This slice enables Dev commands only for manifest-backed local contexts.
@@ -215,9 +224,11 @@ session.
 - Start and Restart always review system-memory override, router address,
   router/custom/MCP ports, ports file, data directory, clean,
   agent-filesystem root, and per-launch --yes.
-- When no ports file is supplied, the TUI supplies one from the CLI user
-  configuration area. Starting changes to running only after the child process
-  remains alive and rewrites a parseable ports file after launch.
+- Ports file is optional and empty by default. When omitted, the TUI does not
+  pass `--ports-file`; bound ports remain `not observed`. When supplied, a
+  freshly rewritten parseable file enriches the displayed port details.
+- A successful child-process spawn changes Starting to Running. Port-file
+  observation never gates or substitutes for process lifecycle state.
 - Restart first stops the current process, then launches the reviewed settings.
   Cancelling the form leaves the current server untouched.
 - Server readiness is process-and-bound-port evidence only. No HTTP health
