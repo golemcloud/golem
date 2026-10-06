@@ -29,6 +29,11 @@ var Source = golem.DefineAgent[SourceID](golem.Spec{Name: "SourceAgent"})
 // Failing streams one item and then fails its production.
 var Failing = Source.Method[golem.Unit, golem.AgentStream[int32]]("failing")
 
+type SpendIn struct{ Token golem.QuotaToken }
+
+// Spend uses one unit of the quota it is handed.
+var Spend = Source.Method[SpendIn, string]("spend")
+
 // Slow sleeps for two seconds.
 var Slow = Source.Method[golem.Unit, string]("slow")
 
@@ -63,6 +68,7 @@ var (
 	AwaitLate   = Ops.Method[golem.Unit, string]("awaitLate")
 	TimerVsRPC  = Ops.Method[golem.Unit, string]("timerVsRpc")
 	Sleepy      = Ops.Method[golem.Unit, string]("sleepy")
+	Quota       = Ops.Method[golem.Unit, string]("quota")
 )
 
 type counterState struct{ N int64 }
@@ -103,7 +109,29 @@ func init() {
 		return "slow-done"
 	})
 
+	source.Handle(Spend, func(_ *golem.Context[sourceState], in SpendIn) string {
+		_, err := golem.WithReservation(in.Token, 1, func(*golem.Reservation) (uint64, golem.Unit) { return 1, golem.Unit{} })
+		return fmt.Sprintf("child:%v", err)
+	})
+
 	ops := Ops.Implement(func(OpsID) *opsState { return &opsState{} })
+
+	// The api-calls resource holds three units and rejects beyond them: two are
+	// spent here, one by another agent through a split token.
+	ops.Handle(Quota, func(*golem.Context[opsState], golem.Unit) string {
+		tok := golem.NewQuotaToken("api-calls", 1)
+		for range 2 {
+			r, err := tok.Reserve(1)
+			if err != nil {
+				return "reserve: " + err.Error()
+			}
+			r.Commit(1)
+		}
+		child := Spend.Call(Source.Get(SourceID{Name: "quota"}), SpendIn{Token: tok.Split(1)})
+		_, err := tok.Reserve(1)
+		var failed *golem.FailedReservation
+		return fmt.Sprintf("%s|exhausted:%t", child, errors.As(err, &failed))
+	})
 
 	ops.Handle(Sleepy, func(*golem.Context[opsState], golem.Unit) string {
 		start := time.Now()

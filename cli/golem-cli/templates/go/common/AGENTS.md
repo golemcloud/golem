@@ -58,6 +58,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-add-http-auth-go` | Requiring authentication on HTTP endpoints |
 | `golem-add-cors-go` | Configuring CORS on HTTP endpoints |
 | `golem-add-webhook-go` | Receiving external webhook callbacks |
+| `golem-quota-go` | Resource quotas: rate limits, capacity and concurrency with quota tokens |
 | `golem-make-http-request-go` | Making outgoing HTTP requests via `net/http` |
 | `golem-mark-read-only-go` | Marking methods read-only (side-effect-free) with result caching |
 | `golem-atomic-block-go` | Atomic regions, custom durability (`DurableOp`), idempotence, oplog commit, idempotency keys |

@@ -320,6 +320,9 @@ func (d *definitions) sdkComposite(c *codec) bool {
 	case streamish:
 		compileStream(c, d.compile(z.streamElem()))
 		return true
+	case quotaish:
+		compileQuotaToken(c)
+		return true
 	}
 
 	if elem, ok := values.OptionElem(zero); ok {

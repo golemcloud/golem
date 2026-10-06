@@ -1,6 +1,7 @@
 export default {
   "golem-add-go-module": "Add a Go Module Dependency",
   "golem-add-agent-go": "Adding a New Agent to a Go Golem Component",
+  "golem-quota-go": "Adding Resource Quotas to an Agent (Go)",
   "golem-add-secret-go": "Adding Secrets to a Go Agent",
   "golem-add-config-go": "Adding Typed Configuration to a Go Agent",
   "golem-atomic-block-go": "Atomic Regions and Durability Controls (Go)",

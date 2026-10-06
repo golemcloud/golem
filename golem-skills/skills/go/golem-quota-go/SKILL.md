@@ -1,0 +1,109 @@
+---
+name: golem-quota-go
+description: "Adding resource quotas to a Go Golem agent. Use when the user asks about rate limiting, resource quotas, quota tokens, golem.QuotaToken, reservations, throttling API calls, limiting concurrency, capacity limits, or splitting tokens between agents in a Go Golem project."
+---
+
+# Adding Resource Quotas to an Agent (Go)
+
+Golem's quota system shares limited resources — API call rates, storage capacity, connection concurrency — among all agents of a deployment. Resources are declared in the manifest; agents hold a `golem.QuotaToken` per resource and reserve from it before each use.
+
+## 1. Define Resources in the Application Manifest
+
+Declare resources under `resourceDefaults`, per environment:
+
+```yaml
+resourceDefaults:
+  prod:
+    api-calls:
+      limit:
+        type: Rate
+        value: 100
+        period: minute
+        max: 1000
+      enforcementAction: reject
+      unit: request
+      units: requests
+    connections:
+      limit:
+        type: Concurrency
+        value: 50
+      enforcementAction: throttle
+      unit: connection
+      units: connections
+```
+
+- **Limits:** `Rate` refills `value` every `period` (second/minute/hour/day), capped at `max`; `Capacity` is a fixed pool, never refilled; `Concurrency` is a pool whose units return when released.
+- **Enforcement:** `reject` makes a reservation fail with a `*golem.FailedReservation`; `throttle` suspends the agent until capacity is available, with no code needed; `terminate` fails the agent.
+
+## 2. Acquire a Token and Reserve
+
+Acquire one token per resource, usually in the constructor, and keep it in the agent's state:
+
+```go
+type state struct{ calls golem.QuotaToken }
+
+var agent = assistant.Agent.Implement(func(assistant.ID) *state {
+	// The second argument is the expected use per reservation, for fair sharing.
+	return &state{calls: golem.NewQuotaToken("api-calls", 1)}
+})
+
+func init() {
+	agent.Handle(assistant.Ask, func(ctx *golem.Context[state], in assistant.AskIn) string {
+		answer, err := golem.WithReservation(ctx.State.calls, 1, func(*golem.Reservation) (uint64, string) {
+			return 1, callModel(in.Question)
+		})
+		var failed *golem.FailedReservation
+		if errors.As(err, &failed) {
+			return "busy, try again later"
+		}
+		return answer
+	})
+}
+```
+
+`WithReservation` reserves, runs the function and commits the amount it reports as used — less than reserved returns the rest to the pool. For variable costs, reserve the maximum and report what was actually used.
+
+Manual form:
+
+```go
+r, err := tok.Reserve(4000)
+if err != nil {
+	return err // *golem.FailedReservation, only under reject enforcement
+}
+resp := callLLM(prompt)
+r.Commit(resp.TokensUsed)
+```
+
+`FailedReservation.EstimatedWait` says when to retry, when the resource knows.
+
+## 3. Hand a Share to Another Agent
+
+A `golem.QuotaToken` can be a field of a method's input or output. Split a share off for a child agent:
+
+```go
+type SummarizeIn struct {
+	Text  string
+	Quota golem.QuotaToken
+}
+
+summary := summarizer.Summarize.Call(summarizer.Agent.Get(id), summarizer.SummarizeIn{
+	Text: text, Quota: tok.Split(200),
+})
+```
+
+Sending a token moves it: the copy you sent is unusable afterwards (`golem.ErrQuotaTokenMoved`). A token returned to you is folded back with `tok.Merge(returned)`.
+
+## Key Constraints
+
+- Acquire a token once and reuse it; do not create one per call.
+- `Split` traps if the child's expected use exceeds the token's; `Merge` traps for tokens of different resources.
+- Commit every reservation; `WithReservation` does it for you.
+- Resource names in code must match `resourceDefaults` in `golem.yaml`.
+- Change limits at runtime with `golem resource update api-calls --limit '{"type":"Rate","value":200,"period":"minute","max":2000}' --environment prod`.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-call-another-agent-go` | Passing a split token to another agent |
+| `golem-add-agent-go` | Agent state and constructors |

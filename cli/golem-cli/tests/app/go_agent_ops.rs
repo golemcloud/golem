@@ -82,6 +82,15 @@ async fn test_go_agent_ops() {
           go-agent-ops:main:
             dir: {component_dir}
             templates: go
+        resourceDefaults:
+          local:
+            api-calls:
+              limit:
+                type: Capacity
+                value: 3
+              enforcementAction: reject
+              unit: request
+              units: requests
         agents:
           ConfiguredGreeter:
             config:
@@ -141,6 +150,9 @@ async fn test_go_agent_ops() {
 
     // Go timers fire while the agent waits on the host: a sleep, a timeout
     // racing a call, and a deadline on a promise.
+    let quota = invoke("quota", &[]).await;
+    assert!(quota.contains("child:<nil>|exhausted:true"), "{quota}");
+
     let slept = invoke("sleepy", &[]).await;
     assert!(slept.contains("slept:true"), "{slept}");
     let timer = invoke("timerVsRpc", &[]).await;
