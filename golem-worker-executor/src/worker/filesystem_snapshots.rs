@@ -1627,6 +1627,38 @@ mod tests {
         );
     }
 
+    #[test]
+    async fn only_a_start_restore_from_the_store_gives_the_times_of_a_save() {
+        use golem_common::model::agent::AgentFileContentHash;
+        use golem_common::model::component::{
+            AgentFilePath, AgentFilePermissions, InitialAgentFile,
+        };
+        let (snapshots, shutdown) = enabled_service();
+        let store = StartRestore::Store(
+            snapshots
+                .restore(
+                    &agent_snapshots("saved-times"),
+                    &FilesystemSnapshotName::periodic(),
+                )
+                .unwrap(),
+        );
+        let initial_files = StartRestore::InitialFiles(
+            InitialFilesRestore::of_read_only(Box::new([InitialAgentFile {
+                content_hash: AgentFileContentHash(golem_common::model::diff::Hash::empty()),
+                path: AgentFilePath::from_abs_str("/file").unwrap(),
+                permissions: AgentFilePermissions::ReadOnly,
+                size: 1,
+            }]))
+            .unwrap(),
+        );
+
+        assert_eq!(
+            [store.gives_saved_times(), initial_files.gives_saved_times()],
+            [true, false]
+        );
+        shut_down(shutdown).await;
+    }
+
     /// A host that records its calls and answers as the test says.
     struct ScriptedHost {
         calls: std::sync::Mutex<Vec<Box<str>>>,
