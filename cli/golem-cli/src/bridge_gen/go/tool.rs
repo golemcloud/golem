@@ -29,6 +29,7 @@ use super::go::{
     unique_idents_with_reserved,
 };
 use super::go_writer::GoWriter;
+use super::restriction;
 use super::{GOLEM_PKG, GoBridgeGenerator, case_idents};
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{command_path, idx_to_usize, synthetic_agent_type};
@@ -279,6 +280,7 @@ impl GoToolBridgeGenerator {
             fields.push(Field {
                 ident: ident.clone(),
                 typ: "io.Reader".to_string(),
+                tag: None,
                 binding: format!(
                     "Stdin(&{{}}.{ident}){}",
                     if stdin.required { "" } else { ".Optional()" }
@@ -416,6 +418,7 @@ impl GoToolBridgeGenerator {
             out.push(Field {
                 ident,
                 typ,
+                tag: self.inner.restriction_tag(&field.type_)?,
                 binding,
             });
         }
@@ -669,6 +672,7 @@ impl ToolNames {
 struct Field {
     ident: String,
     typ: String,
+    tag: Option<String>,
     binding: String,
 }
 
@@ -695,9 +699,11 @@ fn write_struct(
     for e in embedded {
         writer.line(e);
     }
-    let width = fields.iter().map(|f| f.ident.len()).max().unwrap_or(0);
-    for field in fields {
-        writer.line(format!("{:<width$} {}", field.ident, field.typ));
+    let idents = fields.iter().map(|f| f.ident.clone()).collect::<Vec<_>>();
+    let types = fields.iter().map(|f| f.typ.clone()).collect::<Vec<_>>();
+    let tags = fields.iter().map(|f| f.tag.clone()).collect::<Vec<_>>();
+    for line in restriction::field_lines(&idents, &types, &tags, &vec![false; idents.len()]) {
+        writer.line(line);
     }
     writer.dedent();
     writer.line("}");

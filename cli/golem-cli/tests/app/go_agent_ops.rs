@@ -166,6 +166,30 @@ async fn test_go_agent_ops() {
     let late = invoke("awaitLate", &[]).await;
     assert!(late.contains("timed-out|late"), "{late}");
 
+    // A golem struct tag restricts the parameter in the published schema, and
+    // the platform rejects a value outside it before the agent runs.
+    let bounded = invoke("bounded", &["7"]).await;
+    assert!(bounded.contains('7'), "{bounded}");
+    let out_of_range = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "OpsAgent(\"o\")",
+            "bounded",
+            "11",
+        ])
+        .await;
+    let rejection = format!(
+        "{}\n{}",
+        out_of_range.stdout_text(),
+        out_of_range.stderr_text()
+    );
+    assert!(
+        !out_of_range.success() && rejection.contains("above maximum 10"),
+        "an out-of-range argument was not rejected by its restriction: {rejection}"
+    );
+
     let reflected = invoke("reflected", &[]).await;
     assert!(reflected.contains("hej r|hej r|true"), "{reflected}");
 

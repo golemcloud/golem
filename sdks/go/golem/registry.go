@@ -33,6 +33,8 @@ type fieldInfo struct {
 	// autoInjected marks a Principal field: the host fills it from the
 	// invocation, so it has no codec and no value on the wire.
 	autoInjected bool
+	// restrict is what the field's golem tag declared.
+	restrict *restriction
 }
 
 type methodEntry struct {
@@ -108,12 +110,24 @@ func (d *definitions) structFields(t reflect.Type) []fieldInfo {
 			out = append(out, fieldInfo{name: lowerFirst(f.Name), index: i, typ: f.Type, autoInjected: true})
 			continue
 		}
-		out = append(out, fieldInfo{
+		fi := fieldInfo{
 			name:  lowerFirst(f.Name),
 			index: i,
 			typ:   f.Type,
 			codec: d.compile(f.Type),
-		})
+		}
+		if tag, ok := f.Tag.Lookup("golem"); ok {
+			r, err := parseRestrictionTag(tag)
+			if err == nil {
+				err = d.checkRestriction(fi.codec, r)
+			}
+			if err != nil {
+				fi.codec = restrictionFailed(fi.codec, fmt.Sprintf("%s.%s: %v", t, f.Name, err))
+			} else {
+				fi.restrict = r
+			}
+		}
+		out = append(out, fi)
 	}
 	return out
 }

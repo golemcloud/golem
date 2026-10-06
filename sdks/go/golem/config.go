@@ -75,9 +75,10 @@ import (
 // is Secret[T] so the schema graph carries a secret(inner) node; for local
 // config it is the value type directly.
 type configDecl struct {
-	source common.AgentConfigSource
-	path   []string
-	typ    reflect.Type
+	source   common.AgentConfigSource
+	path     []string
+	typ      reflect.Type
+	restrict *restriction
 }
 
 // NoConfig is the empty config type used by an agent that declares no config. It
@@ -129,6 +130,8 @@ type configLeaf struct {
 	path   []string
 	typ    reflect.Type
 	index  []int
+	// tag is the field's golem restriction tag, if it has one.
+	tag string
 }
 
 var secretishType = reflect.TypeOf((*secretish)(nil)).Elem()
@@ -157,11 +160,11 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 			index := append(append([]int(nil), idx...), i)
 			switch {
 			case isSecretType(f.Type):
-				leaves = append(leaves, configLeaf{common.AgentConfigSourceSecret, path, f.Type, index})
+				leaves = append(leaves, configLeaf{common.AgentConfigSourceSecret, path, f.Type, index, f.Tag.Get("golem")})
 			case f.Type.Kind() == reflect.Struct:
 				walk(path, index, f.Type)
 			default:
-				leaves = append(leaves, configLeaf{common.AgentConfigSourceLocal, path, f.Type, index})
+				leaves = append(leaves, configLeaf{common.AgentConfigSourceLocal, path, f.Type, index, f.Tag.Get("golem")})
 			}
 		}
 	}
@@ -179,6 +182,18 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 	}
 	for _, lf := range leaves {
 		recordConfigOn(d, e, agentName, lf.source, lf.path, lf.typ)
+		if lf.tag == "" || len(e.configs) == 0 || !pathsEqual(e.configs[len(e.configs)-1].path, lf.path) {
+			continue
+		}
+		r, err := parseRestrictionTag(lf.tag)
+		if err == nil {
+			err = d.checkRestriction(d.compile(lf.typ), r)
+		}
+		if err != nil {
+			d.recordErr(agentName, "", "config %v: %v", lf.path, err)
+			continue
+		}
+		e.configs[len(e.configs)-1].restrict = r
 	}
 }
 
@@ -309,7 +324,7 @@ func (d *definitions) buildConfigDecls(g *graphBuilder, cds []configDecl) []comm
 		out = append(out, common.AgentConfigDeclaration{
 			Source:    cd.source,
 			Path:      cd.path,
-			ValueType: g.node(d.compile(cd.typ)),
+			ValueType: g.restrictedNode(d.compile(cd.typ), cd.restrict),
 		})
 	}
 	return out

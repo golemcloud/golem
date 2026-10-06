@@ -460,6 +460,14 @@ func (d *definitions) boundArgOf(b *argBinding, prefix []int) (boundArg, error) 
 	if a.value.invalid != "" {
 		return a, fmt.Errorf("%s is %s, which cannot be represented: %s", b.name, b.value, a.value.invalid)
 	}
+	if b.restrictErr != nil {
+		return a, fmt.Errorf("%s: %w", b.name, b.restrictErr)
+	}
+	if b.restrict != nil {
+		if err := d.checkRestriction(a.value, b.restrict); err != nil {
+			return a, fmt.Errorf("%s: %w", b.name, err)
+		}
+	}
 	if b.optional && b.def.IsValid() {
 		return a, fmt.Errorf("%s is optional (golem.Option) and cannot also have a default; use a plain type with Default", b.name)
 	}
@@ -871,7 +879,7 @@ func optionSpecOf(g *graphBuilder, a boundArg) toolCommon.OptionSpec {
 	switch b.kind {
 	case argList:
 		shape = toolCommon.MakeOptionShapeRepeatableList(toolCommon.RepeatableListShape{
-			Repetition: b.repetition, ItemType: g.node(a.value),
+			Repetition: b.repetition, ItemType: g.restrictedNode(a.value, b.restrict),
 		})
 	case argMap:
 		policy := toolCommon.DuplicateKeyPolicyReject
@@ -879,13 +887,13 @@ func optionSpecOf(g *graphBuilder, a boundArg) toolCommon.OptionSpec {
 			policy = toolCommon.DuplicateKeyPolicyLastWins
 		}
 		shape = toolCommon.MakeOptionShapeRepeatableMap(toolCommon.RepeatableMapShape{
-			Repetition: b.repetition, MapType: g.node(a.value), DuplicateKeyPolicy: policy,
+			Repetition: b.repetition, MapType: g.restrictedNode(a.value, b.restrict), DuplicateKeyPolicy: policy,
 		})
 	default:
 		if b.valueOptional {
-			shape = toolCommon.MakeOptionShapeOptionalScalar(g.node(a.value))
+			shape = toolCommon.MakeOptionShapeOptionalScalar(g.restrictedNode(a.value, b.restrict))
 		} else {
-			shape = toolCommon.MakeOptionShapeScalar(g.node(a.value))
+			shape = toolCommon.MakeOptionShapeScalar(g.restrictedNode(a.value, b.restrict))
 		}
 		required = !b.optional && !b.def.IsValid()
 	}
@@ -943,7 +951,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 				Name:         b.name,
 				Doc:          b.doc.toWit(),
 				ValueName:    someIfSet(b.valueName),
-				Type:         g.node(a.value),
+				Type:         g.restrictedNode(a.value, b.restrict),
 				Default:      defaultOf(a),
 				Required:     !b.optional && !b.def.IsValid(),
 				AcceptsStdio: b.acceptsStdio,
@@ -957,7 +965,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 				Name:         b.name,
 				Doc:          b.doc.toWit(),
 				ValueName:    someIfSet(b.valueName),
-				ItemType:     g.node(a.value),
+				ItemType:     g.restrictedNode(a.value, b.restrict),
 				Min:          b.min,
 				Max:          max,
 				Separator:    someIfSet(b.separator),
@@ -1045,7 +1053,7 @@ func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSc
 	g := graphBuilder{d: d}
 	fields := make([]types.NamedFieldType, 0, len(l.fields))
 	for _, a := range l.fields {
-		fields = append(fields, types.NamedFieldType{Name: a.b.name, Body: g.node(a.field)})
+		fields = append(fields, types.NamedFieldType{Name: a.b.name, Body: g.restrictedNode(a.field, a.b.restrict)})
 	}
 	g.nodes = append(g.nodes, types.SchemaTypeNode{Body: types.MakeSchemaTypeBodyRecordType(fields)})
 	root := int32(len(g.nodes) - 1)

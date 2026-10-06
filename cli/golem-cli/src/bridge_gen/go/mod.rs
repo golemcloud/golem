@@ -42,6 +42,7 @@ pub mod external;
 pub mod go;
 pub mod go_writer;
 pub mod quantity;
+pub mod restriction;
 pub mod tool;
 pub mod type_name;
 pub mod type_ref;
@@ -323,6 +324,10 @@ impl GoBridgeGenerator {
         None
     }
 
+    fn restriction_tag(&self, typ: &SchemaType) -> anyhow::Result<Option<String>> {
+        restriction::restriction_tag(typ, &|t| self.resolve(t))
+    }
+
     fn render(&self, typ: &SchemaType, writer: &mut GoWriter) -> anyhow::Result<String> {
         let streams = match self.mode {
             GoBridgeMode::GuestWasmRpc => type_ref::Streams::Guest,
@@ -371,9 +376,10 @@ impl GoBridgeGenerator {
     fn types_file(&self) -> anyhow::Result<String> {
         let mut writer = GoWriter::new();
         let render = |t: &SchemaType, w: &mut GoWriter| self.render(t, w);
+        let tag = |t: &SchemaType| self.restriction_tag(t);
         for (typ, name) in self.type_naming.types() {
             let body = self.resolve(typ);
-            decl::write(&name.name, body, &render, &mut writer)?;
+            decl::write(&name.name, body, &render, &tag, &mut writer)?;
         }
         self.quantity_units.write(&mut writer);
         Ok(writer.finish(&self.package_name()))
@@ -680,15 +686,20 @@ impl GoBridgeGenerator {
             rendered.push(self.render(&field.schema, writer)?);
         }
         let idents = unique_idents(fields.iter().map(|f| to_field_ident(&f.name)).collect());
+        let tags = fields
+            .iter()
+            .map(|f| self.restriction_tag(&f.schema))
+            .collect::<anyhow::Result<Vec<_>>>()?;
         writer.doc(doc);
         if fields.is_empty() {
             writer.line(format!("type {name} struct{{}}"));
         } else {
-            let width = idents.iter().map(|i| i.len()).max().unwrap_or(0);
             writer.line(format!("type {name} struct {{"));
             writer.indent();
-            for (ident, typ) in idents.iter().zip(&rendered) {
-                writer.line(format!("{ident:<width$} {typ}"));
+            for line in
+                restriction::field_lines(&idents, &rendered, &tags, &vec![false; idents.len()])
+            {
+                writer.line(line);
             }
             writer.dedent();
             writer.line("}");

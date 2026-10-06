@@ -48,6 +48,7 @@ use crate::bridge_gen::go::go::{
     go_string, lower_first, to_exported_ident, to_field_ident, unique_idents,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
+use crate::bridge_gen::go::restriction;
 use golem_common::schema::MetadataEnvelope;
 use golem_common::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseType};
 
@@ -55,19 +56,23 @@ use golem_common::schema::schema_type::{NamedFieldType, SchemaType, VariantCaseT
 /// The generator owns the walk, so it is passed in.
 pub type RenderType<'a> = dyn Fn(&SchemaType, &mut GoWriter) -> anyhow::Result<String> + 'a;
 
+/// The `golem:"…"` restriction tag of a field of the given type, if any.
+pub type TagOf<'a> = dyn Fn(&SchemaType) -> anyhow::Result<Option<String>> + 'a;
+
 /// Writes the declaration for a named schema type. Returns false when the type
 /// needs no declaration, which the caller treats as "already spelled inline".
 pub fn write(
     name: &str,
     typ: &SchemaType,
     render: &RenderType<'_>,
+    tag: &TagOf<'_>,
     writer: &mut GoWriter,
 ) -> anyhow::Result<bool> {
     match typ {
         SchemaType::Record {
             fields, metadata, ..
         } => {
-            write_record(name, fields, metadata, render, writer)?;
+            write_record(name, fields, metadata, render, tag, writer)?;
             Ok(true)
         }
         SchemaType::Enum {
@@ -110,6 +115,7 @@ fn write_record(
     fields: &[NamedFieldType],
     metadata: &MetadataEnvelope,
     render: &RenderType<'_>,
+    tag: &TagOf<'_>,
     writer: &mut GoWriter,
 ) -> anyhow::Result<()> {
     // Rendering first records the imports the field types need, before the
@@ -129,15 +135,14 @@ fn write_record(
     writer.line(format!("type {name} struct {{"));
     writer.indent();
     let documented: Vec<bool> = fields.iter().map(|f| has_doc(&f.metadata)).collect();
-    let widths = aligned_widths(&idents, &documented);
+    let tags = fields
+        .iter()
+        .map(|f| tag(&f.body))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let lines = restriction::field_lines(&idents, &rendered, &tags, &documented);
     for (idx, field) in fields.iter().enumerate() {
         write_member_doc(&idents[idx], &field.metadata, writer);
-        writer.line(format!(
-            "{:<width$} {}",
-            idents[idx],
-            rendered[idx],
-            width = widths[idx]
-        ));
+        writer.line(lines[idx].clone());
     }
     writer.dedent();
     writer.line("}");
@@ -359,7 +364,8 @@ mod tests {
 
     fn emit(name: &str, typ: &SchemaType) -> String {
         let mut writer = GoWriter::new();
-        let declared = write(name, typ, &render_inline, &mut writer).expect("a declaration");
+        let declared =
+            write(name, typ, &render_inline, &|_| Ok(None), &mut writer).expect("a declaration");
         assert!(declared, "{name} should need a declaration");
         writer.finish("client")
     }
@@ -598,6 +604,7 @@ mod tests {
             "Ignored",
             &SchemaType::String { metadata: meta() },
             &render_inline,
+            &|_| Ok(None),
             &mut writer,
         )
         .expect("no error");

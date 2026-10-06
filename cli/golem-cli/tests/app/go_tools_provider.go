@@ -33,11 +33,12 @@ var ErrRejected = golem.DefineToolError[Rejected](Tool, "rejected",
 
 type CommitArgs struct {
 	Globals
-	Paths   []string
-	Message string
-	Author  golem.Option[string]
-	Amend   bool
-	Caller  golem.Principal
+	Paths    []string
+	Message  string
+	Author   golem.Option[string]
+	Priority golem.Option[uint32]
+	Amend    bool
+	Caller   golem.Principal
 }
 
 type CommitResult struct {
@@ -50,6 +51,7 @@ var Commit = Tool.Command[CommitArgs, CommitResult]("commit", func(a *CommitArgs
 	s.Tail(&a.Paths)
 	s.Option(&a.Message).Short('m')
 	s.Option(&a.Author)
+	s.Option(&a.Priority).MaxValue(golem.Some[uint32](5))
 	s.Flag(&a.Amend)
 	s.Raises(ErrNothingToCommit)
 })

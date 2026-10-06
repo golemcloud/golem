@@ -38,7 +38,7 @@ func (d *definitions) compileRecord(c *codec) {
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
 		nf := make([]types.NamedFieldType, 0, len(fields))
 		for _, f := range fields {
-			nf = append(nf, types.NamedFieldType{Name: f.name, Body: g.node(f.codec)})
+			nf = append(nf, types.NamedFieldType{Name: f.name, Body: g.restrictedNode(f.codec, f.restrict)})
 		}
 		return types.MakeSchemaTypeBodyRecordType(nf)
 	}

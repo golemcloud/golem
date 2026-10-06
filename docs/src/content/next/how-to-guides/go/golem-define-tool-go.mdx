@@ -114,6 +114,26 @@ Globals are options and flags only; each command embeds the globals of every nod
 
 Constraints refer to bindings, `binding.ValueIs(v)` or, for any field including an inherited global, `s.Present(&a.F)` / `s.ValueIs(&a.F, v)`: `RequiresAll`, `RequiresAny`, `AllOrNone`, `Mutex`, `MutexGroups(s.AllOf(…), …)`, `Implies(lhs, rhs)` and `Forbids(lhs, …)`, with `s.AllOf`/`s.AnyOf` to group references.
 
+### Restricting Arguments
+
+An argument takes the same `golem` struct tag as an agent parameter (see [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go)), or setters on its binding. The host checks the restrictions before the command runs:
+
+```go
+type ResizeArgs struct {
+	Width  uint32
+	Format golem.Text `golem:"regex=^(png|jpeg)$"`
+	Tags   []golem.Text
+}
+
+var Resize = Tool.Command[ResizeArgs, string]("resize", func(a *ResizeArgs, s *golem.ToolCommandSpec) {
+	s.Positional(&a.Width).Range(1, 4096).Unit("px")
+	s.Option(&a.Format) // restricted by its tag
+	s.List(&a.Tags).MaxLength(20)
+})
+```
+
+The setters are `Range(min, max)`, `MinValue`, `MaxValue` and `Unit` for numbers and quantities, typed as the argument. `Languages`, `MinLength`, `MaxLength` and `Regex` apply to `golem.Text`, and `Mime`, `MinBytes` and `MaxBytes` to `golem.Binary`. `golem.Path` takes `Direction(golem.PathOutput)`, `PathKind(golem.PathFile)`, `Mime` and `Extensions`; `golem.URL` takes `Schemes` and `Hosts`. A restriction that does not fit the argument's type fails the tool definition.
+
 ## Stdin, Stdout and Stderr
 
 A command that writes standard output, standard error or both is declared with `OutputCommand`, and its spec declares which; its handler gets a `*golem.ToolOutputContext`:

@@ -148,7 +148,6 @@ type secretTaker interface {
 
 type secretAdopter interface{ secretAdopt(h *types.Secret) }
 
-
 func (s Secret[T]) secretElem() reflect.Type { return reflect.TypeFor[T]() }
 
 func (s Secret[T]) secretTake() (*types.Secret, error) {

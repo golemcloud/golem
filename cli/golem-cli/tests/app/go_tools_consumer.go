@@ -37,6 +37,15 @@ func init() {
 		check(err == nil, "commit: %v", err)
 		check(res.Files == 2, "files: %d", res.Files)
 
+		// A restricted argument is checked before the command runs.
+		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) {
+			a.Message = "fix"
+			a.Paths = []string{"x"}
+			a.Priority = golem.Some[uint32](9)
+		})
+		check(err != nil && strings.Contains(err.Error(), "maximum 5"),
+			"a priority above its maximum was accepted: %v", err)
+
 		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "secret"; a.Paths = []string{"x"} })
 		var policy *golem.ToolCallError
 		check(errors.As(err, &policy) && policy.Kind == golem.ToolCallConstraintViolation &&

@@ -50,7 +50,8 @@ use golem_common::model::agent::{
 };
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{
-    DiscriminatorRule, QuantitySpec, ResultSpec, UnionBranch, UnionSpec,
+    DiscriminatorRule, NumericBound, NumericRestrictions, PathDirection, PathKind, PathSpec,
+    QuantitySpec, ResultSpec, TextRestrictions, UnionBranch, UnionSpec,
 };
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
@@ -1380,4 +1381,83 @@ func TestSetConfigurationFieldsTravelAsCanonicalJSON(t *testing.T) {{
 "#
         ),
     );
+}
+
+fn restricted_agent() -> AgentTypeSchema {
+    let bounded = SchemaType::U32 {
+        restrictions: Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(1)),
+            max: Some(NumericBound::Unsigned(10)),
+            unit: Some("px".into()),
+        }),
+        metadata: Default::default(),
+    };
+    let label = SchemaType::text(TextRestrictions {
+        languages: Some(vec!["en".into(), "de".into()]),
+        min_length: None,
+        max_length: Some(40),
+        regex: Some("^[a-z]+,[0-9]$".into()),
+    });
+    let output = SchemaType::path(PathSpec {
+        direction: PathDirection::Output,
+        kind: PathKind::File,
+        allowed_mime_types: None,
+        allowed_extensions: Some(vec!["png".into()]),
+    });
+    agent(
+        "ShapeAgent",
+        "rust",
+        vec![field("name", SchemaType::string())],
+        vec![method(
+            "draw",
+            vec![
+                field("box", ref_to("shape.Box")),
+                field("count", SchemaType::option(bounded.clone())),
+                field("out", output),
+            ],
+            None,
+        )],
+        vec![def(
+            "shape.Box",
+            SchemaType::record(vec![
+                named_field("width", bounded),
+                named_field("name", SchemaType::string()),
+                named_field("label", label.clone()),
+                named_field("tags", SchemaType::list(label)),
+            ]),
+        )],
+        AgentMode::Durable,
+    )
+}
+
+/// A restricted field carries a `golem` tag, so the schema the SDK derives
+/// from the generated type matches the one it came from; the tags line up as
+/// gofmt writes them.
+#[test]
+fn go_clients_tag_restricted_fields(env: &GoEnv) {
+    for generated in [
+        GeneratedGo::guest(env, restricted_agent()),
+        GeneratedGo::external(env, restricted_agent()),
+    ] {
+        let types = generated.read("types.go");
+        for expected in [
+            r#"`golem:"min=1,max=10,unit=px"`"#,
+            r#"`golem:"languages=en|de,maxLength=40,regex=^[a-z]+,[0-9]$"`"#,
+        ] {
+            assert!(types.contains(expected), "missing {expected} in:\n{types}");
+        }
+        generated.assert_gofmt_clean(env);
+    }
+    let guest = GeneratedGo::guest(env, restricted_agent());
+    let client = guest.read("client.go");
+    for expected in [
+        r#"`golem:"min=1,max=10,unit=px"`"#,
+        r#"`golem:"direction=output,kind=file,extensions=png"`"#,
+    ] {
+        assert!(
+            client.contains(expected),
+            "missing {expected} in:\n{client}"
+        );
+    }
+    guest.assert_vets_for_wasip1(env);
 }

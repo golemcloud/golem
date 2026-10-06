@@ -96,6 +96,10 @@ type argBinding struct {
 	value reflect.Type
 	// optional marks a golem.Option field: optional, and without a default.
 	optional bool
+	// restrict narrows the values the argument accepts; restrictErr is a
+	// setter's mistake, reported when the tool is defined.
+	restrict    *restriction
+	restrictErr error
 
 	doc           toolDoc
 	valueName     string
@@ -209,6 +213,11 @@ func (s *specState) bind(p any, kind argKind, value reflect.Type) *argBinding {
 		}
 	}
 	b.path, b.field, b.name = path, field, kebab(field.Name)
+	// A golem tag restricts the argument as it does a record field; setters
+	// called on the binding afterwards add to it.
+	if tag, ok := field.Tag.Lookup("golem"); ok {
+		b.restrict, b.restrictErr = parseRestrictionTag(tag)
+	}
 	s.bindings = append(s.bindings, b)
 	return b
 }
@@ -271,12 +280,12 @@ func (s *ToolCommandSpec) Positional[T any](p *T) *ToolPositionalArg[T] {
 	}
 	b := s.state.bind(p, argPositional, value)
 	b.optional = optional
-	return &ToolPositionalArg[T]{b: b}
+	return newToolPositionalArg[T](b)
 }
 
 // Tail binds a slice field to the variadic positional after the fixed ones.
 func (s *ToolCommandSpec) Tail[T any](p *[]T) *ToolTailArg[T] {
-	return &ToolTailArg[T]{b: s.state.bind(p, argTail, reflect.TypeFor[T]())}
+	return newToolTailArg[T](s.state.bind(p, argTail, reflect.TypeFor[T]()))
 }
 
 // Option binds a field to a named option carrying one value.
@@ -292,17 +301,17 @@ func bindOption[T any](s *specState, p *T) *ToolOptionArg[T] {
 	}
 	b := s.bind(p, argOption, value)
 	b.optional = optional
-	return &ToolOptionArg[T]{b: b}
+	return newToolOptionArg[T](b)
 }
 
 // List binds a slice field to an option that may be given several times.
 func (s *ToolCommandSpec) List[T any](p *[]T) *ToolListArg[T] {
-	return &ToolListArg[T]{b: s.state.bind(p, argList, reflect.TypeFor[T]())}
+	return newToolListArg[T](s.state.bind(p, argList, reflect.TypeFor[T]()))
 }
 
 // List binds a slice field to a global option that may be given several times.
 func (s *ToolGlobalsSpec) List[T any](p *[]T) *ToolListArg[T] {
-	return &ToolListArg[T]{b: s.state.bind(p, argList, reflect.TypeFor[T]())}
+	return newToolListArg[T](s.state.bind(p, argList, reflect.TypeFor[T]()))
 }
 
 // Map binds a map field to a key-value option, given as key=value.
@@ -458,7 +467,16 @@ func (o *ToolOutputSpec) Required() *ToolOutputSpec { o.d.required = true; retur
 // Argument bindings. Each setter returns the binding, so declarations chain.
 
 // ToolPositionalArg is a field bound to a positional argument.
-type ToolPositionalArg[T any] struct{ b *argBinding }
+type ToolPositionalArg[T any] struct {
+	restrictable[*ToolPositionalArg[T], T]
+	b *argBinding
+}
+
+func newToolPositionalArg[T any](b *argBinding) *ToolPositionalArg[T] {
+	a := &ToolPositionalArg[T]{b: b}
+	a.restrictable = restrictable[*ToolPositionalArg[T], T]{rb: b, self: a}
+	return a
+}
 
 func (a *ToolPositionalArg[T]) Name(name string) *ToolPositionalArg[T] { a.b.name = name; return a }
 func (a *ToolPositionalArg[T]) Doc(summary string) *ToolPositionalArg[T] {
@@ -489,7 +507,16 @@ func (a *ToolPositionalArg[T]) toolRef() refDecl    { return refDecl{b: a.b} }
 func (a *ToolPositionalArg[T]) toolRefs() refsDecl  { return single(a) }
 
 // ToolTailArg is a slice field bound to the variadic positional.
-type ToolTailArg[T any] struct{ b *argBinding }
+type ToolTailArg[T any] struct {
+	restrictable[*ToolTailArg[T], T]
+	b *argBinding
+}
+
+func newToolTailArg[T any](b *argBinding) *ToolTailArg[T] {
+	a := &ToolTailArg[T]{b: b}
+	a.restrictable = restrictable[*ToolTailArg[T], T]{rb: b, self: a}
+	return a
+}
 
 func (a *ToolTailArg[T]) Name(name string) *ToolTailArg[T]     { a.b.name = name; return a }
 func (a *ToolTailArg[T]) Doc(summary string) *ToolTailArg[T]   { a.b.doc.summary = summary; return a }
@@ -508,7 +535,16 @@ func (a *ToolTailArg[T]) toolRef() refDecl    { return refDecl{b: a.b} }
 func (a *ToolTailArg[T]) toolRefs() refsDecl  { return single(a) }
 
 // ToolOptionArg is a field bound to a named option carrying one value.
-type ToolOptionArg[T any] struct{ b *argBinding }
+type ToolOptionArg[T any] struct {
+	restrictable[*ToolOptionArg[T], T]
+	b *argBinding
+}
+
+func newToolOptionArg[T any](b *argBinding) *ToolOptionArg[T] {
+	a := &ToolOptionArg[T]{b: b}
+	a.restrictable = restrictable[*ToolOptionArg[T], T]{rb: b, self: a}
+	return a
+}
 
 func (a *ToolOptionArg[T]) Name(name string) *ToolOptionArg[T]   { a.b.name = name; return a }
 func (a *ToolOptionArg[T]) Short(r rune) *ToolOptionArg[T]       { a.b.short = r; return a }
@@ -542,7 +578,16 @@ func (a *ToolOptionArg[T]) toolRef() refDecl    { return refDecl{b: a.b} }
 func (a *ToolOptionArg[T]) toolRefs() refsDecl  { return single(a) }
 
 // ToolListArg is a slice field bound to an option given several times.
-type ToolListArg[T any] struct{ b *argBinding }
+type ToolListArg[T any] struct {
+	restrictable[*ToolListArg[T], T]
+	b *argBinding
+}
+
+func newToolListArg[T any](b *argBinding) *ToolListArg[T] {
+	a := &ToolListArg[T]{b: b}
+	a.restrictable = restrictable[*ToolListArg[T], T]{rb: b, self: a}
+	return a
+}
 
 func (a *ToolListArg[T]) Name(name string) *ToolListArg[T]   { a.b.name = name; return a }
 func (a *ToolListArg[T]) Short(r rune) *ToolListArg[T]       { a.b.short = r; return a }

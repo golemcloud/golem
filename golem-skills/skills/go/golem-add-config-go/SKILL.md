@@ -94,6 +94,14 @@ func init() {
 
 `ctx.Config(shop.Agent)` returns the whole `shop.Config` value; `ctx` is the running method's `*golem.Context[state]` (requiring it means config is only readable from inside a running method). The constructor reads the same config via `ctx.Config()` on its `InitContext`.
 
+A config field takes the same `golem` restriction tag as a method parameter (see `golem-add-agent-go`), which publishes it in the config's declared type:
+
+```go
+type Config struct {
+	Retries uint32 `golem:"max=5"`
+}
+```
+
 ## Providing Values in `golem.yaml`
 
 Set defaults under `agents.<Name>.config`. Keys are **camelCase** — they match the lower-camel-cased Go field names; nested structs are nested maps, and a `map[string]V` is a list of `[key, value]` pairs:

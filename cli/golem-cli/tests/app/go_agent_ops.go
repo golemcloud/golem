@@ -66,6 +66,12 @@ type OpsID struct{ Name string }
 
 type NameIn struct{ Name string }
 
+// BoundedIn carries a schema restriction, which the platform enforces before
+// the method runs.
+type BoundedIn struct {
+	N uint32 `golem:"min=1,max=10"`
+}
+
 var Ops = golem.DefineAgent[OpsID](golem.Spec{Name: "OpsAgent"})
 
 var (
@@ -82,6 +88,7 @@ var (
 	TimerVsRPC  = Ops.Method[golem.Unit, string]("timerVsRpc")
 	Sleepy      = Ops.Method[golem.Unit, string]("sleepy")
 	Quota       = Ops.Method[golem.Unit, string]("quota")
+	Bounded     = Ops.Method[BoundedIn, uint32]("bounded")
 )
 
 type counterState struct{ N int64 }
@@ -136,6 +143,8 @@ func init() {
 
 	// The api-calls resource holds three units and rejects beyond them: two are
 	// spent here, one by another agent through a split token.
+	ops.Handle(Bounded, func(_ *golem.Context[opsState], in BoundedIn) uint32 { return in.N })
+
 	ops.Handle(Quota, func(*golem.Context[opsState], golem.Unit) string {
 		tok := golem.NewQuotaToken("api-calls", 1)
 		for range 2 {

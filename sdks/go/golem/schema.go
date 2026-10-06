@@ -167,7 +167,7 @@ func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
 		out = append(out, common.NamedField{
 			Name:   f.name,
 			Source: common.MakeFieldSourceUserSupplied(),
-			Schema: g.node(f.codec),
+			Schema: g.restrictedNode(f.codec, f.restrict),
 		})
 	}
 	return out

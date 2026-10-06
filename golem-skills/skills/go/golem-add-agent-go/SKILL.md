@@ -122,6 +122,27 @@ Parameter and result types are Go structs; each exported field becomes one WIT f
 - Variants/enums are declared with `golem.DefineVariant` / `golem.DefineEnum`. A variant case type is its payload; a case with no payload is an empty struct (`type Cash struct{}`).
 - When the payload cannot carry the variant's marker method without changing what it is — a `time.Time`, a `golem.Text`, an `Option`, another variant — wrap it in a one-field struct and register it with `golem.WrappedCase`. `type At time.Time` would publish a different schema; `type At struct{ Value time.Time }` with `WrappedCase[At]("at")` publishes `at(datetime)`. Unions have `golem.WrappedBranch` for the same reason.
 
+### Restricting Values
+
+A `golem` struct tag restricts a field, on a method's parameters or on a record. The restriction is published in the schema, and the platform rejects a value outside it before the method runs:
+
+```go
+type ResizeIn struct {
+	Width  uint32       `golem:"min=1,max=4096,unit=px"`
+	Name   golem.Text   `golem:"languages=en|de,maxLength=40,regex=^[a-z][a-z0-9-]*$"`
+	Photo  golem.Binary `golem:"mime=image/png|image/jpeg,maxBytes=1048576"`
+	Out    golem.Path   `golem:"direction=output,kind=file,extensions=png"`
+	Source golem.URL    `golem:"schemes=https"`
+	Limit  golem.Option[uint8] `golem:"max=9"` // an option or a list is restricted through to its values
+}
+```
+
+- Numbers take `min`, `max` and `unit`. A quantity takes `min` and `max`, such as `0.5` in its base unit or `20kg`.
+- `golem.Text` takes `languages`, `minLength`, `maxLength` and `regex`. A plain `string` carries no restrictions.
+- `golem.Binary` takes `mime`, `minBytes` and `maxBytes`. `golem.Path` takes `direction`, `kind`, `mime` and `extensions`. `golem.URL` takes `schemes` and `hosts`.
+- Lists are separated by `|`. A `regex` runs to the end of the tag, so put it last.
+- A tag that does not fit the field's type is reported as a definition error.
+
 ## Returning Failures
 
 Handlers return only their output value. Signal failure two ways:

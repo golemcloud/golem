@@ -375,3 +375,31 @@ func TestASecretTravelsAsAHandle(t *testing.T) {
 		encodeWith(c, reflect.ValueOf(SecretIn{}))
 	}()
 }
+
+type restrictedConfig struct {
+	Retries uint32 `golem:"max=5"`
+	Label   string
+}
+
+// TestConfigFieldsTakeRestrictionTags — a config field's golem tag restricts
+// its declared value type, as it does a parameter's.
+func TestConfigFieldsTakeRestrictionTags(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		cfgConfiguredAgent[restrictedConfig](d)
+		out, errs := d.discover()
+		if len(errs) != 0 {
+			t.Fatalf("unexpected definition errors: %v", errs)
+		}
+		for _, dcl := range out[0].Config {
+			if strings.Join(dcl.Path, "/") != "retries" {
+				continue
+			}
+			rs := out[0].Schema.TypeNodes[dcl.ValueType].Body.U32Type()
+			if rs.IsNone() || rs.Some().Max.Some().Unsigned() != 5 {
+				t.Fatalf("retries is not bounded: %+v", rs)
+			}
+			return
+		}
+		t.Fatal("no retries declaration")
+	})
+}
