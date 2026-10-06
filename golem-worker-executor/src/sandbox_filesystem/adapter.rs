@@ -2217,7 +2217,7 @@ fn native_name_comparison_mode(
         Ok(linux_name_comparison_mode(
             source,
             parent,
-            managed_xfs_name_mode_shortcut_enabled(),
+            xfs_name_mode_shortcut_enabled(),
             || {
                 probe.record();
                 rustix::fs::ioctl_getflags(directory)
@@ -2243,21 +2243,21 @@ fn native_name_comparison_mode(
 }
 
 #[cfg(target_os = "linux")]
-const MANAGED_XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED: bool = true;
+const XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED: bool = true;
 
 #[cfg(target_os = "linux")]
-fn managed_xfs_name_mode_shortcut_enabled() -> bool {
-    let enabled = MANAGED_XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED;
+fn xfs_name_mode_shortcut_enabled() -> bool {
+    let enabled = XFS_NAME_MODE_SHORTCUT_DEFAULT_ENABLED;
     #[cfg(test)]
-    let enabled = enabled && !managed_xfs_name_mode_shortcut_disabled_for_test();
+    let enabled = enabled && !xfs_name_mode_shortcut_disabled_for_test();
     enabled
 }
 
 #[cfg(all(test, target_os = "linux"))]
-fn managed_xfs_name_mode_shortcut_disabled_for_test() -> bool {
+fn xfs_name_mode_shortcut_disabled_for_test() -> bool {
     static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DISABLED.get_or_init(|| {
-        std::env::var("GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT").as_deref()
+        std::env::var("GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT").as_deref()
             == Ok("1")
     })
 }
@@ -2276,7 +2276,7 @@ fn linux_name_comparison_mode(
         _ => return NativeNameComparisonMode::Conservative,
     };
     if shortcut_enabled
-        && matches!(source, NativeNameModeSource::ValidatedManagedXfs(proof) if proof.matches_device(parent_device))
+        && matches!(source, NativeNameModeSource::ValidatedXfs(proof) if proof.matches_device(parent_device))
     {
         return NativeNameComparisonMode::Exact;
     }
@@ -3671,15 +3671,15 @@ mod tests {
             NativeRoot::new(root.clone(), directory),
             LeaseState {
                 lifecycle,
-                cleanup: NativeCleanup::Unmanaged {
+                cleanup: NativeCleanup::Directory {
                     path: root,
                     cleanup_retry: RetryConfig::default(),
                 },
             },
             FilesystemVolume::unmanaged_development(),
             QuotaAuthority::Unsupported,
-            NativeNameModeSource::ValidatedManagedXfs(
-                xfs::validated_managed_xfs_name_mode_for_test(device),
+            NativeNameModeSource::ValidatedXfs(
+                xfs::validated_xfs_name_mode_for_test(device),
             ),
         )
     }
@@ -4141,10 +4141,10 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn validated_managed_xfs_name_mode_skips_native_detection() {
+    fn validated_xfs_name_mode_skips_native_detection() {
         let parent = linux_parent_key(17);
-        let source = NativeNameModeSource::ValidatedManagedXfs(
-            xfs::validated_managed_xfs_name_mode_for_test(17),
+        let source = NativeNameModeSource::ValidatedXfs(
+            xfs::validated_xfs_name_mode_for_test(17),
         );
         let probes = std::cell::Cell::new(0);
 
@@ -4213,8 +4213,8 @@ mod tests {
     #[test]
     fn benchmark_disable_control_restores_managed_xfs_native_detection() {
         let parent = linux_parent_key(17);
-        let source = NativeNameModeSource::ValidatedManagedXfs(
-            xfs::validated_managed_xfs_name_mode_for_test(17),
+        let source = NativeNameModeSource::ValidatedXfs(
+            xfs::validated_xfs_name_mode_for_test(17),
         );
         let probes = std::cell::Cell::new(0);
 

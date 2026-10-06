@@ -50,27 +50,27 @@ const PROJECT_LIMIT_FIELDS: u16 =
 const PROJECT_DATA_LIMIT_FIELDS: u16 = FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD;
 
 #[derive(Clone, Copy)]
-pub(super) struct ValidatedManagedXfsNameMode {
+pub(super) struct ValidatedXfsNameMode {
     identity: FilesystemIdentity,
 }
 
-impl ValidatedManagedXfsNameMode {
+impl ValidatedXfsNameMode {
     pub(super) fn matches_device(self, device: u64) -> bool {
         self.identity.device == device
     }
 }
 
 #[cfg(test)]
-pub(super) fn validated_managed_xfs_name_mode_for_test(device: u64) -> ValidatedManagedXfsNameMode {
-    validated_managed_xfs_name_mode(XFS_SUPER_MAGIC, FilesystemIdentity { device })
+pub(super) fn validated_xfs_name_mode_for_test(device: u64) -> ValidatedXfsNameMode {
+    validated_xfs_name_mode(XFS_SUPER_MAGIC, FilesystemIdentity { device })
         .expect("XFS filesystem type must produce a managed name-mode proof")
 }
 
-fn validated_managed_xfs_name_mode(
+fn validated_xfs_name_mode(
     filesystem_type: u64,
     identity: FilesystemIdentity,
-) -> Option<ValidatedManagedXfsNameMode> {
-    (filesystem_type == XFS_SUPER_MAGIC).then_some(ValidatedManagedXfsNameMode { identity })
+) -> Option<ValidatedXfsNameMode> {
+    (filesystem_type == XFS_SUPER_MAGIC).then_some(ValidatedXfsNameMode { identity })
 }
 
 #[derive(Default)]
@@ -146,7 +146,7 @@ pub(super) struct ManagedProvisioning {
     root_fd: Arc<File>,
     allocator: Arc<Mutex<ProjectAllocator>>,
     filesystem_block_bytes: NonZeroU64,
-    validated_name_mode: ValidatedManagedXfsNameMode,
+    validated_name_mode: ValidatedXfsNameMode,
     cleanup_retry: RetryConfig,
 }
 
@@ -199,7 +199,7 @@ impl ManagedProvisioning {
             FilesystemStorageError::io("identify managed XFS root", root, error)
         })?;
         let validated_name_mode =
-            validated_managed_xfs_name_mode(filesystem.f_type as u64, identity)
+            validated_xfs_name_mode(filesystem.f_type as u64, identity)
                 .expect("validated XFS filesystem type must produce a name-mode proof");
         clear_root_project_assignment(&root_fd, &stable_root)?;
         let root_fd = Arc::new(root_fd);
@@ -1238,7 +1238,7 @@ impl ManagedProvisioning {
                 project_id,
                 filesystem_block_bytes: self.filesystem_block_bytes,
             },
-            NativeNameModeSource::ValidatedManagedXfs(self.validated_name_mode),
+            NativeNameModeSource::ValidatedXfs(self.validated_name_mode),
         );
         if let Err(error) = assignment_result {
             return Err(rollback_created_filesystem(created, error).await);
@@ -1549,10 +1549,10 @@ mod tests {
     #[test]
     fn managed_name_mode_proof_requires_xfs_filesystem_type() {
         let identity = FilesystemIdentity { device: 17 };
-        let proof = validated_managed_xfs_name_mode(XFS_SUPER_MAGIC, identity).unwrap();
+        let proof = validated_xfs_name_mode(XFS_SUPER_MAGIC, identity).unwrap();
         assert!(proof.matches_device(17));
         assert!(!proof.matches_device(18));
-        assert!(validated_managed_xfs_name_mode(0, identity).is_none());
+        assert!(validated_xfs_name_mode(0, identity).is_none());
     }
 
     #[test]
