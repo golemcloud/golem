@@ -71,16 +71,18 @@ Updating an agent that uses IFS requires some special consideration depending on
 should produce _exactly_ the same results and side effects as it did with the old IFS. For example, changing the format of a file will work without issues, but changing
 a file that gets read by the agent and returned to the user will likely lead to divergence. In such cases a manual update might be necessary.
 * **Manual updates**: On an executor with [filesystem snapshots](/next/develop/snapshotting#agent-files-and-snapshots), Golem saves the agent's files
-with the update snapshot and restores them in the target revision before `golem:api/load-snapshot` runs. On other executors, you are responsible
-for saving and restoring the content of files in the agent filesystem. You can use the `golem:api/save-snapshot` function to persist the files
-and later restore / migrate them using `golem:api/load-snapshot`.
+with the update snapshot and restores them in the target revision before `golem:api/load-snapshot` runs. On other executors, a snapshot-based
+update works only while the agent's files are its initial files. Otherwise the update fails, and the agent stays on its current revision.
+See [Availability](/next/develop/snapshotting#availability).
 
 ## Files after a restart
 
 Golem rebuilds the agent filesystem at each start. A full replay of the oplog runs the agent's code again, and the code writes its files again.
 A start from a snapshot record replays only the entries after the record. On an executor with
 [filesystem snapshots](/next/develop/snapshotting#agent-files-and-snapshots), Golem restores the files of the record before the replay. On other
-executors, the files that the agent wrote before the record do not exist after such a start.
+executors, Golem writes a snapshot record only while the agent's files are its initial files, and a start from the record puts the initial files
+in place. An agent whose files changed takes no snapshot, so its start uses an older snapshot record or replays the full oplog, and the code writes
+its files again.
 
 ## Externally accessing agent files
 

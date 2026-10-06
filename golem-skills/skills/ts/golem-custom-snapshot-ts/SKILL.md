@@ -96,7 +96,7 @@ export const NotesAgentImpl = NotesAgent.implement({
 });
 ```
 
-> **Filesystem snapshots are required.** A typed snapshot with a file-backed database relies on the executor's filesystem snapshots. Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. An executor without them keeps its usual behavior: it does not restore the files that the agent wrote before a snapshot. On such an executor, use an in-memory database or custom `save` and `load` functions. When the database file is missing at its recorded location, the load fails. For an automatic snapshot, the start then falls back to the previous usable automatic snapshot or a full replay.
+> **Filesystem snapshots restore the file.** A typed snapshot with a file-backed database relies on the executor's filesystem snapshots to restore the database file. Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. On an executor without them, the database file makes the agent's files differ from its initial files. The executor then takes no automatic snapshot of the agent, so the agent recovers by a replay without data loss, and a snapshot-based manual update of the agent fails. The load fails when the database file is missing at its recorded location.
 
 Limits:
 
