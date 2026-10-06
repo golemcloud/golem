@@ -16,8 +16,8 @@ package golem
 
 import (
 	"fmt"
-	"slices"
 	"reflect"
+	"slices"
 	"strings"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"

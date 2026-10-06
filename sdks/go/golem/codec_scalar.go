@@ -132,15 +132,26 @@ func compileSecret(c *codec, inner *codec) {
 			Category: witTypes.None[string](),
 		})
 	}
-	// Secrets are config-only: they are read via get-config-value + reveal (see
-	// readSecretValue), never carried as plaintext in an invocation payload. Guard
-	// the wire path so using a Secret[T] as a method parameter/return fails clearly
-	// instead of silently shipping plaintext. Config never reaches these — it uses
-	// c.body for the graph and reveal for the value.
-	c.encode = func(*valBuilder, reflect.Value) int32 {
-		panic(&encodeError{"Secret[T] is config-only; it cannot be a method parameter or return value"})
+	// An invocation carries a secret as a handle, never as plaintext: sending
+	// one hands a handle on, and a received one is revealed through the host.
+	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+		h, err := v.Interface().(secretTaker).secretTake()
+		if err != nil {
+			panic(&encodeError{err.Error()})
+		}
+		return b.push(types.MakeSchemaValueNodeSecretValue(h))
 	}
-	c.decode = func(*decoder, reflect.Value, int32) error {
-		return fmt.Errorf("golem: Secret[T] is config-only; it cannot be a method parameter or return value")
+	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
+		n, err := d.node(idx)
+		if err != nil {
+			return err
+		}
+		if n.Tag() != types.SchemaValueNodeSecretValue {
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+		}
+		fresh := reflect.New(c.typ)
+		fresh.Interface().(secretAdopter).secretAdopt(n.SecretValue())
+		dst.Set(fresh.Elem())
+		return nil
 	}
 }

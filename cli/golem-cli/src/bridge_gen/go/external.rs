@@ -119,8 +119,10 @@ impl<'g> Codecs<'g> {
             SchemaType::Datetime { .. } => leaf("Datetime"),
             SchemaType::Duration { .. } => leaf("Duration"),
             SchemaType::Uuid { .. } => leaf("UUID"),
-            SchemaType::QuotaToken { .. } | SchemaType::PermissionCard { .. } => anyhow::bail!(
-                "an external client cannot pass a quota token or a permission card: they are host capabilities only an agent can hold"
+            SchemaType::QuotaToken { .. }
+            | SchemaType::PermissionCard { .. }
+            | SchemaType::Secret { .. } => anyhow::bail!(
+                "an external client cannot pass a secret, a quota token or a permission card: they are host capabilities only an agent can hold"
             ),
             SchemaType::Tuple { elements, .. } if elements.len() == 1 => {
                 self.func(dir, &elements[0])

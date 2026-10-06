@@ -47,12 +47,18 @@ type sourceState struct{}
 
 type GreeterID struct{ Name string }
 
-type GreeterConfig struct{ Greeting string }
+type GreeterConfig struct {
+	Greeting string
+	Token    golem.Secret[string]
+}
 
 // Greeter is configured, so a reflected caller can override its configuration.
 var Greeter = golem.DefineConfiguredAgent[GreeterID, GreeterConfig](golem.Spec{Name: "ConfiguredGreeter"})
 
 var Greet = Greeter.Method[golem.Unit, string]("greet")
+
+// Share hands its config secret to the caller, as a secret handle.
+var Share = Greeter.Method[golem.Unit, golem.Secret[string]]("share")
 
 type greeterState struct{ greeting, name string }
 
@@ -72,6 +78,7 @@ var (
 	ReadFailing = Ops.Method[golem.Unit, string]("readFailing")
 	Reflected   = Ops.Method[golem.Unit, string]("reflected")
 	AwaitLate   = Ops.Method[golem.Unit, string]("awaitLate")
+	SharedKey   = Ops.Method[golem.Unit, string]("sharedKey")
 	TimerVsRPC  = Ops.Method[golem.Unit, string]("timerVsRpc")
 	Sleepy      = Ops.Method[golem.Unit, string]("sleepy")
 	Quota       = Ops.Method[golem.Unit, string]("quota")
@@ -106,6 +113,9 @@ func init() {
 	greeter := Greeter.ImplementConfigured(func(ctx *golem.InitContext[GreeterID, greeterState, GreeterConfig]) *greeterState {
 		return &greeterState{greeting: ctx.Config().Greeting, name: ctx.ID().Name}
 	})
+	greeter.Handle(Share, func(ctx *golem.Context[greeterState], _ golem.Unit) golem.Secret[string] {
+		return ctx.Config(Greeter).Token
+	})
 	greeter.Handle(Greet, func(ctx *golem.Context[greeterState], _ golem.Unit) string {
 		return ctx.State.greeting + " " + ctx.State.name
 	})
@@ -139,6 +149,11 @@ func init() {
 		_, err := tok.Reserve(1)
 		var failed *golem.FailedReservation
 		return fmt.Sprintf("%s|exhausted:%t", child, errors.As(err, &failed))
+	})
+
+	// A secret received from another agent is revealed through the host.
+	ops.Handle(SharedKey, func(*golem.Context[opsState], golem.Unit) string {
+		return "revealed:" + Share.Call(Greeter.Get(GreeterID{Name: "keeper"}), golem.Unit{}).Get()
 	})
 
 	ops.Handle(Sleepy, func(*golem.Context[opsState], golem.Unit) string {

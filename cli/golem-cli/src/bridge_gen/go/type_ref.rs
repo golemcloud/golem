@@ -194,8 +194,13 @@ pub fn render<'a>(
             }
         }
 
+        SchemaType::Secret { spec, .. } => {
+            let inner = render(&spec.inner, named, resolve, writer)?;
+            writer.import(GO_SDK_MODULE);
+            format!("golem.Secret[{inner}]")
+        }
+
         SchemaType::Quantity { .. }
-        | SchemaType::Secret { .. }
         | SchemaType::Future { .. }
         | SchemaType::Stream { inner: None, .. } => {
             anyhow::bail!("the Go bridge does not yet spell this schema type: {resolved:?}")

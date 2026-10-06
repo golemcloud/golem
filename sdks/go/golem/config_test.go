@@ -316,3 +316,40 @@ func TestSecretErrorToGo(t *testing.T) {
 		}
 	}
 }
+
+type SecretIn struct{ Key Secret[string] }
+
+// TestASecretTravelsAsAHandle — a Secret field of a method's input is sent as a
+// secret handle, never as plaintext, and one without a source is refused.
+func TestASecretTravelsAsAHandle(t *testing.T) {
+	h := &types.Secret{}
+	in := SecretIn{Key: Secret[string]{take: func() (*types.Secret, error) { return h, nil }}}
+	c := defs.compile(reflect.TypeFor[SecretIn]())
+	tree := encodeWith(c, reflect.ValueOf(in))
+	var found bool
+	for _, n := range tree.ValueNodes {
+		if n.Tag() == types.SchemaValueNodeSecretValue && n.SecretValue() == h {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the secret was not sent as its handle")
+	}
+	out := reflect.New(reflect.TypeFor[SecretIn]()).Elem()
+	d := decoder{nodes: tree.ValueNodes}
+	if err := c.decode(&d, out, tree.Root); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Interface().(SecretIn).Key.take == nil {
+		t.Error("the received secret has no handle")
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("a secret without a source was sent")
+			}
+		}()
+		encodeWith(c, reflect.ValueOf(SecretIn{}))
+	}()
+}

@@ -15,10 +15,12 @@
 package golem
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 
 	"github.com/golemcloud/golem/sdks/go/core/values"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
 // The Go vocabulary for schema values.
@@ -80,17 +82,26 @@ type QuantityUnit = values.QuantityUnit
 // quantity type. See [values.Quantity].
 type Quantity[U QuantityUnit] = values.Quantity[U]
 
-// Secret is a handle to a declared config secret, obtained from the agent's
-// config ([Config] / [InitContext.Config]). It lowers to the WIT secret
-// type. [Secret.Get] reads the CURRENT plaintext from the host on each call, so a
-// rotated value is observed; the payload stays redacted in logs. A Secret cannot
-// be constructed from a plaintext and cannot be a method parameter or return
-// value — it is config-only.
+// Secret is a handle to a secret, obtained from the agent's config ([Config] /
+// [InitContext.Config]) or received as a field of a method's input or output.
+// It lowers to the WIT secret type. [Secret.Get] reads the plaintext from the
+// host — for a config secret, the CURRENT value on each call, so a rotated value
+// is observed; the payload stays redacted in logs. A Secret cannot be
+// constructed from a plaintext.
+//
+// Sending a Secret to another agent hands it a secret handle: a config secret
+// can be sent again, while a received one moves, and the copy that was sent is
+// unusable afterwards ([ErrSecretMoved]).
 type Secret[T any] struct {
-	// read fetches the current value from the host. It is installed by config
-	// materialization (see secretBindPath); a zero-value Secret has none.
+	// read fetches the plaintext from the host, and take hands a secret handle
+	// on. Config materialization (secretBindPath) or decoding installs them; a
+	// zero-value Secret has neither.
 	read func() (T, error)
+	take func() (*types.Secret, error)
 }
+
+// ErrSecretMoved reports a received secret used after it was handed on.
+var ErrSecretMoved = errors.New("golem: the secret was moved to another agent")
 
 // Get reads the secret's current plaintext from the host and returns it, or
 // panics if the read fails. Because it re-reads on every call, a rotated secret
@@ -128,10 +139,21 @@ type secretish interface{ secretElem() reflect.Type }
 // statically known there.
 type secretBinder interface{ secretBindPath(path []string) }
 
+// secretTaker and secretAdopter move a secret handle across the codec, which
+// does not know the inner type.
+type secretTaker interface {
+	secretTake() (*types.Secret, error)
+}
+
+type secretAdopter interface{ secretAdopt(h *types.Secret) }
+
 func (s Secret[T]) secretElem() reflect.Type { return reflect.TypeFor[T]() }
 
-func (s *Secret[T]) secretBindPath(path []string) {
-	s.read = func() (T, error) { return readSecretValue[T](defs, path) }
+func (s Secret[T]) secretTake() (*types.Secret, error) {
+	if s.take == nil {
+		return nil, fmt.Errorf("golem: Secret has no source; obtain it from the agent's config")
+	}
+	return s.take()
 }
 
 // ---------------------------------------------------------------------------

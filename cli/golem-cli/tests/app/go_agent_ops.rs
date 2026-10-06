@@ -82,6 +82,9 @@ async fn test_go_agent_ops() {
           go-agent-ops:main:
             dir: {component_dir}
             templates: go
+        secretDefaults:
+          local:
+            token: "s3cret"
         resourceDefaults:
           local:
             api-calls:
@@ -150,6 +153,9 @@ async fn test_go_agent_ops() {
 
     // Go timers fire while the agent waits on the host: a sleep, a timeout
     // racing a call, and a deadline on a promise.
+    let shared = invoke("sharedKey", &[]).await;
+    assert!(shared.contains("revealed:s3cret"), "{shared}");
+
     let quota = invoke("quota", &[]).await;
     assert!(quota.contains("child:<nil>|exhausted:true"), "{quota}");
 

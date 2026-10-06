@@ -23,7 +23,6 @@ import (
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	reveal "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_reveal"
 	secrets "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_types"
 )
 
@@ -295,36 +294,6 @@ func readSecretLeaf(lf configLeaf) (reflect.Value, error) {
 	ptr := reflect.New(lf.typ) // *Secret[T]
 	ptr.Interface().(secretBinder).secretBindPath(clonePath(lf.path))
 	return ptr.Elem(), nil
-}
-
-// readSecretValue fetches, reveals, and decodes a config secret's CURRENT value.
-// [Secret.Get] calls it on every access, so each read returns the latest value
-// (a fresh get-config-value mints a handle pinned to the current revision, which
-// reveal then unpacks). Host-backed — reachable only from Secret.Get, never from
-// the config-materialization path.
-func readSecretValue[T any](d *definitions, path []string) (T, error) {
-	var zero T
-	innerType := reflect.TypeFor[T]()
-
-	handleRes := host.GetConfigValue(path, d.graphForType(reflect.TypeFor[Secret[T]]()))
-	if handleRes.IsErr() {
-		return zero, configValueErrorToGo(path, handleRes.Err())
-	}
-	handle, err := extractSecretHandle(path, handleRes.Ok())
-	if err != nil {
-		return zero, err
-	}
-	res := reveal.Reveal(handle, d.graphForType(innerType))
-	if res.IsErr() {
-		return zero, secretErrorToGo(path, res.Err())
-	}
-
-	dst := reflect.New(innerType).Elem()
-	dec := decoder{nodes: res.Ok().ValueNodes}
-	if err := d.compile(innerType).decode(&dec, dst, res.Ok().Root); err != nil {
-		return zero, fmt.Errorf("golem/secret %v: %w", path, err)
-	}
-	return dst.Interface().(T), nil
 }
 
 // buildConfigDecls derives the agent-type config metadata, compiling each key's

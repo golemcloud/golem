@@ -82,7 +82,24 @@ func init() {
 }
 ```
 
-A `golem.Secret[T]` cannot be constructed from a plaintext and cannot be a method parameter or return value — it is config-only, always obtained from the agent's config. Its `String()`/`GoString()` render as `golem.Secret(redacted)`, so it stays out of logs formatted with `%v`/`%s`.
+A `golem.Secret[T]` cannot be constructed from a plaintext: it comes from the agent's config, or from another agent. Its `String()`/`GoString()` render as `golem.Secret(redacted)`, so it stays out of logs formatted with `%v`/`%s`.
+
+## Passing a Secret to Another Agent
+
+A `golem.Secret[T]` can be a field of a method's input or its result. It travels as a secret handle, never as plaintext, and the receiver reveals it with `.Get()`:
+
+```go
+var Share = Agent.Method[golem.Unit, golem.Secret[string]]("share")
+
+agent.Handle(Share, func(ctx *golem.Context[state], _ golem.Unit) golem.Secret[string] {
+	return ctx.Config(Agent).ApiKey
+})
+
+// in another agent
+key := client.Share.Call(client.Agent.Get(client.ID{Name: "keeper"}), golem.Unit{}).Get()
+```
+
+A config secret can be sent again; a secret you received moves when you send it on, and the copy that was sent is unusable afterwards (`golem.ErrSecretMoved`). External clients cannot carry secrets.
 
 ## Secret Defaults in `golem.yaml` (local only)
 
