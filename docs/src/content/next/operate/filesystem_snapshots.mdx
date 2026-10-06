@@ -242,7 +242,7 @@ At a snapshot boundary, the executor first admits the snapshot. It refuses the s
 
 - The free space or the free filesystem objects of the volume are below the targets of `[filesystem_storage.pressure]` (`target_available_bytes` and `target_available_filesystem_objects`), or the executor cannot read them.
 - A delete of all snapshots of the agent waits or runs.
-- An upload of the agent, its confirmation or its retention runs. At most one upload runs for each agent. There is an exception: when an automatic upload failed and waits for its next run, also while it waits until its own earlier writes to blob storage have settled, the new snapshot replaces it. The record of the replaced upload is never confirmed.
+- An upload of the agent, its confirmation or its retention runs. At most one upload runs for each agent. There is an exception: when an automatic upload failed and waits for its next run, also while it waits until its own earlier writes to blob storage have settled, the new snapshot replaces it. The replaced upload never confirms its record. A start can still confirm that record while it is the newest snapshot record of the agent, as described in [Uploads and confirmations](#uploads-and-confirmations).
 
 For a manual update, the first two refusals fail the update at once. When an upload of the agent runs, the update waits for the run in flight, and then replaces the upload or waits for its end. All waits of the update end `confirmation_wait` after the update began. The update then fails.
 
