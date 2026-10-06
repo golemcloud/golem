@@ -3081,7 +3081,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.owned_agent_id,
             self.parent.initial_worker_metadata.fingerprint,
         );
-        let mode = self.parent.agent_mode();
         let (snapshot, filesystem_snapshot, retention) = match update_snapshot(
             &mut UpdateHost {
                 invocation: self,
@@ -3089,7 +3088,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             },
             &snapshots,
             &agent_snapshots,
-            mode,
         )
         .await
         {
@@ -3416,8 +3414,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             &self.owned_agent_id,
             self.parent.initial_worker_metadata.fingerprint,
         );
-        let mode = self.parent.agent_mode();
-        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots, mode).await {
+        match periodic_snapshot(&mut PeriodicHost(self), &snapshots, &agent_snapshots).await {
             PeriodicResult::Continue => CommandOutcome::Continue,
             PeriodicResult::Guest(outcome) => outcome,
             PeriodicResult::NotWritten(failure) => periodic_failure_outcome(&failure),

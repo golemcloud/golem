@@ -4138,8 +4138,9 @@ async fn an_ephemeral_agent_with_a_snapshot_policy_makes_no_store_call(
     #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    // The executor takes a snapshot after each invocation. An ephemeral agent keeps no files, so
-    // the snapshot service makes no store call for it.
+    // The executor takes a snapshot after each invocation of a durable agent. An ephemeral agent
+    // takes no snapshot, so nothing captures or checks its files, and the snapshot service makes
+    // no store call for it.
     let context = TestContext::new(last_unique_id);
     with_snapshot_store(|store| async move {
         let executor =
@@ -4163,6 +4164,11 @@ async fn an_ephemeral_agent_with_a_snapshot_policy_makes_no_store_call(
 
         assert_eq!(answers.len(), 3);
         assert_eq!((store.save_count(), store.copy_count()), (0, 0));
+        assert_eq!(
+            ["captured", "unchanged", "initial_files", "changed"]
+                .map(|outcome| executor.filesystem_captures(outcome)),
+            [0, 0, 0, 0]
+        );
         Ok(())
     })
     .await

@@ -30,7 +30,6 @@ use crate::services::agent_filesystem_snapshots::{
 };
 use crate::services::oplog::OplogError;
 use crate::workerctx::WorkerCtx;
-use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     FilesystemSnapshotName, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
@@ -320,21 +319,6 @@ fn checked_record<Copy>(check: InitialFilesCheck) -> Option<PeriodicRecord<Copy>
     }
 }
 
-/// What a periodic snapshot found about the tree before its record.
-enum Capturing {
-    /// The admission of an upload, the confirmed snapshot that the capture compared with, and
-    /// the outcome of the capture.
-    Upload(
-        Admission,
-        Option<ConfirmedFilesystemSnapshot>,
-        CaptureOutcome,
-    ),
-    /// The check of the tree on an executor without filesystem snapshots.
-    Checked(InitialFilesCheck),
-    /// The agent keeps no files.
-    WithoutName,
-}
-
 /// What a periodic snapshot writes: the record that [`plan_periodic_record`] decides, with the
 /// upload that starts after the record commits.
 struct PeriodicPlan(PeriodicRecord<PendingUpload>);
@@ -348,24 +332,28 @@ struct PendingUpload {
 }
 
 impl PeriodicPlan {
-    /// Plans the record of a periodic snapshot from what `capturing` found: with an admission, as
-    /// [`plan_periodic_record`] decides from the confirmed snapshot that the capture compared with
-    /// and the outcome of the capture; on an executor without filesystem snapshots, as
-    /// [`checked_record`] decides. Gives `None` when no record is written. The admission is
-    /// dropped unless the record uploads the capture.
-    fn new(capturing: Capturing) -> Option<Self> {
-        match capturing {
-            Capturing::Upload(admission, since, outcome) => {
-                let record = plan_periodic_record(CaptureFinding::of(outcome), since.as_ref())?;
-                Some(Self(record.with_copy(|(tree, mark)| PendingUpload {
-                    admission,
-                    tree,
-                    mark,
-                })))
-            }
-            Capturing::Checked(check) => checked_record(check).map(Self),
-            Capturing::WithoutName => Some(Self(PeriodicRecord::WithoutName)),
-        }
+    /// Plans the record of a periodic snapshot from the admission, the confirmed snapshot that
+    /// the capture compared with, and the outcome of the capture, as [`plan_periodic_record`]
+    /// decides. Gives `None` when no record is written. The admission is dropped unless the record
+    /// uploads the capture.
+    fn captured(
+        admission: Admission,
+        since: Option<ConfirmedFilesystemSnapshot>,
+        outcome: CaptureOutcome,
+    ) -> Option<Self> {
+        let record = plan_periodic_record(CaptureFinding::of(outcome), since.as_ref())?;
+        Some(Self(record.with_copy(|(tree, mark)| PendingUpload {
+            admission,
+            tree,
+            mark,
+        })))
+    }
+
+    /// Plans the record of a periodic snapshot on an executor without filesystem snapshots from
+    /// the check of the tree, as [`checked_record`] decides. Gives `None` when no record is
+    /// written.
+    fn checked(check: InitialFilesCheck) -> Option<Self> {
+        checked_record(check).map(Self)
     }
 
     /// The filesystem snapshot name of the record.
@@ -489,20 +477,17 @@ pub(crate) enum PeriodicResult<Stop> {
 /// save hook of the guest, the capture, the record with the name, its commit and the checkpoint
 /// of the status, then the upload. An admission that the service refuses skips the snapshot. A
 /// disabled service checks the tree in place of the capture: a tree of initial files gives a
-/// record without a name, and any other tree, or a check that fails, writes no record. An agent
-/// that keeps no files gets a record without a name and no check. A capture that fails writes no
-/// record. A record that does not reach the oplog drops the admission and discards the capture
+/// record without a name, and any other tree, or a check that fails, writes no record. A capture
+/// that fails writes no record. A record that does not reach the oplog drops the admission and discards the capture
 /// at one place. A written record of a tree of initial files gives its mark to the slot.
 pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
     agent: &AgentSnapshots,
-    mode: AgentMode,
 ) -> PeriodicResult<Host::Stop> {
-    let admitted = match snapshots.admit_periodic(agent, mode).await {
+    let admitted = match snapshots.admit_periodic(agent).await {
         Admitted::Upload(admission) => Admit::Upload(admission),
         Admitted::InitialFilesOnly { capture_wait } => Admit::Check(capture_wait),
-        Admitted::WithoutName => Admit::WithoutName,
         Admitted::Skip(skip) => {
             tracing::debug!(reason = %skip, "Skipping periodic snapshot");
             return PeriodicResult::Continue;
@@ -512,7 +497,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
         Ok(snapshot) => snapshot,
         Err(stop) => return PeriodicResult::Guest(stop),
     };
-    let capturing = match admitted {
+    let plan = match admitted {
         Admit::Upload(admission) => {
             let since = host.since();
             match host
@@ -522,7 +507,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
                 )
                 .await
             {
-                Some(outcome) => Capturing::Upload(admission, since, outcome),
+                Some(outcome) => PeriodicPlan::captured(admission, since, outcome),
                 None => return PeriodicResult::Continue,
             }
         }
@@ -534,11 +519,10 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
                      files, and filesystem snapshots are disabled on this executor"
                 );
             }
-            Capturing::Checked(check)
+            PeriodicPlan::checked(check)
         }
-        Admit::WithoutName => Capturing::WithoutName,
     };
-    let Some(plan) = PeriodicPlan::new(capturing) else {
+    let Some(plan) = plan else {
         return PeriodicResult::Continue;
     };
     let written = match host.entry(snapshot, plan.name()).await {
@@ -618,18 +602,15 @@ pub(crate) enum UpdateSnapshot<Stop> {
 /// the update. A terminal interrupt ends that wait or the upload and fails the update, except on
 /// a lost shard: then nothing is written, and the update stays pending for the shard's new
 /// owner. A disabled service checks the tree in place of the capture: a tree of initial files gives
-/// a record without a name, and any other tree, or a check that fails, fails the update. An agent
-/// that keeps no files gets a record without a name and no check.
+/// a record without a name, and any other tree, or a check that fails, fails the update.
 pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
     agent: &AgentSnapshots,
-    mode: AgentMode,
 ) -> UpdateSnapshot<Host::Stop> {
-    let admission = match snapshots.admit_update(agent, mode, host.terminal()).await {
+    let admission = match snapshots.admit_update(agent, host.terminal()).await {
         UpdateAdmitted::Upload(admission) => Admit::Upload(admission),
         UpdateAdmitted::InitialFilesOnly { capture_wait } => Admit::Check(capture_wait),
-        UpdateAdmitted::WithoutName => Admit::WithoutName,
         UpdateAdmitted::Interrupted => {
             return interrupted_update(
                 UpdateInterruption::Wait,
@@ -650,13 +631,6 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
         Admit::Upload(admission) => admission,
         Admit::Check(wait) => {
             return checked_update(host.check_initial_files(wait).await, snapshot);
-        }
-        Admit::WithoutName => {
-            return UpdateSnapshot::Saved {
-                snapshot,
-                name: None,
-                retention: None,
-            };
         }
     };
     let tree = match host.capture_whole(admission.capture_wait()).await {
@@ -699,8 +673,6 @@ enum Admit {
     /// The check of the tree on an executor without filesystem snapshots, which waits up to this
     /// time for open file calls.
     Check(Duration),
-    /// The agent keeps no files.
-    WithoutName,
 }
 
 /// Why a manual update on an executor without filesystem snapshots fails when the tree of the
@@ -1890,8 +1862,7 @@ mod tests {
             let agent = &agent;
             async move {
                 let mut host = host;
-                let result =
-                    periodic_snapshot(&mut host, disabled, agent, AgentMode::Durable).await;
+                let result = periodic_snapshot(&mut host, disabled, agent).await;
                 (outcome(&result), host.calls())
             }
         };
@@ -1955,60 +1926,22 @@ mod tests {
     }
 
     #[test]
-    async fn an_ephemeral_periodic_snapshot_writes_a_record_without_a_name_and_checks_nothing() {
-        let (disabled, disabled_shutdown) = disabled_service();
-        let (enabled, enabled_shutdown) = enabled_service();
-        let agent = agent_snapshots("periodic-ephemeral");
-
-        let mut on_disabled = ScriptedHost::checking(InitialFilesCheck::Changed);
-        let disabled_result = outcome(
-            &periodic_snapshot(&mut on_disabled, &disabled, &agent, AgentMode::Ephemeral).await,
-        );
-        let mut on_enabled = ScriptedHost::checking(InitialFilesCheck::Changed);
-        let enabled_result = outcome(
-            &periodic_snapshot(&mut on_enabled, &enabled, &agent, AgentMode::Ephemeral).await,
-        );
-
-        let expected = (
-            "Continue".to_string(),
-            strings(&["snapshot_guest", "entry(none)", "write(none)"]),
-        );
-        assert_eq!((disabled_result, on_disabled.calls()), expected);
-        assert_eq!((enabled_result, on_enabled.calls()), expected);
-        shut_down(disabled_shutdown).await;
-        shut_down(enabled_shutdown).await;
-    }
-
-    #[test]
     async fn a_manual_update_without_snapshots_needs_a_tree_of_initial_files() {
         let (disabled, disabled_shutdown) = disabled_service();
         let agent = agent_snapshots("update-disabled");
-        let run = |host: ScriptedHost, mode: AgentMode| {
+        let run = |host: ScriptedHost| {
             let disabled = disabled.as_ref();
             let agent = &agent;
             async move {
                 let mut host = host;
-                let result = update_snapshot(&mut host, disabled, agent, mode).await;
+                let result = update_snapshot(&mut host, disabled, agent).await;
                 (update_outcome(&result), host.calls())
             }
         };
 
-        let initial_files = run(
-            ScriptedHost::checking(InitialFilesCheck::InitialFiles),
-            AgentMode::Durable,
-        )
-        .await;
-        let changed = run(
-            ScriptedHost::checking(InitialFilesCheck::Changed),
-            AgentMode::Durable,
-        )
-        .await;
-        let check_failed = run(ScriptedHost::new(), AgentMode::Durable).await;
-        let ephemeral = run(
-            ScriptedHost::checking(InitialFilesCheck::Changed),
-            AgentMode::Ephemeral,
-        )
-        .await;
+        let initial_files = run(ScriptedHost::checking(InitialFilesCheck::InitialFiles)).await;
+        let changed = run(ScriptedHost::checking(InitialFilesCheck::Changed)).await;
+        let check_failed = run(ScriptedHost::new()).await;
 
         assert_eq!(
             initial_files,
@@ -2032,13 +1965,6 @@ mod tests {
             )
         );
         assert_eq!(
-            ephemeral,
-            (
-                "Saved(none, false)".to_string(),
-                strings(&["snapshot_guest"])
-            )
-        );
-        assert_eq!(
             UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS,
             "cannot take a snapshot for the update: the files of the agent differ from its \
              initial files, and filesystem snapshots are disabled on this executor"
@@ -2053,36 +1979,25 @@ mod tests {
         let agent = agent_snapshots("periodic-enabled");
         let since = confirmed(&FilesystemSnapshotName::periodic(), mark);
 
-        let held = snapshots
-            .admit_periodic(&agent, AgentMode::Durable)
-            .await
-            .unwrap();
+        let held = snapshots.admit_periodic(&agent).await.unwrap();
         let mut refused = ScriptedHost::new();
-        let while_held =
-            outcome(&periodic_snapshot(&mut refused, &snapshots, &agent, AgentMode::Durable).await);
+        let while_held = outcome(&periodic_snapshot(&mut refused, &snapshots, &agent).await);
         drop(held);
         let mut failed_capture = ScriptedHost::new();
-        let capture_failed = outcome(
-            &periodic_snapshot(&mut failed_capture, &snapshots, &agent, AgentMode::Durable).await,
-        );
+        let capture_failed =
+            outcome(&periodic_snapshot(&mut failed_capture, &snapshots, &agent).await);
         let mut initial = ScriptedHost {
             capture: std::sync::Mutex::new(Some(CaptureOutcome::InitialFiles { mark })),
             ..ScriptedHost::new()
         };
-        let initial_files =
-            outcome(&periodic_snapshot(&mut initial, &snapshots, &agent, AgentMode::Durable).await);
+        let initial_files = outcome(&periodic_snapshot(&mut initial, &snapshots, &agent).await);
         let mut unchanged = ScriptedHost {
             since: Some(since.clone()),
             capture: std::sync::Mutex::new(Some(CaptureOutcome::Unchanged)),
             ..ScriptedHost::new()
         };
-        let reused = outcome(
-            &periodic_snapshot(&mut unchanged, &snapshots, &agent, AgentMode::Durable).await,
-        );
-        let free_after = snapshots
-            .admit_periodic(&agent, AgentMode::Durable)
-            .await
-            .is_ok();
+        let reused = outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
+        let free_after = snapshots.admit_periodic(&agent).await.is_ok();
 
         let name = since.name.as_ref().unwrap().as_str().to_string();
         assert_eq!(
@@ -2153,27 +2068,22 @@ mod tests {
         let agent = agent_snapshots("update");
 
         let mut without = ScriptedHost::checking(InitialFilesCheck::InitialFiles);
-        let without_snapshots = update_outcome(
-            &update_snapshot(&mut without, &disabled, &agent, AgentMode::Durable).await,
-        );
+        let without_snapshots =
+            update_outcome(&update_snapshot(&mut without, &disabled, &agent).await);
         let mut stopped = ScriptedHost {
             guest: Some(Err("stop")),
             ..ScriptedHost::new()
         };
-        let guest_stop = update_outcome(
-            &update_snapshot(&mut stopped, &snapshots, &agent, AgentMode::Durable).await,
-        );
+        let guest_stop = update_outcome(&update_snapshot(&mut stopped, &snapshots, &agent).await);
         let mut failed = ScriptedHost::new();
-        let capture_failed = update_outcome(
-            &update_snapshot(&mut failed, &snapshots, &agent, AgentMode::Durable).await,
-        );
+        let capture_failed =
+            update_outcome(&update_snapshot(&mut failed, &snapshots, &agent).await);
         let mut initial = ScriptedHost {
             whole: std::sync::Mutex::new(Some(WholeCapture::InitialFiles)),
             ..ScriptedHost::new()
         };
-        let initial_files = update_outcome(
-            &update_snapshot(&mut initial, &snapshots, &agent, AgentMode::Durable).await,
-        );
+        let initial_files =
+            update_outcome(&update_snapshot(&mut initial, &snapshots, &agent).await);
 
         assert_eq!(
             (without_snapshots, without.calls()),
@@ -2191,12 +2101,7 @@ mod tests {
             )
         );
         assert_eq!(initial_files, "Saved(none, false)");
-        assert!(
-            snapshots
-                .admit_periodic(&agent, AgentMode::Durable)
-                .await
-                .is_ok()
-        );
+        assert!(snapshots.admit_periodic(&agent).await.is_ok());
         shut_down(disabled_shutdown).await;
         shut_down(shutdown).await;
     }
@@ -2205,10 +2110,7 @@ mod tests {
     async fn an_interrupted_wait_of_a_manual_update_fails_it_or_writes_nothing_on_a_lost_shard() {
         let (snapshots, shutdown) = enabled_service();
         let agent = agent_snapshots("update-interrupted");
-        let held = snapshots
-            .admit_periodic(&agent, AgentMode::Durable)
-            .await
-            .unwrap();
+        let held = snapshots.admit_periodic(&agent).await.unwrap();
         let run = |lost_shard| {
             let snapshots = &snapshots;
             let agent = &agent;
@@ -2218,7 +2120,7 @@ mod tests {
                     ..ScriptedHost::new()
                 };
                 host.terminal.send_replace(true);
-                let result = update_snapshot(&mut host, snapshots, agent, AgentMode::Durable).await;
+                let result = update_snapshot(&mut host, snapshots, agent).await;
                 (update_outcome(&result), host.calls())
             }
         };
@@ -2420,12 +2322,10 @@ mod tests {
             ..ScriptedHost::new()
         };
 
-        let unchanged_result = outcome(
-            &periodic_snapshot(&mut unchanged, &snapshots, &agent, AgentMode::Durable).await,
-        );
-        let not_written_result = outcome(
-            &periodic_snapshot(&mut not_written, &snapshots, &agent, AgentMode::Durable).await,
-        );
+        let unchanged_result =
+            outcome(&periodic_snapshot(&mut unchanged, &snapshots, &agent).await);
+        let not_written_result =
+            outcome(&periodic_snapshot(&mut not_written, &snapshots, &agent).await);
 
         assert_eq!(
             (unchanged_result, unchanged.calls()),
@@ -2475,8 +2375,7 @@ mod tests {
             ..ScriptedHost::new()
         };
 
-        let result =
-            outcome(&periodic_snapshot(&mut host, &snapshots, &agent, AgentMode::Durable).await);
+        let result = outcome(&periodic_snapshot(&mut host, &snapshots, &agent).await);
 
         assert_eq!(
             (result, host.calls().last().cloned()),
@@ -2645,7 +2544,7 @@ mod tests {
         let UpdateSnapshot::Saved {
             retention: Some(retention),
             ..
-        } = update_snapshot(&mut host, &snapshots, &agent, AgentMode::Durable).await
+        } = update_snapshot(&mut host, &snapshots, &agent).await
         else {
             panic!("the manual update saves its snapshot with a retention");
         };
