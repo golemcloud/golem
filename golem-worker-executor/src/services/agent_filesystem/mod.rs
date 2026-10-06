@@ -278,17 +278,13 @@ impl AgentFilesystems {
         &self.pressure
     }
 
-    /// Returns the volume shared by provisioned agent filesystems.
+    /// Returns the storage of the agent filesystems: its volume and how it accounts for the files
+    /// of each agent.
     ///
-    /// Callers use the volume identity for capacity observation and pressure recovery before a
-    /// generation is created. The returned value does not represent an individual agent target.
-    pub(crate) fn volume(&self) -> &FilesystemVolume {
-        self.provisioning.volume()
-    }
-
-    /// How the storage of the agent filesystems accounts for the files of each agent.
-    pub(crate) fn agent_accounting(&self) -> AgentAccounting {
-        self.provisioning.agent_accounting()
+    /// Callers use the volume for capacity observation and pressure recovery before a generation
+    /// is created. The value does not represent an individual agent target.
+    pub(crate) fn provisioning(&self) -> &SandboxFilesystemProvisioning {
+        &self.provisioning
     }
 
     /// Resolves an agent's byte allocation into the limits installed on a new generation.
@@ -639,7 +635,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("fit filesystem pressure byte target within managed capacity")
+                .contains("fit filesystem pressure byte target within the volume capacity")
         );
     }
 
@@ -775,7 +771,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("fit filesystem pressure object target within managed capacity")
+                .contains("fit filesystem pressure object target within the volume capacity")
         );
     }
 }

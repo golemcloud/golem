@@ -202,7 +202,7 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
         StoreSource::configured(
             blob_storage,
             VolumeRoom::Pressure {
-                volume: filesystems.volume().clone(),
+                volume: filesystems.provisioning().volume().clone(),
                 pressure: filesystems.pressure_policy().clone(),
             },
         )
@@ -210,7 +210,7 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
         source,
-        filesystems.volume().copies_on_write(),
+        filesystems.provisioning().volume().copies_on_write(),
         shutdown,
     )
     .map_err(|error| anyhow!(error))
@@ -994,7 +994,10 @@ pub async fn create_worker_executor_impl<
 
     services::resource_usage_metering::check_filesystem_metering(
         golem_config.resource_usage_metering,
-        active_agents.agent_filesystems().agent_accounting(),
+        active_agents
+            .agent_filesystems()
+            .provisioning()
+            .agent_accounting(),
     )
     .map_err(|error| anyhow!(error))?;
 

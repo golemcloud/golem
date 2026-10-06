@@ -185,33 +185,37 @@ pub(super) struct ManagedProvisioning {
 ///
 /// The value holds the exclusive lock of the root for as long as its descriptor is open.
 pub(super) struct XfsRoot {
+    /// The root as the configuration gives it. Errors name it.
+    root: Box<Path>,
     root_fd: Arc<File>,
+    /// The root through the open descriptor, which keeps naming the same directory.
     stable_root: Box<Path>,
     identity: FilesystemIdentity,
     name_mode: ValidatedXfsNameMode,
     filesystem_block_bytes: NonZeroU64,
-    project_quota_accounting: ProjectQuotaAccounting,
+    /// The filesystem options of the mount, as XFS shows them in the mount table.
+    mount_options: Box<str>,
 }
 
 impl XfsRoot {
     /// Opens the XFS volume at `root` for one executor.
     ///
-    /// The path must be the root directory of an XFS filesystem and the root of its mount, with
-    /// case-sensitive names and a valid block size, and no other process may hold its lock. The
-    /// function takes the exclusive lock of the root. It changes nothing on the volume, and none of
-    /// its calls needs a privilege.
+    /// The path must be the root directory of an XFS filesystem and the root of its mount. The
+    /// filesystem must compare names with their case and have a valid block size. No other
+    /// process may hold the lock of the root. The function takes the exclusive lock of the root.
+    /// It changes nothing on the volume, and none of its calls needs a privilege.
     pub(super) fn open(root: &Path) -> Result<Self, FilesystemStorageError> {
         let root_fd = File::open(root)
             .map_err(|error| FilesystemStorageError::io("open XFS root", root, error))?;
         let filesystem = fstatfs(&root_fd).map_err(|error| {
             FilesystemStorageError::io("inspect XFS root", root, errno_to_io(error))
         })?;
-        if filesystem.f_type as u64 != XFS_SUPER_MAGIC {
-            return Err(FilesystemStorageError::verification(
-                "validate XFS root filesystem type",
-                root,
-            ));
-        }
+        let identity = filesystem_identity(&root_fd)
+            .map_err(|error| FilesystemStorageError::io("identify XFS root", root, error))?;
+        let name_mode =
+            validated_xfs_name_mode(filesystem.f_type as u64, identity).ok_or_else(|| {
+                FilesystemStorageError::verification("validate XFS root filesystem type", root)
+            })?;
         let flags = geometry_flags(&root_fd).map_err(|error| {
             FilesystemStorageError::io("inspect XFS root geometry", root, error)
         })?;
@@ -221,7 +225,7 @@ impl XfsRoot {
                 root,
             ));
         }
-        let project_quota_accounting = validate_xfs_root_location(&root_fd, root)?;
+        let mount_options = validate_xfs_root_location(&root_fd, root)?;
         flock(&root_fd, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
             FilesystemStorageError::io(
                 "acquire exclusive ownership of XFS root",
@@ -241,17 +245,14 @@ impl XfsRoot {
         std::fs::metadata(&stable_root).map_err(|error| {
             FilesystemStorageError::io("open XFS root through its stable descriptor", root, error)
         })?;
-        let identity = filesystem_identity(&root_fd)
-            .map_err(|error| FilesystemStorageError::io("identify XFS root", root, error))?;
-        let name_mode = validated_xfs_name_mode(filesystem.f_type as u64, identity)
-            .expect("validated XFS filesystem type must produce a name-mode proof");
         Ok(Self {
+            root: Box::from(root),
             root_fd: Arc::new(root_fd),
             stable_root,
             identity,
             name_mode,
             filesystem_block_bytes,
-            project_quota_accounting,
+            mount_options,
         })
     }
 }
@@ -260,14 +261,14 @@ impl XfsRoot {
 /// agent directories under the root, copied by reflink.
 ///
 /// The root is refused when its mount accounts project quotas, when it has a project id or the
-/// project-inherit flag, or when a reflink in it fails. The function never changes the root, and
-/// none of its calls needs a privilege.
+/// project-inherit flag, or when a reflink in it fails. The function never changes the project id
+/// or the flags of the root, and none of its calls needs a privilege.
 pub(super) fn bind_reflink(
     root: XfsRoot,
     cleanup_retry: RetryConfig,
 ) -> Result<(FilesystemVolume, directories::DirectoryProvisioning), FilesystemStorageError> {
     verify_no_project_quotas(&root)?;
-    probe_reflink(&root.stable_root)?;
+    probe_reflink(&root)?;
     let XfsRoot {
         root_fd,
         stable_root,
@@ -285,26 +286,22 @@ pub(super) fn bind_reflink(
     ))
 }
 
-/// Checks that the mount of `root` accounts no project quotas and that the root has no project id
-/// and no project-inherit flag, so no agent directory and no host directory gets a project.
+/// Checks that the mount of `root` accounts no project quotas, and that the root has no project
+/// id and no project-inherit flag. Then no agent directory and no host directory gets a project.
 fn verify_no_project_quotas(root: &XfsRoot) -> Result<(), FilesystemStorageError> {
-    if root.project_quota_accounting == ProjectQuotaAccounting::On {
+    if project_quota_accounting(&root.mount_options) == ProjectQuotaAccounting::On {
         return Err(FilesystemStorageError::verification(
             "verify XFS volume has no project quota accounting",
-            &root.stable_root,
+            &root.root,
         ));
     }
     let attributes = get_fsxattr(&root.root_fd).map_err(|error| {
-        FilesystemStorageError::io(
-            "inspect XFS root project attributes",
-            &root.stable_root,
-            error,
-        )
+        FilesystemStorageError::io("inspect XFS root project attributes", &root.root, error)
     })?;
     if has_project_identity(&attributes) {
         return Err(FilesystemStorageError::verification(
             "verify XFS root has no project identity",
-            &root.stable_root,
+            &root.root,
         ));
     }
     Ok(())
@@ -318,15 +315,19 @@ const REFLINK_PROBE: &str = ".golem-xfs-reflink-probe";
 ///
 /// What an earlier process left under the probe name is removed first. The probe is removed after
 /// the check, also when the check fails.
-fn probe_reflink(root: &Path) -> Result<(), FilesystemStorageError> {
-    let probe = root.join(REFLINK_PROBE);
+fn probe_reflink(root: &XfsRoot) -> Result<(), FilesystemStorageError> {
+    let probe = root.stable_root.join(REFLINK_PROBE);
+    let configured_probe = root.root.join(REFLINK_PROBE);
     remove_and_verify_blocking(&probe, "remove stale XFS reflink probe")?;
-    std::fs::create_dir(&probe)
-        .map_err(|error| FilesystemStorageError::io("create XFS reflink probe", &probe, error))?;
+    std::fs::create_dir(&probe).map_err(|error| {
+        FilesystemStorageError::io("create XFS reflink probe", &configured_probe, error)
+    })?;
     let probed = reflink_probe_contents(&probe);
     let removed = remove_and_verify_blocking(&probe, "remove XFS reflink probe");
     probed
-        .map_err(|error| FilesystemStorageError::io("validate XFS reflink support", &probe, error))
+        .map_err(|error| {
+            FilesystemStorageError::io("validate XFS reflink support", &configured_probe, error)
+        })
         .and(removed)
 }
 
@@ -360,6 +361,7 @@ impl ManagedProvisioning {
         cleanup_retry: &RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
         let XfsRoot {
+            root: configured_root,
             root_fd,
             stable_root,
             identity,
@@ -367,7 +369,7 @@ impl ManagedProvisioning {
             filesystem_block_bytes,
             ..
         } = root;
-        clear_root_project_assignment(&root_fd, &stable_root)?;
+        clear_root_project_assignment(&root_fd, &configured_root)?;
         let backend = Self {
             volume: FilesystemVolume::copy_on_write(Arc::clone(&root_fd), identity),
             root: stable_root.into_path_buf(),
@@ -897,11 +899,11 @@ pub(super) fn verify_host_directory_has_no_project(
 }
 
 /// Checks that `root` is the root directory of its filesystem and the root of its mount, and gives
-/// whether the mount accounts project quotas.
+/// the filesystem options of the mount.
 fn validate_xfs_root_location(
     root_fd: &File,
     root: &Path,
-) -> Result<ProjectQuotaAccounting, FilesystemStorageError> {
+) -> Result<Box<str>, FilesystemStorageError> {
     let location = statx(
         root_fd,
         "",
@@ -916,16 +918,21 @@ fn validate_xfs_root_location(
     })?;
     let mount_id =
         (location.stx_mask & StatxFlags::MNT_ID.bits() != 0).then_some(location.stx_mnt_id);
-    let line = mount_id.and_then(|id| mount_line(&mount_table, id));
-    if !xfs_root_location_is_valid(location.stx_attributes, location.stx_attributes_mask, line) {
-        return Err(FilesystemStorageError::verification(
+    match mount_id.and_then(|id| mount_line(&mount_table, id)) {
+        Some(line)
+            if xfs_root_location_is_valid(
+                location.stx_attributes,
+                location.stx_attributes_mask,
+                Some(line),
+            ) =>
+        {
+            Ok(Box::from(line.super_options))
+        }
+        _ => Err(FilesystemStorageError::verification(
             "validate XFS root is the filesystem mount root",
             root,
-        ));
+        )),
     }
-    Ok(line.map_or(ProjectQuotaAccounting::On, |line| {
-        project_quota_accounting(line.super_options)
-    }))
 }
 
 /// Whether an XFS mount accounts project quotas.
@@ -1019,7 +1026,7 @@ pub(super) fn observe_space(
     if capacity.f_flag.contains(StatVfsMountFlags::RDONLY) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::ReadOnlyFilesystem,
-            "managed XFS mount is read-only",
+            "XFS volume is mounted read-only",
         ));
     }
     space_from_values(
@@ -1044,7 +1051,7 @@ fn validate_filesystem_identity(root: &File, expected: FilesystemIdentity) -> st
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "managed filesystem capacity authority identity changed",
+            "XFS volume identity changed",
         ))
     }
 }
@@ -1791,6 +1798,8 @@ mod tests {
 37 22 7:0 /agents /srv/bound rw,relatime shared:2 - xfs /dev/loop0 rw,attr2,inode64,noquota
 38 22 7:1 / /var/lib/golem/managed rw,relatime - xfs /dev/loop1 rw,attr2,inode64,prjquota
 39 22 7:2 / /var/lib/golem/accounted rw,relatime - xfs /dev/loop2 rw,usrquota,pqnoenforce
+40 22 7:3 / /mnt/with\\040space rw - xfs /dev/loop3 rw,noquota
+41 22 7:4 /dir\\040with\\040space /srv/bound\\040too rw - xfs /dev/loop4 rw,prjquota
 ";
 
     #[test]
@@ -1805,6 +1814,20 @@ mod tests {
         assert_eq!(
             mount_line(MOUNT_TABLE_FIXTURE, 37).map(|line| line.root),
             Some("/agents")
+        );
+        assert_eq!(
+            mount_line(MOUNT_TABLE_FIXTURE, 40),
+            Some(MountLine {
+                root: "/",
+                super_options: "rw,noquota",
+            })
+        );
+        assert_eq!(
+            mount_line(MOUNT_TABLE_FIXTURE, 41),
+            Some(MountLine {
+                root: "/dir\\040with\\040space",
+                super_options: "rw,prjquota",
+            })
         );
         assert_eq!(mount_line(MOUNT_TABLE_FIXTURE, 99), None);
         assert_eq!(mount_line("36 22 7:0 / /a rw", 36), None);
@@ -2978,7 +3001,9 @@ mod tests {
     fn without_reflink_test_root() -> PathBuf {
         std::env::var_os("GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT")
             .map(PathBuf::from)
-            .expect("GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT must name the mounted XFS test root without reflink")
+            .expect(
+                "GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT must name an XFS test root without reflink",
+            )
     }
 
     fn reflink_storage(root: PathBuf) -> FilesystemStorageMode {

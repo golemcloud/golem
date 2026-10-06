@@ -11593,7 +11593,7 @@ impl RunningWorker {
         let pressure = filesystems.pressure_policy();
         let pressure_recovery =
             crate::filesystem_pressure::FilesystemWriteRecovery::for_active_agents(
-                filesystems.volume().clone(),
+                filesystems.provisioning().volume().clone(),
                 Arc::downgrade(&parent.active_agents()),
                 crate::filesystem_pressure::FilesystemWritePressurePolicy::from_config(pressure),
             );
