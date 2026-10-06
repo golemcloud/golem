@@ -2166,7 +2166,11 @@ impl Default for MemoryConfig {
 }
 
 /// Configuration for managed agent filesystems and their cleanup.
+///
+/// An unknown key, such as a key of an earlier storage configuration, makes the configuration fail
+/// to load.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FilesystemStorageConfig {
     /// Retry policy for deleting and verifying runtime filesystem directories.
     /// `max_attempts` includes the initial deletion attempt.
@@ -2183,14 +2187,14 @@ pub struct FilesystemStorageConfig {
 
 /// The storage of the agent filesystems. Exactly one mode applies.
 ///
-/// With a root, an agent filesystem is the directory `<root>/<environment_id>/<component_id>/<agent_name>/`,
-/// so external tools can find it by the id of the agent. The executor also makes the host
-/// directories `.scratch` and `.initial-files` directly under the root.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
+/// With a root, an agent filesystem is the directory
+/// `<root>/<environment_id>/<component_id>/<agent_name>/`, so external tools can find it by the
+/// id of the agent. The executor also makes the host directories `.scratch` and `.initial-files`
+/// directly under the root.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config", deny_unknown_fields)]
 pub enum FilesystemStorageMode {
     /// Development storage in a new temporary directory for each agent filesystem.
-    #[default]
     Temporary,
     /// Development storage under `root`, on any filesystem.
     Directory { root: PathBuf },
