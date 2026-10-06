@@ -127,7 +127,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub(super) filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
     /// The filesystem snapshots of the generation that runs.
     pub(super) filesystem_snapshot_slot: SnapshotSlot,
-    /// When the last `SaveSnapshot` of this loop started, whether it wrote a record or not. Every
+    /// When the last `SaveSnapshot` of this loop ended, whether it wrote a record or not. Every
     /// `SaveSnapshot` sets it, and only the `Periodic` policy reads it.
     pub(super) last_periodic_attempt: Option<Timestamp>,
     pub(super) unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
@@ -1596,9 +1596,9 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     store: &'a Mutex<Store<Ctx>>,
     filesystem: &'a ResidentFilesystem,
     filesystem_snapshot_slot: &'a SnapshotSlot,
-    /// When the last `SaveSnapshot` started. Every `SaveSnapshot` sets it, and only the `Periodic`
-    /// policy reads it: a snapshot that writes no record waits a period from it, as one that
-    /// writes a record does.
+    /// When the last `SaveSnapshot` ended. Every `SaveSnapshot` sets it, and only the `Periodic`
+    /// policy reads it: the next periodic snapshot waits a period from it, whether the last one
+    /// wrote a record or not, and however long it took.
     last_periodic_attempt: &'a mut Option<Timestamp>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
@@ -2227,9 +2227,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// The queued invocations internal invocations that we use for
     /// concurrency control.
     async fn internal_invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
-        if matches!(message, QueuedWorkerInvocation::SaveSnapshot) {
-            *self.last_periodic_attempt = Some(Timestamp::now_utc());
-        }
+        let snapshot = matches!(message, QueuedWorkerInvocation::SaveSnapshot);
         let mut store = self.store.lock().await;
         let store = store.deref_mut();
 
@@ -2242,7 +2240,12 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             filesystem_snapshot_slot: self.filesystem_snapshot_slot,
             uses_streams: false,
         };
-        invocation.process(message).await
+        if !snapshot {
+            return invocation.process(message).await;
+        }
+        let (outcome, ended) = with_end(invocation.process(message), Timestamp::now_utc).await;
+        *self.last_periodic_attempt = Some(ended);
+        outcome
     }
 
     /// Performs an interrupt request
@@ -3614,10 +3617,21 @@ fn periodic_snapshot_failure_outcome(
     }
 }
 
+/// Waits for `attempt` and gives its outcome with the time that `now` gives when it ended. A
+/// periodic snapshot waits a period from the end of the last attempt, so an attempt that takes
+/// longer than the period does not make the next one due at once.
+async fn with_end<T>(
+    attempt: impl Future<Output = T>,
+    now: impl FnOnce() -> Timestamp,
+) -> (T, Timestamp) {
+    let outcome = attempt.await;
+    (outcome, now())
+}
+
 /// The time that the period of the next periodic snapshot starts at: the later of the last
-/// automatic snapshot record and the start of the last periodic snapshot, which can end without a
-/// record, or the creation of the agent before both. So a snapshot that writes no record does not
-/// make the next one due at once.
+/// automatic snapshot record and the end of the last periodic snapshot, which can end without a
+/// record, or the creation of the agent before both. So a snapshot that writes no record, or that
+/// takes longer than the period, does not make the next one due at once.
 fn snapshot_baseline_timestamp(
     last_snapshot_timestamp: Option<Timestamp>,
     last_attempt: Option<Timestamp>,
@@ -3651,13 +3665,11 @@ fn snapshot_action_at(
 }
 
 /// Waits for a capture or a check of the agent filesystem and gives `record` its outcome with the
-/// label `label` gives, or with the label of its error, and the time it took. A failure is logged
-/// with `failed`.
+/// label `label` gives, or with the label of its error, and the time it took.
 async fn measured_capture<Outcome, Capturing>(
     capture: impl FnOnce() -> Capturing,
     label: fn(&Outcome) -> &'static str,
     record: impl FnOnce(&'static str, std::time::Duration),
-    failed: &'static str,
 ) -> Result<Outcome, CaptureError>
 where
     Capturing: Future<Output = Result<Outcome, CaptureError>>,
@@ -3668,11 +3680,17 @@ where
         result.as_ref().map_or_else(CaptureError::label, label),
         started.elapsed(),
     );
-    result.inspect_err(|error| warn!(error = %error, "{failed}"))
+    result
 }
 
-/// The log message of a capture that failed.
-const CAPTURE_FAILED: &str = "Skipping the snapshot: the agent filesystem was not captured";
+/// Logs a capture that failed, and gives the outcome of a capture that did not.
+fn logged_capture<Outcome>(result: Result<Outcome, CaptureError>) -> Option<Outcome> {
+    result
+        .inspect_err(|error| {
+            warn!(error = %error, "Skipping the snapshot: the agent filesystem was not captured")
+        })
+        .ok()
+}
 
 /// Checks whether `filesystem` of `parent` holds only initial files, records the check in the
 /// capture metric, and logs a check that failed.
@@ -3686,10 +3704,15 @@ async fn measured_check<Ctx: WorkerCtx>(
         || check_initial_files(filesystem, wait),
         InitialFilesCheck::label,
         |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
-        "The check of the agent filesystem failed: the snapshot writes no record, and an update \
-         fails",
     )
     .await
+    .inspect_err(|error| {
+        warn!(
+            error = %error,
+            "The check of the agent filesystem failed: the snapshot writes no record, and an \
+             update fails"
+        )
+    })
 }
 
 /// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
@@ -3732,14 +3755,14 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
         since: Option<TreeMark>,
     ) -> Option<CaptureOutcome> {
         let snapshots = self.0.parent.agent_filesystem_snapshots();
-        measured_capture(
-            || capture(self.0.filesystem, wait, since),
-            CaptureOutcome::label,
-            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
-            CAPTURE_FAILED,
+        logged_capture(
+            measured_capture(
+                || capture(self.0.filesystem, wait, since),
+                CaptureOutcome::label,
+                |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+            )
+            .await,
         )
-        .await
-        .ok()
     }
 
     async fn check_initial_files(
@@ -3842,14 +3865,14 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
 
     async fn capture_whole(&self, wait: std::time::Duration) -> Option<WholeCapture> {
         let snapshots = self.invocation.parent.agent_filesystem_snapshots();
-        measured_capture(
-            || capture_whole(self.invocation.filesystem, wait),
-            WholeCapture::label,
-            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
-            CAPTURE_FAILED,
+        logged_capture(
+            measured_capture(
+                || capture_whole(self.invocation.filesystem, wait),
+                WholeCapture::label,
+                |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+            )
+            .await,
         )
-        .await
-        .ok()
     }
 
     async fn check_initial_files(
@@ -3878,7 +3901,7 @@ mod tests {
         periodic_failure_outcome, periodic_snapshot_failure_outcome, publish_unload_outcome,
         run_invocation_loop_task, snapshot_action_at, snapshot_baseline_timestamp,
         spawn_module_owned_unload, successful_agent_invocation_outcome,
-        unload_resident_agent_ownership, wait_for_resident_wakeup,
+        unload_resident_agent_ownership, wait_for_resident_wakeup, with_end,
     };
     use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
     use crate::services::active_agents::stop_loaded_idle_if_eligible;
@@ -3913,12 +3936,11 @@ mod tests {
         let label = |_: &u8| "captured";
         let recorded = Mutex::new(Vec::new());
         let record = |outcome, _| recorded.lock().unwrap().push(outcome);
-        let captured = measured_capture(|| async { Ok(7) }, label, record, "failed").await;
+        let captured = measured_capture(|| async { Ok(7) }, label, record).await;
         let failed = measured_capture(
             || async { Err(crate::services::agent_filesystem::CaptureError::Busy) },
             label,
             record,
-            "failed",
         )
         .await;
 
@@ -4883,6 +4905,26 @@ mod tests {
                 Timestamp::from(4_000),
             ),
             PeriodicSnapshotAction::Wait(Duration::from_secs(4))
+        );
+    }
+
+    #[test]
+    async fn a_periodic_attempt_that_takes_longer_than_its_period_waits_a_full_period_after_its_end()
+     {
+        let clock = std::sync::atomic::AtomicU64::new(1_000);
+        let attempt = async {
+            // The attempt waits for a busy check, for longer than the period of 1 s.
+            clock.store(6_000, Ordering::SeqCst);
+            "no record"
+        };
+        let (outcome, ended) =
+            with_end(attempt, || Timestamp::from(clock.load(Ordering::SeqCst))).await;
+        let baseline = snapshot_baseline_timestamp(None, Some(ended), Timestamp::from(500));
+
+        assert_eq!((outcome, ended), ("no record", Timestamp::from(6_000)));
+        assert_eq!(
+            snapshot_action_at(baseline, Duration::from_secs(1), Timestamp::from(6_200)),
+            PeriodicSnapshotAction::Wait(Duration::from_millis(800))
         );
     }
 
