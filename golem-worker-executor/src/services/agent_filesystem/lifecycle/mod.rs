@@ -1330,6 +1330,19 @@ enum Counted {
     Installed,
     /// The change puts an existing or a chosen modification time at a path outside an install.
     Chosen,
+    /// A replay puts back a time that the live run had at a path. A start from initial files does
+    /// not hold that time, but the live run did not choose it either: a replay of the same history
+    /// puts it back again, so it does not count as a chosen time.
+    Replayed,
+}
+
+/// Who asks for a change of the times of an object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TimeOrigin {
+    /// A call of the agent.
+    Call,
+    /// A replay that puts back the recorded times of a stat.
+    Replay,
 }
 
 /// The modification times that a restored baseline holds.
@@ -1374,7 +1387,7 @@ impl TreeCounters {
     fn after(self, counted: Counted) -> Self {
         let (carried, chosen) = match counted {
             Counted::Fresh => (0, 0),
-            Counted::Installed => (1, 0),
+            Counted::Installed | Counted::Replayed => (1, 0),
             Counted::Chosen => (1, 1),
         };
         Self {
@@ -1425,18 +1438,22 @@ impl TreeCounters {
     }
 }
 
-/// What a change of the times of an object with the modification time `before_modified` counts.
-/// A snapshot keeps no access time, so only a change of the modification time changes the tree.
+/// What a change of the times of an object with the modification time `before_modified` counts,
+/// when `origin` asks for it. A snapshot keeps no access time, so only a change of the modification
+/// time changes the tree. A given time is a chosen time when a call of the agent asks for it, and a
+/// replayed time when a replay puts it back.
 fn set_times_change(
     before_modified: Option<std::time::SystemTime>,
     requested: TimeChange,
+    origin: TimeOrigin,
 ) -> Option<Counted> {
     if time_change_satisfied(before_modified, before_modified, requested, None) {
         return None;
     }
-    Some(match requested {
-        TimeChange::Set(_) => Counted::Chosen,
-        TimeChange::Now | TimeChange::Keep => Counted::Fresh,
+    Some(match (requested, origin) {
+        (TimeChange::Set(_), TimeOrigin::Call) => Counted::Chosen,
+        (TimeChange::Set(_), TimeOrigin::Replay) => Counted::Replayed,
+        (TimeChange::Now | TimeChange::Keep, _) => Counted::Fresh,
     })
 }
 
@@ -2546,7 +2563,7 @@ pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
     let target = sandbox_target(&generation, target)?;
     let lease = generation.registry.lease_call(CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
-        execute_set_times(generation, target, times).await
+        execute_set_times(generation, target, times, TimeOrigin::Replay).await
     }))
 }
 
@@ -2923,7 +2940,9 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
     changes: AttributeChanges,
 ) -> Result<(), Error> {
     match changes {
-        AttributeChanges::Times(times) => execute_set_times(generation, target, times).await,
+        AttributeChanges::Times(times) => {
+            execute_set_times(generation, target, times, TimeOrigin::Call).await
+        }
         AttributeChanges::File { size, times } => {
             let AttributeTarget::Open(SandboxNode::File(file)) = target else {
                 return Err(Error::Access(AccessError::WrongGeneration));
@@ -2933,6 +2952,7 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
                 generation,
                 AttributeTarget::Open(SandboxNode::File(file)),
                 times,
+                TimeOrigin::Call,
             )
             .await
         }
@@ -3083,6 +3103,7 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: AttributeTarget,
     times: TimeChanges,
+    origin: TimeOrigin,
 ) -> Result<(), Error> {
     if time_changes_are_noop(times) {
         return Ok(());
@@ -3091,7 +3112,7 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     if time_changes_satisfied(&before, &before, times, None) {
         return Ok(());
     }
-    if let Some(counted) = set_times_change(before.modified, times.modified) {
+    if let Some(counted) = set_times_change(before.modified, times.modified, origin) {
         generation.registry.record(counted);
     }
     let mut budget = RetryBudget::new(2);

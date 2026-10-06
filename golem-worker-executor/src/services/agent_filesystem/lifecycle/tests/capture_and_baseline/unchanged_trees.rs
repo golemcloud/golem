@@ -822,6 +822,43 @@ async fn untouched_read_only_initial_files_make_no_copy_and_no_host_directory() 
     delete(seal(filesystem)).await.unwrap();
 }
 
+/// Starts a tree of read-only initial files, lets a replay put back a past time at `path`, and
+/// gives what a capture and a check then find.
+async fn after_a_replayed_time_at(path: &str) -> (Seen, InitialFilesCheck) {
+    let agents = UnmanagedAgents::new().await;
+    let (_, filesystem) = read_only_agent(&agents, "replayed-time", &[]).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    restore_times_of(
+        &generation_handle,
+        path,
+        TimeChange::Keep,
+        TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000)),
+    )
+    .await;
+    let checked = check_initial_files(&filesystem, WAIT).await.unwrap();
+    let seen = look_without_mark(&filesystem).await;
+    delete(seal(filesystem)).await.unwrap();
+    (seen, checked)
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_replayed_time_of_a_read_only_initial_file_keeps_a_tree_of_initial_files() {
+    assert_eq!(
+        after_a_replayed_time_at("a.txt").await,
+        (Seen::InitialFiles, InitialFilesCheck::InitialFiles)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_replayed_time_of_a_directory_that_holds_initial_files_keeps_a_tree_of_initial_files() {
+    assert_eq!(
+        after_a_replayed_time_at("nested").await,
+        (Seen::InitialFiles, InitialFilesCheck::InitialFiles)
+    );
+}
+
 #[test]
 #[timeout("60s")]
 async fn an_update_that_keeps_every_directory_keeps_a_tree_of_initial_files() {
@@ -1050,7 +1087,9 @@ async fn each_change_of_a_tree_of_initial_files_gives_a_copy() {
         &[("/config.txt", AgentFilePermissions::ReadWrite)];
     let cases: [ChangeCase; 12] = [
         ("untouched", &[], Change::None, Seen::InitialFiles),
-        // A kernel time on a directory comes back from a replay as a new time too.
+        // The write and the remove change only the time of the root, which the kernel gives. The
+        // check does not compare the times of directories: a replay that stats the root puts the
+        // live time back, and a time that a replay puts back is not a chosen time.
         (
             "temporary-file",
             &[],
@@ -1283,7 +1322,7 @@ fn only_a_change_of_the_modification_time_counts_and_a_chosen_time_counts_as_cho
             (Some(before), TimeChange::Now),
             (None, TimeChange::Now),
         ]
-        .map(|(before, requested)| set_times_change(before, requested)),
+        .map(|(before, requested)| set_times_change(before, requested, TimeOrigin::Call)),
         [
             None,
             None,
@@ -1292,6 +1331,31 @@ fn only_a_change_of_the_modification_time_counts_and_a_chosen_time_counts_as_cho
             Some(Counted::Fresh),
             Some(Counted::Fresh),
         ]
+    );
+}
+
+#[test]
+fn a_time_that_a_replay_puts_back_is_a_replayed_time_and_never_a_chosen_time() {
+    let before = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let other = before + Duration::from_secs(1);
+    assert_eq!(
+        [
+            (Some(before), TimeChange::Set(before)),
+            (Some(before), TimeChange::Set(other)),
+            (None, TimeChange::Set(other)),
+            (Some(before), TimeChange::Now),
+        ]
+        .map(|(before, requested)| set_times_change(before, requested, TimeOrigin::Replay)),
+        [
+            None,
+            Some(Counted::Replayed),
+            Some(Counted::Replayed),
+            Some(Counted::Fresh),
+        ]
+    );
+    assert_eq!(
+        counters(4, 2, 1).after(Counted::Replayed),
+        counters(5, 3, 1)
     );
 }
 
