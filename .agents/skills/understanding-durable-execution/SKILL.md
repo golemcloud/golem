@@ -745,9 +745,10 @@ its index, time, revision, filesystem snapshot name and confirmation), and
 `previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it
 has no filesystem snapshot name, or when a `SnapshotConfirmed` entry confirms its name. A start takes the first of the two that is usable, has
 the current revision, is not in the rejected set, is not unavailable for this start, and has no
-name when filesystem snapshots are disabled. An ephemeral agent never has an automatic record:
-`resolve_agent_properties` gives it `SnapshotPolicy::Disabled`, because its restart replays only
-its initialization and never loads an application snapshot. It skips `INITIAL+1..=snapshot_idx`. No automatic
+name when filesystem snapshots are disabled. It skips `INITIAL+1..=snapshot_idx`. An ephemeral
+agent never has an automatic record: `resolve_agent_properties` gives it
+`SnapshotPolicy::Disabled`, because a start from a snapshot record skips the initialization that
+the replay of an ephemeral agent needs, and that replay then fails. No automatic
 record is used while an update is pending. Without a selected record, the last manual-update
 snapshot is the baseline, else `OplogIndex::INITIAL`. `prepare_instance` (`durable_host/mod.rs`)
 then branches on `PendingUpdate`:
@@ -887,8 +888,8 @@ name, no entity-provisioned file exists, and the tree holds nothing else; a read
 file counts as a change. A tree of initial files gives a record without a name. Any other tree,
 or a check that cannot decide (a file call that stays open, a sandbox error), gives no periodic
 record, so a start uses an older usable record or replays the whole oplog; a snapshot-based manual
-update fails as a failed update (`UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`), and the agent stays on its
-revision. A periodic boundary that writes no record waits one period before the next attempt
+update fails as a failed update, with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` for changed files and with
+`UPDATE_CHECK_FAILED` and the cause for a failed check, and the agent stays on its revision. A periodic boundary that writes no record waits one period before the next attempt
 (`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times

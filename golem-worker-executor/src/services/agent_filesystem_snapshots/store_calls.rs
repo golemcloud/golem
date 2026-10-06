@@ -958,6 +958,11 @@ fn restore_retryable(failure: &RestoreFailure) -> bool {
 }
 
 impl RestoreTree for StoreRestore {
+    /// A filesystem snapshot holds the modification times of its save.
+    fn gives_saved_times(&self) -> bool {
+        true
+    }
+
     async fn restore(self, into: &Path) -> Result<(), RestoreError> {
         let name = super::store_name(&self.name).map_err(|error| RestoreError {
             retryable: false,

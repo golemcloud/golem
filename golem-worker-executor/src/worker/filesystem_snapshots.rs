@@ -21,8 +21,8 @@ use super::Worker;
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
 use crate::services::agent_filesystem::{
-    CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesCheck, InitialFilesRestore,
-    RestoreError, RestoreTree, TreeMark, WholeCapture,
+    CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesCheck,
+    InitialFilesRestore, RestoreError, RestoreTree, TreeMark, WholeCapture,
 };
 use crate::services::agent_filesystem_snapshots::{
     Admission, Admitted, AgentFilesystemSnapshots, Confirm, Confirmation, SavedUpdate,
@@ -349,13 +349,6 @@ impl PeriodicPlan {
         })))
     }
 
-    /// Plans the record of a periodic snapshot on an executor without filesystem snapshots from
-    /// the check of the tree, as [`checked_record`] decides. Gives `None` when no record is
-    /// written.
-    fn checked(check: InitialFilesCheck) -> Option<Self> {
-        checked_record(check).map(Self)
-    }
-
     /// The filesystem snapshot name of the record.
     fn name(&self) -> Option<FilesystemSnapshotName> {
         match &self.0 {
@@ -435,11 +428,12 @@ pub(crate) trait PeriodicSnapshotHost {
         wait: Duration,
         since: Option<TreeMark>,
     ) -> impl Future<Output = Option<CaptureOutcome>> + Send;
-    /// Checks whether the tree holds only initial files, and gives `None` when the check failed.
+    /// Checks whether the tree holds only initial files, and gives the error of a check that
+    /// failed.
     fn check_initial_files(
         &self,
         wait: Duration,
-    ) -> impl Future<Output = Option<InitialFilesCheck>> + Send;
+    ) -> impl Future<Output = Result<InitialFilesCheck, CaptureError>> + Send;
     /// Makes the record of `snapshot` with the filesystem snapshot `name`, or gives the details
     /// when its payload is not made.
     fn entry(
@@ -478,8 +472,9 @@ pub(crate) enum PeriodicResult<Stop> {
 /// of the status, then the upload. An admission that the service refuses skips the snapshot. A
 /// disabled service checks the tree in place of the capture: a tree of initial files gives a
 /// record without a name, and any other tree, or a check that fails, writes no record. A capture
-/// that fails writes no record. A record that does not reach the oplog drops the admission and discards the capture
-/// at one place. A written record of a tree of initial files gives its mark to the slot.
+/// that fails writes no record. A record that does not reach the oplog drops the admission and
+/// discards the capture at one place. A written record of a tree of initial files gives its mark
+/// to the slot.
 pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
     host: &mut Host,
     snapshots: &AgentFilesystemSnapshots,
@@ -487,7 +482,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
 ) -> PeriodicResult<Host::Stop> {
     let admitted = match snapshots.admit_periodic(agent).await {
         Admitted::Upload(admission) => Admit::Upload(admission),
-        Admitted::InitialFilesOnly { capture_wait } => Admit::Check(capture_wait),
+        Admitted::InitialFilesOnly { capture_wait } => Admit::InitialFilesOnly(capture_wait),
         Admitted::Skip(skip) => {
             tracing::debug!(reason = %skip, "Skipping periodic snapshot");
             return PeriodicResult::Continue;
@@ -511,7 +506,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
                 None => return PeriodicResult::Continue,
             }
         }
-        Admit::Check(wait) => {
+        Admit::InitialFilesOnly(wait) => {
             let check = checked_tree(host.check_initial_files(wait).await);
             if check == InitialFilesCheck::Changed {
                 tracing::debug!(
@@ -519,7 +514,7 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
                      files, and filesystem snapshots are disabled on this executor"
                 );
             }
-            PeriodicPlan::checked(check)
+            checked_record(check).map(PeriodicPlan)
         }
     };
     let Some(plan) = plan else {
@@ -567,11 +562,12 @@ pub(crate) trait UpdateSnapshotHost {
     ) -> impl Future<Output = Result<RawSnapshotData, Self::Stop>> + Send;
     /// Captures the whole tree, and gives `None` when the capture failed.
     fn capture_whole(&self, wait: Duration) -> impl Future<Output = Option<WholeCapture>> + Send;
-    /// Checks whether the tree holds only initial files, and gives `None` when the check failed.
+    /// Checks whether the tree holds only initial files, and gives the error of a check that
+    /// failed.
     fn check_initial_files(
         &self,
         wait: Duration,
-    ) -> impl Future<Output = Option<InitialFilesCheck>> + Send;
+    ) -> impl Future<Output = Result<InitialFilesCheck, CaptureError>> + Send;
     /// A receiver of whether a terminal interrupt waits for the agent.
     fn terminal(&self) -> watch::Receiver<bool>;
     /// A receiver of why the shard of the agent moved to another executor, once it has.
@@ -610,7 +606,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
 ) -> UpdateSnapshot<Host::Stop> {
     let admission = match snapshots.admit_update(agent, host.terminal()).await {
         UpdateAdmitted::Upload(admission) => Admit::Upload(admission),
-        UpdateAdmitted::InitialFilesOnly { capture_wait } => Admit::Check(capture_wait),
+        UpdateAdmitted::InitialFilesOnly { capture_wait } => Admit::InitialFilesOnly(capture_wait),
         UpdateAdmitted::Interrupted => {
             return interrupted_update(
                 UpdateInterruption::Wait,
@@ -629,7 +625,7 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
     };
     let admission = match admission {
         Admit::Upload(admission) => admission,
-        Admit::Check(wait) => {
+        Admit::InitialFilesOnly(wait) => {
             return checked_update(host.check_initial_files(wait).await, snapshot);
         }
     };
@@ -670,9 +666,9 @@ pub(crate) async fn update_snapshot<Host: UpdateSnapshotHost>(
 enum Admit {
     /// The upload of a snapshot with a new name.
     Upload(Admission),
-    /// The check of the tree on an executor without filesystem snapshots, which waits up to this
-    /// time for open file calls.
-    Check(Duration),
+    /// A record without a name, only when the check of the tree finds only initial files. The
+    /// check waits up to this time for open file calls.
+    InitialFilesOnly(Duration),
 }
 
 /// Why a manual update on an executor without filesystem snapshots fails when the tree of the
@@ -682,12 +678,12 @@ pub(crate) const UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS: &str = "cannot take a snapsh
      on this executor";
 
 /// Why a manual update on an executor without filesystem snapshots fails when the check of the
-/// tree failed.
+/// tree failed. The cause of the failure follows it.
 const UPDATE_CHECK_FAILED: &str = "failed to check the agent filesystem for the update";
 
 /// The tree that a check found, where a check that failed counts as a changed tree: a start can
 /// trust a record without a name only when the check found a tree of initial files.
-fn checked_tree(check: Option<InitialFilesCheck>) -> InitialFilesCheck {
+fn checked_tree(check: Result<InitialFilesCheck, CaptureError>) -> InitialFilesCheck {
     check.unwrap_or(InitialFilesCheck::Changed)
 }
 
@@ -695,19 +691,19 @@ fn checked_tree(check: Option<InitialFilesCheck>) -> InitialFilesCheck {
 /// tree: a tree of initial files gives a record without a name with `snapshot`, and any other
 /// tree, or a check that failed, fails the update.
 fn checked_update<Stop>(
-    check: Option<InitialFilesCheck>,
+    check: Result<InitialFilesCheck, CaptureError>,
     snapshot: RawSnapshotData,
 ) -> UpdateSnapshot<Stop> {
     match check {
-        Some(InitialFilesCheck::InitialFiles) => UpdateSnapshot::Saved {
+        Ok(InitialFilesCheck::InitialFiles) => UpdateSnapshot::Saved {
             snapshot,
             name: None,
             retention: None,
         },
-        Some(InitialFilesCheck::Changed) => {
+        Ok(InitialFilesCheck::Changed) => {
             UpdateSnapshot::Fail(UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS.to_string())
         }
-        None => UpdateSnapshot::Fail(UPDATE_CHECK_FAILED.to_string()),
+        Err(error) => UpdateSnapshot::Fail(format!("{UPDATE_CHECK_FAILED}: {error}")),
     }
 }
 
@@ -1668,9 +1664,9 @@ mod tests {
             self.calls.lock().unwrap().push(call.into_boxed_str());
         }
 
-        fn check(&self, wait: Duration) -> Option<InitialFilesCheck> {
+        fn check(&self, wait: Duration) -> Result<InitialFilesCheck, CaptureError> {
             self.call(format!("check({wait:?})"));
-            self.check.lock().unwrap().take()
+            self.check.lock().unwrap().take().ok_or(CaptureError::Busy)
         }
 
         fn checking(check: InitialFilesCheck) -> Self {
@@ -1716,7 +1712,10 @@ mod tests {
             self.capture.lock().unwrap().take()
         }
 
-        async fn check_initial_files(&self, wait: Duration) -> Option<InitialFilesCheck> {
+        async fn check_initial_files(
+            &self,
+            wait: Duration,
+        ) -> Result<InitialFilesCheck, CaptureError> {
             ScriptedHost::check(self, wait)
         }
 
@@ -1768,7 +1767,10 @@ mod tests {
             self.whole.lock().unwrap().take()
         }
 
-        async fn check_initial_files(&self, wait: Duration) -> Option<InitialFilesCheck> {
+        async fn check_initial_files(
+            &self,
+            wait: Duration,
+        ) -> Result<InitialFilesCheck, CaptureError> {
             ScriptedHost::check(self, wait)
         }
 
@@ -1960,7 +1962,9 @@ mod tests {
         assert_eq!(
             check_failed,
             (
-                "Fail(failed to check the agent filesystem for the update)".to_string(),
+                "Fail(failed to check the agent filesystem for the update: agent filesystem has \
+                 an open call)"
+                    .to_string(),
                 strings(&["snapshot_guest", "check(5s)"])
             )
         );

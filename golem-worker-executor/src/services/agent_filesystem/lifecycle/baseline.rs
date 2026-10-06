@@ -36,15 +36,17 @@ pub(crate) trait RestoreTree: Send {
 
     /// Whether the restored tree holds the modification times of a save. A tree that holds only
     /// the times of an install of initial files gives `false`.
-    fn gives_saved_times(&self) -> bool {
-        true
-    }
+    fn gives_saved_times(&self) -> bool;
 }
 
 #[cfg(test)]
 impl RestoreTree for std::convert::Infallible {
     async fn restore(self, _into: &Path) -> Result<(), RestoreError> {
         match self {}
+    }
+
+    fn gives_saved_times(&self) -> bool {
+        match *self {}
     }
 }
 
@@ -84,9 +86,9 @@ pub(crate) struct InitialFilesRestore {
 
 impl InitialFilesRestore {
     /// The restore of `files` when they are all read-only. Only a tree of read-only initial files
-    /// gives a record without a name. A record without a name and with other declarations comes
-    /// from an executor without filesystem snapshots, and its start seeds the initial files of
-    /// the target revision, so it gets `None`.
+    /// gives a record without a name, so `None` comes from a source revision without initial
+    /// files, whose start seeds the initial files of the target revision on the empty tree, or
+    /// from a record that an executor wrote before that rule, whose start does the same.
     pub(crate) fn of_read_only(files: Box<[InitialAgentFile]>) -> Option<Self> {
         (!files.is_empty()
             && files

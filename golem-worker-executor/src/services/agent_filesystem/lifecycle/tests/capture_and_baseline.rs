@@ -28,6 +28,10 @@ impl<F: FnOnce(&Path) -> Result<(), RestoreError> + Send> RestoreTree for Fixtur
     fn restore(self, into: &Path) -> impl Future<Output = Result<(), RestoreError>> + Send {
         std::future::ready((self.0)(into))
     }
+
+    fn gives_saved_times(&self) -> bool {
+        true
+    }
 }
 
 /// Gives the copy of a capture that must copy the tree.
@@ -369,6 +373,10 @@ struct WithSavedTimes<Restore>(Restore);
 impl<Restore: RestoreTree> RestoreTree for WithSavedTimes<Restore> {
     fn restore(self, into: &Path) -> impl Future<Output = Result<(), RestoreError>> + Send {
         self.0.restore(into)
+    }
+
+    fn gives_saved_times(&self) -> bool {
+        true
     }
 }
 

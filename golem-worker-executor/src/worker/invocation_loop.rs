@@ -127,7 +127,8 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub(super) filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
     /// The filesystem snapshots of the generation that runs.
     pub(super) filesystem_snapshot_slot: SnapshotSlot,
-    /// When the last periodic snapshot of this loop started, whether it wrote a record or not.
+    /// When the last `SaveSnapshot` of this loop started, whether it wrote a record or not. Every
+    /// `SaveSnapshot` sets it, and only the `Periodic` policy reads it.
     pub(super) last_periodic_attempt: Option<Timestamp>,
     pub(super) unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     pub idle_since_millis: Arc<AtomicU64>,
@@ -1595,8 +1596,9 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     store: &'a Mutex<Store<Ctx>>,
     filesystem: &'a ResidentFilesystem,
     filesystem_snapshot_slot: &'a SnapshotSlot,
-    /// When the last periodic snapshot started. A snapshot that writes no record waits a period
-    /// from it, as one that writes a record does.
+    /// When the last `SaveSnapshot` started. Every `SaveSnapshot` sets it, and only the `Periodic`
+    /// policy reads it: a snapshot that writes no record waits a period from it, as one that
+    /// writes a record does.
     last_periodic_attempt: &'a mut Option<Timestamp>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
@@ -3648,14 +3650,15 @@ fn snapshot_action_at(
     }
 }
 
-/// Waits for a capture of the agent filesystem and gives `record` its outcome with the label
-/// `label` gives, or with the label of its error, and the time it took. Gives `None` when the
-/// capture failed.
+/// Waits for a capture or a check of the agent filesystem and gives `record` its outcome with the
+/// label `label` gives, or with the label of its error, and the time it took. A failure is logged
+/// with `failed`.
 async fn measured_capture<Outcome, Capturing>(
     capture: impl FnOnce() -> Capturing,
     label: fn(&Outcome) -> &'static str,
     record: impl FnOnce(&'static str, std::time::Duration),
-) -> Option<Outcome>
+    failed: &'static str,
+) -> Result<Outcome, CaptureError>
 where
     Capturing: Future<Output = Result<Outcome, CaptureError>>,
 {
@@ -3665,11 +3668,28 @@ where
         result.as_ref().map_or_else(CaptureError::label, label),
         started.elapsed(),
     );
-    result
-        .inspect_err(|error| {
-            warn!(error = %error, "Skipping the snapshot: the agent filesystem was not captured")
-        })
-        .ok()
+    result.inspect_err(|error| warn!(error = %error, "{failed}"))
+}
+
+/// The log message of a capture that failed.
+const CAPTURE_FAILED: &str = "Skipping the snapshot: the agent filesystem was not captured";
+
+/// Checks whether `filesystem` of `parent` holds only initial files, records the check in the
+/// capture metric, and logs a check that failed.
+async fn measured_check<Ctx: WorkerCtx>(
+    parent: &Worker<Ctx>,
+    filesystem: &ResidentFilesystem,
+    wait: std::time::Duration,
+) -> Result<InitialFilesCheck, CaptureError> {
+    let snapshots = parent.agent_filesystem_snapshots();
+    measured_capture(
+        || check_initial_files(filesystem, wait),
+        InitialFilesCheck::label,
+        |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+        "The check of the agent filesystem failed: the snapshot writes no record, and an update \
+         fails",
+    )
+    .await
 }
 
 /// What the loop does after a periodic snapshot record did not reach the oplog. A payload that
@@ -3716,18 +3736,17 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
             || capture(self.0.filesystem, wait, since),
             CaptureOutcome::label,
             |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+            CAPTURE_FAILED,
         )
         .await
+        .ok()
     }
 
-    async fn check_initial_files(&self, wait: std::time::Duration) -> Option<InitialFilesCheck> {
-        let snapshots = self.0.parent.agent_filesystem_snapshots();
-        measured_capture(
-            || check_initial_files(self.0.filesystem, wait),
-            InitialFilesCheck::label,
-            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
-        )
-        .await
+    async fn check_initial_files(
+        &self,
+        wait: std::time::Duration,
+    ) -> Result<InitialFilesCheck, CaptureError> {
+        measured_check(&self.0.parent, self.0.filesystem, wait).await
     }
 
     async fn entry(
@@ -3827,18 +3846,17 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
             || capture_whole(self.invocation.filesystem, wait),
             WholeCapture::label,
             |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+            CAPTURE_FAILED,
         )
         .await
+        .ok()
     }
 
-    async fn check_initial_files(&self, wait: std::time::Duration) -> Option<InitialFilesCheck> {
-        let snapshots = self.invocation.parent.agent_filesystem_snapshots();
-        measured_capture(
-            || check_initial_files(self.invocation.filesystem, wait),
-            InitialFilesCheck::label,
-            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
-        )
-        .await
+    async fn check_initial_files(
+        &self,
+        wait: std::time::Duration,
+    ) -> Result<InitialFilesCheck, CaptureError> {
+        measured_check(&self.invocation.parent, self.invocation.filesystem, wait).await
     }
 
     fn terminal(&self) -> tokio::sync::watch::Receiver<bool> {
@@ -3891,19 +3909,26 @@ mod tests {
     use test_r::{test, timeout};
 
     #[test]
-    async fn a_measured_capture_gives_the_outcome_of_a_capture_and_nothing_for_a_failed_one() {
+    async fn a_measured_capture_gives_the_outcome_of_a_capture_and_the_error_of_a_failed_one() {
         let label = |_: &u8| "captured";
         let recorded = Mutex::new(Vec::new());
         let record = |outcome, _| recorded.lock().unwrap().push(outcome);
-        let captured = measured_capture(|| async { Ok(7) }, label, record).await;
+        let captured = measured_capture(|| async { Ok(7) }, label, record, "failed").await;
         let failed = measured_capture(
             || async { Err(crate::services::agent_filesystem::CaptureError::Busy) },
             label,
             record,
+            "failed",
         )
         .await;
 
-        assert_eq!((captured, failed), (Some(7), None));
+        assert_eq!(
+            (captured.ok(), failed.map_err(|error| error.to_string())),
+            (
+                Some(7),
+                Err("agent filesystem has an open call".to_string())
+            )
+        );
         assert_eq!(recorded.into_inner().unwrap(), ["captured", "busy"]);
     }
 

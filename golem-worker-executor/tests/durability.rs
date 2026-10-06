@@ -1888,7 +1888,8 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_takes_no_snapshot_
     let state_before = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
-    // The check of a snapshot runs after the invocation before it returned.
+    // The snapshot after an invocation, and its check, run after the invocation returned to the
+    // caller, so the test waits for the checks.
     tokio::time::timeout(
         Duration::from_secs(30),
         std::pin::pin!(
@@ -1966,9 +1967,9 @@ async fn snapshot_count(
 }
 
 /// With a policy that takes a snapshot after each invocation, an ephemeral agent whose definition
-/// enables snapshots takes none, and a durable agent of the same component still takes snapshots. The executor keeps no filesystem
-/// snapshots, so each snapshot checks the tree of its agent after the save hook: a check count of
-/// zero shows that no snapshot of the ephemeral agent ran.
+/// enables snapshots takes none, and a durable agent of the same component still takes snapshots.
+/// The executor keeps no filesystem snapshots, so each snapshot checks the tree of its agent after
+/// the save hook: a check count of zero shows that no snapshot of the ephemeral agent ran.
 #[test]
 #[tracing::instrument]
 async fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_does(
@@ -2005,7 +2006,7 @@ async fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_does(
     executor
         .invoke_and_await_agent(&component, &ephemeral, "increment", data_value!())
         .await?;
-    // A snapshot follows the invocation before it returned.
+    // The snapshot after an invocation runs after the invocation returned to the caller.
     tokio::time::sleep(Duration::from_secs(2)).await;
     let ephemeral_checks = checks();
     let durable = agent_id!("SnapshotCounter", "snapshots");

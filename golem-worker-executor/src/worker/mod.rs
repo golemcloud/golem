@@ -13872,8 +13872,8 @@ fn resolve_agent_properties<T: HasConfig>(
 }
 
 /// The snapshot policy of an agent in `mode` whose configuration gives `configured`. An ephemeral
-/// agent takes no snapshot: a restart of an ephemeral agent replays only its initialization and
-/// never loads an application snapshot, so a snapshot record would only make the restart fail.
+/// agent takes no snapshot: a start from a snapshot record skips the initialization that the
+/// replay of an ephemeral agent needs, and that replay then fails.
 fn snapshot_policy_of_mode(mode: AgentMode, configured: SnapshotPolicy) -> SnapshotPolicy {
     match mode {
         AgentMode::Durable => configured,
