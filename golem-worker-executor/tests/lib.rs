@@ -137,7 +137,7 @@ tag_suite!(oplog_metrics, group1);
 tag_suite!(tool_discovery, group1);
 tag_suite!(mcp_stdout, group1);
 tag_suite!(tool_runtime_bypass, group1);
-tag_suite!(tool_streaming, group1);
+tag_suite!(tool_streaming, tool_streaming);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
