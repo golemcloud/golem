@@ -4236,6 +4236,7 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
     pressure: FilesystemPressureConfig,
     metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4245,7 +4246,7 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
-                    root: managed_xfs_root.clone().into(),
+                    root: managed_xfs_root.clone(),
                 };
                 config.filesystem_storage.pressure = pressure.clone();
                 config.resource_usage_metering = metering;
@@ -4309,6 +4310,7 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         max_disk_space_bytes,
         u64::MAX,
     ));
+    let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     let executor = run_production_context_bootstrap(
         deps,
         context,
@@ -4318,7 +4320,7 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
-                    root: managed_xfs_root.clone().into(),
+                    root: managed_xfs_root.clone(),
                 };
                 config.resource_usage_metering = metering;
                 config.filesystem_storage.filesystem_object_limit_policy =
