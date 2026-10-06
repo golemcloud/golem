@@ -154,6 +154,7 @@ fn router_agent(name: &str, path: &str) -> AgentTypeSchema {
         webhook_suffix: vec![],
         static_bindings: vec![],
         filesystem_bindings: vec![],
+        file_response_headers: vec![],
         openapi_provider_method: None,
     });
     agent
@@ -917,6 +918,7 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 vec![]
             },
             filesystem_bindings: if live_files { vec![mapping] } else { vec![] },
+            file_response_headers: vec![],
             openapi_provider_method: None,
         });
         agent.validate().unwrap();

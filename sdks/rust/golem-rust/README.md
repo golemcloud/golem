@@ -149,6 +149,31 @@ invocations return `InvalidToolName`; agent initialization and invocation return
 and snapshot save trap with an explicit unsupported message because their WIT
 signatures have no error result.
 
+## File response headers
+
+Live filesystem bindings and HTTP router static files can attach an ordered list
+of response headers. Use the same `(source, target)`-style pair syntax as file
+mappings, with a header name followed by its value:
+
+```rust,ignore
+#[agent_definition(
+    mount = "/files/{owner}",
+    filesystem_bindings = [("/*", "/public/$1")],
+    file_response_headers = [("content-security-policy", "default-src 'none'"), ("referrer-policy", "no-referrer")]
+)]
+trait Files { /* ... */ }
+
+#[http_router(
+    name = "Site",
+    mount = "/",
+    static_files = [("/*", "/site/$1")],
+    file_response_headers = [("content-security-policy", "default-src 'self'")]
+)]
+impl HttpRouter for Site { /* ... */ }
+```
+
+Omitting `file_response_headers` emits an empty list.
+
 ## Tool middleware
 
 `#[tool_middleware]` and `#[universal_tool_middleware]` accept `parameters = P` for statically typed installation parameters. `P` must implement the SDK schema conversion traits. For monomorphic middleware, the declared `constructor` has signature `fn(P) -> Self`; universal middleware receives `P` as its first function argument. Without `parameters`, constructors remain zero-argument and universal functions have no parameter value.

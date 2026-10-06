@@ -20,7 +20,8 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentFileContentHash, AgentMode, AgentTypeName, FileMapping, HttpMethod, ReadOnlyConfig,
+    AgentFileContentHash, AgentMode, AgentTypeName, FileMapping, FileResponseHeader, HttpMethod,
+    ReadOnlyConfig,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -520,6 +521,7 @@ pub struct HttpRouterBehaviour {
     pub openapi_provider_method: Option<RouterMethod>,
     pub static_bindings: Vec<FileMapping>,
     pub file_index: Vec<RouterFileIndexEntry>,
+    pub file_response_headers: Vec<FileResponseHeader>,
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -549,6 +551,7 @@ pub struct AgentFilesystemBehaviour {
     pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
     pub filesystem_bindings: Vec<FileMapping>,
+    pub file_response_headers: Vec<FileResponseHeader>,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]

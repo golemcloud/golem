@@ -3,7 +3,7 @@
 // you may not use this file except in compliance with the License.
 package golem.runtime.macros
 
-import golem.runtime.http.{FileMapping, FileMappingParser, HttpMountDetails, PathSegment}
+import golem.runtime.http.{FileMapping, FileMappingParser, FileResponseHeader, HttpMountDetails, PathSegment}
 import scala.quoted.*
 
 private[macros] object HttpDeclarationMacro {
@@ -71,6 +71,26 @@ private[macros] object HttpDeclarationMacro {
     FileMappingParser.compile(pairs).fold(error => report.errorAndAbort(s"$name: $error"), identity)
   }
 
+  def headerValues(using
+    Quotes
+  )(symbol: quotes.reflect.Symbol, annotation: String, index: Int): List[FileResponseHeader] = {
+    import quotes.reflect.*
+    argument(symbol, annotation, "fileResponseHeaders", index).toList.flatMap(elements).map {
+      case Apply(_, List(Literal(StringConstant(name)), Literal(StringConstant(value)))) =>
+        FileResponseHeader(name, value)
+      case value => report.errorAndAbort(s"fileResponseHeaders requires literal (name, value) pairs: ${value.show}")
+    }
+  }
+
+  private def headers(using
+    Quotes
+  )(symbol: quotes.reflect.Symbol, annotation: String, index: Int): Expr[List[FileResponseHeader]] =
+    Expr.ofList(
+      headerValues(symbol, annotation, index).map(header =>
+        '{ FileResponseHeader(${ Expr(header.name) }, ${ Expr(header.value) }) }
+      )
+    )
+
   def exposesFiles(using Quotes)(symbol: quotes.reflect.Symbol): Boolean =
     argument(symbol, "agentDefinition", "exposeFiles", 8).exists(elements(_).nonEmpty)
 
@@ -79,9 +99,10 @@ private[macros] object HttpDeclarationMacro {
     val path = FileMappingParser
       .publicPath(string(symbol, "mount", 1))
       .fold(error => report.errorAndAbort(s"router-mount: $error"), identity)
-    val pathExpr = Expr.ofList(path.map(s => '{ PathSegment.Literal(${ Expr(s) }) }))
-    val static   = mappings(symbol, "httpRouter", "staticBindings", 2)
-    val auth     = argument(symbol, "httpRouter", "auth", 3) match {
+    val pathExpr        = Expr.ofList(path.map(s => '{ PathSegment.Literal(${ Expr(s) }) }))
+    val static          = mappings(symbol, "httpRouter", "staticBindings", 2)
+    val responseHeaders = headers(symbol, "httpRouter", 5)
+    val auth            = argument(symbol, "httpRouter", "auth", 3) match {
       case Some(Literal(BooleanConstant(value)))                  => value
       case Some(value) if value.symbol.name.contains("$default$") => false
       case None                                                   => false
@@ -107,7 +128,8 @@ private[macros] object HttpDeclarationMacro {
           Nil,
           $static,
           Nil,
-          $provider
+          $provider,
+          $responseHeaders
         )
       )
     }
@@ -138,7 +160,8 @@ private[macros] object HttpDeclarationMacro {
       Nil,
       mappingValues(symbol, "httpRouter", "staticBindings", 2),
       Nil,
-      providers.headOption.map(_.name)
+      providers.headOption.map(_.name),
+      headerValues(symbol, "httpRouter", 5)
     )
   }
 }

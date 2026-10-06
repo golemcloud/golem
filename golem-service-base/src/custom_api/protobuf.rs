@@ -363,6 +363,11 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .map(TryInto::try_into)
                     .collect::<Result<_, _>>()?,
                 file_index: decode_file_index(value.file_index)?,
+                file_response_headers: value
+                    .file_response_headers
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             })),
             Kind::AgentFilesystem(value) => {
                 Ok(RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
@@ -386,6 +391,11 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                         .into_iter()
                         .map(TryInto::try_into)
                         .collect::<Result<_, _>>()?,
+                    file_response_headers: value
+                        .file_response_headers
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                 }))
             }
         }
@@ -554,6 +564,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     file_index: value.file_index.into_iter().map(|entry| proto::golem::customapi::route_behaviour::RouterFileIndexEntry {
                         path: entry.path, blob_key: entry.blob_key.0.as_blake3_hash().as_bytes().to_vec(), size: entry.size
                     }).collect(),
+                    file_response_headers: value.file_response_headers.into_iter().map(Into::into).collect(),
                 })) },
             RouteBehaviour::AgentFilesystem(value) => Self { kind: Some(Kind::AgentFilesystem(
                 proto::golem::customapi::route_behaviour::AgentFilesystem {
@@ -561,6 +572,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     agent_type: value.agent_type.0, constructor_input: Some(value.constructor_input.into()),
                     constructor_parameters: value.constructor_parameters.into_iter().map(Into::into).collect(),
                     filesystem_bindings: value.filesystem_bindings.into_iter().map(Into::into).collect(),
+                    file_response_headers: value.file_response_headers.into_iter().map(Into::into).collect(),
                 })) },
         }
     }
@@ -1223,7 +1235,9 @@ impl From<CorsOptions> for golem_api_grpc::proto::golem::customapi::CorsOptions 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::agent::{AgentFileContentHash, FileMapping, HttpMethod};
+    use golem_common::model::agent::{
+        AgentFileContentHash, FileMapping, FileResponseHeader, HttpMethod,
+    };
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
     use test_r::test;
@@ -1334,6 +1348,16 @@ mod tests {
                 )),
                 size: 4_294_967_301,
             }],
+            file_response_headers: vec![
+                FileResponseHeader {
+                    name: "content-security-policy".into(),
+                    value: "default-src 'self'".into(),
+                },
+                FileResponseHeader {
+                    name: "referrer-policy".into(),
+                    value: "same-origin".into(),
+                },
+            ],
         })
     }
 
@@ -1376,6 +1400,16 @@ mod tests {
                 ("/fallback", "/fallback"),
             ])
             .unwrap(),
+            file_response_headers: vec![
+                FileResponseHeader {
+                    name: "content-security-policy".into(),
+                    value: "default-src 'none'".into(),
+                },
+                FileResponseHeader {
+                    name: "referrer-policy".into(),
+                    value: "no-referrer".into(),
+                },
+            ],
         });
         let mut filesystem_route = route(filesystem);
         filesystem_route

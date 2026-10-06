@@ -9831,6 +9831,7 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                             size: 556,
                         }]
                     },
+                    file_response_headers: vec![],
                 }),
                 security: if protected {
                     UnboundRouteSecurity::SecurityScheme(UnboundSecuritySchemeRouteSecurity {
