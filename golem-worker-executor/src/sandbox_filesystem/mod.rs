@@ -380,10 +380,7 @@ impl FilesystemVolume {
     /// Whether the volume makes copy-on-write copies of files: `copy_contents` and `seed` then
     /// share extents instead of copying bytes.
     pub(crate) fn copies_on_write(&self) -> bool {
-        match &self.mode {
-            FilesystemVolumeMode::CopyOnWrite { .. } => true,
-            FilesystemVolumeMode::UnmanagedDevelopment => false,
-        }
+        volume_facts(&self.mode).copies_on_write
     }
 
     #[cfg(target_os = "linux")]
@@ -726,23 +723,44 @@ enum QuotaAuthority {
     },
 }
 
-/// Gives the storage profile of the native calls on a sandbox on `volume`. A copy-on-write volume
-/// is known local storage, which an XFS storage mode opened and checked. The storage of another
-/// volume is unknown.
-fn storage_profile(volume: &FilesystemVolume) -> NativeStorageProfile {
-    match volume.mode {
-        FilesystemVolumeMode::CopyOnWrite { .. } => NativeStorageProfile::KnownLocal,
-        FilesystemVolumeMode::UnmanagedDevelopment => NativeStorageProfile::Unknown,
+/// The facts that the mode of a volume decides.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VolumeFacts {
+    /// Whether the volume makes copy-on-write copies of files.
+    copies_on_write: bool,
+    /// The storage profile of the native calls on a sandbox on the volume.
+    storage_profile: NativeStorageProfile,
+    /// How the files of a sandbox on the volume are copied.
+    file_copy_mode: FileCopyMode,
+}
+
+/// Gives the facts of a volume in `mode`. A copy-on-write volume, which an XFS storage mode
+/// opened and checked, is known local storage, and its files are copied by reflink, with or
+/// without a project quota. The storage of a development volume is unknown, and its files are
+/// copied by bytes.
+fn volume_facts(mode: &FilesystemVolumeMode) -> VolumeFacts {
+    match mode {
+        FilesystemVolumeMode::CopyOnWrite { .. } => VolumeFacts {
+            copies_on_write: true,
+            storage_profile: NativeStorageProfile::KnownLocal,
+            file_copy_mode: FileCopyMode::Reflink,
+        },
+        FilesystemVolumeMode::UnmanagedDevelopment => VolumeFacts {
+            copies_on_write: false,
+            storage_profile: NativeStorageProfile::Unknown,
+            file_copy_mode: FileCopyMode::Buffered,
+        },
     }
 }
 
-/// Gives how the files of a sandbox on `volume` are copied: by reflink on a copy-on-write volume,
-/// with or without a project quota, and by bytes otherwise.
+/// Gives the storage profile of the native calls on a sandbox on `volume`.
+fn storage_profile(volume: &FilesystemVolume) -> NativeStorageProfile {
+    volume_facts(&volume.mode).storage_profile
+}
+
+/// Gives how the files of a sandbox on `volume` are copied.
 fn file_copy_mode(volume: &FilesystemVolume) -> FileCopyMode {
-    match volume.mode {
-        FilesystemVolumeMode::CopyOnWrite { .. } => FileCopyMode::Reflink,
-        FilesystemVolumeMode::UnmanagedDevelopment => FileCopyMode::Buffered,
-    }
+    volume_facts(&volume.mode).file_copy_mode
 }
 
 /// How one seeded file gets its contents.
@@ -1745,6 +1763,31 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = File::open(directory.path()).unwrap();
         FilesystemVolume::copy_on_write(Arc::new(root), FilesystemIdentity { device: 1 })
+    }
+
+    #[test]
+    fn each_volume_mode_states_its_facts() {
+        assert_eq!(
+            volume_facts(&FilesystemVolumeMode::UnmanagedDevelopment),
+            VolumeFacts {
+                copies_on_write: false,
+                storage_profile: NativeStorageProfile::Unknown,
+                file_copy_mode: FileCopyMode::Buffered,
+            }
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_copy_on_write_volume_mode_states_its_facts() {
+        assert_eq!(
+            volume_facts(&copy_on_write_volume().mode),
+            VolumeFacts {
+                copies_on_write: true,
+                storage_profile: NativeStorageProfile::KnownLocal,
+                file_copy_mode: FileCopyMode::Reflink,
+            }
+        );
     }
 
     #[cfg(target_os = "linux")]
