@@ -43,8 +43,6 @@ applying = { workspace = true }
 arc-swap = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
-async-recursion = { workspace = true }
-async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }

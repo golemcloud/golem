@@ -2124,6 +2124,16 @@ description = "Builds representative components and assembles a local size and r
 command = "python3"
 args = ["test-components/size-analysis/report.py", "--out", "tmp/component-size-report"]
 
+[tasks.cargo-dependency-report]
+description = "Generates an interactive Cargo dependency dominator report"
+command = "python3"
+args = ["scripts/cargo-dependency-visualizer.py"]
+
+[tasks.cargo-dependency-feature-report]
+description = "Lists resolved third-party crates with configurable Cargo features"
+command = "python3"
+args = ["scripts/cargo-dependency-feature-audit.py"]
+
 ## ** BUILD TEST COMPONENTS **
 
 [tasks.build-test-components]
