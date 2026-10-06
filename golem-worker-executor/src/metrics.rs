@@ -1823,7 +1823,7 @@ pub mod filesystem_snapshots {
         .unwrap();
         static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(
             "filesystem_snapshot_restore_seconds",
-            "Time of a restore of a filesystem snapshot, without the wait for a slot, by outcome",
+            "Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome",
             &["outcome"],
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
