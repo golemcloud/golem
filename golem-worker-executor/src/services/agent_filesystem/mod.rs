@@ -599,6 +599,7 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(filesystems.agent_accounting(), AgentAccounting::Development);
         assert!(matches!(
             filesystems
                 .resolved_limits(AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE - 1)

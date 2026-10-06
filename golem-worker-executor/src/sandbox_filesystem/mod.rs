@@ -838,14 +838,21 @@ impl SandboxFilesystemProvisioning {
         storage: &FilesystemStorageMode,
         cleanup_retry: RetryConfig,
     ) -> Result<Self, FilesystemStorageError> {
-        match storage {
-            FilesystemStorageMode::Temporary => Ok(development(None, cleanup_retry)),
+        let (volume, mode) = match storage {
+            FilesystemStorageMode::Temporary => development(None, cleanup_retry),
             FilesystemStorageMode::Directory { root } => {
-                Ok(development(Some(Arc::from(&**root)), cleanup_retry))
+                development(Some(Arc::from(&**root)), cleanup_retry)
             }
-            FilesystemStorageMode::ManagedXfs { root } => configured_managed(root, &cleanup_retry),
-            FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry),
-        }
+            FilesystemStorageMode::ManagedXfs { root } => configured_managed(root, &cleanup_retry)?,
+            FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry)?,
+        };
+        let (accounting, host_directory_check) = storage_facts(storage);
+        Ok(Self {
+            volume,
+            mode,
+            accounting,
+            host_directory_check,
+        })
     }
 
     pub(crate) fn volume(&self) -> &FilesystemVolume {
@@ -881,59 +888,69 @@ impl SandboxFilesystemProvisioning {
     }
 }
 
+/// The facts that the storage mode `storage` states when it is bound: how it accounts for the
+/// files of each agent, and whether its host directories are checked for a project.
+fn storage_facts(storage: &FilesystemStorageMode) -> (AgentAccounting, HostDirectoryCheck) {
+    match storage {
+        FilesystemStorageMode::Temporary | FilesystemStorageMode::Directory { .. } => {
+            (AgentAccounting::Development, HostDirectoryCheck::None)
+        }
+        FilesystemStorageMode::ManagedXfs { .. } => (
+            AgentAccounting::ProjectQuotas,
+            HostDirectoryCheck::NoXfsProject,
+        ),
+        FilesystemStorageMode::ReflinkXfs { .. } => (
+            AgentAccounting::Unaccounted,
+            HostDirectoryCheck::NoXfsProject,
+        ),
+    }
+}
+
 /// Development storage: plain directories under `root`, or in temporary directories without one.
 fn development(
     root: Option<Arc<Path>>,
     cleanup_retry: RetryConfig,
-) -> SandboxFilesystemProvisioning {
-    SandboxFilesystemProvisioning {
-        volume: FilesystemVolume::unmanaged_development(),
-        mode: SandboxFilesystemProvisioningMode::Directories(
-            directories::DirectoryProvisioning::new(
-                root,
-                cleanup_retry,
-                NativeNameModeSource::NativeDetection,
-            ),
-        ),
-        accounting: AgentAccounting::Development,
-        host_directory_check: HostDirectoryCheck::None,
-    }
+) -> (FilesystemVolume, SandboxFilesystemProvisioningMode) {
+    (
+        FilesystemVolume::unmanaged_development(),
+        SandboxFilesystemProvisioningMode::Directories(directories::DirectoryProvisioning::new(
+            root,
+            cleanup_retry,
+            NativeNameModeSource::NativeDetection,
+        )),
+    )
 }
 
 #[cfg(target_os = "linux")]
 fn configured_managed(
     root: &Path,
     cleanup_retry: &RetryConfig,
-) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
+) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     let managed = xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, cleanup_retry)?;
     let volume = managed.volume().clone();
-    Ok(SandboxFilesystemProvisioning {
+    Ok((
         volume,
-        mode: SandboxFilesystemProvisioningMode::ProjectQuotas(managed),
-        accounting: AgentAccounting::ProjectQuotas,
-        host_directory_check: HostDirectoryCheck::NoXfsProject,
-    })
+        SandboxFilesystemProvisioningMode::ProjectQuotas(managed),
+    ))
 }
 
 #[cfg(target_os = "linux")]
 fn configured_reflink(
     root: &Path,
     cleanup_retry: RetryConfig,
-) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
+) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     let (volume, directories) = xfs::bind_reflink(xfs::XfsRoot::open(root)?, cleanup_retry)?;
-    Ok(SandboxFilesystemProvisioning {
+    Ok((
         volume,
-        mode: SandboxFilesystemProvisioningMode::Directories(directories),
-        accounting: AgentAccounting::Unaccounted,
-        host_directory_check: HostDirectoryCheck::NoXfsProject,
-    })
+        SandboxFilesystemProvisioningMode::Directories(directories),
+    ))
 }
 
 #[cfg(not(target_os = "linux"))]
 fn configured_managed(
     root: &Path,
     _cleanup_retry: &RetryConfig,
-) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
+) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
         "initialize XFS storage on a non-Linux platform",
         root,
@@ -944,7 +961,7 @@ fn configured_managed(
 fn configured_reflink(
     root: &Path,
     _cleanup_retry: RetryConfig,
-) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
+) -> Result<(FilesystemVolume, SandboxFilesystemProvisioningMode), FilesystemStorageError> {
     Err(FilesystemStorageError::verification(
         "initialize XFS storage on a non-Linux platform",
         root,
@@ -1652,6 +1669,54 @@ fn running_as_root() -> bool {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn each_storage_mode_states_its_accounting_and_its_host_directory_check() {
+        let root: Box<Path> = Box::from(Path::new("/var/lib/golem/agents"));
+        assert_eq!(
+            [
+                FilesystemStorageMode::Temporary,
+                FilesystemStorageMode::Directory { root: root.clone() },
+                FilesystemStorageMode::ManagedXfs { root: root.clone() },
+                FilesystemStorageMode::ReflinkXfs { root },
+            ]
+            .iter()
+            .map(storage_facts)
+            .collect::<Vec<_>>(),
+            [
+                (AgentAccounting::Development, HostDirectoryCheck::None),
+                (AgentAccounting::Development, HostDirectoryCheck::None),
+                (
+                    AgentAccounting::ProjectQuotas,
+                    HostDirectoryCheck::NoXfsProject
+                ),
+                (
+                    AgentAccounting::Unaccounted,
+                    HostDirectoryCheck::NoXfsProject
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_error_about_another_path_keeps_its_operation_and_cause() {
+        let error = FilesystemStorageError::io(
+            "remove XFS reflink probe",
+            Path::new("/proc/self/fd/7/.golem-xfs-reflink-probe"),
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        )
+        .about(Path::new("/var/lib/golem/agents/.golem-xfs-reflink-probe"));
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "failed to remove XFS reflink probe filesystem \
+                 /var/lib/golem/agents/.golem-xfs-reflink-probe: {}",
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+            )
+        );
+        assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+    }
 
     #[test]
     fn development_storage_has_development_accounting_and_no_project_check() {
