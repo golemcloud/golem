@@ -3270,6 +3270,26 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn the_storage_mode_shows_its_name_and_its_root() {
+        let root = || Box::from(std::path::Path::new("/var/lib/golem/agents"));
+        assert_eq!(
+            [
+                super::FilesystemStorageMode::Temporary,
+                super::FilesystemStorageMode::Directory { root: root() },
+                super::FilesystemStorageMode::ManagedXfs { root: root() },
+                super::FilesystemStorageMode::ReflinkXfs { root: root() },
+            ]
+            .map(|storage| storage.to_safe_string()),
+            [
+                "temporary directories",
+                "directory at /var/lib/golem/agents",
+                "managed XFS at /var/lib/golem/agents",
+                "reflink XFS at /var/lib/golem/agents",
+            ]
+        );
+    }
+
+    #[test]
     fn mcp_transport_config_roundtrips_and_validates() {
         let mut config = GolemConfig::default();
         config.mcp_transport.request_bytes = 1234;
