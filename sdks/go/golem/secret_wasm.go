@@ -20,17 +20,47 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/secretref"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	reveal "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_reveal"
 )
 
 // The host side of secrets: reading and revealing them, and minting handles to
-// send. Native builds have stubs (secret_other.go).
+// send or lend. Native builds have stubs (secret_other.go).
+
+// secretBorrower lends a secret's handle to a host call without moving it.
+type secretBorrower interface {
+	secretBorrow() (*types.Secret, func(), error)
+}
+
+func (s Secret[T]) secretBorrow() (*types.Secret, func(), error) {
+	if s.borrow == nil {
+		return nil, nil, fmt.Errorf("golem: Secret has no source; obtain it from the agent's config")
+	}
+	return s.borrow()
+}
+
+func init() {
+	secretref.Borrow = func(secret any) (*types.Secret, func(), error) {
+		b, ok := secret.(secretBorrower)
+		if !ok {
+			return nil, nil, fmt.Errorf("golem: %T is not a golem.Secret", secret)
+		}
+		return b.secretBorrow()
+	}
+}
 
 func (s *Secret[T]) secretBindPath(path []string) {
 	s.read = func() (T, error) { return readSecretValue[T](defs, path) }
 	s.take = func() (*types.Secret, error) { return configSecretHandle[T](defs, path) }
+	s.borrow = func() (*types.Secret, func(), error) {
+		h, err := configSecretHandle[T](defs, path)
+		if err != nil {
+			return nil, nil, err
+		}
+		return h, h.Drop, nil
+	}
 }
 
 // secretAdopt initialises a zero Secret with a received handle, which Get
@@ -43,6 +73,12 @@ func (s *Secret[T]) secretAdopt(h *types.Secret) {
 			return zero, ErrSecretMoved
 		}
 		return revealSecret[T](defs, nil, *held)
+	}
+	s.borrow = func() (*types.Secret, func(), error) {
+		if *held == nil {
+			return nil, nil, ErrSecretMoved
+		}
+		return *held, func() {}, nil
 	}
 	s.take = func() (*types.Secret, error) {
 		if *held == nil {

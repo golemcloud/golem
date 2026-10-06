@@ -92,7 +92,28 @@ Create or ensure the session first when not every method argument comes from the
 
 ## Clients
 
-External programs speak the protocol over plain HTTP. The generated external Go bridge (`golem-call-from-external-go`) leaves stream-bearing methods out, so use HTTP directly for these endpoints. From inside a Go agent, call the URLs with `net/http` (see `golem-make-http-request-go`).
+External programs speak the protocol over plain HTTP. The generated external Go bridge (`golem-call-from-external-go`) leaves stream-bearing methods out, so use HTTP directly for these endpoints.
+
+From inside a Go agent, read and write any Durable Streams URL — this deployment's or an external one — with `github.com/golemcloud/golem/sdks/go/golem/durablestreams`. The host does the HTTP and authentication, and the reader's checkpoint and the writer's producer progress survive replay:
+
+```go
+type Config struct{ ExternalAuth golem.Secret[string] } // bearer token, never revealed to the agent
+
+r := durablestreams.ReadJSON[Event](url, durablestreams.ReadOptions{
+	Auth: golem.Some(ctx.Config(Agent).ExternalAuth),
+})
+events, err := r.Collect() // or r.Next() item by item; r.AgentStream() to return it
+
+w, err := durablestreams.NewWriter(url, "application/json", durablestreams.WriteOptions{
+	ProducerID: golem.Some("orders-1"), // stable id: a repeated append is deduplicated
+	Auth:       golem.Some(ctx.Config(Agent).ExternalAuth),
+})
+receipt, err := durablestreams.AppendJSON(w, []Event{ev}, false) // true closes the stream
+```
+
+- `ReadBytes(url, opts)` reads a byte stream. `ReadOptions` sets the starting `Checkpoint` (default `durablestreams.Start`), the `Transport` once caught up (`LongPoll` by default, or `SSE`), the attempt `Timeout`, the `IdleDelay` and `Retry`; `r.Checkpoint()` is where a later reader can resume.
+- A `Writer` has one append in flight: after an error, `RetryPending()` resends that exact append before new data is accepted. `w.Close()` closes the stream; `w.AppendBytes` writes bytes.
+- Transient failures (timeouts, transport, rate limits, unavailability) are retried per `RetryOptions`; any other `*durablestreams.Error` is returned, and an error never means the end of a stream.
 
 ```shell
 golem build

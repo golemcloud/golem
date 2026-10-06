@@ -96,8 +96,9 @@ type Secret[T any] struct {
 	// read fetches the plaintext from the host, and take hands a secret handle
 	// on. Config materialization (secretBindPath) or decoding installs them; a
 	// zero-value Secret has neither.
-	read func() (T, error)
-	take func() (*types.Secret, error)
+	read   func() (T, error)
+	take   func() (*types.Secret, error)
+	borrow func() (*types.Secret, func(), error)
 }
 
 // ErrSecretMoved reports a received secret used after it was handed on.
@@ -146,6 +147,7 @@ type secretTaker interface {
 }
 
 type secretAdopter interface{ secretAdopt(h *types.Secret) }
+
 
 func (s Secret[T]) secretElem() reflect.Type { return reflect.TypeFor[T]() }
 

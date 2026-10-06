@@ -33,6 +33,7 @@ func (s *Secret[T]) secretBindPath([]string) {
 		return zero, errSecretOutsideComponent
 	}
 	s.take = func() (*types.Secret, error) { return nil, errSecretOutsideComponent }
+	s.borrow = func() (*types.Secret, func(), error) { return nil, nil, errSecretOutsideComponent }
 }
 
 func (s *Secret[T]) secretAdopt(*types.Secret) {
@@ -41,4 +42,5 @@ func (s *Secret[T]) secretAdopt(*types.Secret) {
 		return zero, errSecretOutsideComponent
 	}
 	s.take = func() (*types.Secret, error) { return nil, errSecretOutsideComponent }
+	s.borrow = func() (*types.Secret, func(), error) { return nil, nil, errSecretOutsideComponent }
 }

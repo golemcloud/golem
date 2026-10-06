@@ -382,6 +382,92 @@ async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
     }
 }
 
+/// A Go agent appends to and reads from an external Durable Stream, with its
+/// bearer token held as a config secret, as the streaming templates do.
+#[test]
+#[timeout("20 minutes")]
+async fn go_external_durable_streams_e2e() {
+    let mut ctx = TestContext::new();
+    fs::create_dir_all(ctx.cwd_path_join("go-durable-streams")).unwrap();
+    ctx.cd("go-durable-streams");
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go"])
+            .await
+            .success_or_dump()
+    );
+    let component = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .chain(std::iter::once(ctx.cwd_path().to_path_buf()))
+        .find(|path| path.join("go.mod").exists())
+        .expect("the Go component directory");
+    let module = fs::read_to_string(component.join("go.mod"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .unwrap();
+    fs::remove(component.join("agents")).unwrap();
+    fs::write_str(
+        component.join("streaming/streaming.go"),
+        include_str!("go_durable_streams.go"),
+    )
+    .unwrap();
+    fs::write_str(
+        component.join("main.go"),
+        format!("package main\n\nimport _ \"{module}/streaming\"\n\nfunc main() {{}}\n"),
+    )
+    .unwrap();
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let original = fs::read_to_string(&manifest).unwrap();
+    let body = original.split("\nhttpApi:").next().unwrap().to_string();
+    fs::write_str(
+        &manifest,
+        format!("{body}\nsecretDefaults:\n  local:\n    externalAuth: \"{TEST_TOKEN}\"\n"),
+    )
+    .unwrap();
+    ctx.start_server().await;
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let server = ReferenceServer::start().await;
+    let external = server.create("/go", "application/json").await;
+    let append_args = vec![
+        json!(external),
+        json!("stable-go-producer"),
+        json!(["once"]),
+        json!(false),
+    ];
+    let first: Option<String> = invoke_template(&ctx, "appendExternal", append_args.clone()).await;
+    assert!(first.is_some());
+    let duplicate: Option<String> = invoke_template(&ctx, "appendExternal", append_args).await;
+    assert_eq!(duplicate, None);
+    let _: Option<String> = invoke_template(
+        &ctx,
+        "appendExternal",
+        vec![
+            json!(external),
+            json!("closer"),
+            json!(["tail"]),
+            json!(true),
+        ],
+    )
+    .await;
+    let values: Vec<String> = invoke_template(&ctx, "readExternal", vec![json!(external)]).await;
+    assert_eq!(values, ["once", "tail"]);
+    let requests = server.requests().await;
+    assert!(
+        requests
+            .iter()
+            .any(|r| r["producerId"] == "stable-go-producer")
+    );
+    for method in ["GET", "POST"] {
+        assert!(requests.iter().any(|r| {
+            r["path"] == "/go" && r["method"] == method && r["authenticated"] == true
+        }));
+    }
+    server.stop().await;
+}
+
 #[test]
 #[timeout("10 minutes")]
 async fn external_durable_streams_reference_server_e2e() {
