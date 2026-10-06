@@ -1923,19 +1923,22 @@ mod tests {
         let names_past_the_limit = request_names(&mut state, &fourth, &snapshot_names(&["p-4"]));
         let all_again = request_all(&mut state, &fourth);
         let no_names_left = request_all(&mut state, &agent_snapshots("fifth"));
+        let pending_all_again = request_all(&mut state, &third);
 
         assert_eq!(
             [
                 all.overflow,
                 names_past_the_limit.overflow,
                 all_again.overflow,
-                no_names_left.overflow
+                no_names_left.overflow,
+                pending_all_again.overflow
             ],
             [
                 Some(Overflow::Evicted(first.clone())),
                 Some(Overflow::Refused),
                 Some(Overflow::Evicted(second.clone())),
-                Some(Overflow::Refused)
+                Some(Overflow::Refused),
+                None
             ]
         );
         assert_eq!(
@@ -1954,7 +1957,7 @@ mod tests {
 
     #[test]
     fn names_past_the_limit_of_one_entry_are_counted_as_leaked() {
-        let mut state = limited(10, 100, 2);
+        let mut state = limited(1, 100, 2);
         let agent = agent_snapshots("one-entry");
 
         let first = request_names(&mut state, &agent, &snapshot_names(&["p-3", "p-2", "p-1"]));
