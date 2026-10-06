@@ -2488,9 +2488,9 @@ fn one_copy_request(from: &str, to: &str) -> Vec<(String, String, Option<String>
 async fn copy_gives_a_missing_error_for_a_source_that_is_not_there_and_sends_one_request() {
     // The S3 model names one error of `CopyObject`, `ObjectNotInActiveTierError`, so a source key
     // that is not there comes as the code `NoSuchKey` in the body of the response, which the SDK
-    // keeps in the metadata of a `CopyObjectError::Unhandled`. The backend reads that code as a
-    // source with no blob, as the default `copy_between_at` reads a missing blob, so `copy` gives
-    // `BlobMissingError`. The backend sends the request one time: a retry cannot make the bucket
+    // keeps in the metadata of a `CopyObjectError::Unhandled`. The backend's `copy_between_at`
+    // reads that code as a source with no blob and gives false, and `copy` turns that answer into
+    // a `BlobMissingError` that names the source. The backend sends the request one time: a retry cannot make the bucket
     // hold the source key. The storage sends 3 requests for a retriable error, which
     // `copy_retries_a_server_error` holds.
     let (storage, requests) = scripted_storage("", |_, _| Answer::new(404, NO_SUCH_KEY));
