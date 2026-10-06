@@ -175,6 +175,10 @@ func (c *valueConverter) node(idx int32) (core.SchemaValue, error) {
 	return nil, fmt.Errorf("golem: unknown value node (tag %d); the SDK's bindings may be out of date", n.Tag())
 }
 
+// witValueTagCount pins how many value cases the bindings declare. Bump it
+// deliberately, with the case added above — see TestEveryWitValueTagConverts.
+const witValueTagCount = 36
+
 func (c *valueConverter) each(idxs []int32) ([]core.SchemaValue, error) {
 	out := make([]core.SchemaValue, 0, len(idxs))
 	for _, idx := range idxs {

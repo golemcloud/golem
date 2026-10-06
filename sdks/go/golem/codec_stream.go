@@ -56,7 +56,6 @@ func (s AgentStream[T]) streamAdopt(src treeSource) { s.st.src = src }
 
 // compileStream lowers AgentStream[T] to the WIT stream type.
 func compileStream(c *codec, inner *codec) {
-	c.containsStream = true
 	c.body = func(g *graphBuilder) types.SchemaTypeBody {
 		// Always typed: Go has no way to spell an untyped stream, and an
 		// untyped one could not supply an item codec anyway.

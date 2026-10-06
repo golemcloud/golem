@@ -16,6 +16,7 @@ package witschema
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
@@ -136,3 +137,104 @@ func TestFailedFlatteningReleasesHandles(t *testing.T) {
 type countingHandle struct{ released int }
 
 func (h *countingHandle) Release() { h.released++ }
+
+func TestEveryWitValueTagConverts(t *testing.T) {
+	// If this fails, the bindings gained or lost a case: handle it in node()
+	// and move the count deliberately.
+	const declared = witValueTagCount
+	if types.SchemaValueNodeStreamValue != declared-1 {
+		t.Fatalf("the bindings declare value tags up to %d, but the converter pins %d; "+
+			"a WIT case was added or removed", types.SchemaValueNodeStreamValue, declared-1)
+	}
+	for tag := uint8(0); tag < declared; tag++ {
+		var b valueBuilder
+		leaf := b.push(types.MakeSchemaValueNodeBoolValue(true))
+		root := b.push(sampleValue(t, tag, leaf))
+		_, err := ValueToCore(b.tree(root))
+		// The host handles are refused off target, from their own case.
+		if err != nil && strings.Contains(err.Error(), "unknown value node") {
+			t.Errorf("tag %d fell through to the fallback: %v", tag, err)
+		}
+	}
+}
+
+// sampleValue builds a minimal node for a tag, using leaf wherever a nested
+// value is needed.
+func sampleValue(t *testing.T, tag uint8, leaf int32) types.SchemaValueNode {
+	switch tag {
+	case types.SchemaValueNodeBoolValue:
+		return types.MakeSchemaValueNodeBoolValue(true)
+	case types.SchemaValueNodeS8Value:
+		return types.MakeSchemaValueNodeS8Value(1)
+	case types.SchemaValueNodeS16Value:
+		return types.MakeSchemaValueNodeS16Value(1)
+	case types.SchemaValueNodeS32Value:
+		return types.MakeSchemaValueNodeS32Value(1)
+	case types.SchemaValueNodeS64Value:
+		return types.MakeSchemaValueNodeS64Value(1)
+	case types.SchemaValueNodeU8Value:
+		return types.MakeSchemaValueNodeU8Value(1)
+	case types.SchemaValueNodeU16Value:
+		return types.MakeSchemaValueNodeU16Value(1)
+	case types.SchemaValueNodeU32Value:
+		return types.MakeSchemaValueNodeU32Value(1)
+	case types.SchemaValueNodeU64Value:
+		return types.MakeSchemaValueNodeU64Value(1)
+	case types.SchemaValueNodeF32Value:
+		return types.MakeSchemaValueNodeF32Value(1)
+	case types.SchemaValueNodeF64Value:
+		return types.MakeSchemaValueNodeF64Value(1)
+	case types.SchemaValueNodeCharValue:
+		return types.MakeSchemaValueNodeCharValue('a')
+	case types.SchemaValueNodeStringValue:
+		return types.MakeSchemaValueNodeStringValue("s")
+	case types.SchemaValueNodeRecordValue:
+		return types.MakeSchemaValueNodeRecordValue([]int32{leaf})
+	case types.SchemaValueNodeVariantValue:
+		return types.MakeSchemaValueNodeVariantValue(types.VariantValuePayload{Payload: witTypes.Some(leaf)})
+	case types.SchemaValueNodeEnumValue:
+		return types.MakeSchemaValueNodeEnumValue(0)
+	case types.SchemaValueNodeFlagsValue:
+		return types.MakeSchemaValueNodeFlagsValue([]bool{true})
+	case types.SchemaValueNodeTupleValue:
+		return types.MakeSchemaValueNodeTupleValue([]int32{leaf})
+	case types.SchemaValueNodeListValue:
+		return types.MakeSchemaValueNodeListValue([]int32{leaf})
+	case types.SchemaValueNodeFixedListValue:
+		return types.MakeSchemaValueNodeFixedListValue([]int32{leaf})
+	case types.SchemaValueNodeMapValue:
+		return types.MakeSchemaValueNodeMapValue([]types.MapEntry{{Key: leaf, Value: leaf}})
+	case types.SchemaValueNodeOptionValue:
+		return types.MakeSchemaValueNodeOptionValue(witTypes.Some(leaf))
+	case types.SchemaValueNodeResultValue:
+		return types.MakeSchemaValueNodeResultValue(types.MakeResultValuePayloadOkValue(witTypes.Some(leaf)))
+	case types.SchemaValueNodeTextValue:
+		return types.MakeSchemaValueNodeTextValue(types.TextValuePayload{Text: "t", Language: witTypes.None[string]()})
+	case types.SchemaValueNodeBinaryValue:
+		return types.MakeSchemaValueNodeBinaryValue(types.BinaryValuePayload{Bytes: []uint8{1}, MimeType: witTypes.None[string]()})
+	case types.SchemaValueNodePathValue:
+		return types.MakeSchemaValueNodePathValue("/p")
+	case types.SchemaValueNodeUrlValue:
+		return types.MakeSchemaValueNodeUrlValue("https://example.com")
+	case types.SchemaValueNodeUuidValue:
+		return types.MakeSchemaValueNodeUuidValue(types.Uuid{HighBits: 1, LowBits: 2})
+	case types.SchemaValueNodeDatetimeValue:
+		return types.MakeSchemaValueNodeDatetimeValue(types.Datetime{Seconds: 1})
+	case types.SchemaValueNodeDurationValue:
+		return types.MakeSchemaValueNodeDurationValue(types.DurationValuePayload{Nanoseconds: 1})
+	case types.SchemaValueNodeQuantityValueNode:
+		return types.MakeSchemaValueNodeQuantityValueNode(types.QuantityValue{Mantissa: 1, Unit: "kg"})
+	case types.SchemaValueNodeUnionValue:
+		return types.MakeSchemaValueNodeUnionValue(types.UnionValuePayload{Tag: "b", Body: leaf})
+	case types.SchemaValueNodeSecretValue:
+		return types.MakeSchemaValueNodeSecretValue(nil)
+	case types.SchemaValueNodeQuotaTokenHandle:
+		return types.MakeSchemaValueNodeQuotaTokenHandle(nil)
+	case types.SchemaValueNodePermissionCardHandle:
+		return types.MakeSchemaValueNodePermissionCardHandle(nil)
+	case types.SchemaValueNodeStreamValue:
+		return types.MakeSchemaValueNodeStreamValue(nil)
+	}
+	t.Fatalf("no sample for value tag %d", tag)
+	return types.SchemaValueNode{}
+}

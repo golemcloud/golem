@@ -253,3 +253,69 @@ func (e *agentEntry) kind() common.AgentTypeKind {
 	}
 	return common.AgentTypeKindRegular
 }
+
+// carriesStream reports whether a stream is reachable anywhere in t's schema,
+// through named definitions and recursive types alike: an exact walk of the
+// graph t publishes, so no cycle can hide one.
+func (d *definitions) carriesStream(t reflect.Type) bool {
+	g := graphBuilder{d: d}
+	root := g.node(d.compile(t))
+	graph := g.build()
+	seen := map[int32]bool{}
+	var walk func(idx int32) bool
+	walk = func(idx int32) bool {
+		if idx < 0 || int(idx) >= len(graph.TypeNodes) || seen[idx] {
+			return false
+		}
+		seen[idx] = true
+		body := graph.TypeNodes[idx].Body
+		some := func(o witTypes.Option[int32]) bool { return o.IsSome() && walk(o.Some()) }
+		switch body.Tag() {
+		case types.SchemaTypeBodyStreamType:
+			return true
+		case types.SchemaTypeBodyRefType:
+			def := body.RefType()
+			return int(def) < len(graph.Defs) && walk(graph.Defs[def].Body)
+		case types.SchemaTypeBodyRecordType:
+			for _, f := range body.RecordType() {
+				if walk(f.Body) {
+					return true
+				}
+			}
+		case types.SchemaTypeBodyVariantType:
+			for _, c := range body.VariantType() {
+				if some(c.Payload) {
+					return true
+				}
+			}
+		case types.SchemaTypeBodyTupleType:
+			for _, e := range body.TupleType() {
+				if walk(e) {
+					return true
+				}
+			}
+		case types.SchemaTypeBodyListType:
+			return walk(body.ListType())
+		case types.SchemaTypeBodyFixedListType:
+			return walk(body.FixedListType().Element)
+		case types.SchemaTypeBodyMapType:
+			return walk(body.MapType().Key) || walk(body.MapType().Value)
+		case types.SchemaTypeBodyOptionType:
+			return walk(body.OptionType())
+		case types.SchemaTypeBodyResultType:
+			return some(body.ResultType().Ok) || some(body.ResultType().Err)
+		case types.SchemaTypeBodyUnionType:
+			for _, b := range body.UnionType().Branches {
+				if walk(b.Body) {
+					return true
+				}
+			}
+		case types.SchemaTypeBodySecretType:
+			return walk(body.SecretType().Inner)
+		case types.SchemaTypeBodyFutureType:
+			return some(body.FutureType())
+		}
+		return false
+	}
+	return walk(root)
+}

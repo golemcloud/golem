@@ -241,9 +241,9 @@ func TestStreamSchemaIsAlwaysTyped(t *testing.T) {
 	}
 }
 
-// TestContainsStreamPropagatesThroughComposites — the flag has to survive
-// nesting, since a stream buried in a record still rules out Trigger.
-func TestContainsStreamPropagatesThroughComposites(t *testing.T) {
+// TestCarriesStreamFindsNestedStreams — a stream buried in a record or reached
+// only through a recursive type still rules out Trigger.
+func TestCarriesStreamFindsNestedStreams(t *testing.T) {
 	type Inner struct{ Lines AgentStream[string] }
 	type Outer struct {
 		Name  string
@@ -260,10 +260,11 @@ func TestContainsStreamPropagatesThroughComposites(t *testing.T) {
 		{"an option of one", reflect.TypeFor[Option[AgentStream[string]]](), true},
 		{"a list of them", reflect.TypeFor[[]AgentStream[string]](), true},
 		{"a plain record", reflect.TypeFor[struct{ Name string }](), false},
+		{"a recursive type holding one", reflect.TypeFor[streamTree](), true},
 	} {
 		d := newDefinitions()
-		if got := d.compile(tc.rt).containsStream; got != tc.want {
-			t.Errorf("%s: containsStream=%v, want %v", tc.name, got, tc.want)
+		if got := d.carriesStream(tc.rt); got != tc.want {
+			t.Errorf("%s: carriesStream=%v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
@@ -328,3 +329,12 @@ func TestAFailedProductionIsNotEndOfInput(t *testing.T) {
 	default:
 	}
 }
+
+// streamTree reaches its stream only through itself: the case an approximate
+// propagation could miss.
+type streamTree struct {
+	Children []streamTree
+	Leaf     Option[streamLeaf]
+}
+
+type streamLeaf struct{ Lines AgentStream[string] }

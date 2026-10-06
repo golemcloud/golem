@@ -73,9 +73,6 @@ type definitions struct {
 	unions    map[reflect.Type]*unionDef
 	pins      map[reflect.Type]string // NameType type-id overrides
 	codecs    map[reflect.Type]*codec // compile() memoization
-	// enclosing is the codec currently being compiled, so a nested stream can
-	// mark every type that contains it.
-	enclosing *codec
 	errs      []definitionError // registration-phase errors (derivation adds more)
 }
 

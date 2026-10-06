@@ -301,9 +301,7 @@ func rpcErrorToGo(target, method string, e host.RpcError) error {
 // the caller a stream endpoint — including when the only stream is in the
 // output. Await the call instead.
 func (m MethodDef[Id, In, Out]) refuseStreams(form string) {
-	in := defs.compile(reflect.TypeFor[In]())
-	out := defs.compile(reflect.TypeFor[Out]())
-	if in.containsStream || out.containsStream {
+	if defs.carriesStream(reflect.TypeFor[In]()) || defs.carriesStream(reflect.TypeFor[Out]()) {
 		panic(fmt.Errorf(
 			"golem: %s: %s cannot carry a stream; await the call with Call or CallAsync instead",
 			m.name, form))
