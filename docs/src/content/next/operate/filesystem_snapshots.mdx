@@ -46,13 +46,13 @@ managed_xfs_root_dir = "/var/lib/golem/agents"
 
 The environment variable is `GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR`.
 
-At startup, the executor checks the volume and refuses to start when a check fails. The error has the form `failed to <check> filesystem <path>`, sometimes followed by `: <cause>`. The `<check>` part tells which check failed:
+At startup, the executor checks the volume and refuses to start when a check fails. The error has the form `failed to <check> filesystem <path>`, sometimes followed by `: <cause>`. `<path>` is the configured root, a path below `/proc/self/fd/`, `<managed-volume>` for the read of the free space, or `<configuration>` for a check of the settings. The `<check>` part tells which check failed:
 
 | Check | `<check>` in the error |
 | --- | --- |
 | The executor can open the path and read its filesystem. | `open managed XFS root` or `inspect managed XFS root` |
 | The path is an XFS filesystem. | `validate managed XFS root filesystem type` |
-| The path is the root of its mount and the root directory of the XFS filesystem. A subdirectory, also through a bind mount, fails. | `validate managed XFS root is the filesystem mount root` |
+| The path is the root of its mount and the root directory of the XFS filesystem. A subdirectory, also through a bind mount, fails. | `inspect managed XFS root mount location`, `inspect managed XFS root inode` or `validate managed XFS root is the filesystem mount root` |
 | No other process holds the lock on the root. | `acquire exclusive ownership of managed XFS root` |
 | The filesystem has a valid block size. | `validate managed XFS filesystem block size` |
 | The executor can open the root through its open file and identify its filesystem. | `open managed XFS root through its stable descriptor` or `identify managed XFS root` |
@@ -61,9 +61,12 @@ At startup, the executor checks the volume and refuses to start when a check fai
 | The executor can read the quota of a 32-bit project id. | `validate 32-bit XFS project quota query` |
 | The project id 2147483648, which the check uses, is not in use. | `reserve unused 32-bit XFS startup probe project` |
 | The executor can change project quotas. | `validate XFS project quota update permissions` |
-| The executor can write to the root. It makes the directory `.golem-xfs-project-probe` there for the next check, and removes it after the check. | `create managed XFS startup probe` |
+| The executor can write to the root. It makes the directory `.golem-xfs-project-probe` there for the next check, and removes it after the check. | `remove stale managed XFS startup probe`, `create managed XFS startup probe`, `remove managed XFS startup probe` or `clear managed XFS startup probe project` |
 | A new directory gets the project of its parent, and reflink copies work. | `validate managed XFS project assignment and inheritance` |
 | `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within managed capacity` or `fit filesystem pressure object target within managed capacity` |
+| The executor removes any project from the root, and the root then belongs to no project. | `inspect managed XFS root project attributes`, `clear managed XFS root project inheritance`, `verify managed XFS root project attributes` or `verify managed XFS root has neutral project identity` |
+| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root` or `create host directory` |
+| The executor can read the free space of the volume. | `observe managed filesystem space` |
 | `deterministic_root_dir` is not set. The two storage modes exclude each other. | `select exactly one filesystem storage mode` |
 
 The executor makes the directories `.scratch` and `.initial-files` directly under the root, outside the quota of every agent. A capture goes into `.scratch`. At startup, the executor removes what an earlier process left in these directories.
@@ -195,7 +198,7 @@ multiplier = 4.0
 | `capture_wait` | `5s` | How long a capture waits for the agent's open file calls. When a call is still open after this time, the capture gives up. |
 | `retained_periodic_snapshots` | `128` | The number of automatic filesystem snapshots that retention keeps for each agent. A revert restores exactly only from a snapshot that blob storage still holds, so this number sets how far back a revert can go without a full replay. |
 | `retained_update_snapshots` | `2` | The number of manual-update filesystem snapshots that retention keeps for each agent, among those that no successful or pending update uses. |
-| `max_pending_deletes_per_agent` | `1024` | The largest number of snapshots of one agent that wait for deletion. See [Clean-up](#clean-up). |
+| `max_pending_deletes_per_agent` | `1024` | The largest number of snapshots of a revert of one agent that wait in the clean-up queue for deletion. See [Clean-up](#clean-up). |
 | `storage_retry` | see [Retries](#retries) | When a snapshot operation fails, how often and after which waits the executor runs it again. |
 
 Write each duration in the [humantime](https://docs.rs/humantime) format, for example `"500ms"`, `"60s"` or `"2m"`. Each count and each wait must be greater than zero. The executor refuses to start with an invalid value and names the setting in the error, for example `max_concurrent_restores must be greater than zero` or `repository_key must be 128 hex characters`.
@@ -227,7 +230,7 @@ The executor keeps the snapshots of each agent incarnation in their own location
 | SQLite (`Sqlite` and `KVStoreSqlite`) | The namespace `filesystem_snapshots-<environment id>-<agent>-<incarnation id>` in the `blob_storage` table |
 | In memory | The memory of the executor. The snapshots are lost when the executor stops. Use it only for tests. |
 
-`<agent>` is the agent name, with each character other than an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters (`agent` when the name is empty), then `-` and the BLAKE3 hash of the full agent id in hex. `<incarnation id>` is a UUID.
+`<agent>` is the agent name, with each character other than an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters (`agent` when the name is empty), then `-` and the BLAKE3 hash, in hex, of `<component id>/<agent name>`. `<incarnation id>` is a UUID.
 
 ## How the executor uses the settings
 
@@ -283,7 +286,7 @@ The executor deletes filesystem snapshots in the background when the life of an 
 
 The clean-ups wait in a queue in the memory of the executor. At most `max_concurrent_uploads` clean-ups run at the same time. Retention does not use this queue. These deletes do: the deletes of a revert, the delete of all snapshots of a deleted agent, the delete of all snapshots of an incarnation that the recovery of a shard finds stale, and the delete of the copy of a fork attempt that did not create its new agent.
 
-One agent can have at most `max_pending_deletes_per_agent` snapshots of a revert waiting for deletion. The snapshots that wait keep their place. A revert gives its snapshots newest first. The executor queues them up to the bound, refuses the rest, and counts a leaked clean-up with the operation `overflow`. The refused snapshots stay in the location of the agent, and retention deletes them later by count, as it deletes other old snapshots.
+Only the snapshots of a revert wait in the queue by name. Retention deletes directly, and the queue does not limit it. A delete of all snapshots carries no names. One agent can have at most `max_pending_deletes_per_agent` snapshots of a revert waiting for deletion. The snapshots that wait keep their place. A revert gives its snapshots newest first. The executor queues them up to the bound, refuses the rest, which are the oldest snapshots of the reverted part, and counts a leaked clean-up with the operation `overflow`. The refused snapshots stay in the location of the agent. Retention deletes a refused automatic snapshot after the agent has made about `retained_periodic_snapshots` newer automatic snapshots, and a refused manual-update snapshot after more manual updates. The delete of the agent also deletes them.
 
 The queue also has fixed bounds over all agents: 65,536 agents with waiting work, and 786,432 waiting snapshots. A revert past these bounds is also counted as `overflow`. When 65,536 agents have waiting work, a delete of all snapshots of an agent removes the oldest waiting revert deletes of another agent to make room, and counts them as `overflow`. Only when no such deletes wait is the delete of all snapshots refused, and counted as `overflow`.
 
@@ -318,7 +321,7 @@ The worker executor exports these metrics for filesystem snapshots. The labels h
 | `filesystem_snapshot_upload_seconds` | histogram | `kind`, `outcome` | The time of an upload with its retries, until its confirmation. `kind` is `periodic` for an automatic snapshot or `update` for a manual update. For `periodic`, `outcome` is `confirmed`, `superseded`, `deferred`, `replaced` or `failed`. For `update`, it is `saved` or `failed`. |
 | `filesystem_snapshot_uploaded_bytes_total` | counter | `kind` | The bytes of the trees of the uploaded snapshots. |
 | `filesystem_snapshot_uploads_in_progress` | gauge | | The runs of uploads that hold a slot now. |
-| `filesystem_snapshot_restore_seconds` | histogram | `outcome` | The time of a restore, without the wait for a slot. `outcome` is `restored` or `failed`. |
+| `filesystem_snapshot_restore_seconds` | histogram | `outcome` | The time of a restore, with the wait for a restore slot and the retries. `outcome` is `restored` or `failed`. |
 | `filesystem_snapshot_copy_seconds` | histogram | `outcome` | The time of the copy of the snapshots of a fork source. `outcome` is `copied`, `stopped` or `failed`. |
 | `filesystem_snapshot_dropped_confirmations_total` | counter | `reason` | Uploaded snapshots that no confirmation record names. `reason` is `superseded`. |
 | `filesystem_snapshot_cleanups_pending` | gauge | | The agents with clean-up work that waits or runs. |
@@ -334,7 +337,7 @@ Watch these values:
 - **Leaked clean-ups.** `filesystem_snapshot_leaked_cleanups_total` counts clean-ups that left snapshots in blob storage. A growing `overflow` count means that deletes come faster than the clean-ups run. A `shutdown` count shows clean-ups that a shutdown cut off.
 - **Pending clean-ups.** A `filesystem_snapshot_cleanups_pending` value that grows all the time means that the clean-ups do not keep up.
 - **Unused storage.** `filesystem_snapshot_failed_space_reclaims_total` counts deletes that did not give back their storage yet.
-- **Restore time.** `filesystem_snapshot_restore_seconds` shows how much a restore adds to the start of an agent.
+- **Restore time.** `filesystem_snapshot_restore_seconds` shows how much a restore adds to the start of an agent, with the wait for a restore slot.
 
 ## Logs
 
