@@ -863,7 +863,7 @@ fn configured_managed(
     root: &Path,
     cleanup_retry: &RetryConfig,
 ) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
-    let managed = xfs::ManagedProvisioning::new(root, cleanup_retry)?;
+    let managed = xfs::ManagedProvisioning::new(xfs::XfsRoot::open(root)?, cleanup_retry)?;
     let volume = managed.volume().clone();
     Ok(SandboxFilesystemProvisioning {
         volume,
