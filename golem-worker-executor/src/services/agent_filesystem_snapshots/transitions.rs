@@ -222,13 +222,12 @@ enum ForkPhase {
 }
 
 /// What the end of a fork attempt does to the snapshots of its stage.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ForkEnd {
     /// Nothing can publish the stage of the attempt: it never reached its publication, or the
     /// live target has another instance id. The delete of all snapshots of the stage is
-    /// requested. `overflow` tells whether the bound of the clean-ups dropped that request or
-    /// evicted other work.
-    StageDeleted { overflow: bool },
+    /// requested. `overflow` tells what the bound of the clean-ups did to that request.
+    StageDeleted { overflow: Option<Overflow> },
     /// The attempt did not finish its publication. Its stage can be published, so its snapshots
     /// stay.
     StageLeaked,
@@ -241,9 +240,17 @@ pub(super) enum ForkEnd {
 pub(super) struct Requested {
     /// The stop of the job of the agent, when the request stops it.
     pub(super) stop: Option<CancellationToken>,
-    /// Whether the bound of the clean-ups dropped some of the request, or evicted other work for
-    /// it.
-    pub(super) overflow: bool,
+    /// What the bounds of the clean-ups did to the request, when they did something.
+    pub(super) overflow: Option<Overflow>,
+}
+
+/// What the bounds of the clean-ups did to a request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Overflow {
+    /// The bounds refused some names of the request, or dropped the delete of all snapshots.
+    Refused,
+    /// The delete of all snapshots evicted the pending names of this agent. These names are lost.
+    Evicted(AgentSnapshots),
 }
 
 /// A transition of [`State`]. The registry wakes its waiters after a transition when
@@ -672,8 +679,9 @@ pub(super) fn is_free(state: &State, agent: &AgentSnapshots) -> bool {
 /// names of the agent, and is ignored while a delete of all snapshots of the agent is pending or
 /// runs. Only the names of a revert come here. The pending names keep their place: the names of
 /// the request are added in their order while they fit under the limit of one agent and the limit
-/// of all agents, and the names that do not fit are refused. A request for an agent without pending work is refused when the limit of
-/// the agents with pending work is reached. An empty request changes nothing. The answer tells
+/// of all agents, and the names that do not fit are refused. A request for an agent without
+/// pending work, also an agent whose clean-up runs, is refused when the limit of the agents with
+/// pending work is reached. An empty request changes nothing. The answer tells
 /// whether names were refused, and holds the stop of the job of the agent when `names` holds the
 /// name of the job, also when the bounds refuse the names.
 pub(super) fn request_names(
@@ -686,7 +694,7 @@ pub(super) fn request_names(
         .get(agent)
         .filter(|job| names.iter().any(|name| name.as_str() == job.name.as_str()))
         .map(|job| job.stop.clone());
-    let overflow = add_names(&mut state, agent, names);
+    let overflow = add_names(&mut state, agent, names).then_some(Overflow::Refused);
     push_if_ready(&mut state, agent);
     Next::of(
         Transition::RequestNames,
@@ -701,8 +709,7 @@ fn add_names(state: &mut State, agent: &AgentSnapshots, names: &[SnapshotName]) 
     if names.is_empty() || all_requested(state, agent) {
         return false;
     }
-    let exists = state.cleanups.contains_key(agent);
-    if !exists && state.pending_entries >= state.limits.pending_cleanups {
+    if !has_pending(state, agent) && state.pending_entries >= state.limits.pending_cleanups {
         return true;
     }
     let limits = state.limits;
@@ -749,10 +756,11 @@ fn add_names(state: &mut State, agent: &AgentSnapshots, names: &[SnapshotName]) 
 
 /// Requests the delete of all snapshots of `agent`. It replaces the pending names of the agent,
 /// and carries no names, so the limit of the names of one agent does not apply to it. When the
-/// limit of the agents with pending work is reached, it evicts the oldest pending names of another
-/// agent, which count as a leaked clean-up, and it is dropped only when no pending names are left
-/// to evict. The answer
-/// holds the stop of the job of the agent, also when the bound drops the request.
+/// limit of the agents with pending work is reached and the agent has no pending work, also when
+/// its clean-up runs, it evicts the oldest pending names of another agent, which count as a leaked
+/// clean-up, and it is dropped only when no pending names are left to evict. The answer names the
+/// evicted agent, and holds the stop of the job of the agent, also when the bound drops the
+/// request.
 pub(super) fn request_all(mut state: State, agent: &AgentSnapshots) -> Next<Requested> {
     let stop = state.jobs.get(agent).map(|job| job.stop.clone());
     let overflow = add_all(&mut state, agent);
@@ -760,60 +768,62 @@ pub(super) fn request_all(mut state: State, agent: &AgentSnapshots) -> Next<Requ
     Next::of(Transition::RequestAll, state, Requested { stop, overflow })
 }
 
-/// Makes the delete of all snapshots of `agent` pending, and tells whether the bound dropped it or
-/// evicted other work.
-fn add_all(state: &mut State, agent: &AgentSnapshots) -> bool {
-    let pending_names = match state.cleanups.get(agent).map(|cleanup| &cleanup.pending) {
-        Some(Some(Work::All)) => return false,
-        Some(Some(Work::Names(names))) => Some(names.len()),
-        Some(None) => None,
-        None => {
-            let evicted = state.pending_entries >= state.limits.pending_cleanups;
-            if evicted && !evict_oldest_names(state) {
-                return true;
-            }
-            state.pending_entries += 1;
-            state.cleanups.insert(
-                agent.clone(),
-                Cleanup {
-                    pending: Some(Work::All),
-                    ..Cleanup::default()
-                },
-            );
-            return evicted;
-        }
+/// Makes the delete of all snapshots of `agent` pending, and tells what the bound of the agents
+/// with pending work did to it: nothing, dropped it, or evicted the pending names of another agent.
+fn add_all(state: &mut State, agent: &AgentSnapshots) -> Option<Overflow> {
+    let pending_names = match state
+        .cleanups
+        .get(agent)
+        .and_then(|cleanup| cleanup.pending.as_ref())
+    {
+        Some(Work::All) => return None,
+        Some(Work::Names(names)) => Some(names.len()),
+        None => None,
     };
-    match pending_names {
+    let overflow = match pending_names {
         Some(names) => {
             state.pending_names_total = state.pending_names_total.saturating_sub(names);
             state.pending_names_entries = state.pending_names_entries.saturating_sub(1);
+            None
         }
-        None => state.pending_entries += 1,
-    }
-    if let Some(cleanup) = state.cleanups.get_mut(agent) {
-        cleanup.pending = Some(Work::All);
-        cleanup.order = None;
-    }
-    false
+        None if state.pending_entries >= state.limits.pending_cleanups => {
+            let Some(evicted) = evict_oldest_names(state) else {
+                return Some(Overflow::Refused);
+            };
+            state.pending_entries += 1;
+            Some(Overflow::Evicted(evicted))
+        }
+        None => {
+            state.pending_entries += 1;
+            None
+        }
+    };
+    let cleanup = state.cleanups.entry(agent.clone()).or_default();
+    cleanup.pending = Some(Work::All);
+    cleanup.order = None;
+    overflow
 }
 
-/// Drops the oldest pending names of an agent, and tells whether there were any. The work that
-/// the agent runs stays.
-fn evict_oldest_names(state: &mut State) -> bool {
+/// Whether `agent` has pending clean-up work.
+fn has_pending(state: &State, agent: &AgentSnapshots) -> bool {
+    state
+        .cleanups
+        .get(agent)
+        .is_some_and(|cleanup| cleanup.pending.is_some())
+}
+
+/// Drops the oldest pending names of an agent, and gives that agent, when there was one. The work
+/// that the agent runs stays.
+fn evict_oldest_names(state: &mut State) -> Option<AgentSnapshots> {
     let cleanups = &state.cleanups;
-    let Some((agent, _)) = std::iter::from_fn(|| state.names_order.pop_front())
-        .find(|(agent, stamp)| holds_names_of(cleanups, agent, *stamp))
-    else {
-        return false;
-    };
-    let Some(cleanup) = state.cleanups.get_mut(&agent) else {
-        return false;
-    };
+    let (agent, _) = std::iter::from_fn(|| state.names_order.pop_front())
+        .find(|(agent, stamp)| holds_names_of(cleanups, agent, *stamp))?;
+    let cleanup = state.cleanups.get_mut(&agent)?;
     let names = match cleanup.pending.take() {
         Some(Work::Names(names)) => names.len(),
         other => {
             cleanup.pending = other;
-            return false;
+            return None;
         }
     };
     cleanup.order = None;
@@ -823,7 +833,7 @@ fn evict_oldest_names(state: &mut State) -> bool {
     state.pending_names_total = state.pending_names_total.saturating_sub(names);
     state.pending_names_entries = state.pending_names_entries.saturating_sub(1);
     state.pending_entries = state.pending_entries.saturating_sub(1);
-    true
+    Some(agent)
 }
 
 /// Whether the order entry of `agent` with `stamp` stands for the pending names of the agent.
@@ -1786,7 +1796,7 @@ mod tests {
 
         let requested = request_names(&mut state, &agent, &[]);
 
-        assert!(requested.stop.is_none() && !requested.overflow);
+        assert!(requested.stop.is_none() && requested.overflow.is_none());
         assert!(state.cleanups.is_empty() && state.ready.is_empty());
     }
 
@@ -1804,7 +1814,7 @@ mod tests {
             state.pending_names_total,
         );
 
-        assert!(!ignored.overflow);
+        assert_eq!(ignored.overflow, None);
         assert_eq!(counts, (1, 0, 0));
         assert_eq!(take(&mut state).map(|(_, work)| work), Some(Work::All));
     }
@@ -1840,7 +1850,7 @@ mod tests {
                     state.pending_names_total
                 ),
             ),
-            (false, false, Some(None), false, (1, 0, 0))
+            (None, None, Some(None), false, (1, 0, 0))
         );
     }
 
@@ -1857,7 +1867,7 @@ mod tests {
             taken,
             Some(std::collections::BTreeSet::from(["p-1".to_string()]))
         );
-        assert_eq!((requested.overflow, state.pending_entries), (false, 1));
+        assert_eq!((requested.overflow, state.pending_entries), (None, 1));
     }
 
     #[test]
@@ -1914,8 +1924,20 @@ mod tests {
         let all_again = request_all(&mut state, &fourth);
         let no_names_left = request_all(&mut state, &agent_snapshots("fifth"));
 
-        assert!(all.overflow && names_past_the_limit.overflow && all_again.overflow);
-        assert!(no_names_left.overflow);
+        assert_eq!(
+            [
+                all.overflow,
+                names_past_the_limit.overflow,
+                all_again.overflow,
+                no_names_left.overflow
+            ],
+            [
+                Some(Overflow::Evicted(first.clone())),
+                Some(Overflow::Refused),
+                Some(Overflow::Evicted(second.clone())),
+                Some(Overflow::Refused)
+            ]
+        );
         assert_eq!(
             [&first, &second, &third, &fourth].map(|agent| state.cleanups.contains_key(agent)),
             [false, false, true, true]
@@ -1938,8 +1960,10 @@ mod tests {
         let first = request_names(&mut state, &agent, &snapshot_names(&["p-3", "p-2", "p-1"]));
         let again = request_names(&mut state, &agent, &snapshot_names(&["p-3"]));
 
-        assert!(first.overflow);
-        assert!(!again.overflow);
+        assert_eq!(
+            (first.overflow, again.overflow),
+            (Some(Overflow::Refused), None)
+        );
         assert_eq!(
             take(&mut state).map(|(_, work)| work_names(&work)),
             Some(["p-3", "p-2"].map(String::from).into_iter().collect())
@@ -1963,7 +1987,7 @@ mod tests {
 
         assert_eq!(
             (bound.get(), fits.overflow, past.overflow),
-            (1024, false, true)
+            (1024, None, Some(Overflow::Refused))
         );
         assert_eq!(pending, Some(texts.into_iter().collect()));
     }
@@ -1981,9 +2005,117 @@ mod tests {
             &snapshot_names(&["p-5"]),
         );
 
-        assert!(!fits.overflow && past.overflow && none_left.overflow);
+        assert_eq!(
+            [fits.overflow, past.overflow, none_left.overflow],
+            [None, Some(Overflow::Refused), Some(Overflow::Refused)]
+        );
         assert_eq!(state.pending_names_total, 3);
         assert_eq!(state.pending_entries, 2);
+    }
+
+    #[test]
+    fn a_delete_of_all_at_the_bound_names_the_agent_whose_names_it_evicts() {
+        let mut state = limited(2, 100, 10);
+        let (first, second, source, stage) = (
+            agent_snapshots("first"),
+            agent_snapshots("second"),
+            agent_snapshots("source"),
+            agent_snapshots("stage"),
+        );
+        let flight = (
+            AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "target".to_string(),
+            },
+            [9; 32],
+        );
+        request_names(&mut state, &first, &snapshot_names(&["p-1"]));
+        request_names(&mut state, &second, &snapshot_names(&["p-2"]));
+        step(&mut state, |state| fork_began(state, &source, &flight));
+
+        let all = request_all(&mut state, &agent_snapshots("all"));
+        let fork_end = step(&mut state, |state| {
+            fork_ended(state, &source, &flight, Some(&stage), None)
+        });
+
+        assert_eq!(
+            (all.overflow, fork_end),
+            (
+                Some(Overflow::Evicted(first)),
+                ForkEnd::StageDeleted {
+                    overflow: Some(Overflow::Evicted(second))
+                }
+            )
+        );
+        assert!(all_requested(&state, &stage));
+    }
+
+    #[test]
+    fn a_delete_of_all_for_an_agent_whose_clean_up_runs_keeps_the_bound() {
+        let (running, waiting) = (agent_snapshots("running"), agent_snapshots("waiting"));
+        let running_names = |state: &mut State| {
+            request_names(state, &running, &snapshot_names(&["p-1"]));
+            take(state).map(|(agent, _)| agent)
+        };
+        let mut evicts = limited(1, 100, 10);
+        let taken = running_names(&mut evicts);
+        request_names(&mut evicts, &waiting, &snapshot_names(&["p-2"]));
+        let mut refuses = limited(1, 100, 10);
+        running_names(&mut refuses);
+        request_all(&mut refuses, &waiting);
+
+        let evicted = request_all(&mut evicts, &running);
+        let refused = request_all(&mut refuses, &running);
+
+        assert_eq!(taken, Some(running.clone()));
+        assert_eq!(
+            (
+                evicted.overflow,
+                evicts.pending_entries,
+                all_requested(&evicts, &running)
+            ),
+            (Some(Overflow::Evicted(waiting)), 1, true)
+        );
+        assert_eq!(
+            (
+                refused.overflow,
+                refuses.pending_entries,
+                refuses
+                    .cleanups
+                    .get(&running)
+                    .map(|cleanup| (cleanup.pending.clone(), cleanup.running))
+            ),
+            (
+                Some(Overflow::Refused),
+                1,
+                Some((None, Some(RunningWork::Names)))
+            )
+        );
+    }
+
+    #[test]
+    fn names_for_an_agent_whose_clean_up_runs_keep_the_bound() {
+        let mut state = limited(1, 100, 10);
+        let running = agent_snapshots("running");
+        request_names(&mut state, &running, &snapshot_names(&["p-1"]));
+        let taken = take(&mut state).map(|(agent, _)| agent);
+        request_all(&mut state, &agent_snapshots("full"));
+
+        let names = request_names(&mut state, &running, &snapshot_names(&["p-2"]));
+
+        assert_eq!(taken, Some(running.clone()));
+        assert_eq!(
+            (
+                names.overflow,
+                state.pending_entries,
+                state.pending_names_total,
+                state
+                    .cleanups
+                    .get(&running)
+                    .map(|cleanup| cleanup.pending.clone())
+            ),
+            (Some(Overflow::Refused), 1, 0, Some(None))
+        );
     }
 
     #[test]
@@ -2357,7 +2489,7 @@ mod tests {
                 (
                     true,
                     false,
-                    ForkEnd::StageDeleted { overflow: false },
+                    ForkEnd::StageDeleted { overflow: None },
                     true,
                     0
                 ),
@@ -2389,7 +2521,7 @@ mod tests {
             });
             (end, all_requested(&state, &staged))
         };
-        let deleted = (ForkEnd::StageDeleted { overflow: false }, true);
+        let deleted = (ForkEnd::StageDeleted { overflow: None }, true);
 
         assert_eq!(
             [
@@ -2404,8 +2536,8 @@ mod tests {
             ],
             [
                 (ForkEnd::Done, false),
-                deleted,
-                deleted,
+                deleted.clone(),
+                deleted.clone(),
                 (ForkEnd::Done, false),
                 deleted,
                 (ForkEnd::StageLeaked, false),

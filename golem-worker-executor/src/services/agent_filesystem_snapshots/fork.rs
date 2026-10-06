@@ -87,7 +87,9 @@ impl Drop for ForkTicket {
             )
         });
         match end {
-            ForkEnd::StageDeleted { overflow: true } => {
+            ForkEnd::StageDeleted {
+                overflow: Some(transitions::Overflow::Refused),
+            } => {
                 tracing::warn!(
                     stage = ?self.stage,
                     "The clean-up queue of filesystem snapshots is full; the snapshots of a fork stage are lost"
@@ -101,7 +103,10 @@ impl Drop for ForkTicket {
                 );
                 crate::metrics::filesystem_snapshots::record_leaked_cleanup("fork_stage");
             }
-            ForkEnd::StageDeleted { overflow: false } | ForkEnd::Done => {}
+            ForkEnd::StageDeleted {
+                overflow: Some(transitions::Overflow::Evicted(evicted)),
+            } => super::record_eviction(&evicted),
+            ForkEnd::StageDeleted { overflow: None } | ForkEnd::Done => {}
         }
     }
 }

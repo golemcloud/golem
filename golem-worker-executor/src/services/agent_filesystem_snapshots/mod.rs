@@ -828,17 +828,22 @@ impl AgentFilesystemSnapshots {
         }
     }
 
-    /// Stops the job that a request stops, and counts a request that the bound dropped.
+    /// Stops the job that a request stops, and logs and counts the work that the bound dropped or
+    /// evicted.
     fn requested(agent: &AgentSnapshots, requested: transitions::Requested) {
         if let Some(stop) = requested.stop {
             stop.cancel();
         }
-        if requested.overflow {
-            tracing::warn!(
-                agent = ?agent,
-                "The clean-up queue of filesystem snapshots is full; a clean-up is lost"
-            );
-            crate::metrics::filesystem_snapshots::record_leaked_cleanup("overflow");
+        match requested.overflow {
+            Some(transitions::Overflow::Refused) => {
+                tracing::warn!(
+                    agent = ?agent,
+                    "The clean-up queue of filesystem snapshots is full; a clean-up is lost"
+                );
+                crate::metrics::filesystem_snapshots::record_leaked_cleanup("overflow");
+            }
+            Some(transitions::Overflow::Evicted(evicted)) => record_eviction(&evicted),
+            None => {}
         }
     }
 
@@ -880,6 +885,16 @@ impl AgentFilesystemSnapshots {
             core.calls.shut_down().await;
         }
     }
+}
+
+/// Logs and counts the pending names of `evicted` that a delete of all snapshots of another agent
+/// evicted.
+fn record_eviction(evicted: &AgentSnapshots) {
+    tracing::warn!(
+        agent = ?evicted,
+        "The clean-up queue of filesystem snapshots is full; the waiting deletes of the snapshots of this agent are lost"
+    );
+    crate::metrics::filesystem_snapshots::record_leaked_cleanup("overflow");
 }
 
 impl Core {
