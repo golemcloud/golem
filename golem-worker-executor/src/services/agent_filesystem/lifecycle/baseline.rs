@@ -691,13 +691,15 @@ pub(super) struct GenerationFacts {
 impl GenerationFacts {
     /// The facts of a generation with the initial files of `state`, where `chosen_times` tells
     /// whether a call put a chosen modification time at a path.
+    /// It reads the declaration maps of `state` as they are and builds no other view of them.
     pub(super) fn of(state: &InitialFileState, chosen_times: bool) -> Self {
         Self {
             chosen_times,
             provisioned: !state.provisioned.is_empty(),
             read_write_declared: state
-                .declarations()
+                .initial
                 .values()
+                .chain(state.provisioned.values())
                 .any(|file| file.permissions != AgentFilePermissions::ReadOnly),
         }
     }
@@ -716,6 +718,20 @@ pub(super) fn every_declaration_left_out(left_out: usize, declared: usize) -> bo
     left_out == declared
 }
 
+/// Whether a tree with `facts`, whose `left_out` read-only paths hold their initial files, still
+/// needs a walk to tell if it holds only initial files. It reads the sizes of the declaration maps
+/// `initial` and `provisioned` as they are, so a tree that the rules rule out costs no other view
+/// of the declarations.
+pub(super) fn needs_a_walk(
+    facts: GenerationFacts,
+    left_out: usize,
+    initial: &Declarations,
+    provisioned: &Declarations,
+) -> bool {
+    may_hold_only_initial_files(facts)
+        && every_declaration_left_out(left_out, initial.len() + provisioned.len())
+}
+
 /// Tells whether the tree holds only what a start from the initial files gives, from the facts of
 /// the generation and the read-only paths `left_out` that hold their initial files. The tree is read
 /// only when the facts and the left-out paths still allow a tree of initial files. The caller holds
@@ -726,13 +742,10 @@ async fn holds_only_initial_files<Adapter: SandboxFilesystemAdapter>(
     facts: GenerationFacts,
     left_out: &[Box<Path>],
 ) -> Result<bool, FilesystemStorageError> {
-    let declarations = state.declarations();
-    if !may_hold_only_initial_files(facts)
-        || !every_declaration_left_out(left_out.len(), declarations.len())
-    {
+    if !needs_a_walk(facts, left_out.len(), &state.initial, &state.provisioned) {
         return Ok(false);
     }
-    holds_nothing_else(sandbox, &declarations).await
+    holds_nothing_else(sandbox, &state.declarations()).await
 }
 
 /// Finds the read-only declared paths that hold the declared initial file with a single name. A

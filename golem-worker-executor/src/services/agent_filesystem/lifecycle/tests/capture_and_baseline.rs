@@ -409,6 +409,43 @@ async fn the_facts_of_a_generation_name_its_chosen_times_provisioned_files_and_r
 }
 
 #[test]
+async fn only_a_tree_that_the_facts_and_the_left_out_count_allow_needs_a_walk() {
+    use crate::services::agent_filesystem::lifecycle::baseline::{GenerationFacts, needs_a_walk};
+    use crate::services::agent_filesystem::lifecycle::initial_files::declarations_of;
+    let store = InitialFileStore::new().await;
+    let initial = declarations_of(
+        vec![
+            store
+                .declare("/a.txt", AgentFilePermissions::ReadOnly, b"a")
+                .await,
+            store
+                .declare("/b.txt", AgentFilePermissions::ReadOnly, b"b")
+                .await,
+        ],
+        "initial",
+    )
+    .unwrap();
+    let none = declarations_of(vec![], "provisioned").unwrap();
+    let facts = |chosen_times, provisioned, read_write_declared| GenerationFacts {
+        chosen_times,
+        provisioned,
+        read_write_declared,
+    };
+
+    assert_eq!(
+        [
+            (facts(false, false, false), 2),
+            (facts(false, false, false), 1),
+            (facts(true, false, false), 2),
+            (facts(false, true, false), 2),
+            (facts(false, false, true), 2),
+        ]
+        .map(|(facts, left_out)| needs_a_walk(facts, left_out, &initial, &none)),
+        [true, false, false, false, false]
+    );
+}
+
+#[test]
 #[timeout("10s")]
 async fn a_check_of_a_tree_that_the_facts_rule_out_reads_nothing() {
     let store = InitialFileStore::new().await;
