@@ -2083,6 +2083,103 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn streaming_output_retains_invocation_context_during_live_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let caller = agent_id!("StreamingRpcCaller", "stream-context-lifetime");
+    let target = agent_id!("StreamingRpcTarget", "stream-context-lifetime");
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    let mut previous_span_id = None;
+
+    for attempt in 0..2 {
+        let gate = executor
+            .invoke_and_await_agent(&component, &target, "create_output_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let checkpoint = executor.oplog_max_index(&target_worker).await?;
+        let collect = executor.invoke_and_await_agent(
+            &component,
+            &caller,
+            "collect_context_stream",
+            data_value!(gate.clone()),
+        );
+        let release = async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let oplog = executor.get_oplog(&target_worker, checkpoint).await?;
+                    if oplog
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamItems(_)))
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("producer did not persist its first output item"))??;
+            executor.complete_promise(&gate, Vec::new()).await
+        };
+        let (result, released) = tokio::join!(collect, release);
+        released?;
+        let snapshots = result?.into_typed::<Vec<(String, String, String)>>()?;
+        assert_eq!(snapshots.len(), 4);
+        assert_eq!(snapshots[0].2, "invoke-exported-function");
+        assert_eq!(
+            snapshots[1], snapshots[0],
+            "context changed after guest return"
+        );
+        assert_eq!(snapshots[2].0, snapshots[0].0);
+        assert_ne!(snapshots[2].1, snapshots[0].1);
+        assert_eq!(snapshots[2].2, "stream-child");
+        assert_eq!(
+            snapshots[3], snapshots[0],
+            "finishing the child lost its parent"
+        );
+        assert_ne!(previous_span_id.as_ref(), Some(&snapshots[0].1));
+        previous_span_id = Some(snapshots[0].1.clone());
+
+        // A subsequent scalar invocation also joins the producer's completion bookkeeping.
+        executor
+            .invoke_and_await_agent(&component, &target, "noop", data_value!())
+            .await?;
+        let oplog = executor
+            .get_oplog(&target_worker, OplogIndex::INITIAL)
+            .await?;
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count(),
+            1 + 3 * (attempt + 1),
+            "initialization and each gate/stream/scalar invocation finish exactly once"
+        );
+        if attempt == 0 {
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+            executor = start(deps, &context).await?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn durable_streaming_output_recovers_after_executor_restart(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

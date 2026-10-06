@@ -970,7 +970,10 @@ records.
 The primary remains `ExecutionStatus::Running` after the guest returns while owned output
 streams drain and invocation/session completion runs. `materialize_streaming_result`
 (`worker/invocation.rs`) publishes the early result and preserves typed traps during production
-and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+and settlement. Both live execution and replay retain invocation-owned context spans until
+materialization finishes, so output producers can read the current context and create child spans
+after the guest export returns. Resident span cleanup still runs if materialization fails.
+Suspension belongs to the outer live invocation or replay boundary, not the
 guest-result boundary; interruption must still reach a producer that no longer writes to its
 stream. Snapshot calls retain their own settled suspension boundary.
 
