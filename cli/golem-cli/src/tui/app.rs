@@ -59,10 +59,10 @@ use crate::tui::widgets::{
     ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow, HelpRow,
     JsonDocument, KeyHint, Notice, NoticeKind, OverlayFrame, PaneChrome, PaneEnding, PaneFocus,
     PaneHeader, PaneHeaderStatus, PaneLayout, PaneScrollbarSlot, PaneStatusTone, PaneTable,
-    PaneTableCell, PaneTableCellSpan, PaneTableColumn, PaneTableState, ScrollableDocument,
-    SearchInput, SectionHeading, SelectableRow, ShortcutRow, StatusKind, StatusMarker,
-    WorkspaceItem, WorkspaceSelector, fit, pane_table_virtual_width, render_scrollbar,
-    responsive_table_columns, shortcut_line,
+    PaneTableCell, PaneTableCellSpan, PaneTableColumn, PaneTableState, ReviewFieldRow,
+    ScrollableDocument, SearchInput, SectionHeading, SelectableRow, ShortcutRow, StatusKind,
+    StatusMarker, WorkspaceItem, WorkspaceSelector, fit, pane_table_virtual_width,
+    render_scrollbar, responsive_table_columns, shortcut_line, wrap_styled_line,
 };
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -95,6 +95,7 @@ use tokio::sync::{
     oneshot,
 };
 use tokio::time::{Duration, sleep};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const TUI_EVENT_CHANNEL_CAPACITY: usize = 1024;
 const CONTEXT_PICKER_RIGHT_PADDING: usize = 4;
@@ -638,7 +639,7 @@ impl TuiApp {
                 self.open_leader();
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_palette(PaletteScope::All);
+                self.open_palette(self.palette.scope);
             }
             KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_help();
@@ -687,8 +688,6 @@ impl TuiApp {
 
     fn handle_palette_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
         if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.palette.scope = PaletteScope::All;
-            self.palette.selected = 0;
             return;
         }
         if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1449,7 +1448,7 @@ impl TuiApp {
                 self.open_repl_form(true);
             }
             ActionId::OpenPalette => {
-                self.open_palette(PaletteScope::All);
+                self.open_palette(self.palette.scope);
             }
             ActionId::ShowHelp => {
                 self.palette.reset();
@@ -1568,6 +1567,10 @@ impl TuiApp {
 
     fn filtered_actions(&self) -> Vec<ActionDefinition> {
         filtered_actions(&self.palette.query, self.palette.scope, self)
+    }
+
+    fn palette_matches(&self) -> Vec<PaletteMatch> {
+        ranked_palette_actions(&self.palette.query, self.palette.scope, self)
     }
 
     fn open_leader(&mut self) {
@@ -2904,7 +2907,7 @@ impl TuiApp {
             return;
         }
         if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.open_palette(PaletteScope::All);
+            self.open_palette(self.palette.scope);
             return;
         }
         if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -2920,16 +2923,45 @@ impl TuiApp {
             self.restore_default_mode();
             return;
         };
-        if form.editing {
+        if form.editing.is_some() {
             match key.code {
-                KeyCode::Esc | KeyCode::Enter => form.editing = false,
-                KeyCode::Backspace => {
-                    command_form_text_value_mut(form).pop();
+                KeyCode::Esc => form.editing = None,
+                KeyCode::Enter => {
+                    let field = form.selected_field();
+                    let draft = form.editing.take().expect("active field editor").draft;
+                    apply_command_form_edit(form, field, draft);
+                }
+                KeyCode::Left => form
+                    .editing
+                    .as_mut()
+                    .expect("active field editor")
+                    .move_left(),
+                KeyCode::Right => form
+                    .editing
+                    .as_mut()
+                    .expect("active field editor")
+                    .move_right(),
+                KeyCode::Home => form.editing.as_mut().expect("active field editor").cursor = 0,
+                KeyCode::End => {
+                    let editor = form.editing.as_mut().expect("active field editor");
+                    editor.cursor = editor.draft.len();
+                }
+                KeyCode::Backspace => form
+                    .editing
+                    .as_mut()
+                    .expect("active field editor")
+                    .backspace(),
+                KeyCode::Delete => form.editing.as_mut().expect("active field editor").delete(),
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    form.editing.as_mut().expect("active field editor").clear()
                 }
                 KeyCode::Char(character)
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    command_form_text_value_mut(form).push(character);
+                    form.editing
+                        .as_mut()
+                        .expect("active field editor")
+                        .insert(character);
                 }
                 _ => {}
             }
@@ -3389,7 +3421,7 @@ impl TuiApp {
         self.session_form = Some(SessionReviewForm::Server {
             values,
             selected: 0,
-            editing: false,
+            editing: None,
             restart,
             error: None,
         });
@@ -3404,6 +3436,7 @@ impl TuiApp {
         self.session_form = Some(SessionReviewForm::Repl {
             values,
             selected: 0,
+            editing: None,
             restart,
         });
         self.mode.replace(InteractionMode::SessionForm);
@@ -3415,7 +3448,7 @@ impl TuiApp {
             return;
         }
         if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.open_palette(PaletteScope::All);
+            self.open_palette(self.palette.scope);
             return;
         }
         if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -3431,29 +3464,41 @@ impl TuiApp {
             return;
         };
 
-        if let SessionReviewForm::Server {
-            values,
-            selected,
-            editing,
-            error,
-            ..
-        } = form
-            && *editing
-        {
+        if form.editing().is_some() {
             match key.code {
-                KeyCode::Esc | KeyCode::Enter => *editing = false,
-                KeyCode::Backspace => {
-                    server_form_text_mut(values, *selected).pop();
-                    *error = None;
+                KeyCode::Esc => {
+                    form.take_editing();
+                }
+                KeyCode::Enter => {
+                    let field = form.selected_field();
+                    let draft = form.take_editing().expect("active field editor").draft;
+                    apply_session_form_edit(form, field, draft);
+                }
+                KeyCode::Left => form.editing_mut().expect("active field editor").move_left(),
+                KeyCode::Right => form
+                    .editing_mut()
+                    .expect("active field editor")
+                    .move_right(),
+                KeyCode::Home => form.editing_mut().expect("active field editor").cursor = 0,
+                KeyCode::End => {
+                    let editor = form.editing_mut().expect("active field editor");
+                    editor.cursor = editor.draft.len();
+                }
+                KeyCode::Backspace => form.editing_mut().expect("active field editor").backspace(),
+                KeyCode::Delete => form.editing_mut().expect("active field editor").delete(),
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    form.editing_mut().expect("active field editor").clear()
                 }
                 KeyCode::Char(character)
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    server_form_text_mut(values, *selected).push(character);
-                    *error = None;
+                    form.editing_mut()
+                        .expect("active field editor")
+                        .insert(character);
                 }
                 _ => {}
             }
+            form.clear_error();
             return;
         }
 
@@ -3549,13 +3594,14 @@ impl TuiApp {
 
         let clean = values.clean;
         let args = server_args_from_values(&values);
-        let ports_file = Some(PathBuf::from(values.ports_file.trim()));
+        let ports_file =
+            (!values.ports_file.trim().is_empty()).then(|| PathBuf::from(values.ports_file.trim()));
         let ports_file_before_modified = ports_file
             .as_ref()
             .and_then(|path| std::fs::metadata(path).ok())
             .and_then(|metadata| metadata.modified().ok());
         self.open_dev_workspace(DevView::Server);
-        self.mode.replace(InteractionMode::TerminalInput);
+        self.mode.replace(InteractionMode::Normal);
         self.server.run = ServerRun::new(
             self.server.next_id,
             clean,
@@ -3597,6 +3643,7 @@ impl TuiApp {
                     let _ = runtime.resize(cols, rows);
                 }
                 self.server.run.runtime = Some(runtime);
+                self.server.run.mark_spawned();
                 let stop = Arc::new(AtomicBool::new(false));
                 spawn_server_spinner(self.server.run.id, event_tx.clone(), stop.clone());
                 self.server.run.spinner_stop = Some(stop);
@@ -3708,11 +3755,10 @@ impl TuiApp {
     fn handle_server_spinner_tick(&mut self, server_id: u64) {
         if self.server.run.id == server_id && self.server.run.is_running() {
             self.server.run.spinner_frame = self.server.run.spinner_frame.wrapping_add(1);
-            if self.server.run.status == ServerStatus::Starting {
-                if let Some(ports) = fresh_bound_server_ports(&self.server.run) {
-                    self.server.run.bound_ports = Some(ports);
-                    self.server.run.status = ServerStatus::Running;
-                }
+            if self.server.run.bound_ports.is_none()
+                && let Some(ports) = fresh_bound_server_ports(&self.server.run)
+            {
+                self.server.run.bound_ports = Some(ports);
             }
         }
     }
@@ -4109,6 +4155,155 @@ struct CommandFormValues {
     yes: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewField {
+    Run,
+    Yes,
+    Clean,
+    SkipCheck,
+    ForceBuild,
+    FullDiff,
+    RollbackVersion,
+    RollbackRevision,
+    PostDeploy,
+    SystemMemory,
+    RouterAddress,
+    RouterPort,
+    CustomRequestPort,
+    McpPort,
+    PortsFile,
+    DataDirectory,
+    AgentFilesystemRoot,
+    Language,
+    StreamLogs,
+    AutomaticImports,
+}
+
+const BUILD_REVIEW_FIELDS: &[ReviewField] = &[
+    ReviewField::Run,
+    ReviewField::Yes,
+    ReviewField::SkipCheck,
+    ReviewField::ForceBuild,
+];
+const DEPLOY_REVIEW_FIELDS: &[ReviewField] = &[
+    ReviewField::Run,
+    ReviewField::Yes,
+    ReviewField::FullDiff,
+    ReviewField::ForceBuild,
+    ReviewField::RollbackVersion,
+    ReviewField::RollbackRevision,
+    ReviewField::PostDeploy,
+];
+const CLEAN_REVIEW_FIELDS: &[ReviewField] = &[ReviewField::Run, ReviewField::Yes];
+const SERVER_REVIEW_FIELDS: &[ReviewField] = &[
+    ReviewField::Run,
+    ReviewField::Clean,
+    ReviewField::Yes,
+    ReviewField::SystemMemory,
+    ReviewField::RouterAddress,
+    ReviewField::RouterPort,
+    ReviewField::CustomRequestPort,
+    ReviewField::McpPort,
+    ReviewField::PortsFile,
+    ReviewField::DataDirectory,
+    ReviewField::AgentFilesystemRoot,
+];
+const REPL_REVIEW_FIELDS: &[ReviewField] = &[
+    ReviewField::Run,
+    ReviewField::Yes,
+    ReviewField::Language,
+    ReviewField::StreamLogs,
+    ReviewField::AutomaticImports,
+    ReviewField::PostDeploy,
+];
+
+#[derive(Debug, Clone)]
+struct TextEditState {
+    draft: String,
+    cursor: usize,
+}
+
+impl TextEditState {
+    fn new(value: &str) -> Self {
+        Self {
+            draft: value.to_string(),
+            cursor: value.len(),
+        }
+    }
+
+    fn insert(&mut self, character: char) {
+        self.draft.insert(self.cursor, character);
+        self.cursor += character.len_utf8();
+    }
+
+    fn move_left(&mut self) {
+        self.cursor = previous_char_boundary(&self.draft, self.cursor);
+    }
+
+    fn move_right(&mut self) {
+        self.cursor = next_char_boundary(&self.draft, self.cursor);
+    }
+
+    fn backspace(&mut self) {
+        let previous = previous_char_boundary(&self.draft, self.cursor);
+        if previous < self.cursor {
+            self.draft.drain(previous..self.cursor);
+            self.cursor = previous;
+        }
+    }
+
+    fn delete(&mut self) {
+        let next = next_char_boundary(&self.draft, self.cursor);
+        if self.cursor < next {
+            self.draft.drain(self.cursor..next);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.draft.clear();
+        self.cursor = 0;
+    }
+
+    fn viewport(&self, width: usize) -> (String, usize) {
+        if width == 0 {
+            return (String::new(), 0);
+        }
+        let maximum_cursor_column = width.saturating_sub(1);
+        let mut start = 0;
+        while UnicodeWidthStr::width(&self.draft[start..self.cursor]) > maximum_cursor_column {
+            start = next_char_boundary(&self.draft, start);
+        }
+        let cursor_column = UnicodeWidthStr::width(&self.draft[start..self.cursor]);
+        let mut end = start;
+        let mut used = 0_usize;
+        for (offset, character) in self.draft[start..].char_indices() {
+            let character_width = character.width().unwrap_or_default();
+            if used.saturating_add(character_width) > width {
+                break;
+            }
+            used = used.saturating_add(character_width);
+            end = start + offset + character.len_utf8();
+        }
+        (self.draft[start..end].to_string(), cursor_column)
+    }
+}
+
+fn previous_char_boundary(value: &str, cursor: usize) -> usize {
+    value[..cursor]
+        .char_indices()
+        .next_back()
+        .map(|(index, _)| index)
+        .unwrap_or_default()
+}
+
+fn next_char_boundary(value: &str, cursor: usize) -> usize {
+    value[cursor..]
+        .chars()
+        .next()
+        .map(|character| cursor + character.len_utf8())
+        .unwrap_or(cursor)
+}
+
 impl CommandFormValues {
     fn command_options(&self) -> CommandOptions {
         CommandOptions {
@@ -4123,7 +4318,7 @@ struct CommandReviewForm {
     kind: CommandKind,
     values: CommandFormValues,
     selected: usize,
-    editing: bool,
+    editing: Option<TextEditState>,
 }
 
 impl CommandReviewForm {
@@ -4133,59 +4328,63 @@ impl CommandReviewForm {
             kind,
             values,
             selected: 0,
-            editing: false,
+            editing: None,
         }
     }
 
     fn field_count(&self) -> usize {
+        self.fields().len()
+    }
+
+    fn fields(&self) -> &'static [ReviewField] {
         match self.kind {
-            CommandKind::Build => 4,
-            CommandKind::Plan | CommandKind::Deploy => 7,
-            CommandKind::Clean => 2,
+            CommandKind::Build => BUILD_REVIEW_FIELDS,
+            CommandKind::Plan | CommandKind::Deploy => DEPLOY_REVIEW_FIELDS,
+            CommandKind::Clean => CLEAN_REVIEW_FIELDS,
         }
+    }
+
+    fn selected_field(&self) -> ReviewField {
+        self.fields()[self.selected]
     }
 }
 
 fn command_form_is_launch(form: &CommandReviewForm) -> bool {
-    form.selected == 0
-}
-
-fn command_form_text_value_mut(form: &mut CommandReviewForm) -> &mut String {
-    if form.selected == 4 {
-        &mut form.values.rollback_revision
-    } else {
-        &mut form.values.rollback_version
-    }
+    form.selected_field() == ReviewField::Run
 }
 
 fn update_command_form_field(form: &mut CommandReviewForm) {
-    match form.kind {
-        CommandKind::Build => match form.selected {
-            1 => form.values.skip_check = !form.values.skip_check,
-            2 => form.values.force_build = !form.values.force_build,
-            3 => form.values.yes = !form.values.yes,
-            _ => {}
-        },
-        CommandKind::Plan | CommandKind::Deploy => match form.selected {
-            1 => form.values.full_diff = !form.values.full_diff,
-            2 => form.values.force_build = !form.values.force_build,
-            3 => {
+    match form.selected_field() {
+        ReviewField::Yes => form.values.yes = !form.values.yes,
+        ReviewField::SkipCheck => form.values.skip_check = !form.values.skip_check,
+        ReviewField::ForceBuild => form.values.force_build = !form.values.force_build,
+        ReviewField::FullDiff => form.values.full_diff = !form.values.full_diff,
+        ReviewField::RollbackVersion => {
+            form.editing = Some(TextEditState::new(&form.values.rollback_version));
+        }
+        ReviewField::RollbackRevision => {
+            form.editing = Some(TextEditState::new(&form.values.rollback_revision));
+        }
+        ReviewField::PostDeploy => form.values.post_deploy = form.values.post_deploy.next(),
+        _ => {}
+    }
+}
+
+fn apply_command_form_edit(form: &mut CommandReviewForm, field: ReviewField, value: String) {
+    match field {
+        ReviewField::RollbackVersion => {
+            form.values.rollback_version = value;
+            if !form.values.rollback_version.is_empty() {
                 form.values.rollback_revision.clear();
-                form.editing = true;
-            }
-            4 => {
-                form.values.rollback_version.clear();
-                form.editing = true;
-            }
-            5 => form.values.post_deploy = form.values.post_deploy.next(),
-            6 => form.values.yes = !form.values.yes,
-            _ => {}
-        },
-        CommandKind::Clean => {
-            if form.selected == 1 {
-                form.values.yes = !form.values.yes;
             }
         }
+        ReviewField::RollbackRevision => {
+            form.values.rollback_revision = value;
+            if !form.values.rollback_revision.is_empty() {
+                form.values.rollback_version.clear();
+            }
+        }
+        _ => {}
     }
 }
 
@@ -5001,6 +5200,10 @@ impl ServerRun {
         )
     }
 
+    fn mark_spawned(&mut self) {
+        self.status = ServerStatus::Running;
+    }
+
     fn stop_spinner(&mut self) {
         if let Some(stop) = self.spinner_stop.take() {
             stop.store(true, Ordering::Relaxed);
@@ -5044,17 +5247,14 @@ struct ServerFormValues {
 }
 
 impl ServerFormValues {
-    fn new(config_dir: &str) -> Self {
+    fn new(_config_dir: &str) -> Self {
         Self {
             system_memory_override: String::new(),
             router_address: String::new(),
             router_port: String::new(),
             custom_request_port: String::new(),
             mcp_port: String::new(),
-            ports_file: PathBuf::from(config_dir)
-                .join("tui-server-ports.json")
-                .display()
-                .to_string(),
+            ports_file: String::new(),
             data_dir: String::new(),
             agent_filesystem_root: String::new(),
             clean: false,
@@ -5089,13 +5289,14 @@ enum SessionReviewForm {
     Server {
         values: ServerFormValues,
         selected: usize,
-        editing: bool,
+        editing: Option<TextEditState>,
         restart: bool,
         error: Option<String>,
     },
     Repl {
         values: ReplFormValues,
         selected: usize,
+        editing: Option<TextEditState>,
         restart: bool,
     },
 }
@@ -5108,10 +5309,7 @@ impl SessionReviewForm {
     }
 
     fn field_count(&self) -> usize {
-        match self {
-            Self::Server { .. } => 11,
-            Self::Repl { .. } => 6,
-        }
+        self.fields().len()
     }
 
     fn set_selected(&mut self, value: usize) {
@@ -5119,44 +5317,102 @@ impl SessionReviewForm {
             Self::Server { selected, .. } | Self::Repl { selected, .. } => *selected = value,
         }
     }
-}
 
-fn server_form_text_mut(values: &mut ServerFormValues, selected: usize) -> &mut String {
-    match selected {
-        1 => &mut values.system_memory_override,
-        2 => &mut values.router_address,
-        3 => &mut values.router_port,
-        4 => &mut values.custom_request_port,
-        5 => &mut values.mcp_port,
-        6 => &mut values.ports_file,
-        7 => &mut values.data_dir,
-        _ => &mut values.agent_filesystem_root,
+    fn fields(&self) -> &'static [ReviewField] {
+        match self {
+            Self::Server { .. } => SERVER_REVIEW_FIELDS,
+            Self::Repl { .. } => REPL_REVIEW_FIELDS,
+        }
+    }
+
+    fn selected_field(&self) -> ReviewField {
+        self.fields()[self.selected()]
+    }
+
+    fn editing(&self) -> Option<&TextEditState> {
+        match self {
+            Self::Server { editing, .. } | Self::Repl { editing, .. } => editing.as_ref(),
+        }
+    }
+
+    fn editing_mut(&mut self) -> Option<&mut TextEditState> {
+        match self {
+            Self::Server { editing, .. } | Self::Repl { editing, .. } => editing.as_mut(),
+        }
+    }
+
+    fn take_editing(&mut self) -> Option<TextEditState> {
+        match self {
+            Self::Server { editing, .. } | Self::Repl { editing, .. } => editing.take(),
+        }
+    }
+
+    fn clear_error(&mut self) {
+        if let Self::Server { error, .. } = self {
+            *error = None;
+        }
     }
 }
 
 fn update_session_form_field(form: &mut SessionReviewForm) {
+    let field = form.selected_field();
     match form {
         SessionReviewForm::Server {
-            values,
-            selected,
-            editing,
-            ..
-        } => match *selected {
-            1..=8 => *editing = true,
-            9 => values.clean = !values.clean,
-            10 => values.yes = !values.yes,
+            values, editing, ..
+        } => match field {
+            ReviewField::Clean => values.clean = !values.clean,
+            ReviewField::Yes => values.yes = !values.yes,
+            ReviewField::SystemMemory => {
+                *editing = Some(TextEditState::new(&values.system_memory_override))
+            }
+            ReviewField::RouterAddress => {
+                *editing = Some(TextEditState::new(&values.router_address))
+            }
+            ReviewField::RouterPort => *editing = Some(TextEditState::new(&values.router_port)),
+            ReviewField::CustomRequestPort => {
+                *editing = Some(TextEditState::new(&values.custom_request_port))
+            }
+            ReviewField::McpPort => *editing = Some(TextEditState::new(&values.mcp_port)),
+            ReviewField::PortsFile => *editing = Some(TextEditState::new(&values.ports_file)),
+            ReviewField::DataDirectory => *editing = Some(TextEditState::new(&values.data_dir)),
+            ReviewField::AgentFilesystemRoot => {
+                *editing = Some(TextEditState::new(&values.agent_filesystem_root))
+            }
             _ => {}
         },
         SessionReviewForm::Repl {
-            values, selected, ..
-        } => match *selected {
-            0 | 1 => {}
-            2 => values.stream_logs = !values.stream_logs,
-            3 => values.auto_imports = !values.auto_imports,
-            4 => values.post_deploy = values.post_deploy.next(),
-            5 => values.yes = !values.yes,
+            values, editing, ..
+        } => match field {
+            ReviewField::Yes => values.yes = !values.yes,
+            ReviewField::Language => {
+                *editing = Some(TextEditState::new(&values.language));
+            }
+            ReviewField::StreamLogs => values.stream_logs = !values.stream_logs,
+            ReviewField::AutomaticImports => values.auto_imports = !values.auto_imports,
+            ReviewField::PostDeploy => values.post_deploy = values.post_deploy.next(),
             _ => {}
         },
+    }
+}
+
+fn apply_session_form_edit(form: &mut SessionReviewForm, field: ReviewField, value: String) {
+    match form {
+        SessionReviewForm::Server { values, .. } => match field {
+            ReviewField::SystemMemory => values.system_memory_override = value,
+            ReviewField::RouterAddress => values.router_address = value,
+            ReviewField::RouterPort => values.router_port = value,
+            ReviewField::CustomRequestPort => values.custom_request_port = value,
+            ReviewField::McpPort => values.mcp_port = value,
+            ReviewField::PortsFile => values.ports_file = value,
+            ReviewField::DataDirectory => values.data_dir = value,
+            ReviewField::AgentFilesystemRoot => values.agent_filesystem_root = value,
+            _ => {}
+        },
+        SessionReviewForm::Repl { values, .. } => {
+            if field == ReviewField::Language {
+                values.language = value;
+            }
+        }
     }
 }
 
@@ -5169,9 +5425,6 @@ fn validate_server_form(values: &ServerFormValues) -> Result<(), String> {
         if !value.trim().is_empty() && value.trim().parse::<u16>().is_err() {
             return Err(format!("{label} must be a number from 0 to 65535"));
         }
-    }
-    if values.ports_file.trim().is_empty() {
-        return Err("ports file is required so bound ports can be observed".to_string());
     }
     Ok(())
 }
@@ -7241,6 +7494,24 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 label: "Commands",
             },
         ];
+        let dev_terminal = [
+            KeyHint {
+                key: "enter",
+                label: "CLI input",
+            },
+            KeyHint {
+                key: "pageup",
+                label: "Scrollback",
+            },
+            KeyHint {
+                key: "tab / shift+tab",
+                label: "Focus pane",
+            },
+            KeyHint {
+                key: "ctrl+x a",
+                label: "Commands",
+            },
+        ];
         let ops = [
             KeyHint {
                 key: "type",
@@ -7296,7 +7567,11 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         } else if app.mode == InteractionMode::TerminalScrollback {
             scrollback_mode.as_slice()
         } else if app.active_workspace == Workspace::Dev {
-            dev.as_slice()
+            if app.focused_terminal_is_running() {
+                dev_terminal.as_slice()
+            } else {
+                dev.as_slice()
+            }
         } else {
             ops.as_slice()
         };
@@ -8076,7 +8351,13 @@ fn server_status_line(
     let run = &server.run;
     let clean = run.clean;
     let ports = run.bound_ports.as_ref().map_or_else(
-        || "ports: pending".to_string(),
+        || {
+            if run.ports_file.is_some() {
+                "ports: awaiting file".to_string()
+            } else {
+                "ports: not observed".to_string()
+            }
+        },
         |ports| {
             format!(
                 "ports: {}/{}/{}",
@@ -8472,7 +8753,7 @@ fn render_context_switch_confirm(frame: &mut Frame<'_>, app: &TuiApp) {
             kind: NoticeKind::Warning,
             message: &message,
         }
-        .line(&theme()),
+        .popup_line(&theme()),
         Line::default(),
         Notice {
             kind: status_kind,
@@ -8724,14 +9005,10 @@ fn render_command_form(frame: &mut Frame<'_>, app: &TuiApp) {
     let Some(form) = app.command_form.as_ref() else {
         return;
     };
-    let mut fields = command_form_rows(form);
-    let mut lines = vec![
-        ActionButton {
-            label: "Run",
-            selected: form.selected == 0,
-        }
-        .line(&theme()),
-        Line::default(),
+    let fields = command_form_rows(form);
+    let preliminary_area = content_popup_rect(frame.area(), 62, frame.area().height);
+    let preliminary_content = OverlayFrame::content_area(preliminary_area);
+    let notice = wrap_styled_line(
         Notice {
             kind: if form.kind == CommandKind::Clean
                 || form.values.post_deploy == PostDeployPolicy::Reset
@@ -8754,39 +9031,100 @@ fn render_command_form(frame: &mut Frame<'_>, app: &TuiApp) {
                 }
             },
         }
+        .popup_line(&theme()),
+        preliminary_content.width as usize,
+    );
+    let desired_content_height = fields.len() as u16 + 5 + notice.len() as u16;
+    let area = content_popup_rect(frame.area(), 62, desired_content_height.saturating_add(4));
+    let content = OverlayFrame::content_area(area);
+    let mut lines = vec![
+        ActionButton {
+            label: "Run",
+            selected: form.selected_field() == ReviewField::Run,
+        }
         .line(&theme()),
         Line::default(),
     ];
-    for (index, (label, value)) in fields.drain(..).enumerate() {
-        let text = format!("{label:<18} {value}");
+    lines.extend(notice);
+    lines.push(Line::default());
+    let label_width = 18;
+    let row_width = content.width as usize;
+    let mut cursor = None;
+    for row in fields {
+        let selected = row.field == form.selected_field();
+        let editing = selected && form.editing.is_some();
+        let template = ReviewFieldRow {
+            label: row.label,
+            value: &row.value,
+            label_width,
+            selected,
+            editing,
+        };
+        let value_offset = template.value_offset(row_width);
+        let row_y = content.y.saturating_add(lines.len() as u16);
+        let (value, cursor_column) = if editing {
+            form.editing
+                .as_ref()
+                .expect("active field editor")
+                .viewport(row_width.saturating_sub(value_offset))
+        } else {
+            (row.value, 0)
+        };
+        if editing {
+            cursor = Some(Position::new(
+                content
+                    .x
+                    .saturating_add(value_offset as u16)
+                    .saturating_add(cursor_column as u16),
+                row_y,
+            ));
+        }
         lines.push(
-            SelectableRow {
-                label: &text,
-                selected: index + 1 == form.selected,
-                unavailable: false,
+            ReviewFieldRow {
+                label: row.label,
+                value: &value,
+                label_width,
+                selected,
+                editing,
             }
-            .line(54, &theme()),
+            .line(row_width, &theme()),
         );
     }
     lines.push(Line::default());
-    let desired_content_height = lines.len() as u16 + 1;
-    let area = content_popup_rect(frame.area(), 62, desired_content_height.saturating_add(4));
-    let content = OverlayFrame::content_area(area);
+    let normal_hints = [
+        KeyHint {
+            key: "↑/↓",
+            label: "Field",
+        },
+        KeyHint {
+            key: "space / enter",
+            label: "Change",
+        },
+        KeyHint {
+            key: "esc",
+            label: "Cancel",
+        },
+    ];
+    let editing_hints = [
+        KeyHint {
+            key: "type / arrows",
+            label: "Edit",
+        },
+        KeyHint {
+            key: "enter",
+            label: "Apply",
+        },
+        KeyHint {
+            key: "esc",
+            label: "Cancel edit",
+        },
+    ];
     let footer = shortcut_line(
-        &[
-            KeyHint {
-                key: "↑/↓",
-                label: "Field",
-            },
-            KeyHint {
-                key: "space / enter",
-                label: "Change",
-            },
-            KeyHint {
-                key: "esc",
-                label: "Cancel",
-            },
-        ],
+        if form.editing.is_some() {
+            &editing_hints
+        } else {
+            &normal_hints
+        },
         &theme(),
         Alignment::Center,
     );
@@ -8801,62 +9139,75 @@ fn render_command_form(frame: &mut Frame<'_>, app: &TuiApp) {
         Alignment::Left,
         &theme(),
     );
+    if let Some(cursor) = cursor
+        && cursor.x < content.right()
+        && cursor.y < content.bottom()
+    {
+        frame.set_cursor_position(cursor);
+    }
 }
 
-fn command_form_rows(form: &CommandReviewForm) -> Vec<(String, String)> {
-    let toggle = |enabled: bool| {
-        if enabled {
-            "[x]".to_string()
-        } else {
-            "[ ]".to_string()
-        }
-    };
-    match form.kind {
-        CommandKind::Build => vec![
-            ("skip check".to_string(), toggle(form.values.skip_check)),
-            ("force build".to_string(), toggle(form.values.force_build)),
-            ("--yes".to_string(), toggle(form.values.yes)),
-        ],
-        CommandKind::Plan | CommandKind::Deploy => vec![
-            ("full diff".to_string(), toggle(form.values.full_diff)),
-            ("force build".to_string(), toggle(form.values.force_build)),
-            (
-                "rollback version".to_string(),
-                if form.values.rollback_version.is_empty() {
-                    "-".to_string()
-                } else {
-                    form.values.rollback_version.clone()
-                },
-            ),
-            (
-                "rollback revision".to_string(),
-                if form.values.rollback_revision.is_empty() {
-                    "-".to_string()
-                } else {
-                    form.values.rollback_revision.clone()
-                },
-            ),
-            (
-                "post deploy".to_string(),
-                form.values.post_deploy.label().to_string(),
-            ),
-            ("--yes".to_string(), toggle(form.values.yes)),
-        ],
-        CommandKind::Clean => vec![("--yes".to_string(), toggle(form.values.yes))],
+struct ReviewRenderRow {
+    field: ReviewField,
+    label: &'static str,
+    value: String,
+}
+
+fn toggle_value(enabled: bool) -> String {
+    if enabled {
+        "[x]".to_string()
+    } else {
+        "[ ]".to_string()
     }
+}
+
+fn shown_value(value: &str) -> String {
+    if value.is_empty() {
+        "<default>".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn command_form_rows(form: &CommandReviewForm) -> Vec<ReviewRenderRow> {
+    form.fields()
+        .iter()
+        .copied()
+        .filter(|field| *field != ReviewField::Run)
+        .map(|field| {
+            let (label, value) = match field {
+                ReviewField::Yes => ("--yes", toggle_value(form.values.yes)),
+                ReviewField::SkipCheck => ("skip check", toggle_value(form.values.skip_check)),
+                ReviewField::ForceBuild => ("force build", toggle_value(form.values.force_build)),
+                ReviewField::FullDiff => ("full diff", toggle_value(form.values.full_diff)),
+                ReviewField::RollbackVersion => (
+                    "rollback version",
+                    shown_value(&form.values.rollback_version),
+                ),
+                ReviewField::RollbackRevision => (
+                    "rollback revision",
+                    shown_value(&form.values.rollback_revision),
+                ),
+                ReviewField::PostDeploy => {
+                    ("post deploy", form.values.post_deploy.label().to_string())
+                }
+                _ => unreachable!("command review field"),
+            };
+            ReviewRenderRow {
+                field,
+                label,
+                value,
+            }
+        })
+        .collect()
 }
 
 fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
     let Some(form) = app.session_form.as_ref() else {
         return;
     };
-    let (title, notice, error, fields) = match form {
-        SessionReviewForm::Server {
-            values,
-            restart,
-            error,
-            ..
-        } => (
+    let (title, notice, error) = match form {
+        SessionReviewForm::Server { restart, error, .. } => (
             if *restart {
                 "Review Server restart"
             } else {
@@ -8864,11 +9215,8 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
             },
             "Starts the local server in a nested CLI PTY.",
             error.as_deref(),
-            server_form_rows(values),
         ),
-        SessionReviewForm::Repl {
-            values, restart, ..
-        } => (
+        SessionReviewForm::Repl { restart, .. } => (
             if *restart {
                 "Review REPL restart"
             } else {
@@ -8876,63 +9224,127 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
             },
             "Starts the interactive REPL in a persistent nested CLI PTY.",
             None,
-            repl_form_rows(values),
         ),
     };
-    let mut lines = vec![
-        ActionButton {
-            label: "Run",
-            selected: form.selected() == 0,
-        }
-        .line(&theme()),
-        Line::default(),
+    let fields = session_form_rows(form);
+    let preliminary_area = content_popup_rect(frame.area(), 68, frame.area().height);
+    let preliminary_content = OverlayFrame::content_area(preliminary_area);
+    let notice = wrap_styled_line(
         Notice {
             kind: NoticeKind::Info,
             message: notice,
         }
+        .popup_line(&theme()),
+        preliminary_content.width as usize,
+    );
+    let error = error.map(|message| {
+        wrap_styled_line(
+            Notice {
+                kind: NoticeKind::Error,
+                message,
+            }
+            .popup_line(&theme()),
+            preliminary_content.width as usize,
+        )
+    });
+    let error_height = error
+        .as_ref()
+        .map(|lines| lines.len() as u16 + 1)
+        .unwrap_or_default();
+    let desired_content_height = fields.len() as u16 + 5 + notice.len() as u16 + error_height;
+    let area = content_popup_rect(frame.area(), 68, desired_content_height.saturating_add(4));
+    let content = OverlayFrame::content_area(area);
+    let mut lines = vec![
+        ActionButton {
+            label: "Run",
+            selected: form.selected_field() == ReviewField::Run,
+        }
         .line(&theme()),
         Line::default(),
     ];
+    lines.extend(notice);
+    lines.push(Line::default());
     if let Some(error) = error {
-        lines.push(
-            Notice {
-                kind: NoticeKind::Error,
-                message: error,
-            }
-            .line(&theme()),
-        );
+        lines.extend(error);
         lines.push(Line::default());
     }
-    for (index, (label, value)) in fields.into_iter().enumerate() {
-        let text = format!("{label:<22} {value}");
+    let label_width = 22;
+    let row_width = content.width as usize;
+    let mut cursor = None;
+    for row in fields {
+        let selected = row.field == form.selected_field();
+        let editing = selected && form.editing().is_some();
+        let template = ReviewFieldRow {
+            label: row.label,
+            value: &row.value,
+            label_width,
+            selected,
+            editing,
+        };
+        let value_offset = template.value_offset(row_width);
+        let row_y = content.y.saturating_add(lines.len() as u16);
+        let (value, cursor_column) = if editing {
+            form.editing()
+                .expect("active field editor")
+                .viewport(row_width.saturating_sub(value_offset))
+        } else {
+            (row.value, 0)
+        };
+        if editing {
+            cursor = Some(Position::new(
+                content
+                    .x
+                    .saturating_add(value_offset as u16)
+                    .saturating_add(cursor_column as u16),
+                row_y,
+            ));
+        }
         lines.push(
-            SelectableRow {
-                label: &text,
-                selected: index + 1 == form.selected(),
-                unavailable: false,
+            ReviewFieldRow {
+                label: row.label,
+                value: &value,
+                label_width,
+                selected,
+                editing,
             }
-            .line(60, &theme()),
+            .line(row_width, &theme()),
         );
     }
     lines.push(Line::default());
-    let desired_content_height = lines.len() as u16 + 1;
-    let area = content_popup_rect(frame.area(), 68, desired_content_height.saturating_add(4));
-    let content = OverlayFrame::content_area(area);
+    let normal_hints = [
+        KeyHint {
+            key: "↑/↓",
+            label: "Field",
+        },
+        KeyHint {
+            key: "space / enter",
+            label: "Change",
+        },
+        KeyHint {
+            key: "esc",
+            label: "Cancel",
+        },
+    ];
+    let editing_hints = [
+        KeyHint {
+            key: "type / arrows",
+            label: "Edit",
+        },
+        KeyHint {
+            key: "enter",
+            label: "Apply",
+        },
+        KeyHint {
+            key: "esc",
+            label: "Cancel edit",
+        },
+    ];
     let footer = shortcut_line(
-        &[
-            KeyHint {
-                key: "↑/↓",
-                label: "Field",
-            },
-            KeyHint {
-                key: "space / enter",
-                label: "Change",
-            },
-            KeyHint {
-                key: "esc",
-                label: "Cancel",
-            },
-        ],
+        if form.editing().is_some() {
+            &editing_hints
+        } else {
+            &normal_hints
+        },
         &theme(),
         Alignment::Center,
     );
@@ -8943,65 +9355,64 @@ fn render_session_form(frame: &mut Frame<'_>, app: &TuiApp) {
         Alignment::Left,
         &theme(),
     );
+    if let Some(cursor) = cursor
+        && cursor.x < content.right()
+        && cursor.y < content.bottom()
+    {
+        frame.set_cursor_position(cursor);
+    }
 }
 
-fn server_form_rows(values: &ServerFormValues) -> Vec<(String, String)> {
-    let shown = |value: &str| {
-        if value.is_empty() {
-            "<default>".to_string()
-        } else {
-            value.to_string()
-        }
-    };
-    vec![
-        (
-            "system memory".to_string(),
-            shown(&values.system_memory_override),
-        ),
-        ("router address".to_string(), shown(&values.router_address)),
-        ("router port".to_string(), shown(&values.router_port)),
-        (
-            "custom request port".to_string(),
-            shown(&values.custom_request_port),
-        ),
-        ("MCP port".to_string(), shown(&values.mcp_port)),
-        ("ports file".to_string(), shown(&values.ports_file)),
-        ("data directory".to_string(), shown(&values.data_dir)),
-        (
-            "agent filesystem root".to_string(),
-            shown(&values.agent_filesystem_root),
-        ),
-        (
-            "clean".to_string(),
-            if values.clean { "[x]" } else { "[ ]" }.to_string(),
-        ),
-        (
-            "--yes".to_string(),
-            if values.yes { "[x]" } else { "[ ]" }.to_string(),
-        ),
-    ]
-}
-
-fn repl_form_rows(values: &ReplFormValues) -> Vec<(String, String)> {
-    vec![
-        ("language".to_string(), values.language.clone()),
-        (
-            "stream logs".to_string(),
-            if values.stream_logs { "[x]" } else { "[ ]" }.to_string(),
-        ),
-        (
-            "automatic imports".to_string(),
-            if values.auto_imports { "[x]" } else { "[ ]" }.to_string(),
-        ),
-        (
-            "post deploy".to_string(),
-            values.post_deploy.label().to_string(),
-        ),
-        (
-            "--yes".to_string(),
-            if values.yes { "[x]" } else { "[ ]" }.to_string(),
-        ),
-    ]
+fn session_form_rows(form: &SessionReviewForm) -> Vec<ReviewRenderRow> {
+    form.fields()
+        .iter()
+        .copied()
+        .filter(|field| *field != ReviewField::Run)
+        .map(|field| {
+            let (label, value) = match form {
+                SessionReviewForm::Server { values, .. } => match field {
+                    ReviewField::Clean => ("clean", toggle_value(values.clean)),
+                    ReviewField::Yes => ("--yes", toggle_value(values.yes)),
+                    ReviewField::SystemMemory => {
+                        ("system memory", shown_value(&values.system_memory_override))
+                    }
+                    ReviewField::RouterAddress => {
+                        ("router address", shown_value(&values.router_address))
+                    }
+                    ReviewField::RouterPort => ("router port", shown_value(&values.router_port)),
+                    ReviewField::CustomRequestPort => (
+                        "custom request port",
+                        shown_value(&values.custom_request_port),
+                    ),
+                    ReviewField::McpPort => ("MCP port", shown_value(&values.mcp_port)),
+                    ReviewField::PortsFile => ("ports file", shown_value(&values.ports_file)),
+                    ReviewField::DataDirectory => ("data directory", shown_value(&values.data_dir)),
+                    ReviewField::AgentFilesystemRoot => (
+                        "agent filesystem root",
+                        shown_value(&values.agent_filesystem_root),
+                    ),
+                    _ => unreachable!("server review field"),
+                },
+                SessionReviewForm::Repl { values, .. } => match field {
+                    ReviewField::Yes => ("--yes", toggle_value(values.yes)),
+                    ReviewField::Language => ("language", shown_value(&values.language)),
+                    ReviewField::StreamLogs => ("stream logs", toggle_value(values.stream_logs)),
+                    ReviewField::AutomaticImports => {
+                        ("automatic imports", toggle_value(values.auto_imports))
+                    }
+                    ReviewField::PostDeploy => {
+                        ("post deploy", values.post_deploy.label().to_string())
+                    }
+                    _ => unreachable!("REPL review field"),
+                },
+            };
+            ReviewRenderRow {
+                field,
+                label,
+                value,
+            }
+        })
+        .collect()
 }
 
 fn render_jobs(frame: &mut Frame<'_>, app: &TuiApp) {
@@ -9095,7 +9506,7 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
             kind: NoticeKind::Info,
             message: "Force quit stops all TUI-owned processes.",
         }
-        .line(&theme()),
+        .popup_line(&theme()),
         Line::default(),
         ActionButton {
             label: "Return",
@@ -9134,17 +9545,28 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
     .render_aligned(frame, area, lines, Alignment::Left, &theme());
 }
 
+fn palette_match_indices(text: &str, query: &str) -> Vec<usize> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    SkimMatcherV2::default()
+        .fuzzy_indices(&text.to_lowercase(), &query.to_lowercase())
+        .map(|(_, indices)| indices)
+        .unwrap_or_default()
+}
+
 fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
-    let actions = app.filtered_actions();
+    let matches = app.palette_matches();
     let area = adaptive_data_popup_rect(frame.area(), 36, 10);
     let content = OverlayFrame::content_area(area);
     let action_capacity = content.height.saturating_sub(5).max(1) as usize;
-    let overflow = actions.len() > action_capacity;
+    let overflow = matches.len() > action_capacity;
     let content_width = content.width.saturating_sub(u16::from(overflow)) as usize;
-    let selected = app.palette.selected.min(actions.len().saturating_sub(1));
-    let visible_count = action_capacity.min(actions.len());
+    let selected = app.palette.selected.min(matches.len().saturating_sub(1));
+    let visible_count = action_capacity.min(matches.len());
     let start = selected.saturating_sub(visible_count.saturating_sub(1));
-    let visible_actions = actions
+    let visible_matches = matches
         .iter()
         .skip(start)
         .take(visible_count)
@@ -9191,7 +9613,7 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
         Line::default(),
     ];
 
-    if actions.is_empty() {
+    if matches.is_empty() {
         lines.push(
             Notice {
                 kind: NoticeKind::Empty,
@@ -9200,30 +9622,24 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
             .line(&theme()),
         );
     } else {
-        for (index, action) in visible_actions.iter().enumerate() {
+        for (index, matched) in visible_matches.iter().enumerate() {
+            let action = &matched.action;
             let availability = app.action_availability(action);
-            let reason = match availability {
-                ActionAvailability::Available => String::new(),
-                ActionAvailability::Unavailable(reason) => {
-                    format!(" — unavailable: {reason}")
-                }
-            };
-            let review = if action.review() == ActionReview::ReviewForm {
-                " · review"
-            } else {
-                ""
-            };
-            let description = format!(
-                "{}{reason} · {} · target: {}{review}",
-                action.description,
-                action.risk().label(),
-                app.action_target_summary(action)
-            );
+            let description = palette_action_description(app, action);
+            let label_matches = palette_match_indices(action.label, &app.palette.query);
+            let shortcut_matches = action
+                .shortcut
+                .map(|shortcut| palette_match_indices(shortcut, &app.palette.query))
+                .unwrap_or_default();
+            let description_matches = palette_match_indices(&description, &app.palette.query);
             lines.push(
                 CommandRow {
                     label: action.label,
                     shortcut: action.shortcut,
                     description: &description,
+                    label_matches: &label_matches,
+                    shortcut_matches: &shortcut_matches,
+                    description_matches: &description_matches,
                     selected: start + index == selected,
                     unavailable: availability.is_unavailable(),
                 }
@@ -9267,7 +9683,7 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
                 height: content.height.saturating_sub(5),
                 ..content
             },
-            actions.len(),
+            matches.len(),
             selected,
         );
     }
@@ -9395,18 +9811,6 @@ enum ActionSurface {
     System,
 }
 
-impl ActionSurface {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Global => "Global",
-            Self::Leader => "Leader",
-            Self::Agents => "Agents",
-            Self::Repl => "REPL",
-            Self::System => "System",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActionExecution {
     Internal,
@@ -9440,15 +9844,6 @@ enum ActionReview {
     ReviewForm,
 }
 
-impl ActionReview {
-    fn label(self) -> &'static str {
-        match self {
-            Self::None => "no-review",
-            Self::ReviewForm => "review-form",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActionTarget {
     Interface,
@@ -9468,17 +9863,6 @@ impl ActionTarget {
     }
 }
 
-impl ActionExecution {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Internal => "internal",
-            Self::Direct => "direct",
-            Self::NestedCli => "nested-cli",
-            Self::ViewNavigation => "navigation",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct ActionDefinition {
     id: ActionId,
@@ -9486,12 +9870,15 @@ struct ActionDefinition {
     description: &'static str,
     shortcut: Option<&'static str>,
     category: ActionCategory,
+    #[allow(dead_code)]
     scope: ActionSurface,
+    #[allow(dead_code)]
     execution_kind: ActionExecution,
     palette_visible: bool,
 }
 
 impl ActionDefinition {
+    #[allow(dead_code)]
     fn leader_path(self) -> Option<&'static str> {
         match self.id {
             ActionId::SelectDev | ActionId::SelectOps => Some("ctrl+x w"),
@@ -9773,7 +10160,7 @@ const ACTIONS: [ActionDefinition; 34] = [
     },
     ActionDefinition {
         id: ActionId::SelectDev,
-        label: "Go to Dev",
+        label: "Dev",
         description: "Switch to Dev workspace",
         shortcut: None,
         category: ActionCategory::Navigation,
@@ -9783,7 +10170,7 @@ const ACTIONS: [ActionDefinition; 34] = [
     },
     ActionDefinition {
         id: ActionId::SelectOps,
-        label: "Go to Ops",
+        label: "Ops",
         description: "Switch to Ops workspace",
         shortcut: None,
         category: ActionCategory::Navigation,
@@ -9793,7 +10180,7 @@ const ACTIONS: [ActionDefinition; 34] = [
     },
     ActionDefinition {
         id: ActionId::SelectOpsAgents,
-        label: "Open Agents",
+        label: "Ops / Agents",
         description: "Open the Ops Agents collection",
         shortcut: None,
         category: ActionCategory::Ops,
@@ -9803,7 +10190,7 @@ const ACTIONS: [ActionDefinition; 34] = [
     },
     ActionDefinition {
         id: ActionId::SelectOpsDeployment,
-        label: "Open Deployment",
+        label: "Ops / Deployment",
         description: "Open the current Deployment overview",
         shortcut: None,
         category: ActionCategory::Ops,
@@ -9813,7 +10200,7 @@ const ACTIONS: [ActionDefinition; 34] = [
     },
     ActionDefinition {
         id: ActionId::SelectOpsEnvironment,
-        label: "Open Environment",
+        label: "Ops / Environment",
         description: "Open the selected Environment overview",
         shortcut: None,
         category: ActionCategory::Ops,
@@ -9823,7 +10210,7 @@ const ACTIONS: [ActionDefinition; 34] = [
     },
     ActionDefinition {
         id: ActionId::SelectOpsServer,
-        label: "Open Server",
+        label: "Ops / Server",
         description: "Open the selected Server overview",
         shortcut: None,
         category: ActionCategory::Ops,
@@ -9941,36 +10328,127 @@ fn action_relevant_to_context(action: &ActionDefinition, app: &TuiApp) -> bool {
     }
 }
 
-fn filtered_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
+#[derive(Debug, Clone, Copy)]
+struct PaletteMatch {
+    action: ActionDefinition,
+    rank: u8,
+    score: i64,
+    registry_index: usize,
+}
+
+fn palette_action_description(app: &TuiApp, action: &ActionDefinition) -> String {
+    let reason = match app.action_availability(action) {
+        ActionAvailability::Available => String::new(),
+        ActionAvailability::Unavailable(reason) => format!(" — unavailable: {reason}"),
+    };
+    let review = if action.review() == ActionReview::ReviewForm {
+        " · review"
+    } else {
+        ""
+    };
+    format!(
+        "{} · {}{reason} · {} · target: {} ({}){review}",
+        action.category.label(),
+        action.description,
+        action.risk().label(),
+        action.target().label(),
+        app.action_target_summary(action)
+    )
+}
+
+fn palette_search_metadata(app: &TuiApp, action: &ActionDefinition) -> String {
+    format!(
+        "{} {}",
+        action.shortcut.unwrap_or_default(),
+        palette_action_description(app, action)
+    )
+}
+
+fn palette_label_rank(label: &str, query: &str, matcher: &SkimMatcherV2) -> Option<(u8, i64)> {
+    let label = label.to_lowercase();
+    let query = query.to_lowercase();
+    let fuzzy_score = matcher.fuzzy_match(&label, &query).unwrap_or_default();
+    if label == query {
+        return Some((0, fuzzy_score));
+    }
+    if label.starts_with(&query) {
+        return Some((1, fuzzy_score));
+    }
+    let label_words = label
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let query_words = query.split_whitespace().collect::<Vec<_>>();
+    if !query_words.is_empty()
+        && query_words
+            .iter()
+            .all(|query| label_words.iter().any(|word| word.starts_with(query)))
+    {
+        return Some((2, fuzzy_score));
+    }
+    if label.contains(&query) {
+        return Some((3, fuzzy_score));
+    }
+    matcher.fuzzy_match(&label, &query).map(|score| (4, score))
+}
+
+fn ranked_palette_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<PaletteMatch> {
     let query = query.trim();
     if query.is_empty() {
-        return palette_actions(scope, app);
+        return palette_actions(scope, app)
+            .into_iter()
+            .map(|action| PaletteMatch {
+                action,
+                rank: 0,
+                score: 0,
+                registry_index: ACTIONS
+                    .iter()
+                    .position(|registered| registered.id == action.id)
+                    .expect("registered palette action"),
+            })
+            .collect();
     }
-
     let matcher = SkimMatcherV2::default();
     let mut matches = palette_actions(scope, app)
         .into_iter()
         .filter_map(|action| {
-            let haystack = format!(
-                "{} {} {} {} {} {} {} {} {}",
-                action.label,
-                action.description,
-                action.category.label(),
-                action.scope.label(),
-                action.execution_kind.label(),
-                action.risk().label(),
-                action.review().label(),
-                action.target().label(),
-                action.leader_path().unwrap_or("")
-            );
-            matcher
-                .fuzzy_match(&haystack, query)
-                .map(|score| (score, action))
+            let registry_index = ACTIONS
+                .iter()
+                .position(|registered| registered.id == action.id)
+                .expect("registered palette action");
+            let (rank, score) =
+                palette_label_rank(action.label, query, &matcher).or_else(|| {
+                    matcher
+                        .fuzzy_match(&palette_search_metadata(app, &action), query)
+                        .map(|score| (5, score))
+                })?;
+            Some(PaletteMatch {
+                action,
+                rank,
+                score,
+                registry_index,
+            })
         })
         .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        left.rank
+            .cmp(&right.rank)
+            .then_with(|| right.score.cmp(&left.score))
+            .then_with(|| {
+                app.action_availability(&left.action)
+                    .is_unavailable()
+                    .cmp(&app.action_availability(&right.action).is_unavailable())
+            })
+            .then_with(|| left.registry_index.cmp(&right.registry_index))
+    });
+    matches
+}
 
-    matches.sort_by(|(left, _), (right, _)| right.cmp(left));
-    matches.into_iter().map(|(_, action)| action).collect()
+fn filtered_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
+    ranked_palette_actions(query, scope, app)
+        .into_iter()
+        .map(|matched| matched.action)
+        .collect()
 }
 
 #[cfg(test)]
@@ -10182,7 +10660,7 @@ mod tests {
             let secondary = snapshot_region(&app, RegionKind::DevSecondarySplit);
             let (x, y) = match placement {
                 layout::PanePlacement::Right => (primary.x, secondary.y),
-                layout::PanePlacement::Bottom => (secondary.x, primary.y),
+                layout::PanePlacement::Bottom => (secondary.x, secondary.y),
             };
 
             assert_eq!(buffer[(x, y)].symbol(), expected);
@@ -10479,12 +10957,12 @@ mod tests {
             ActionExecution::Direct
         );
         assert!(
-            filtered_actions("nested-cli", PaletteScope::All, &app)
+            filtered_actions("direct", PaletteScope::All, &app)
                 .iter()
                 .all(|action| action.id != ActionId::RefreshAgents)
         );
         assert!(
-            filtered_actions("direct", PaletteScope::All, &app)
+            filtered_actions("refresh", PaletteScope::All, &app)
                 .iter()
                 .any(|action| action.id == ActionId::RefreshAgents)
         );
@@ -10510,6 +10988,14 @@ mod tests {
                 .iter()
                 .any(|action| action.id == ActionId::RefreshAgents),
             "{ops_actions:?}"
+        );
+
+        let target_actions = filtered_actions("sample-app/local/local", PaletteScope::All, &app);
+        assert!(
+            target_actions
+                .iter()
+                .any(|action| action.id == ActionId::Build),
+            "{target_actions:?}"
         );
     }
 
@@ -12134,6 +12620,66 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_remembers_scope_for_the_tui_session() {
+        let mut app = test_app();
+        app.open_palette(PaletteScope::Context);
+        app.handle_palette_key(key(KeyCode::Esc), None);
+
+        app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+
+        assert_eq!(app.mode, InteractionMode::Palette);
+        assert_eq!(app.palette.scope, PaletteScope::Context);
+
+        app.handle_palette_key(key(KeyCode::Esc), None);
+        app.palette.scope = PaletteScope::All;
+        app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Char('a')));
+
+        assert_eq!(app.mode, InteractionMode::Palette);
+        assert_eq!(app.palette.scope, PaletteScope::Context);
+    }
+
+    #[test]
+    fn palette_ranking_prefers_exact_and_path_labels_in_registry_order() {
+        let app = test_app();
+        let matches = ranked_palette_actions("ops", PaletteScope::All, &app);
+        let ids = matches
+            .iter()
+            .map(|matched| matched.action.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids.first(), Some(&ActionId::SelectOps));
+        assert_eq!(
+            &ids[1..5],
+            &[
+                ActionId::SelectOpsAgents,
+                ActionId::SelectOpsDeployment,
+                ActionId::SelectOpsEnvironment,
+                ActionId::SelectOpsServer,
+            ]
+        );
+        assert_eq!(matches[0].rank, 0);
+        assert!(matches[1..5].iter().all(|matched| matched.rank == 1));
+    }
+
+    #[test]
+    fn typed_palette_matches_are_visually_highlighted() {
+        let mut app = test_app();
+        app.open_palette(PaletteScope::All);
+        for character in "ops".chars() {
+            app.handle_palette_key(key(KeyCode::Char(character)), None);
+        }
+
+        let buffer = render_app_buffer_at(&app, 120, 32);
+        let visual = theme();
+        assert!(
+            (0..buffer.area.height).any(|y| (0..buffer.area.width)
+                .any(|x| buffer[(x, y)].bg == visual.search_match_background)),
+            "expected visible palette match highlighting"
+        );
+    }
+
+    #[test]
     fn leader_replaces_every_footer_shortcut_row() {
         let mut app = test_app();
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
@@ -12387,6 +12933,101 @@ mod tests {
         assert!(frame.contains("[ Run ]"), "{frame}");
         assert!(!frame.contains("step check"), "{frame}");
         assert!(frame.contains("skip check"), "{frame}");
+    }
+
+    #[test]
+    fn review_form_field_order_keeps_confirmation_options_first() {
+        let build = CommandReviewForm::new(CommandKind::Build, CommandFormValues::default());
+        assert_eq!(
+            command_form_rows(&build)
+                .iter()
+                .map(|row| row.label)
+                .collect::<Vec<_>>(),
+            vec!["--yes", "skip check", "force build"]
+        );
+
+        let server = SessionReviewForm::Server {
+            values: ServerFormValues::new("unused"),
+            selected: 0,
+            editing: None,
+            restart: false,
+            error: None,
+        };
+        assert_eq!(
+            session_form_rows(&server)
+                .iter()
+                .map(|row| row.label)
+                .take(2)
+                .collect::<Vec<_>>(),
+            vec!["clean", "--yes"]
+        );
+    }
+
+    #[test]
+    fn free_text_review_edits_are_transactional() {
+        let mut app = test_app();
+        app.open_command_form(CommandKind::Deploy);
+        let form = app.command_form.as_mut().expect("deploy review form");
+        form.selected = 4;
+        form.values.rollback_version = "7".to_string();
+        form.values.rollback_revision = "keep-until-apply".to_string();
+
+        app.handle_command_form_key(key(KeyCode::Enter), None);
+        app.handle_command_form_key(
+            modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            None,
+        );
+        app.handle_command_form_key(key(KeyCode::Char('9')), None);
+        app.handle_command_form_key(key(KeyCode::Esc), None);
+
+        let form = app.command_form.as_ref().expect("deploy review form");
+        assert_eq!(form.values.rollback_version, "7");
+        assert_eq!(form.values.rollback_revision, "keep-until-apply");
+
+        app.handle_command_form_key(key(KeyCode::Enter), None);
+        app.handle_command_form_key(
+            modified_key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            None,
+        );
+        app.handle_command_form_key(key(KeyCode::Char('9')), None);
+        app.handle_command_form_key(key(KeyCode::Enter), None);
+
+        let form = app.command_form.as_ref().expect("deploy review form");
+        assert_eq!(form.values.rollback_version, "9");
+        assert!(form.values.rollback_revision.is_empty());
+    }
+
+    #[test]
+    fn free_text_editor_moves_across_unicode_boundaries_and_scrolls_to_cursor() {
+        let mut editor = TextEditState::new("abé界");
+        editor.move_left();
+        editor.backspace();
+        editor.insert('🙂');
+
+        assert_eq!(editor.draft, "ab🙂界");
+        assert!(editor.draft.is_char_boundary(editor.cursor));
+        let (visible, cursor_column) = editor.viewport(4);
+        assert!(UnicodeWidthStr::width(visible.as_str()) <= 4);
+        assert!(cursor_column < 4);
+    }
+
+    #[test]
+    fn active_free_text_review_field_shows_cursor_and_input_background() {
+        let mut app = test_app();
+        app.open_command_form(CommandKind::Deploy);
+        app.command_form
+            .as_mut()
+            .expect("deploy review form")
+            .selected = 4;
+        app.handle_command_form_key(key(KeyCode::Enter), None);
+
+        let (_, cursor) = render_app_text_and_cursor(&app);
+        let buffer = render_app_buffer_at(&app, 100, 24);
+        assert_ne!((cursor.x, cursor.y), (0, 0));
+        assert_eq!(buffer[(cursor.x, cursor.y)].bg, theme().input_background);
+        let frame = render_buffer_text(&buffer);
+        assert!(frame.contains("enter Apply"), "{frame}");
+        assert!(frame.contains("esc Cancel edit"), "{frame}");
     }
 
     #[test]
@@ -12694,16 +13335,35 @@ mod tests {
         values.clean = true;
         let args = server_args_from_values(&values);
 
+        assert_eq!(args, vec!["server", "run", "--clean"]);
+    }
+
+    #[test]
+    fn server_ports_file_is_optional_and_only_emitted_when_configured() {
+        let app = test_app();
+        let mut values = ServerFormValues::new(&app.selected_target.context.config_dir);
+        assert_eq!(server_args_from_values(&values), vec!["server", "run"]);
+
+        values.ports_file = " ./ports.json ".to_string();
         assert_eq!(
-            args,
-            vec![
-                "server",
-                "run",
-                "--ports-file",
-                "/tmp/golem-config/tui-server-ports.json",
-                "--clean"
-            ]
+            server_args_from_values(&values),
+            vec!["server", "run", "--ports-file", "./ports.json"]
         );
+    }
+
+    #[test]
+    fn server_launch_stays_tui_owned_until_input_is_explicitly_entered() {
+        let mut app = test_app();
+        app.start_server_with_values(ServerFormValues::new("unused"), None);
+
+        assert_eq!(app.mode, InteractionMode::Normal);
+        assert_eq!(app.server.run.status, ServerStatus::Starting);
+
+        app.server.run.mark_spawned();
+        assert_eq!(app.server.run.status, ServerStatus::Running);
+        let frame = render_app_text_at(&app, 120, 30);
+        assert!(frame.contains("enter CLI input"), "{frame}");
+        assert!(frame.contains("TUI · enter → CLI"), "{frame}");
     }
 
     #[test]
@@ -12870,7 +13530,7 @@ mod tests {
         server_app.session_form = Some(SessionReviewForm::Server {
             values: server_values,
             selected: 10,
-            editing: false,
+            editing: None,
             restart: false,
             error: None,
         });
@@ -12897,6 +13557,7 @@ mod tests {
                 yes: true,
             },
             selected: 5,
+            editing: None,
             restart: false,
         });
         repl_app.launch_session_form(None);

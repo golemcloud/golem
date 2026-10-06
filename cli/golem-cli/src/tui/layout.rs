@@ -176,6 +176,16 @@ impl UiGeometry {
 
 impl LayoutSnapshot {
     pub(super) fn hit_test(&self, x: u16, y: u16) -> Option<RegionKind> {
+        if let Some(split) = self.regions.iter().rev().find(|region| {
+            matches!(
+                region.kind,
+                RegionKind::DevPrimarySplit
+                    | RegionKind::DevSecondarySplit
+                    | RegionKind::OpsDetailsSplit
+            ) && contains(region.area, x, y)
+        }) {
+            return Some(split.kind);
+        }
         self.regions
             .iter()
             .rev()
@@ -520,9 +530,9 @@ fn split_area(area: Rect, placement: PanePlacement, ratio_value: u16) -> (Rect, 
             );
             let second = Rect::new(
                 area.x,
-                divider.y,
+                divider.bottom(),
                 area.width,
-                area.bottom().saturating_sub(divider.y),
+                area.bottom().saturating_sub(divider.bottom()),
             );
             (first, divider, second)
         }
@@ -808,6 +818,31 @@ mod tests {
     }
 
     #[test]
+    fn resize_split_hit_targets_win_over_overlapping_pane_regions() {
+        let overlap = Rect::new(10, 4, 1, 8);
+        let snapshot = LayoutSnapshot {
+            header: Rect::default(),
+            workspace_body: Rect::new(0, 0, 30, 16),
+            footer: Rect::default(),
+            regions: vec![
+                Region {
+                    kind: RegionKind::OpsDetailsSplit,
+                    area: overlap,
+                },
+                Region {
+                    kind: RegionKind::OpsDetails,
+                    area: Rect::new(10, 0, 20, 16),
+                },
+            ],
+        };
+
+        assert_eq!(
+            snapshot.hit_test(overlap.x, overlap.y),
+            Some(RegionKind::OpsDetailsSplit)
+        );
+    }
+
+    #[test]
     fn right_and_bottom_subviews_use_physical_placement() {
         for placement in [PanePlacement::Right, PanePlacement::Bottom] {
             let mut input = input();
@@ -832,14 +867,14 @@ mod tests {
     }
 
     #[test]
-    fn bottom_split_reuses_the_divider_as_the_trailing_pane_title_row() {
+    fn bottom_split_reserves_a_disjoint_divider_row() {
         let area = Rect::new(3, 4, 80, 20);
         let (first, divider, second) = split_area(area, PanePlacement::Bottom, 60);
 
         assert_eq!(first.bottom(), divider.y);
-        assert_eq!(second.y, divider.y);
-        assert_eq!(second.height, area.bottom() - divider.y);
-        assert_eq!(second.y + 1, divider.bottom());
+        assert_eq!(second.y, divider.bottom());
+        assert_eq!(second.height, area.bottom() - divider.bottom());
+        assert_eq!(first.height + divider.height + second.height, area.height);
     }
 
     #[test]
@@ -866,7 +901,7 @@ mod tests {
                 PanePlacement::Bottom => {
                     assert!(list.y < details.y);
                     let divider = snapshot.region(RegionKind::OpsDetailsSplit).unwrap();
-                    assert_eq!(details.y, divider.y);
+                    assert_eq!(details.y, divider.bottom());
                     assert_eq!(
                         snapshot.hit_test(divider.x, divider.y),
                         Some(RegionKind::OpsDetailsSplit)

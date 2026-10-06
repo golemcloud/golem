@@ -29,7 +29,7 @@ use ratatui::widgets::{
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(super) fn fit(text: &str, width: usize) -> String {
     let display_width = UnicodeWidthStr::width(text);
@@ -95,7 +95,7 @@ impl ActionButton<'_> {
         let style = if self.selected {
             Style::default()
                 .fg(visual.selection_text)
-                .bg(visual.selection_background)
+                .bg(visual.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
@@ -198,6 +198,65 @@ impl Notice<'_> {
         visual: &TuiVisualStyle,
     ) -> Line<'static> {
         notice_line("Loading", glyph, visual.accent, message, visual)
+    }
+
+    pub fn popup_line(self, visual: &TuiVisualStyle) -> Line<'static> {
+        self.line(visual).alignment(Alignment::Center)
+    }
+}
+
+pub(super) struct ReviewFieldRow<'a> {
+    pub label: &'a str,
+    pub value: &'a str,
+    pub label_width: usize,
+    pub selected: bool,
+    pub editing: bool,
+}
+
+impl ReviewFieldRow<'_> {
+    pub fn value_offset(&self, width: usize) -> usize {
+        let marker_width = width.min(2);
+        let label_width = self.label_width.min(width.saturating_sub(marker_width + 1));
+        let gap_width = usize::from(width > marker_width + label_width);
+        marker_width + label_width + gap_width
+    }
+
+    pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
+        let marker_width = width.min(2);
+        let label_width = self.label_width.min(width.saturating_sub(marker_width + 1));
+        let gap_width = usize::from(width > marker_width + label_width);
+        let value_width = width.saturating_sub(marker_width + label_width + gap_width);
+        let row_style = if self.selected {
+            Style::default()
+                .fg(visual.selection_text)
+                .bg(visual.selection_background)
+        } else {
+            Style::default()
+                .fg(visual.text)
+                .bg(visual.overlay_background)
+        };
+        let marker_style = if self.selected {
+            selected_marker_style(visual)
+        } else {
+            row_style
+        };
+        let value_style = if self.editing {
+            Style::default()
+                .fg(visual.input_text)
+                .bg(visual.input_background)
+        } else {
+            row_style
+        };
+        Line::from(vec![
+            Span::styled(
+                fit(if self.selected { "▌" } else { "" }, marker_width),
+                marker_style,
+            ),
+            Span::styled(fit(self.label, label_width), row_style),
+            Span::styled(" ".repeat(gap_width), row_style),
+            Span::styled(fit(self.value, value_width), value_style),
+        ])
+        .alignment(Alignment::Left)
     }
 }
 
@@ -1149,6 +1208,37 @@ impl PaneChrome {
             }
         }
 
+        for divider in &horizontal {
+            for x in divider.x..divider.right() {
+                let cell = &mut frame.buffer_mut()[(x, divider.y)];
+                if !matches!(cell.symbol(), "┬" | "├" | "┤" | "┼" | "┴") {
+                    cell.set_symbol("─").set_style(style);
+                }
+            }
+        }
+
+        let grip_style = Style::default().fg(visual.accent).bg(visual.surface);
+        for divider in &vertical {
+            let center = divider.y.saturating_add(divider.height / 2);
+            let start = center.saturating_sub(1).max(divider.y.saturating_add(1));
+            for y in start..start.saturating_add(3).min(divider.bottom()) {
+                let cell = &mut frame.buffer_mut()[(divider.x, y)];
+                if cell.symbol() == "│" {
+                    cell.set_symbol("┃").set_style(grip_style);
+                }
+            }
+        }
+        for divider in &horizontal {
+            let center = divider.x.saturating_add(divider.width / 2);
+            let start = center.saturating_sub(1).max(divider.x);
+            for x in start..start.saturating_add(3).min(divider.right()) {
+                let cell = &mut frame.buffer_mut()[(x, divider.y)];
+                if cell.symbol() == "─" {
+                    cell.set_symbol("━").set_style(grip_style);
+                }
+            }
+        }
+
         for vertical in vertical {
             for horizontal in &horizontal {
                 if horizontal.y < vertical.y || horizontal.y >= vertical.bottom() {
@@ -1698,6 +1788,9 @@ pub(super) struct CommandRow<'a> {
     pub label: &'a str,
     pub shortcut: Option<&'a str>,
     pub description: &'a str,
+    pub label_matches: &'a [usize],
+    pub shortcut_matches: &'a [usize],
+    pub description_matches: &'a [usize],
     pub selected: bool,
     pub unavailable: bool,
 }
@@ -1748,27 +1841,105 @@ impl CommandRow<'_> {
                 .shortcut
                 .map(|shortcut| format!("{}  {shortcut}", self.label))
                 .unwrap_or_else(|| self.label.to_string());
-            spans.push(Span::styled(fit(&compact, available), label_style));
+            let mut matches = self.label_matches.to_vec();
+            if let Some(shortcut) = self.shortcut {
+                let shortcut_offset = self.label.chars().count() + 2;
+                matches.extend(
+                    self.shortcut_matches
+                        .iter()
+                        .map(|index| shortcut_offset + index),
+                );
+                debug_assert_eq!(
+                    compact.chars().count(),
+                    shortcut_offset + shortcut.chars().count()
+                );
+            }
+            spans.extend(highlighted_fit(
+                &compact,
+                available,
+                label_style,
+                &matches,
+                visual,
+            ));
         } else {
             let shortcut_width = usize::from(self.shortcut.is_some()) * 16;
             let label_width = (available / 3)
                 .clamp(16, 28)
                 .min(available.saturating_sub(shortcut_width));
             let description_width = available.saturating_sub(label_width + shortcut_width);
-            spans.push(Span::styled(fit(self.label, label_width), label_style));
+            spans.extend(highlighted_fit(
+                self.label,
+                label_width,
+                label_style,
+                self.label_matches,
+                visual,
+            ));
             if shortcut_width > 0 {
-                spans.push(Span::styled(
-                    fit(self.shortcut.unwrap_or_default(), shortcut_width),
+                spans.extend(highlighted_fit(
+                    self.shortcut.unwrap_or_default(),
+                    shortcut_width,
                     shortcut_style,
+                    self.shortcut_matches,
+                    visual,
                 ));
             }
-            spans.push(Span::styled(
-                fit(self.description, description_width),
+            spans.extend(highlighted_fit(
+                self.description,
+                description_width,
                 description_style,
+                self.description_matches,
+                visual,
             ));
         }
         Line::from(spans).alignment(Alignment::Left)
     }
+}
+
+fn highlighted_fit(
+    text: &str,
+    width: usize,
+    base_style: Style,
+    matches: &[usize],
+    visual: &TuiVisualStyle,
+) -> Vec<Span<'static>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let display_width = UnicodeWidthStr::width(text);
+    let target_width = if display_width > width {
+        width.saturating_sub(1)
+    } else {
+        width
+    };
+    let match_style = Style::default()
+        .fg(visual.search_match_text)
+        .bg(visual.search_match_background)
+        .add_modifier(Modifier::BOLD);
+    let mut spans = Vec::new();
+    let mut used = 0_usize;
+    for (index, character) in text.chars().enumerate() {
+        let character_width = character.width().unwrap_or_default();
+        if used.saturating_add(character_width) > target_width {
+            break;
+        }
+        spans.push(Span::styled(
+            character.to_string(),
+            if matches.contains(&index) {
+                match_style
+            } else {
+                base_style
+            },
+        ));
+        used = used.saturating_add(character_width);
+    }
+    if display_width > width {
+        spans.push(Span::styled("…", base_style));
+        used = used.saturating_add(1);
+    }
+    if used < width {
+        spans.push(Span::styled(" ".repeat(width - used), base_style));
+    }
+    spans
 }
 
 pub(super) struct SearchInput<'a> {
@@ -2026,6 +2197,85 @@ fn wrap_styled_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Line<'stati
     }
     lines.push(Line::from(current));
     lines
+}
+
+pub(super) fn wrap_styled_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if width == 0 {
+        return vec![Line::default()];
+    }
+    let alignment = line.alignment;
+    let mut tokens: Vec<(bool, Vec<Span<'static>>, usize)> = Vec::new();
+    for span in line.spans {
+        for character in span.content.chars() {
+            let whitespace = character.is_whitespace();
+            let character = character.to_string();
+            let character_width = UnicodeWidthStr::width(character.as_str());
+            if tokens.last().is_none_or(|(kind, _, _)| *kind != whitespace) {
+                tokens.push((whitespace, Vec::new(), 0));
+            }
+            let (_, characters, token_width) = tokens.last_mut().expect("new styled token");
+            characters.push(Span::styled(character, span.style));
+            *token_width = token_width.saturating_add(character_width);
+        }
+    }
+
+    let mut result = Vec::new();
+    let mut current = Vec::new();
+    let mut used = 0_usize;
+    let mut pending_space: Option<(Vec<Span<'static>>, usize)> = None;
+    let push_line = |result: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>| {
+        let mut line = Line::from(std::mem::take(spans));
+        line.alignment = alignment;
+        result.push(line);
+    };
+
+    for (whitespace, mut characters, token_width) in tokens {
+        if whitespace {
+            if used > 0 {
+                pending_space = Some((characters, token_width));
+            }
+            continue;
+        }
+
+        let space_width = pending_space
+            .as_ref()
+            .map(|(_, token_width)| *token_width)
+            .unwrap_or_default();
+        if token_width <= width {
+            if used > 0 && used.saturating_add(space_width).saturating_add(token_width) > width {
+                push_line(&mut result, &mut current);
+                used = 0;
+            } else if used > 0
+                && let Some((mut space, space_width)) = pending_space.take()
+            {
+                current.append(&mut space);
+                used = used.saturating_add(space_width);
+            }
+            pending_space = None;
+            current.append(&mut characters);
+            used = used.saturating_add(token_width);
+            continue;
+        }
+
+        if used > 0 {
+            push_line(&mut result, &mut current);
+            used = 0;
+        }
+        pending_space = None;
+        for character in characters {
+            let character_width = UnicodeWidthStr::width(character.content.as_ref() as &str);
+            if used > 0 && used.saturating_add(character_width) > width {
+                push_line(&mut result, &mut current);
+                used = 0;
+            }
+            current.push(character);
+            used = used.saturating_add(character_width);
+        }
+    }
+    if !current.is_empty() || result.is_empty() {
+        push_line(&mut result, &mut current);
+    }
+    result
 }
 
 pub(super) struct SelectableRow<'a> {
@@ -2347,9 +2597,12 @@ mod tests {
         assert_eq!(buffer[(0, 0)].symbol(), "├");
         assert_eq!(buffer[(23, 0)].symbol(), "┬");
         assert!((1..8).all(|y| buffer[(0, y)].symbol() == "│"));
-        assert!((1..8).all(|y| buffer[(23, y)].symbol() == "│"));
+        assert!((1..8).all(|y| matches!(buffer[(23, y)].symbol(), "│" | "┃")));
+        assert!((1..8).any(|y| buffer[(23, y)].symbol() == "┃"));
         assert!((1..8).all(|y| buffer[(23, y)].bg == visual.surface));
-        assert!((1..8).all(|y| buffer[(23, y)].fg == visual.border_subtle));
+        assert!((1..8).all(|y| {
+            buffer[(23, y)].fg == visual.border_subtle || buffer[(23, y)].fg == visual.accent
+        }));
         assert!((1..8).all(|y| buffer[(24, y)].symbol() != "│"));
     }
 
@@ -2628,6 +2881,113 @@ mod tests {
     }
 
     #[test]
+    fn popup_notices_are_centered_without_changing_inline_notices() {
+        let visual = TuiVisualStyle::production();
+        let inline = Notice {
+            kind: NoticeKind::Info,
+            message: "message",
+        }
+        .line(&visual);
+        let popup = Notice {
+            kind: NoticeKind::Info,
+            message: "message",
+        }
+        .popup_line(&visual);
+
+        assert_eq!(inline.alignment, None);
+        assert_eq!(popup.alignment, Some(Alignment::Center));
+    }
+
+    #[test]
+    fn wrapped_popup_notices_keep_centering_and_styled_words() {
+        let visual = TuiVisualStyle::production();
+        let lines = wrap_styled_line(
+            Notice {
+                kind: NoticeKind::Warning,
+                message: "A longer popup message wraps without losing its label",
+            }
+            .popup_line(&visual),
+            24,
+        );
+
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|line| line.width() <= 24));
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.alignment == Some(Alignment::Center))
+        );
+        assert!(
+            lines
+                .first()
+                .expect("first wrapped notice line")
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref() as &str)
+                .collect::<String>()
+                .contains("Warning")
+        );
+    }
+
+    #[test]
+    fn selected_action_and_editing_field_have_distinct_active_styles() {
+        let visual = TuiVisualStyle::production();
+        let buffer = render(40, 2, |frame| {
+            frame.render_widget(
+                Paragraph::new(
+                    ActionButton {
+                        label: "Run",
+                        selected: true,
+                    }
+                    .line(&visual),
+                ),
+                Rect::new(0, 0, 40, 1),
+            );
+            frame.render_widget(
+                Paragraph::new(
+                    ReviewFieldRow {
+                        label: "language",
+                        value: "typescript",
+                        label_width: 12,
+                        selected: true,
+                        editing: true,
+                    }
+                    .line(40, &visual),
+                ),
+                Rect::new(0, 1, 40, 1),
+            );
+        });
+
+        assert_eq!(buffer[(18, 0)].bg, visual.accent);
+        assert_eq!(buffer[(0, 1)].symbol(), "▌");
+        assert_eq!(buffer[(15, 1)].bg, visual.input_background);
+    }
+
+    #[test]
+    fn command_rows_highlight_matched_characters_in_visible_fields() {
+        let visual = TuiVisualStyle::production();
+        let command = CommandRow {
+            label: "Ops",
+            shortcut: Some("ctrl+x o"),
+            description: "Navigate to Ops",
+            label_matches: &[0, 1, 2],
+            shortcut_matches: &[],
+            description_matches: &[12, 13, 14],
+            selected: false,
+            unavailable: false,
+        }
+        .line(60, &visual);
+        let buffer = render(60, 1, |frame| {
+            frame.render_widget(Paragraph::new(command), frame.area());
+        });
+
+        assert!(
+            (0..60).any(|x| buffer[(x, 0)].bg == visual.search_match_background),
+            "expected a visible match highlight"
+        );
+    }
+
+    #[test]
     fn fit_and_wrap_respect_wide_and_combining_terminal_widths() {
         assert_eq!(UnicodeWidthStr::width(fit("abcd界x", 6).as_str()), 6);
         assert_eq!(fit("abcd界x", 6), "abcd… ");
@@ -2863,6 +3223,9 @@ mod tests {
             label: "A command with a long name",
             shortcut: Some("ctrl+x v"),
             description: "A description that must never wrap into another row",
+            label_matches: &[],
+            shortcut_matches: &[],
+            description_matches: &[],
             selected: true,
             unavailable: false,
         }
