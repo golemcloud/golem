@@ -108,6 +108,19 @@ var _ = Push.Handle(func(ctx *golem.ToolOutputContext, a PushArgs) (int32, error
 	return int32(n), err
 })
 
+type DelegateArgs struct {
+	Globals
+	Card golem.PermissionCard
+}
+
+// Delegate hands a permission card back; publishing it checks that the host
+// accepts cards in tool signatures.
+var Delegate = Tool.Command[DelegateArgs, golem.PermissionCard]("delegate", func(a *DelegateArgs, s *golem.ToolCommandSpec) {
+	s.Positional(&a.Card)
+})
+
+var _ = Delegate.Handle(func(_ *golem.ToolContext, a DelegateArgs) (golem.PermissionCard, error) { return a.Card, nil })
+
 type PolicyParams struct{ ForbidMessage string }
 
 // Policy is a transparent middleware: it checks and rewrites commit, and the

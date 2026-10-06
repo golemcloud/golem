@@ -31,6 +31,7 @@ export default {
   "golem-multi-instance-agent-go": "Multiple Instances of a Go Agent",
   "golem-make-http-request-go": "Outgoing HTTP Requests from a Go Agent",
   "golem-parallel-workers-go": "Parallel Workers — Fan-Out / Fan-In (Go)",
+  "golem-permission-card-go": "Permission cards in Go",
   "golem-recurring-task-go": "Recurring & Scheduled Tasks in Go",
   "golem-add-http-auth-go": "Requiring Authentication on Go HTTP Endpoints",
   "golem-add-transactions-go": "Saga-Pattern Transactions (Go)",

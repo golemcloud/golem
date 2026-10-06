@@ -179,10 +179,23 @@ pub fn render<'a>(
             format!("golem.AgentStream[{item}]")
         }
 
+        // Host capabilities, which only a guest client can pass on; the
+        // external bridge refuses them (see external.rs).
+        SchemaType::QuotaToken { .. } => {
+            writer.import(GO_SDK_MODULE);
+            "golem.QuotaToken".to_string()
+        }
+        SchemaType::PermissionCard { spec, .. } => {
+            writer.import(GO_SDK_MODULE);
+            if spec.polymorphic {
+                "golem.PolymorphicPermissionCard".to_string()
+            } else {
+                "golem.PermissionCard".to_string()
+            }
+        }
+
         SchemaType::Quantity { .. }
         | SchemaType::Secret { .. }
-        | SchemaType::QuotaToken { .. }
-        | SchemaType::PermissionCard { .. }
         | SchemaType::Future { .. }
         | SchemaType::Stream { inner: None, .. } => {
             anyhow::bail!("the Go bridge does not yet spell this schema type: {resolved:?}")
@@ -409,6 +422,27 @@ mod tests {
                 metadata: meta()
             }),
             "values.Result[struct{}, string]"
+        );
+    }
+
+    #[test]
+    fn host_capabilities_map_to_the_guest_sdk_types() {
+        use golem_common::schema::schema_type::{PermissionCardSpec, QuotaTokenSpec};
+        let (rendered, file) =
+            go_type_with_imports(&SchemaType::quota_token(QuotaTokenSpec::default()));
+        assert_eq!(rendered, "golem.QuotaToken");
+        assert!(file.contains("sdks/go/golem\""), "{file}");
+        assert_eq!(
+            go_type(&SchemaType::permission_card(PermissionCardSpec {
+                polymorphic: false
+            })),
+            "golem.PermissionCard"
+        );
+        assert_eq!(
+            go_type(&SchemaType::permission_card(PermissionCardSpec {
+                polymorphic: true
+            })),
+            "golem.PolymorphicPermissionCard"
         );
     }
 

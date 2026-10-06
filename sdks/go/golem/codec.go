@@ -323,6 +323,9 @@ func (d *definitions) sdkComposite(c *codec) bool {
 	case quotaish:
 		compileQuotaToken(c)
 		return true
+	case cardish:
+		compilePermissionCard(c, z.polymorphic())
+		return true
 	}
 
 	if elem, ok := values.OptionElem(zero); ok {

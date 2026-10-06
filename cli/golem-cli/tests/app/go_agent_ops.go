@@ -34,6 +34,12 @@ type SpendIn struct{ Token golem.QuotaToken }
 // Spend uses one unit of the quota it is handed.
 var Spend = Source.Method[SpendIn, string]("spend")
 
+type CardIn struct{ Card golem.PermissionCard }
+
+// Relay hands a permission card back; publishing it checks that the host
+// accepts cards in agent method signatures.
+var Relay = Source.Method[CardIn, golem.PermissionCard]("relay")
+
 // Slow sleeps for two seconds.
 var Slow = Source.Method[golem.Unit, string]("slow")
 
@@ -108,6 +114,8 @@ func init() {
 		time.Sleep(2 * time.Second)
 		return "slow-done"
 	})
+
+	source.Handle(Relay, func(_ *golem.Context[sourceState], in CardIn) golem.PermissionCard { return in.Card })
 
 	source.Handle(Spend, func(_ *golem.Context[sourceState], in SpendIn) string {
 		_, err := golem.WithReservation(in.Token, 1, func(*golem.Reservation) (uint64, golem.Unit) { return 1, golem.Unit{} })
