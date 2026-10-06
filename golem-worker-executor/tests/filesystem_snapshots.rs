@@ -4322,8 +4322,10 @@ async fn without_filesystem_snapshots_changed_files_take_no_snapshot_and_fail_a_
     .await?;
 
     agent.applied(&executor).await?;
+    // The initialization and `applied` each take a snapshot after they returned, so both records
+    // exist before the write.
     eventually(Duration::from_secs(30), || async {
-        Ok((!agent.records(&executor).await?.snapshots.is_empty()).then_some(()))
+        Ok((agent.records(&executor).await?.snapshots.len() >= 2).then_some(()))
     })
     .await?;
     let before_write = agent.records(&executor).await?.snapshots.len();
@@ -4408,6 +4410,9 @@ async fn without_filesystem_snapshots_a_skipped_periodic_snapshot_waits_a_period
         )
         .await?;
     captures_reach(&executor, "changed", 1).await?;
+    // A record without a name from a period before the write is correct. After the first check
+    // that found the change, the tree stays changed, so no record may follow.
+    let after_change = agent.records(&executor).await?.snapshots.len();
     let first = executor.filesystem_captures("changed");
     tokio::time::sleep(Duration::from_secs(3)).await;
     let later = executor.filesystem_captures("changed");
@@ -4423,6 +4428,7 @@ async fn without_filesystem_snapshots_a_skipped_periodic_snapshot_waits_a_period
     // One check each period: three periods give about three checks, and a loop that checks again
     // at once gives thousands.
     assert!(later - first <= 5, "{first} then {later} checks");
-    assert!(records.snapshots.is_empty(), "{records:?}");
+    assert_eq!(records.snapshots.len(), after_change, "{records:?}");
+    assert!(records.snapshots.iter().all(Option::is_none), "{records:?}");
     Ok(())
 }
