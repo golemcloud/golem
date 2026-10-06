@@ -1850,14 +1850,13 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     Ok(())
 }
 
-/// On an executor without filesystem snapshots, the periodic snapshots of `SqliteSnapshotAgent`
-/// have no filesystem snapshot name, so a start from one of them finds no file at the recorded
-/// locations of its file-backed databases. The start tries the newest periodic snapshot and the
-/// usable one before it; both loads fail, and the start replays the whole oplog, which rebuilds
-/// the databases.
+/// On an executor without filesystem snapshots, `SqliteSnapshotAgent` takes no periodic snapshot:
+/// its constructor writes the file of its file-backed database, so the tree differs from its
+/// initial files, and a start from a record without a name would not get the file back. The
+/// restart replays the whole oplog, which rebuilds the databases.
 #[test]
 #[tracing::instrument]
-async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_full_replay(
+async fn ts_sqlite_file_database_without_filesystem_snapshots_takes_no_snapshot_and_replays(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
@@ -1889,30 +1888,24 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
     let state_before = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
+    // The check of a snapshot runs after the invocation before it returned.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        std::pin::pin!(
+            futures::stream::repeat(())
+                .then(|()| tokio::time::sleep(Duration::from_millis(50)))
+                .filter(|()| std::future::ready(executor.filesystem_captures("changed") >= 2))
+        )
+        .next(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("fewer than two checks found a changed tree"))?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let snapshots: Vec<_> = oplog
         .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Snapshot(snapshot) => {
-                Some((entry.oplog_index, snapshot.filesystem_snapshot.clone()))
-            }
-            _ => None,
-        })
-        .collect();
-    assert!(
-        snapshots.len() >= 2,
-        "fewer than two periodic snapshots before the restart: {snapshots:?}"
-    );
-    assert!(
-        snapshots.iter().all(|(_, name)| name.is_none()),
-        "a periodic snapshot has a filesystem snapshot name: {snapshots:?}"
-    );
-    let newest_two: Vec<OplogIndex> = snapshots
-        .iter()
-        .rev()
-        .take(2)
-        .map(|(index, _)| *index)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .map(|entry| entry.oplog_index)
         .collect();
 
     drop(executor);
@@ -1922,9 +1915,7 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
-    assert_eq!(state_before, state_after);
-
-    let failures: Vec<(OplogIndex, String)> = tokio::time::timeout(
+    let recoveries: Vec<String> = tokio::time::timeout(
         Duration::from_secs(10),
         futures::stream::poll_fn(|context| events.poll_recv(context))
             .filter_map(|event| std::future::ready(AgentEvent::try_from(event).ok()))
@@ -1933,13 +1924,11 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
             })
             .filter_map(|event| {
                 std::future::ready(match event {
-                    AgentEvent::SnapshotRecoveryFailed {
-                        snapshot_index,
-                        error,
-                        ..
-                    } => Some((snapshot_index, error)),
+                    AgentEvent::SnapshotRecoveryFailed { snapshot_index, .. } => {
+                        Some(format!("failed at {snapshot_index}"))
+                    }
                     AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
-                        panic!("the snapshot at {snapshot_index} loaded without its database file")
+                        Some(format!("loaded at {snapshot_index}"))
                     }
                     _ => None,
                 })
@@ -1947,14 +1936,13 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
             .collect(),
     )
     .await?;
-    let failed_indexes: Vec<OplogIndex> = failures.iter().map(|(index, _)| *index).collect();
-    assert_eq!(failed_indexes, newest_two);
-    assert!(
-        failures.iter().all(|(_, error)| error.contains("fileDb")
-            && error.contains("no database file at /tmp/sqlite-snapshot-test.db")),
-        "{failures:?}"
-    );
 
+    assert!(
+        snapshots.is_empty(),
+        "a periodic snapshot was taken after the database file existed: {snapshots:?}"
+    );
+    assert_eq!(state_before, state_after);
+    assert!(recoveries.is_empty(), "{recoveries:?}");
     executor.check_oplog_is_queryable(&worker_id).await?;
     assert_eq!(
         invocation_shape(&executor.stored_oplog(&worker_id).await),
