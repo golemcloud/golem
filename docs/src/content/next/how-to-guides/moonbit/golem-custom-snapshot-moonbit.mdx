@@ -130,7 +130,7 @@ The restoration factory does not receive `self` and does not call `Agent::new`. 
 
 Snapshot loading runs in read-only mode and writes nothing to the oplog. Decoding, local computation, config reads, and other permitted reads can be used to construct the value. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
 
-If the factory returns `Err`, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does not try an older automatic snapshot.
+If the factory returns `Err`, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the manual-update snapshot or a full replay.
 
 ## How the SDK Wires Snapshots
 
