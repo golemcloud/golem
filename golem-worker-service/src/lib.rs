@@ -30,13 +30,16 @@ use crate::config::WorkerServiceConfig;
 use crate::mcp::{GolemAgentMcpServer, McpBearerAuth, oauth_proxy_routes};
 use crate::service::registry_event_subscriber::WorkerServiceRegistryInvalidationHandler;
 use anyhow::{Context, anyhow};
-use golem_common::poem::{CliClientInfoMiddleware, LazyEndpointExt};
+use golem_common::poem::{
+    CliClientInfoMiddleware, LazyEndpointExt, OpenTelemetryMetrics, OpenTelemetryTracing,
+    PrometheusExporter,
+};
 use opentelemetry_sdk::trace::SdkTracer;
+use poem::endpoint::BoxEndpoint;
 use poem::endpoint::TowerCompatExt;
-use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
+use poem::middleware::{CookieJarManager, Cors};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;

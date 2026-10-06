@@ -77,7 +77,7 @@ async fn queued_monthly_proposal_is_rejected_after_worker_window_replacement(
         .read_exact(OplogIndex::INITIAL, original_tip.as_u64())
         .await;
     let (old_replay, release_old_replay) = worker.pause_completed_replay_for_test(key.clone());
-    worker.set_interrupting(InterruptKind::Restart).await;
+    worker.set_interrupting(InterruptKind::Restart).await?;
     tokio::time::timeout(Duration::from_secs(10), old_replay)
         .await
         .context("old completed replay")??;
@@ -128,7 +128,7 @@ async fn queued_monthly_proposal_is_rejected_after_worker_window_replacement(
     .context("same-revision credit applied")?;
     let user_suspend = InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
     let mut raw = worker.raw_interrupt_for_test();
-    worker.set_interrupting(user_suspend).await;
+    worker.set_interrupting(user_suspend).await?;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(10), raw.recv()).await??,
         user_suspend

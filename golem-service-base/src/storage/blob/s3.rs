@@ -66,12 +66,11 @@ pub struct S3BlobStorage {
 }
 
 impl S3BlobStorage {
-    #[allow(deprecated)]
     pub async fn new(config: S3BlobStorageConfig) -> Self {
         let region = config.region.clone();
 
         let mut config_builder =
-            aws_config::defaults(BehaviorVersion::v2024_03_28()).region(Region::new(region));
+            aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
             info!("The AWS endpoint url for blob storage is {}", &endpoint_url);
@@ -95,6 +94,7 @@ impl S3BlobStorage {
 
         let mut s3_config_builder = s3_config
             .to_builder()
+            .retry_config(aws_sdk_s3::config::retry::RetryConfig::disabled())
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
 
         if let Some(path_style) = &config.aws_path_style {
@@ -1407,31 +1407,7 @@ mod tests {
             ..Default::default()
         };
 
-        let client_config = aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new(config.region.clone()))
-            .credentials_provider(Credentials::new(
-                "test-access-key",
-                "test-secret-key",
-                None,
-                None,
-                "test",
-            ))
-            .endpoint_url(endpoint)
-            .force_path_style(true)
-            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-            .retry_config(aws_sdk_s3::config::retry::RetryConfig::standard().with_max_attempts(1))
-            .build();
-
-        (
-            S3BlobStorage {
-                client: Client::from_conf(client_config),
-                config,
-            },
-            bodies,
-            uris,
-            server,
-        )
+        (S3BlobStorage::new(config).await, bodies, uris, server)
     }
 
     #[test]

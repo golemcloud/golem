@@ -367,7 +367,7 @@ async fn waiting_start_restart_receipt_precedes_permit_release(
         let (polled, entered, release) = worker.pause_next_stop_driver_for_test();
         let mut receipt = worker
             .set_interrupting(kind)
-            .await
+            .await?
             .expect("accepted loading stop");
         polled.await?;
         entered.await?;
@@ -515,12 +515,12 @@ async fn closing_window_routes_late_stops_to_retained_successor(
         closing.await?;
         assert!(worker.concurrent_agent_permit_is_held().await);
         let (first_polled, mut first, release_first) = worker.pause_next_stop_driver_for_test();
-        drop(worker.set_interrupting(InterruptKind::Restart).await);
+        drop(worker.set_interrupting(InterruptKind::Restart).await?);
         let (second_polled, mut second, release_second) = worker.pause_next_stop_driver_for_test();
         drop(
             worker
                 .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-                .await,
+                .await?,
         );
         first_polled.await?;
         second_polled.await?;
@@ -612,7 +612,7 @@ async fn unloading_window_joins_first_stop_and_retains_late_stop(
     let generation = worker.resident_generation_for_test();
     let (mut closing, release_close) = worker.pause_next_stop_close_for_test();
     let (first_polled, first, release_first) = worker.pause_next_stop_driver_for_test();
-    drop(worker.set_interrupting(InterruptKind::Restart).await);
+    drop(worker.set_interrupting(InterruptKind::Restart).await?);
     first_polled.await?;
     first.await?;
     assert!(worker.concurrent_agent_permit_is_held().await);
@@ -627,7 +627,7 @@ async fn unloading_window_joins_first_stop_and_retains_late_stop(
     drop(
         worker
             .set_interrupting(InterruptKind::Interrupt(Timestamp::now_utc()))
-            .await,
+            .await?,
     );
     second_polled.await?;
     assert!(matches!(

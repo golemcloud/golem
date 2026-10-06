@@ -4365,6 +4365,71 @@ impl WorkerEnumerationService for CountingWorkerEnumerationService {
     }
 }
 
+async fn wait_for_enumeration_before_promise(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    after: OplogIndex,
+) -> anyhow::Result<()> {
+    loop {
+        let oplog = executor.get_oplog(worker_id, after).await?;
+        let invocation_start = oplog.iter().find_map(|entry| {
+            matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))
+                .then_some(entry.oplog_index)
+        });
+        if let Some(invocation_start) = invocation_start {
+            if oplog.iter().any(|entry| {
+                entry.oplog_index > invocation_start
+                    && matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+            }) {
+                return Err(anyhow!(
+                    "enumeration invocation finished before reaching the promise wait"
+                ));
+            }
+            let enumeration_start = oplog.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if entry.oplog_index > invocation_start
+                        && start.function_name == "golem::api::get-agents::get-next" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            });
+            if let Some(enumeration_start) = enumeration_start {
+                let enumeration_end = oplog.iter().find_map(|entry| match &entry.entry {
+                    PublicOplogEntry::End(end) if end.start_index == enumeration_start => {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                });
+                if let Some(enumeration_end) = enumeration_end {
+                    let promise_start = oplog.iter().find_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Start(start)
+                            if entry.oplog_index > enumeration_end
+                                && start.function_name == "golem::api::get_promise_result" =>
+                        {
+                            Some(entry.oplog_index)
+                        }
+                        _ => None,
+                    });
+                    if let Some(promise_start) = promise_start {
+                        let settled = oplog.iter().any(|entry| match &entry.entry {
+                            PublicOplogEntry::End(end) => end.start_index == promise_start,
+                            PublicOplogEntry::Cancelled(cancelled) => {
+                                cancelled.start_index == promise_start
+                            }
+                            _ => false,
+                        });
+                        if !settled {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -4411,27 +4476,34 @@ async fn get_workers_opaque_cursor_replays_after_restart(
     let params = crate::raw_params(vec![component_id_value, promise_id_value.clone()]);
     let resumed_params = params.clone();
     let invocation_key = IdempotencyKey::fresh();
+    let before_invocation = executor
+        .get_oplog(&caller_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map_or(OplogIndex::INITIAL, |entry| entry.oplog_index.next());
     let executor_clone = executor.clone();
     let component_clone = component.clone();
     let caller_clone = caller.clone();
     let key_clone = invocation_key.clone();
-    let mut pending_invocation = tokio::spawn(async move {
-        executor_clone
-            .invoke_and_await_agent_with_key(
-                &component_clone,
-                &caller_clone,
-                &key_clone,
-                "get_agents_across_promise",
-                params,
-            )
-            .await
-    });
+    let mut pending_invocation =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            executor_clone
+                .invoke_and_await_agent_with_key(
+                    &component_clone,
+                    &caller_clone,
+                    &key_clone,
+                    "get_agents_across_promise",
+                    params,
+                )
+                .await
+        }));
     tokio::select! {
+        biased;
         result = &mut pending_invocation => {
             return Err(anyhow!("enumeration returned before the promise was completed: {:?}", result??));
         }
-        status = executor.wait_for_status(&caller_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
-            status?;
+        checkpoint = wait_for_enumeration_before_promise(&executor, &caller_id, before_invocation) => {
+            checkpoint?;
         }
     }
     assert_eq!(enumeration_calls.load(Ordering::SeqCst), 1);
@@ -6632,34 +6704,127 @@ async fn long_running_poll_loop_works_as_expected(
     Ok(())
 }
 
+struct HttpPollServer {
+    cancel: CancellationToken,
+    thread: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
+}
+
+impl HttpPollServer {
+    fn stop(mut self) -> anyhow::Result<()> {
+        self.cancel.cancel();
+        self.join()
+    }
+
+    fn join(&mut self) -> anyhow::Result<()> {
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
+        thread
+            .join()
+            .map_err(|_| anyhow!("HTTP poll server thread panicked"))?
+    }
+}
+
+impl Drop for HttpPollServer {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        let _ = self.join();
+    }
+}
+
 async fn start_http_poll_server(
     response: Arc<Mutex<String>>,
-    poll_count: Arc<AtomicUsize>,
     forced_port: Option<u16>,
-) -> (u16, JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", forced_port.unwrap_or(0)))
+    stall_on_arrival: Option<usize>,
+) -> anyhow::Result<(
+    u16,
+    HttpPollServer,
+    tokio::sync::mpsc::UnboundedReceiver<Instant>,
+)> {
+    let (arrived_tx, arrived_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let cancel = CancellationToken::new();
+    let thread_cancel = cancel.clone();
+    let arrival_count = Arc::new(AtomicUsize::new(0));
+    let thread = std::thread::Builder::new()
+        .name("http-poll-server".to_string())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| anyhow!("Failed to build HTTP poll server runtime: {error}"))?;
+            runtime.block_on(async move {
+                let listener = match tokio::net::TcpListener::bind((
+                    std::net::Ipv4Addr::UNSPECIFIED,
+                    forced_port.unwrap_or(0),
+                ))
+                .await
+                {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        let message = format!("Failed to bind HTTP poll server: {error}");
+                        let _ = started_tx.send(Err(message.clone()));
+                        return Err(anyhow!(message));
+                    }
+                };
+                let host_http_port = listener
+                    .local_addr()
+                    .map_err(|error| anyhow!("Failed to read HTTP poll server address: {error}"))?
+                    .port();
+                let _ = started_tx.send(Ok(host_http_port));
+                let route = Router::new().route(
+                    "/poll",
+                    get(move || {
+                        let arrived_tx = arrived_tx.clone();
+                        let response = response.clone();
+                        let arrival_count = arrival_count.clone();
+                        async move {
+                            let arrival = arrival_count.fetch_add(1, Ordering::Relaxed) + 1;
+                            let body = response.lock().unwrap().clone();
+                            let _ = arrived_tx.send(Instant::now());
+                            if stall_on_arrival == Some(arrival) {
+                                std::future::pending::<()>().await;
+                            }
+                            body
+                        }
+                    }),
+                );
+
+                tokio::select! {
+                    _ = thread_cancel.cancelled() => Ok(()),
+                    result = axum::serve(listener, route) => {
+                        result.map_err(|error| anyhow!("HTTP poll server failed: {error}"))
+                    }
+                }
+            })
+        })
+        .map_err(|error| anyhow!("Failed to spawn HTTP poll server thread: {error}"))?;
+    let server = HttpPollServer {
+        cancel,
+        thread: Some(thread),
+    };
+    let host_http_port = started_rx
         .await
-        .unwrap();
+        .map_err(|_| anyhow!("HTTP poll server stopped before reporting its port"))?
+        .map_err(|error| anyhow!(error))?;
 
-    let host_http_port = listener.local_addr().unwrap().port();
+    Ok((host_http_port, server, arrived_rx))
+}
 
-    let http_server = tokio::spawn(
-        async move {
-            let route = Router::new().route(
-                "/poll",
-                get(move || async move {
-                    let body = response.lock().unwrap();
-                    poll_count.fetch_add(1, Ordering::Release);
-                    body.clone()
-                }),
-            );
-
-            axum::serve(listener, route).await.unwrap();
-        }
-        .in_current_span(),
-    );
-
-    (host_http_port, http_server)
+async fn wait_for_http_polls(
+    arrived: &mut tokio::sync::mpsc::UnboundedReceiver<Instant>,
+    arrivals: &mut Vec<Instant>,
+    count: usize,
+) -> anyhow::Result<()> {
+    while arrivals.len() < count {
+        arrivals.push(
+            arrived
+                .recv()
+                .await
+                .ok_or_else(|| anyhow!("HTTP poll server stopped before the next request"))?,
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -6689,10 +6854,9 @@ async fn long_running_poll_loop_http_failures_are_retried(
     .await?;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
-    let poll_count = Arc::new(AtomicUsize::new(0));
 
-    let (host_http_port, http_server) =
-        start_http_poll_server(response.clone(), poll_count.clone(), None).await;
+    let (host_http_port, http_server, mut poll_arrivals) =
+        start_http_poll_server(response.clone(), None, Some(3)).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, http_tests)
@@ -6701,13 +6865,14 @@ async fn long_running_poll_loop_http_failures_are_retried(
     let agent_id = agent_id!("HttpClient2");
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("POLL_DELAY_NANOS".to_string(), "10000000".to_string());
     env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
         .await?;
 
-    executor.log_output(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke_agent(
@@ -6718,47 +6883,72 @@ async fn long_running_poll_loop_http_failures_are_retried(
         )
         .await?;
 
-    executor
-        .wait_for_status(&worker_id, AgentStatus::Running, Duration::from_secs(10))
-        .await?;
-    // Poll loop is running. Wait until a given poll count
-    let begin = Instant::now();
-    loop {
-        if begin.elapsed() > Duration::from_secs(2) {
-            return Err(anyhow!("No polls in 2 seconds"));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match rx.recv().await {
+                Some(Some(event))
+                    if stdout_event_matching(&event, "Calling the poll endpoint\n") =>
+                {
+                    return Ok(());
+                }
+                Some(Some(_)) => {}
+                _ => return Err(anyhow!("Poll-loop output ended before the first request")),
+            }
         }
+    })
+    .await
+    .map_err(|_| anyhow!("Timed out waiting for poll loop to start"))??;
 
-        if poll_count.load(Ordering::Acquire) >= 3 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let initial_wait_started = Instant::now();
+    let mut initial_arrivals = Vec::with_capacity(3);
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_http_polls(&mut poll_arrivals, &mut initial_arrivals, 3),
+    )
+    .await
+    .map_err(|_| {
+        let handler_span = initial_arrivals
+            .first()
+            .zip(initial_arrivals.last())
+            .map(|(first, last)| last.duration_since(*first));
+        anyhow!(
+            "Only {}/3 polls arrived in 2 seconds after guest readiness (elapsed {:?}, handler span {:?})",
+            initial_arrivals.len(),
+            initial_wait_started.elapsed(),
+            handler_span
+        )
+    })??;
 
     // Kill the HTTP server
-    http_server.abort();
+    http_server.stop()?;
 
     // Wait more than the poll cycle time
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Restart the HTTP server (TODO: another test could have taken the port for now - we need to retry until we can bind again)
-    let (_, http_server) =
-        start_http_poll_server(response.clone(), poll_count.clone(), Some(host_http_port)).await;
+    let (_, http_server, mut poll_arrivals) =
+        start_http_poll_server(response.clone(), Some(host_http_port), None).await?;
 
     // Wait until more polls are coming in
-    let begin = Instant::now();
-    loop {
-        if begin.elapsed() > Duration::from_secs(30) {
-            return Err(anyhow!(
-                "No polls in 30 seconds (poll_count={})",
-                poll_count.load(Ordering::Acquire)
-            ));
-        }
-
-        if poll_count.load(Ordering::Acquire) >= 6 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    let restart_wait_started = Instant::now();
+    let mut restarted_arrivals = Vec::with_capacity(3);
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        wait_for_http_polls(&mut poll_arrivals, &mut restarted_arrivals, 3),
+    )
+    .await
+    .map_err(|_| {
+        let handler_span = restarted_arrivals
+            .first()
+            .zip(restarted_arrivals.last())
+            .map(|(first, last)| last.duration_since(*first));
+        anyhow!(
+            "Only {}/3 polls arrived in 30 seconds after server restart (elapsed {:?}, handler span {:?})",
+            restarted_arrivals.len(),
+            restart_wait_started.elapsed(),
+            handler_span
+        )
+    })??;
 
     // Finish signal
 
@@ -6771,9 +6961,30 @@ async fn long_running_poll_loop_http_failures_are_retried(
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
         .await?;
 
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_start = oplog
+        .iter()
+        .position(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .ok_or_else(|| anyhow!("polling invocation start is missing from the oplog"))?;
+    let invocation_end = oplog
+        .iter()
+        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+        .ok_or_else(|| anyhow!("polling invocation end is missing from the oplog"))?;
+    assert!(
+        oplog[invocation_start..=invocation_end]
+            .iter()
+            .any(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(error)
+                    if error.kind == OplogErrorKind::Invocation
+                        && error.error.contains("in-function retry")
+            )),
+        "polling invocation did not persist evidence of retrying an HTTP failure"
+    );
+
     executor.check_oplog_is_queryable(&worker_id).await?;
     drop(executor);
-    http_server.abort();
+    http_server.stop()?;
     Ok(())
 }
 

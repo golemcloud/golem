@@ -39,7 +39,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     OplogPayload, ScopeScanState, host_functions::HostFunctionName,
 };
-use golem_common::model::regions::OplogRegion;
 use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,

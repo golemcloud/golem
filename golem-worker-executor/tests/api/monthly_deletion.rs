@@ -174,7 +174,10 @@ async fn stop_order(
     }
     let user = InterruptKind::Interrupt(Timestamp::now_utc());
     if first == FirstStop::User {
-        worker.set_interrupting(user).await.unwrap();
+        worker
+            .set_interrupting(user)
+            .await?
+            .expect("accepted user stop");
     }
     let (proposal_entered, release_proposal) = worker.pause_next_monthly_acceptance_for_test();
     policy.available_memory_gb_seconds = 0;

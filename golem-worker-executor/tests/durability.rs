@@ -741,7 +741,22 @@ async fn automatic_snapshot_every_2nd_invocation(
             .await?;
     }
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let expected_snapshot_count = 1 + SNAPSHOT_TEST_INVOCATIONS / 2;
+    let oplog = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let snapshot_count = oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+                .count();
+            if snapshot_count >= expected_snapshot_count {
+                return Ok::<_, anyhow::Error>(oplog);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("automatic snapshots were not persisted in time"))??;
     assert!(
         oplog
             .iter()
@@ -758,8 +773,7 @@ async fn automatic_snapshot_every_2nd_invocation(
         .count();
 
     assert_eq!(
-        snapshot_count,
-        1 + SNAPSHOT_TEST_INVOCATIONS / 2,
+        snapshot_count, expected_snapshot_count,
         "Expected a snapshot every 2 invocations"
     );
 

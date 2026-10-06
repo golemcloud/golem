@@ -144,7 +144,7 @@ async fn monthly_idle_cleanup_health_survives_initial_and_later_idle(
                     drop(
                         worker
                             .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
-                            .await,
+                            .await?,
                     );
                     gated.await?;
                     release.send(true).unwrap();

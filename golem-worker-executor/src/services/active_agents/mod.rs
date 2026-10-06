@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -106,6 +106,7 @@ impl RegisteredConcurrentAccount {
 pub struct ActiveAgent<Ctx: WorkerCtx> {
     owner_id: OwnedAgentId,
     primary: Arc<Worker<Ctx>>,
+    executor_tasks: InvocationLoops,
     entities: Mutex<HashMap<AgentEntity, Arc<EntitySlot>>>,
     accepting_entities: AtomicBool,
     entity_fence_generation: AtomicU64,
@@ -145,10 +146,15 @@ pub struct ActiveAgentEntityMetadata {
 }
 
 impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
-    fn new_unresolved(owner_id: OwnedAgentId, primary: Arc<Worker<Ctx>>) -> Self {
+    fn new_unresolved(
+        owner_id: OwnedAgentId,
+        primary: Arc<Worker<Ctx>>,
+        executor_tasks: InvocationLoops,
+    ) -> Self {
         Self {
             owner_id,
             primary,
+            executor_tasks,
             entities: Mutex::new(HashMap::new()),
             accepting_entities: AtomicBool::new(true),
             entity_fence_generation: AtomicU64::new(0),
@@ -415,6 +421,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             host,
             slot,
             self.execution().lane(),
+            self.executor_tasks.clone(),
             parent,
             scope,
             mode,
@@ -455,6 +462,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             host,
             slot,
             self.execution().lane(),
+            self.executor_tasks.clone(),
             scope,
             mode,
             ticket,
@@ -500,6 +508,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             host,
             slot,
             self.execution().lane(),
+            self.executor_tasks.clone(),
             scope,
             mode,
             invoke,
@@ -550,6 +559,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         start_native_entity_invocation(
             slot,
             self.execution().lane(),
+            self.executor_tasks.clone(),
             parent,
             scope,
             mode,
@@ -591,6 +601,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
         start_registered_native_entity_invocation(
             slot,
             self.execution().lane(),
+            self.executor_tasks.clone(),
             scope,
             mode,
             ticket,
@@ -608,18 +619,101 @@ const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// abandoning the loop and drains admitted writes before reporting its exit. The oplog can then
 /// be reopened without racing writes from the old owner. Cloning shares the same set of loops;
 /// a clone does not keep any task alive.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InvocationLoops {
     shutdown_token: CancellationToken,
+    task_shutdown_token: CancellationToken,
     tracker: TaskTracker,
+    owner_oplogs: Arc<Mutex<Vec<RegisteredOwnerOplog>>>,
+    construction_admission: Arc<Mutex<bool>>,
+    _watcher_lifetime: Arc<InvocationLoopWatcherLifetime>,
+}
+
+struct InvocationLoopWatcherLifetime(CancellationToken);
+
+impl Drop for InvocationLoopWatcherLifetime {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+#[derive(Clone)]
+struct RegisteredOwnerOplog {
+    oplog: Weak<dyn crate::services::oplog::Oplog>,
+    tasks: Option<crate::worker::tasks::WorkerTasks>,
+    shutdown: crate::services::oplog::OplogShutdownHandle,
+}
+
+impl RegisteredOwnerOplog {
+    fn fence_executor_shutdown(&self) {
+        self.shutdown.fence();
+    }
 }
 
 impl InvocationLoops {
     pub fn new(shutdown_token: CancellationToken) -> Self {
+        let task_shutdown_token = CancellationToken::new();
+        let owner_oplogs = Arc::new(Mutex::new(Vec::<RegisteredOwnerOplog>::new()));
+        let construction_admission = Arc::new(Mutex::new(true));
+        let watcher_stop = CancellationToken::new();
+        let watcher_lifetime = Arc::new(InvocationLoopWatcherLifetime(watcher_stop.clone()));
+        tokio::spawn({
+            let shutdown_token = shutdown_token.clone();
+            let task_shutdown_token = task_shutdown_token.clone();
+            let owner_oplogs = owner_oplogs.clone();
+            let construction_admission = construction_admission.clone();
+            async move {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {}
+                    _ = watcher_stop.cancelled() => return,
+                }
+                *construction_admission.lock().unwrap() = false;
+                for registration in owner_oplogs.lock().unwrap().iter() {
+                    registration.fence_executor_shutdown();
+                }
+                task_shutdown_token.cancel();
+            }
+        });
         Self {
             shutdown_token,
+            task_shutdown_token,
             tracker: TaskTracker::new(),
+            owner_oplogs,
+            construction_admission,
+            _watcher_lifetime: watcher_lifetime,
         }
+    }
+
+    pub(crate) fn register_owner_oplog(&self, oplog: Arc<dyn crate::services::oplog::Oplog>) {
+        let mut owner_oplogs = self.owner_oplogs.lock().unwrap();
+        if !owner_oplogs
+            .iter()
+            .filter_map(|registered| registered.oplog.upgrade())
+            .any(|registered| Arc::ptr_eq(&registered, &oplog))
+        {
+            let shutdown = oplog.executor_shutdown_handle();
+            if self.shutdown_token.is_cancelled() {
+                shutdown.fence();
+            }
+            owner_oplogs.push(RegisteredOwnerOplog {
+                oplog: Arc::downgrade(&oplog),
+                tasks: oplog.task_owner().cloned(),
+                shutdown,
+            });
+        }
+    }
+
+    pub(crate) fn spawn_construction(
+        &self,
+        construction: impl Future<Output = ()> + Send + 'static,
+    ) -> bool {
+        let mut admission = self.construction_admission.lock().unwrap();
+        if !*admission || self.shutdown_token.is_cancelled() {
+            *admission = false;
+            return false;
+        }
+        self.tracker.spawn(construction);
+        true
     }
 
     pub(crate) fn spawn(
@@ -627,7 +721,7 @@ impl InvocationLoops {
         invocation_loop: impl Future<Output = ()> + Send + 'static,
         on_shutdown: impl FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
     ) -> JoinHandle<()> {
-        let shutdown_token = self.shutdown_token.clone();
+        let shutdown_token = self.task_shutdown_token.clone();
         self.tracker.spawn(async move {
             let mut invocation_loop = Box::pin(invocation_loop);
             tokio::select! {
@@ -644,10 +738,41 @@ impl InvocationLoops {
         })
     }
 
+    /// Runs detached entity work under the executor's shutdown boundary. Dropping a caller's
+    /// handle still leaves the entity running normally, while executor shutdown abandons the
+    /// transient work without running semantic finalization and joins its destruction before a
+    /// replacement executor may open the same owner oplog.
+    pub(crate) fn spawn_entity<T>(
+        &self,
+        entity_task: impl Future<Output = T> + Send + 'static,
+    ) -> JoinHandle<Option<T>>
+    where
+        T: Send + 'static,
+    {
+        let shutdown_token = self.task_shutdown_token.clone();
+        self.tracker.spawn(async move {
+            let mut entity_task = Box::pin(entity_task);
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {
+                    stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(entity_task));
+                    None
+                }
+                result = crate::worker::invocation::with_invocation_stack(&mut entity_task) => {
+                    Some(result)
+                }
+            }
+        })
+    }
+
     /// Whether the owning executor has been shut down. Once true, no new loop makes progress and
     /// [`Self::wait_for_exit`] resolves as soon as the already running ones have exited.
     pub fn is_shut_down(&self) -> bool {
         self.shutdown_token.is_cancelled()
+    }
+
+    pub fn same_executor(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.owner_oplogs, &other.owner_oplogs)
     }
 
     /// Resolves once every invocation loop of the executor has exited. Only meaningful after the
@@ -655,9 +780,51 @@ impl InvocationLoops {
     ///
     /// A loop that is executing guest code without reaching an await point cannot be cancelled
     /// once the executor's epoch ticker stopped, so callers should bound this wait.
-    pub async fn wait_for_exit(&self) {
+    pub async fn wait_for_exit(&self) -> Result<(), String> {
+        *self.construction_admission.lock().unwrap() = false;
+        {
+            let owner_oplogs = self.owner_oplogs.lock().unwrap();
+            for registration in owner_oplogs.iter() {
+                registration.fence_executor_shutdown();
+            }
+        }
+        self.task_shutdown_token.cancel();
         self.tracker.close();
+        let early_owner_oplogs = self.owner_oplogs.lock().unwrap().clone();
+        futures::future::join_all(
+            early_owner_oplogs
+                .iter()
+                .filter_map(|registration| registration.tasks.as_ref())
+                .map(crate::worker::tasks::WorkerTasks::stop_roots_and_wait),
+        )
+        .await;
         self.tracker.wait().await;
+        let owner_oplogs = self.owner_oplogs.lock().unwrap().clone();
+        let mut result = Ok(());
+        for registration in &owner_oplogs {
+            if let Some(tasks) = &registration.tasks {
+                result = result.and(tasks.stop_and_wait().await);
+            }
+            result = result.and(registration.shutdown.close_and_wait().await);
+        }
+        if result.is_ok() {
+            let mut registered = self.owner_oplogs.lock().unwrap();
+            registered.retain(|oplog| {
+                !owner_oplogs
+                    .iter()
+                    .any(|drained| Weak::ptr_eq(&oplog.oplog, &drained.oplog))
+            });
+        }
+        result
+    }
+}
+
+impl std::fmt::Debug for InvocationLoops {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InvocationLoops")
+            .field("shut_down", &self.is_shut_down())
+            .finish_non_exhaustive()
     }
 }
 
@@ -1057,6 +1224,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     Ok(Arc::new(ActiveAgent::new_unresolved(
                         owned_agent_id,
                         worker,
+                        self.invocation_loops.clone(),
                     )))
                 })
             })

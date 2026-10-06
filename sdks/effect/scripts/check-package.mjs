@@ -1,8 +1,18 @@
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
+import { nodeResolve } from "@rollup/plugin-node-resolve"
+import { rollup } from "rollup"
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const npmCli = process.env.npm_execpath
@@ -93,6 +103,79 @@ try {
     ],
     { cwd: temporaryDirectory },
   )
+  const componentInput = join(temporaryDirectory, "component.mjs")
+  writeFileSync(
+    componentInput,
+    `import { Effect, Schema } from "effect"
+import { WitCodec } from "@golemcloud/effect-golem"
+import { defineAgent } from "@golemcloud/effect-golem/Agent"
+import { method } from "@golemcloud/effect-golem/Method"
+import { UnsupportedSchemaError } from "@golemcloud/effect-golem/WitCodec"
+
+if (WitCodec.UnsupportedSchemaError !== UnsupportedSchemaError)
+  throw new Error("WitCodec root and subpath imports have different identities")
+
+defineAgent({
+  name: "PackedCounter",
+  id: { initial: Schema.Number },
+  methods: { get: method({ input: {}, success: Schema.Number }) },
+}).implement({
+  init: ({ initial }) => Effect.succeed({ value: initial }),
+  methods: (state) => ({ get: () => Effect.succeed(state.value) }),
+})
+`,
+  )
+  const { componentConfiguration: installedComponentConfiguration } = await import(
+    pathToFileURL(join(installed, "build", "component.mjs"))
+  )
+  const componentOptionsFor = (input) => ({
+    input,
+    external: (id) =>
+      id === "effect" ||
+      id === "effect/http" ||
+      id === "node:sqlite" ||
+      id.startsWith("golem:") ||
+      id.startsWith("wasi:"),
+    plugins: [nodeResolve({ extensions: [".mjs", ".js"] })],
+    onwarn: (warning) => {
+      if (warning.code !== "CIRCULAR_DEPENDENCY") throw new Error(warning.message)
+    },
+  })
+  const componentOptions = await installedComponentConfiguration(rollup, () =>
+    componentOptionsFor(componentInput),
+  )
+  const componentBundle = await rollup(componentOptions)
+  try {
+    const { output } = await componentBundle.generate({ format: "esm", inlineDynamicImports: true })
+    const capabilitiesAsset = output.find(
+      (item) => item.type === "asset" && item.fileName === "capabilities.json",
+    )
+    if (!capabilitiesAsset) throw new Error("Packed component build omitted capabilities.json")
+    const capabilities = JSON.parse(String(capabilitiesAsset.source))
+    if (
+      capabilities.agents !== true ||
+      capabilities.tools !== false ||
+      capabilities.middleware !== false
+    )
+      throw new Error(
+        `Packed component selected incorrect capabilities: ${JSON.stringify(capabilities)}`,
+      )
+    const chunk = output.find((item) => item.type === "chunk")
+    if (!chunk) throw new Error("Packed component build omitted its JavaScript chunk")
+    const retained = Object.entries(chunk.modules)
+      .filter(([, info]) => info.renderedLength > 0)
+      .map(([id]) => id.replaceAll("\\", "/"))
+    if (!retained.some((id) => id.endsWith("/dist/component/internal/agent.js")))
+      throw new Error("Packed component build did not retain the modular agent runtime")
+    if (!retained.some((id) => id.endsWith("/dist/component/internal/WitCodec.js")))
+      throw new Error("Packed component build did not retain the canonical WitCodec runtime")
+    if (retained.some((id) => id.endsWith("/dist/component/WitCodec.js")))
+      throw new Error("Packed component build retained a second WitCodec implementation")
+    if (retained.some((id) => id.endsWith("/dist/index.mjs")))
+      throw new Error("Packed component build followed the public SDK bundle")
+  } finally {
+    await componentBundle.close()
+  }
   if (
     manifest.dependencies["@golemcloud/http-contract"] ||
     manifest.dependencies["@golemcloud/golem-ts-sdk"]
@@ -132,7 +215,7 @@ try {
   const nullExports = Object.entries(manifest.exports)
     .filter(([, target]) => target === null)
     .map(([subpath]) => subpath)
-  const wildcardPublicModules = walk(join(installed, "dist", "src"))
+  const wildcardSubpaths = walk(join(installed, "dist", "src"))
     .filter((path) => path.endsWith(".js"))
     .map(
       (path) =>
@@ -141,10 +224,48 @@ try {
           .join("/")
           .slice(0, -3)}`,
     )
+  const wildcardPublicModules = wildcardSubpaths
     .filter((subpath) => !nullExports.some((pattern) => matchesSubpathPattern(subpath, pattern)))
     .map((subpath) => `${manifest.name}/${subpath.slice(2)}`)
   const publicModules = [...explicitPublicModules, ...wildcardPublicModules]
   const uniquePublicModules = [...new Set(publicModules)].sort()
+  for (const [subpath, target] of Object.entries(manifest.exports)) {
+    if (
+      target &&
+      typeof target === "object" &&
+      typeof target.import === "string" &&
+      typeof target["golem-component"] !== "string"
+    )
+      throw new Error(`Public runtime export has no component target: ${subpath}`)
+  }
+
+  const publicComponentInput = join(temporaryDirectory, "component-public-exports.mjs")
+  writeFileSync(
+    publicComponentInput,
+    `${uniquePublicModules
+      .map((name, index) => `import * as public${index} from ${JSON.stringify(name)}`)
+      .join(
+        "\n",
+      )}\nexport default [${uniquePublicModules.map((_, index) => `public${index}`).join(",")}];\n`,
+  )
+  const publicComponentOptions = await installedComponentConfiguration(rollup, () =>
+    componentOptionsFor(publicComponentInput),
+  )
+  const publicComponentBundle = await rollup(publicComponentOptions)
+  try {
+    const { output } = await publicComponentBundle.generate({
+      format: "esm",
+      inlineDynamicImports: true,
+    })
+    const chunk = output.find((item) => item.type === "chunk")
+    if (!chunk) throw new Error("Public component export check omitted its JavaScript chunk")
+    if (
+      Object.keys(chunk.modules).some((id) => id.replaceAll("\\", "/").endsWith("/dist/index.mjs"))
+    )
+      throw new Error("A public component export followed the bundled SDK entry")
+  } finally {
+    await publicComponentBundle.close()
+  }
 
   for (const world of ["agent_guest.wasm"]) {
     const artifact = join(installed, "wasm", world)
@@ -154,11 +275,17 @@ try {
     if (magic !== "0061736d") throw new Error(`${world} is not a WebAssembly binary`)
   }
 
-  const privateModules = [
-    `${manifest.name}/internal/pipeable`,
-    `${manifest.name}/host/HostLive`,
-    `${manifest.name}/Mysql/internal/codec`,
-  ]
+  const privateModules = nullExports.map((pattern) => {
+    const subpath =
+      wildcardSubpaths.find((candidate) => matchesSubpathPattern(candidate, pattern)) ??
+      pattern.replace("*", "__resolver_probe__")
+    const componentProbe = join(installed, "dist", "component", `${subpath.slice(2)}.js`)
+    if (!wildcardSubpaths.includes(subpath)) {
+      mkdirSync(dirname(componentProbe), { recursive: true })
+      writeFileSync(componentProbe, "export {}\n")
+    }
+    return `${manifest.name}/${subpath.slice(2)}`
+  })
   for (const moduleName of privateModules) {
     const result = spawnSync(
       process.execPath,
@@ -172,6 +299,16 @@ try {
     if (!result.stderr.includes("ERR_PACKAGE_PATH_NOT_EXPORTED")) {
       throw new Error(`Private export failed for the wrong reason: ${moduleName}\n${result.stderr}`)
     }
+    const privateComponentInput = join(temporaryDirectory, "component-private-export.mjs")
+    writeFileSync(privateComponentInput, `import ${JSON.stringify(moduleName)}\n`)
+    try {
+      await installedComponentConfiguration(rollup, () =>
+        componentOptionsFor(privateComponentInput),
+      )
+    } catch {
+      continue
+    }
+    throw new Error(`Private export is available to component builds: ${moduleName}`)
   }
 
   const hostExports = new Map()

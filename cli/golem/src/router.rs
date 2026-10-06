@@ -14,10 +14,10 @@
 
 use crate::StartedComponents;
 use anyhow::Context;
-use golem_common::poem::CliClientInfoMiddleware;
+use golem_common::poem::{CliClientInfoMiddleware, OpenTelemetryMetrics, PrometheusExporter};
 use poem::EndpointExt;
 use poem::listener::{Acceptor, Listener};
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
+use poem::middleware::{CookieJarManager, Cors, Tracing};
 use poem::{Route, Server};
 use std::net::Ipv4Addr;
 use tokio::task::JoinSet;
@@ -33,7 +33,6 @@ pub async fn start_router(
     use std::net::SocketAddrV4;
     use std::sync::Arc;
 
-    use poem::endpoint::PrometheusExporter;
     use poem::listener::TcpListener;
 
     let StartedComponents {

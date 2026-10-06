@@ -142,8 +142,8 @@ async fn pending_restart_publishes_only_elected_monthly_cause(
         let mut receipt = if restart_first {
             let receipt = worker
                 .set_interrupting(InterruptKind::Restart)
-                .await
-                .unwrap();
+                .await?
+                .expect("accepted Restart");
             entered.take().unwrap().await?;
             Some(receipt)
         } else {
@@ -181,7 +181,7 @@ async fn pending_restart_publishes_only_elected_monthly_cause(
         assert!(
             worker
                 .set_interrupting(InterruptKind::Restart)
-                .await
+                .await?
                 .is_none()
         );
         assert!(
@@ -189,7 +189,7 @@ async fn pending_restart_publishes_only_elected_monthly_cause(
                 .set_interrupting(InterruptKind::Interrupt(
                     golem_common::model::Timestamp::now_utc()
                 ))
-                .await
+                .await?
                 .is_none()
         );
         assert_eq!(worker.resident_generation_for_test(), generation);
@@ -360,7 +360,7 @@ async fn monthly_before_selection_and_user_stop_after_selection_keep_one_result(
         let mut refresh = None;
         if after_selection {
             expected = InterruptKind::Interrupt(Timestamp::now_utc());
-            receipt = worker.set_interrupting(expected).await;
+            receipt = worker.set_interrupting(expected).await?;
             tokio::time::timeout(Duration::from_secs(5), async {
                 while worker.frozen_stop_for_test().is_none() {
                     tokio::task::yield_now().await;

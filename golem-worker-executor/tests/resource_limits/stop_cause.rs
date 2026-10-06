@@ -64,9 +64,12 @@ async fn waiting_stop_freezes_supersession_and_first_terminal_without_permit(
         let mut existing = worker.await_interrupt_for_test();
         let (_, entered, release) = worker.pause_next_stop_driver_for_test();
         let (published, release_publication) = worker.pause_next_stop_publication_for_test();
-        let mut receipt = worker.set_interrupting(first).await.unwrap();
+        let mut receipt = worker
+            .set_interrupting(first)
+            .await?
+            .expect("accepted first stop");
         entered.await?;
-        let second_receipt = worker.set_interrupting(second).await;
+        let second_receipt = worker.set_interrupting(second).await?;
         assert_eq!(second_receipt.is_some(), index < 2);
         drop(second_receipt);
         assert!(matches!(

@@ -1167,14 +1167,13 @@ impl GolemHostApi for GolemHostApiImpl {
             );
         let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
             .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
-        raw_http::request_async(
-            Method::Get,
-            &format!("localhost:{port}"),
-            "/checkpoint/cancel",
-            None,
-            None,
-        )
-        .await;
+        let response = wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/checkpoint/{tool_name}"))
+            .send()
+            .await
+            .expect("MCP cancellation checkpoint request failed");
+        assert_eq!(response.status().as_u16(), 200);
+        let _ = response.into_body().bytes().await;
         result.cancel();
         let read = async move {
             let mut bytes = Vec::new();

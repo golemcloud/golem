@@ -201,6 +201,27 @@ active_stream_crash_replays_pinned_activation_with_fresh_attachments,
 concurrent_tool_attempt_identity_survives_reordered_admission_and_replay,
 completed_reconstruction_claim_blocks_concurrent_replay_to_live}`.
 
+## Pattern 11: treat owner and entities as one lifecycle unit
+
+Mistake caught: restarting only the primary Store, allowing reconstruction to overtake an entity
+drain, or letting stale owner A mutate replacement B because both have the same `AgentId`.
+
+Do: enter a real entity body or completed-body reconstruction and hold it at a named checkpoint,
+then request restart, suspend, or terminal interruption. For restart/control races, assert the
+original invocation identity completes, its semantic retry counters are unchanged, completed
+external effects are not repeated, filesystem state and the asymmetric result reconstruct
+correctly, and a fresh follow-up invocation is safe. For explicit terminal interruption, assert
+the invocation remains stopped until resume rather than silently restarting. Run the stale-owner
+case asymmetrically: publish B, release A's delayed cleanup, and prove B still accepts and completes
+fresh work—not merely that A's operation returned. For executor shutdown, enter and retain the
+callback before shutdown, then prove task destruction and callback/oplog-layer joins complete
+without semantic finalization.
+
+Copy: `tests/tool_streaming/mod.rs::suspended_restart_replays_completed_tool_without_semantic_retry`,
+the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`, and the retained
+entity shutdown cases in `src/services/active_agents/tests.rs` and
+`src/worker/entity_invocation.rs`.
+
 ## Anti-patterns
 
 - A "restart" that only calls `resume` on a still-resident worker, or resets a cursor.

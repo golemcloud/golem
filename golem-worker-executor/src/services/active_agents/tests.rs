@@ -56,7 +56,349 @@ async fn invocation_shutdown_fences_before_drop_and_waits_for_drain() {
     );
     release.send(()).unwrap();
     task.await.unwrap();
-    loops.wait_for_exit().await;
+    loops.wait_for_exit().await.unwrap();
+}
+
+#[test]
+#[timeout("10s")]
+async fn executor_shutdown_joins_detached_entity_without_running_finalization() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::oneshot;
+    use tokio_util::sync::CancellationToken;
+
+    struct DropProbe(Arc<AtomicBool>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    let shutdown = CancellationToken::new();
+    let tasks = super::InvocationLoops::new(shutdown.clone());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let finalized = Arc::new(AtomicBool::new(false));
+    let (started, running) = oneshot::channel();
+    let task = tasks.spawn_entity({
+        let dropped = dropped.clone();
+        let finalized = finalized.clone();
+        async move {
+            let _probe = DropProbe(dropped);
+            started.send(()).unwrap();
+            std::future::pending::<()>().await;
+            finalized.store(true, Ordering::Release);
+        }
+    });
+    running.await.unwrap();
+
+    shutdown.cancel();
+    tasks.wait_for_exit().await.unwrap();
+
+    assert!(dropped.load(Ordering::Acquire));
+    assert!(!finalized.load(Ordering::Acquire));
+    assert_eq!(task.await.unwrap(), None);
+}
+
+#[test]
+#[timeout("10s")]
+async fn entity_submitted_after_executor_shutdown_is_never_polled() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio_util::sync::CancellationToken;
+
+    let shutdown = CancellationToken::new();
+    let tasks = super::InvocationLoops::new(shutdown.clone());
+    let polled = Arc::new(AtomicBool::new(false));
+    shutdown.cancel();
+    tasks.wait_for_exit().await.unwrap();
+    let task = tasks.spawn_entity({
+        let polled = polled.clone();
+        async move {
+            polled.store(true, Ordering::Release);
+        }
+    });
+
+    assert_eq!(task.await.unwrap(), None);
+    assert!(!polled.load(Ordering::Acquire));
+}
+
+struct ShutdownDrainProbe {
+    attempts: Arc<std::sync::atomic::AtomicUsize>,
+    fail_first: bool,
+    tasks: Option<crate::worker::tasks::WorkerTasks>,
+}
+
+impl std::fmt::Debug for ShutdownDrainProbe {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ShutdownDrainProbe")
+            .field("attempts", &self.attempts)
+            .field("fail_first", &self.fail_first)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::services::oplog::Oplog for ShutdownDrainProbe {
+    fn executor_shutdown_handle(&self) -> crate::services::oplog::OplogShutdownHandle {
+        let attempts = self.attempts.clone();
+        let fail_first = self.fail_first;
+        crate::services::oplog::OplogShutdownHandle::new(
+            || {},
+            move || {
+                let attempts = attempts.clone();
+                Box::pin(async move {
+                    let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                    if fail_first && attempt == 0 {
+                        Err("injected shutdown drain failure".to_string())
+                    } else {
+                        Ok(())
+                    }
+                })
+            },
+        )
+    }
+
+    fn task_owner(&self) -> Option<&crate::worker::tasks::WorkerTasks> {
+        self.tasks.as_ref()
+    }
+
+    fn enqueue_add(
+        &self,
+        _entry: golem_common::model::oplog::OplogEntry,
+    ) -> crate::services::oplog::OplogAddReceipt {
+        panic!("probe does not accept entries")
+    }
+
+    async fn drop_prefix(&self, _: golem_common::model::OplogIndex) -> u64 {
+        unimplemented!()
+    }
+
+    async fn commit(
+        &self,
+        _: crate::services::oplog::CommitLevel,
+    ) -> Result<
+        std::collections::BTreeMap<
+            golem_common::model::OplogIndex,
+            golem_common::model::oplog::OplogEntry,
+        >,
+        crate::services::oplog::OplogError,
+    > {
+        unimplemented!()
+    }
+
+    async fn current_oplog_index(&self) -> golem_common::model::OplogIndex {
+        unimplemented!()
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<golem_common::model::OplogIndex> {
+        unimplemented!()
+    }
+
+    async fn wait_for_replicas(
+        &self,
+        _: u8,
+        _: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        unimplemented!()
+    }
+
+    async fn read_exact(
+        &self,
+        _: golem_common::model::OplogIndex,
+        _: u64,
+    ) -> std::collections::BTreeMap<
+        golem_common::model::OplogIndex,
+        golem_common::model::oplog::OplogEntry,
+    > {
+        unimplemented!()
+    }
+
+    async fn length(&self) -> u64 {
+        unimplemented!()
+    }
+
+    async fn upload_raw_payload(
+        &self,
+        _: Vec<u8>,
+    ) -> Result<golem_common::model::oplog::RawOplogPayload, String> {
+        unimplemented!()
+    }
+
+    async fn download_raw_payload(
+        &self,
+        _: golem_common::model::oplog::PayloadId,
+        _: Vec<u8>,
+    ) -> Result<Vec<u8>, String> {
+        unimplemented!()
+    }
+
+    async fn add_start_with_reserved_raw_payload(
+        &self,
+        _: Vec<u8>,
+        _: crate::services::oplog::ReservedRawStartBuilder,
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
+        unimplemented!()
+    }
+
+    async fn add_start_with_indexed_reserved_raw_payload(
+        &self,
+        _: crate::services::oplog::IndexedReservedStartBuilder,
+    ) -> Result<crate::services::oplog::OrderedOplogStart, crate::services::oplog::OplogError> {
+        unimplemented!()
+    }
+
+    fn enqueue_add_pair(
+        &self,
+        _: golem_common::model::oplog::OplogEntry,
+        _: Box<
+            dyn FnOnce(golem_common::model::OplogIndex) -> golem_common::model::oplog::OplogEntry
+                + Send,
+        >,
+    ) -> crate::services::oplog::OplogAddPairReceipt {
+        unimplemented!()
+    }
+}
+
+#[test]
+#[timeout("10s")]
+async fn failed_shutdown_drain_remains_registered_for_retry() {
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let tasks = super::InvocationLoops::new(shutdown.clone());
+    let oplog = Arc::new(ShutdownDrainProbe {
+        attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        fail_first: true,
+        tasks: None,
+    });
+    tasks.register_owner_oplog(oplog.clone());
+    shutdown.cancel();
+
+    assert_eq!(
+        tasks.wait_for_exit().await,
+        Err("injected shutdown drain failure".to_string())
+    );
+    tasks.wait_for_exit().await.unwrap();
+    assert_eq!(oplog.attempts.load(std::sync::atomic::Ordering::Acquire), 2);
+}
+
+#[test]
+#[timeout("10s")]
+async fn shutdown_waits_for_construction_before_draining_registered_oplog() {
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let tasks = super::InvocationLoops::new(shutdown.clone());
+    let oplog = Arc::new(ShutdownDrainProbe {
+        attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        fail_first: false,
+        tasks: None,
+    });
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    assert!(tasks.spawn_construction({
+        let tasks = tasks.clone();
+        let oplog = oplog.clone();
+        async move {
+            entered_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            tasks.register_owner_oplog(oplog);
+        }
+    }));
+    entered_rx.await.unwrap();
+    shutdown.cancel();
+
+    let mut wait = Box::pin(tasks.wait_for_exit());
+    assert!(futures::poll!(wait.as_mut()).is_pending());
+    release_tx.send(()).unwrap();
+    wait.await.unwrap();
+    assert_eq!(oplog.attempts.load(std::sync::atomic::Ordering::Acquire), 1);
+}
+
+#[test]
+#[timeout("10s")]
+async fn shutdown_stops_worker_roots_before_joining_invocation_cleanup() {
+    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.take().unwrap().send(());
+        }
+    }
+
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let loops = super::InvocationLoops::new(shutdown.clone());
+    let worker_tasks = crate::worker::tasks::WorkerTasks::default();
+    let (root_started_tx, root_started_rx) = tokio::sync::oneshot::channel();
+    let (root_dropped_tx, root_dropped_rx) = tokio::sync::oneshot::channel();
+    worker_tasks.spawn(async move {
+        let _drop_signal = DropSignal(Some(root_dropped_tx));
+        root_started_tx.send(()).unwrap();
+        std::future::pending::<()>().await;
+    });
+    root_started_rx.await.unwrap();
+
+    let oplog = Arc::new(ShutdownDrainProbe {
+        attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        fail_first: false,
+        tasks: Some(worker_tasks.clone()),
+    });
+    loops.register_owner_oplog(oplog.clone());
+
+    let (invocation_started_tx, invocation_started_rx) = tokio::sync::oneshot::channel();
+    let (cleanup_entered_tx, cleanup_entered_rx) = tokio::sync::oneshot::channel();
+    let (release_cleanup_tx, release_cleanup_rx) = tokio::sync::oneshot::channel();
+    loops.spawn(
+        async move {
+            invocation_started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+        },
+        move || {
+            Box::pin(async move {
+                root_dropped_rx.await.unwrap();
+                cleanup_entered_tx.send(()).unwrap();
+                release_cleanup_rx.await.unwrap();
+            })
+        },
+    );
+    invocation_started_rx.await.unwrap();
+
+    shutdown.cancel();
+    let wait = tokio::spawn({
+        let loops = loops.clone();
+        async move { loops.wait_for_exit().await }
+    });
+    tokio::time::timeout(Duration::from_secs(1), cleanup_entered_rx)
+        .await
+        .expect("worker root was not stopped before invocation cleanup")
+        .unwrap();
+    assert!(!wait.is_finished());
+    assert_eq!(oplog.attempts.load(std::sync::atomic::Ordering::Acquire), 0);
+    assert_eq!(
+        worker_tasks
+            .spawn_metadata(async { 42 })
+            .expect("metadata remains available during invocation cleanup")
+            .await
+            .unwrap(),
+        42
+    );
+
+    release_cleanup_tx.send(()).unwrap();
+    wait.await.unwrap().unwrap();
+    assert_eq!(oplog.attempts.load(std::sync::atomic::Ordering::Acquire), 1);
+}
+
+#[test]
+#[timeout("10s")]
+async fn construction_submitted_after_shutdown_barrier_is_rejected_without_polling() {
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let tasks = super::InvocationLoops::new(shutdown.clone());
+    shutdown.cancel();
+    tasks.wait_for_exit().await.unwrap();
+    let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    assert!(!tasks.spawn_construction({
+        let polled = polled.clone();
+        async move {
+            polled.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }));
+    assert!(!polled.load(std::sync::atomic::Ordering::Acquire));
 }
 
 #[test]

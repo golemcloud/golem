@@ -519,6 +519,9 @@ impl TrapType {
                             host_function: host_function.clone(),
                         })),
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+                            Some(WorkerExecutorError::Interrupted { kind }) => {
+                                TrapType::Interrupt(*kind)
+                            }
                             // The generic read-only check inside `begin_durable_function` reports
                             // violations as `WorkerExecutorError::ReadOnlyViolation` so the
                             // trap survives `WorkerExecutorError -> wasmtime::Error -> ...`
@@ -1069,6 +1072,22 @@ mod tests {
             SnapshotReplayPurpose::for_reconstruction(true, Some(SnapshotSource::ManualUpdate)),
             SnapshotReplayPurpose::None
         );
+    }
+
+    #[test]
+    fn wrapped_replay_jump_remains_an_interrupt() {
+        let error = anyhow::Error::new(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        })
+        .context("durable call recovery");
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &error,
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+        assert!(matches!(trap, TrapType::Interrupt(InterruptKind::Jump)));
     }
 
     #[test]

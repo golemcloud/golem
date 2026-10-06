@@ -113,7 +113,7 @@ async fn monthly_memory_stop_is_accepted_during_completed_history_replay(
     eprintln!("[monthly-replay] original committed oplog: {original:#?}");
     let (replay, release_replay) = worker.pause_completed_replay_for_test(key.clone());
     // The public crash API ignores Idle. Restart the resident Worker through the same stop path.
-    worker.set_interrupting(InterruptKind::Restart).await;
+    worker.set_interrupting(InterruptKind::Restart).await?;
     let replay_indices = tokio::time::timeout(Duration::from_secs(10), replay)
         .await
         .context("completed-history replay boundary after Restart")??;

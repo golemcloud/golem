@@ -1,7 +1,7 @@
 /** Runtime support for exact graph-backed generated tool bridges. @since 1.6.0 */
 import type * as Host from "golem:tool/host@0.1.0"
 import type * as Common from "golem:tool/common@0.1.0"
-import { Effect, Option, Result, Stream } from "effect"
+import { Effect, Option, Result, Scope, Stream } from "effect"
 import * as Bridge from "./Bridge.js"
 import { ToolClient } from "./host/ToolClient.js"
 import { liveToolStart, ToolClientError, ToolTransport } from "./Tool.js"
@@ -62,7 +62,7 @@ export interface ToolClientRuntime {
       readonly cancel: Effect.Effect<void>
     },
     ToolRuntimeError<E>,
-    ToolClient
+    ToolClient | Scope.Scope
   >
 }
 

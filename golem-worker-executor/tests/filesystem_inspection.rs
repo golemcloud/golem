@@ -655,7 +655,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     };
     tokio::time::timeout(Duration::from_secs(10), async {
         while worker
-            .get_attached_last_known_status()
+            .get_last_known_status()
             .await
             .pending_invocations
             .is_empty()
@@ -694,7 +694,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     }
     worker
         .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
-        .await;
+        .await?;
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_is_loaded(&owned).await {
             tokio::task::yield_now().await;
@@ -728,7 +728,7 @@ async fn live_file_inspection_queued_before_suspend_observes_completed_write(
     )?;
     worker
         .set_interrupting(InterruptKind::Suspend(Timestamp::now_utc()))
-        .await;
+        .await?;
     // Suspend cancels and joins the blocked startup without acquiring the held permit.
     tokio::time::timeout(Duration::from_secs(10), async {
         while executor.worker_has_pending_startup(&owned).await

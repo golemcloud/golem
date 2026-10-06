@@ -194,9 +194,15 @@ async fn start_components(
     args: &LaunchArgs,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
+    let component_compilation_service_config = component_compilation_service_config(args);
+    golem_service_base::observability::install_runtime_metrics(
+        Handle::current(),
+        prometheus::default_registry().clone(),
+        component_compilation_service_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
     let component_compilation_service =
-        run_component_compilation_service(component_compilation_service_config(args), join_set)
-            .await?;
+        run_component_compilation_service(component_compilation_service_config, join_set).await?;
 
     let registry_service = run_registry_service(
         registry_service_config(args, &component_compilation_service)?,

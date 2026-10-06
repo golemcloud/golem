@@ -199,7 +199,7 @@ async fn repeated_stop(
         let mut signal = None;
         if user_stop {
             let kind = InterruptKind::Interrupt(Timestamp::now_utc());
-            receipt = worker.set_interrupting(kind).await;
+            receipt = worker.set_interrupting(kind).await?;
             tokio::time::timeout(Duration::from_secs(10), driver_entered.take().unwrap()).await??;
             release_driver.take().unwrap().send(false).unwrap();
             tokio::time::timeout(Duration::from_secs(10), selected.take().unwrap()).await??;

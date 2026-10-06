@@ -2,6 +2,7 @@
 cors_origin_regex = "https://*.golem.cloud"
 environment = "dev"
 http_port = 8081
+runtime_metrics_sampling_interval = "5s"
 workspace = "release"
 
 [blob_storage]

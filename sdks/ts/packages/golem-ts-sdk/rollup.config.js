@@ -93,6 +93,7 @@ export default (args) =>
           middleware: 'src/middleware.ts',
           'schema/public': 'src/schema/public.ts',
           reflection: 'src/reflection.ts',
+          'http-router': 'src/httpRouterContract.ts',
           toolClient: 'src/toolClient.ts',
           'internal/tool/compiled': 'src/internal/tool/compiled.ts',
           'internal/compiledAgent': 'src/internal/compiledAgent.ts',

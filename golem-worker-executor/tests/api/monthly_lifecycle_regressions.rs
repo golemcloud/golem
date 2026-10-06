@@ -99,7 +99,7 @@ async fn consumed_suspend_teardown_does_not_survive_reactivation(
     let (published, release_driver) = worker.pause_next_stop_publication_for_test();
     let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
     let accepted = InterruptKind::Suspend(Timestamp::now_utc());
-    worker.set_interrupting(accepted).await;
+    worker.set_interrupting(accepted).await?;
     let mut receipt = worker.accepted_stop_receipt_for_test();
     published.await?;
     release_outcome.send(false).unwrap();
@@ -271,7 +271,7 @@ async fn frozen_interrupt_wins_over_monthly_invocation_admission(
     let acquisitions = worker.permit_acquisitions_for_test();
     let (frozen, release_driver) = worker.pause_next_stop_freeze_for_test();
     let accepted = InterruptKind::Interrupt(Timestamp::now_utc());
-    worker.set_interrupting(accepted).await;
+    worker.set_interrupting(accepted).await?;
     let mut receipt = worker.accepted_stop_receipt_for_test();
     frozen.await?;
     assert_eq!(worker.frozen_stop_for_test(), Some(accepted));
