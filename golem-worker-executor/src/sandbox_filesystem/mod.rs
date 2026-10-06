@@ -787,7 +787,7 @@ pub(crate) enum AgentAccounting {
 /// Whether the host directories of a storage mode must be checked for a project identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HostDirectoryCheck {
-    /// The volume has no projects.
+    /// Development storage. The host directories are not checked for a project.
     None,
     /// The volume is XFS. A host directory with a project id or the project-inherit flag is
     /// refused.
