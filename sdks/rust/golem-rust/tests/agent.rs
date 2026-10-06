@@ -21,7 +21,7 @@ test_r::enable!();
 mod tests {
     use golem_rust::agentic::{
         AgentStream, AgentTypeName, Multimodal, MultimodalAdvanced, MultimodalCustom, Schema,
-        UnstructuredBinary, UnstructuredText,
+        SnapshotData, UnstructuredBinary, UnstructuredText,
     };
     use golem_rust::agentic::{HttpRequest, HttpResponse, HttpRouter, Principal, create_webhook};
     use golem_rust::golem_agentic::golem::agent::common::{
@@ -1978,15 +1978,15 @@ mod tests {
         let helper = SaveHelper(&agent);
         let result = helper.snapshot_save();
         assert!(result.is_ok(), "Save should succeed for serializable agent");
-        let snapshot = result.unwrap();
-        assert_eq!(snapshot.mime_type, "application/json");
-        let json_value: serde_json::Value = serde_json::from_slice(&snapshot.data).unwrap();
+        let SnapshotData::Json(snapshot) = result.unwrap() else {
+            panic!("expected JSON");
+        };
+        let json_value: serde_json::Value = serde_json::from_slice(&snapshot).unwrap();
         assert_eq!(json_value["name"], "test-agent");
 
-        let agent2 = <SerializableAgentImpl as SerializableAgent>::__golem_auto_load_snapshot(
-            &snapshot.data,
-        )
-        .unwrap();
+        let agent2 =
+            <SerializableAgentImpl as SerializableAgent>::__golem_auto_load_snapshot(&snapshot)
+                .unwrap();
         assert_eq!(agent2.name, "test-agent");
     }
 
@@ -2025,7 +2025,10 @@ mod tests {
         let restored = with_agent_initiator(
             |initiator| async move {
                 initiator
-                    .restore(br#"{"name":"restored"}"#.to_vec(), context)
+                    .restore(
+                        SnapshotData::Json(br#"{"name":"restored"}"#.to_vec()),
+                        context,
+                    )
                     .await
             },
             &agent_type,
@@ -2035,9 +2038,11 @@ mod tests {
 
         assert_eq!(SERIALIZABLE_AGENT_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
         let saved = restored.agent.borrow().save_snapshot_base().await.unwrap();
-        assert_eq!(saved.mime_type, "application/json");
+        let SnapshotData::Json(saved) = saved else {
+            panic!("expected JSON");
+        };
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&saved.data).unwrap()["name"],
+            serde_json::from_slice::<serde_json::Value>(&saved).unwrap()["name"],
             "restored"
         );
     }
@@ -2077,9 +2082,10 @@ mod tests {
         // save_snapshot_base should use the custom method and return octet-stream
         let save_result = agent.save_snapshot_base().await;
         assert!(save_result.is_ok());
-        let snapshot = save_result.unwrap();
-        assert_eq!(snapshot.mime_type, "application/octet-stream");
-        assert_eq!(snapshot.data, b"hello-world");
+        let SnapshotData::Bytes(snapshot) = save_result.unwrap() else {
+            panic!("expected bytes");
+        };
+        assert_eq!(snapshot, b"hello-world");
 
         CustomSnapshotAgentImpl::__register_agent_type();
         CUSTOM_SNAPSHOT_AGENT_CONSTRUCTIONS.store(0, Ordering::SeqCst);
@@ -2095,7 +2101,11 @@ mod tests {
         let failed_context = context();
         let context = context();
         let failed = with_agent_initiator(
-            |initiator| async move { initiator.restore(vec![0xff], failed_context).await },
+            |initiator| async move {
+                initiator
+                    .restore(SnapshotData::Bytes(vec![0xff]), failed_context)
+                    .await
+            },
             &agent_type,
         )
         .await;
@@ -2108,7 +2118,11 @@ mod tests {
         );
 
         let restored = with_agent_initiator(
-            |initiator| async move { initiator.restore(b"new-data".to_vec(), context).await },
+            |initiator| async move {
+                initiator
+                    .restore(SnapshotData::Bytes(b"new-data".to_vec()), context)
+                    .await
+            },
             &agent_type,
         )
         .await
@@ -2119,8 +2133,10 @@ mod tests {
         );
         assert_eq!(CUSTOM_SNAPSHOT_AGENT_RESTORATIONS.load(Ordering::SeqCst), 2);
         let saved = restored.agent.borrow().save_snapshot_base().await.unwrap();
-        assert_eq!(saved.mime_type, "application/octet-stream");
-        assert_eq!(saved.data, b"new-data");
+        let SnapshotData::Bytes(saved) = saved else {
+            panic!("expected bytes");
+        };
+        assert_eq!(saved, b"new-data");
     }
 
     #[test]
@@ -2718,5 +2734,135 @@ mod tests {
             golem_rust::golem_agentic::golem::agent::common::HttpMethod::Any
         ));
         assert!(route.http_endpoint[0].path_suffix.is_empty());
+    }
+
+    static PARTS_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+    static PARTS_RESTORATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(golem_rust::serde::Serialize, golem_rust::serde::Deserialize)]
+    struct PartsSavedState {
+        revision: u32,
+    }
+
+    #[agent_definition(snapshotting = "enabled")]
+    trait MultipartIndexAgent {
+        fn new(revision: u32) -> Self;
+        fn revision(&self) -> u32;
+    }
+
+    struct MultipartIndexAgentImpl {
+        revision: u32,
+        index: Vec<u8>,
+    }
+
+    #[agent_implementation]
+    impl MultipartIndexAgent for MultipartIndexAgentImpl {
+        fn new(revision: u32) -> Self {
+            PARTS_CONSTRUCTIONS.fetch_add(1, Ordering::SeqCst);
+            Self {
+                revision,
+                index: vec![],
+            }
+        }
+
+        fn revision(&self) -> u32 {
+            self.revision
+        }
+
+        async fn save_snapshot_parts(
+            &self,
+        ) -> Result<golem_rust::agentic::MultipartSnapshot, String> {
+            golem_rust::agentic::MultipartSnapshot::from_state(
+                &PartsSavedState {
+                    revision: self.revision,
+                },
+                std::collections::BTreeMap::from([(
+                    "index".to_string(),
+                    golem_rust::agentic::SnapshotPart {
+                        bytes: self.index.clone(),
+                        content_type: "application/octet-stream".to_string(),
+                    },
+                )]),
+            )
+        }
+
+        async fn load_snapshot_parts(
+            snapshot: golem_rust::agentic::MultipartSnapshot,
+            context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            PARTS_RESTORATIONS.fetch_add(1, Ordering::SeqCst);
+            assert!(matches!(context.principal, Principal::Anonymous));
+            let saved: PartsSavedState = snapshot.decode_state()?;
+            let index = snapshot
+                .require_part("index", "application/octet-stream")?
+                .to_vec();
+            Ok(Self {
+                revision: saved.revision,
+                index,
+            })
+        }
+    }
+
+    #[test]
+    #[allow(clippy::await_holding_refcell_ref)]
+    async fn multipart_hooks_restore_fresh_nonserde_live_state_and_reject_wrong_modes() {
+        use golem_rust::agentic::{SnapshotRestoreContext, with_agent_initiator};
+        MultipartIndexAgentImpl::__register_agent_type();
+        PARTS_CONSTRUCTIONS.store(0, Ordering::SeqCst);
+        PARTS_RESTORATIONS.store(0, Ordering::SeqCst);
+        let bytes: Vec<u8> = (0..=255).chain([13, 10]).collect();
+        let instance = MultipartIndexAgentImpl {
+            revision: 17,
+            index: bytes.clone(),
+        };
+        let SnapshotData::Multipart(saved) = instance.save_snapshot_base().await.unwrap() else {
+            panic!("expected multipart");
+        };
+        let agent_type = AgentTypeName("MultipartIndexAgent".to_string());
+        let context = || SnapshotRestoreContext {
+            principal: Principal::Anonymous,
+            agent_type: agent_type.0.clone(),
+            parameters: wire_input(vec![SchemaValue::U32(0)]),
+            phantom_id: None,
+        };
+        for wrong in [
+            SnapshotData::Json(b"null".to_vec()),
+            SnapshotData::Bytes(vec![]),
+        ] {
+            let context = context();
+            let result = with_agent_initiator(
+                |initiator| async move { initiator.restore(wrong, context).await },
+                &agent_type,
+            )
+            .await;
+            assert!(result.is_err());
+        }
+        assert_eq!(PARTS_RESTORATIONS.load(Ordering::SeqCst), 0);
+        let context = context();
+        let restored = with_agent_initiator(
+            |initiator| async move {
+                initiator
+                    .restore(SnapshotData::Multipart(saved), context)
+                    .await
+            },
+            &agent_type,
+        )
+        .await
+        .unwrap();
+        assert_eq!(PARTS_CONSTRUCTIONS.load(Ordering::SeqCst), 0);
+        assert_eq!(PARTS_RESTORATIONS.load(Ordering::SeqCst), 1);
+        let SnapshotData::Multipart(saved) =
+            restored.agent.borrow().save_snapshot_base().await.unwrap()
+        else {
+            panic!("expected multipart");
+        };
+        assert_eq!(saved.state, serde_json::json!({ "revision": 17 }));
+        assert_eq!(
+            saved
+                .require_part("index", "application/octet-stream")
+                .unwrap(),
+            bytes
+        );
+        assert_eq!(restored.agent.borrow().get_definition().methods.len(), 1);
     }
 }

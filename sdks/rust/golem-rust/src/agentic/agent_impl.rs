@@ -70,7 +70,16 @@ fn encode_json_snapshot(principal: &Principal, state: &[u8]) -> Vec<u8> {
 
 fn decode_snapshot(
     snapshot: crate::load_snapshot::exports::golem::api::load_snapshot::Snapshot,
-) -> Result<(Principal, Vec<u8>), String> {
+) -> Result<(Principal, super::SnapshotData), String> {
+    if snapshot
+        .mime_type
+        .split(';')
+        .next()
+        .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("multipart/mixed"))
+    {
+        return super::snapshot_parts::decode(&snapshot.payload, &snapshot.mime_type)
+            .map(|(principal, parts)| (principal, super::SnapshotData::Multipart(parts)));
+    }
     let bytes = snapshot.payload;
     let is_json = snapshot.mime_type == "application/json";
 
@@ -96,14 +105,14 @@ fn decode_snapshot(
             .state
             .ok_or_else(|| "JSON snapshot missing 'state' field".to_string())?;
         let agent_snapshot = state.get().as_bytes().to_vec();
-        Ok((principal, agent_snapshot))
+        Ok((principal, super::SnapshotData::Json(agent_snapshot)))
     } else {
         let version = bytes[0];
         match version {
             1 => {
                 let agent_snapshot = bytes[1..].to_vec();
                 let principal = get_principal().unwrap_or(Principal::Anonymous);
-                Ok((principal, agent_snapshot))
+                Ok((principal, super::SnapshotData::Bytes(agent_snapshot)))
             }
             2 => {
                 if bytes.len() < 5 {
@@ -119,7 +128,7 @@ fn decode_snapshot(
                 }
                 let principal = deserialize_principal(&bytes[principal_start..principal_end])?;
                 let agent_snapshot = bytes[principal_end..].to_vec();
-                Ok((principal, agent_snapshot))
+                Ok((principal, super::SnapshotData::Bytes(agent_snapshot)))
             }
             _ => Err(format!("Unsupported snapshot version: {}", version)),
         }
@@ -287,24 +296,35 @@ impl SaveSnapshotGuest for AgentRuntime {
 
             let principal = get_principal().unwrap_or(Principal::Anonymous);
 
-            if snapshot_data.mime_type == "application/json" {
-                let data = encode_json_snapshot(&principal, &snapshot_data.data);
-                crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                    payload: data,
-                    mime_type: "application/json".to_string(),
+            match snapshot_data {
+                super::SnapshotData::Multipart(parts) => {
+                    let (payload, mime_type) = super::snapshot_parts::encode(&parts, &principal)
+                        .expect("Failed to encode multipart snapshot");
+                    crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                        payload,
+                        mime_type,
+                    }
                 }
-            } else {
-                // Custom binary snapshot: version 2 format with principal
-                let principal_bytes = serialize_principal(&principal);
-                let total_length = 1 + 4 + principal_bytes.len() + snapshot_data.data.len();
-                let mut full_snapshot = Vec::with_capacity(total_length);
-                full_snapshot.push(2);
-                full_snapshot.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
-                full_snapshot.extend_from_slice(&principal_bytes);
-                full_snapshot.extend_from_slice(&snapshot_data.data);
-                crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
-                    payload: full_snapshot,
-                    mime_type: "application/octet-stream".to_string(),
+                super::SnapshotData::Json(data) => {
+                    let data = encode_json_snapshot(&principal, &data);
+                    crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                        payload: data,
+                        mime_type: "application/json".to_string(),
+                    }
+                }
+                super::SnapshotData::Bytes(data) => {
+                    // Custom binary snapshot: version 2 format with principal
+                    let principal_bytes = serialize_principal(&principal);
+                    let total_length = 1 + 4 + principal_bytes.len() + data.len();
+                    let mut full_snapshot = Vec::with_capacity(total_length);
+                    full_snapshot.push(2);
+                    full_snapshot.extend_from_slice(&(principal_bytes.len() as u32).to_be_bytes());
+                    full_snapshot.extend_from_slice(&principal_bytes);
+                    full_snapshot.extend_from_slice(&data);
+                    crate::save_snapshot::exports::golem::api::save_snapshot::Snapshot {
+                        payload: full_snapshot,
+                        mime_type: "application/octet-stream".to_string(),
+                    }
                 }
             }
         })
@@ -357,10 +377,7 @@ mod tests {
         }
 
         async fn save_snapshot_base(&self) -> Result<SnapshotData, String> {
-            Ok(SnapshotData {
-                data: self.snapshot.clone(),
-                mime_type: "application/octet-stream".to_string(),
-            })
+            Ok(SnapshotData::Bytes(self.snapshot.clone()))
         }
     }
 
@@ -379,9 +396,12 @@ mod tests {
 
         async fn restore(
             &self,
-            snapshot: Vec<u8>,
+            snapshot: SnapshotData,
             context: SnapshotRestoreContext,
         ) -> Result<ResolvedAgent, String> {
+            let SnapshotData::Bytes(snapshot) = snapshot else {
+                return Err("expected bytes".to_string());
+            };
             RESTORE_CALLS.fetch_add(1, Ordering::SeqCst);
             let expected_phantom =
                 crate::Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
@@ -454,6 +474,9 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(decoded_principal, Principal::Anonymous));
+        let SnapshotData::Json(state) = state else {
+            panic!("expected JSON");
+        };
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&state).unwrap(),
             json["state"]
@@ -472,6 +495,9 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(decoded_principal, Principal::Anonymous));
+        let SnapshotData::Bytes(state) = state else {
+            panic!("expected bytes");
+        };
         assert_eq!(state, b"state");
     }
 
@@ -500,6 +526,9 @@ mod tests {
             )
             .unwrap();
             assert!(matches!(principal, Principal::Anonymous));
+            let SnapshotData::Json(restored) = restored else {
+                panic!("expected JSON");
+            };
             assert_eq!(restored, state.as_bytes());
             assert_eq!(
                 serde_json::from_slice::<serde_json::Value>(&restored).unwrap(),
@@ -600,6 +629,27 @@ mod tests {
         RESTORE_CALLS.store(0, Ordering::SeqCst);
 
         let encoded_agent_id = "RestoreTest(\"constructor\")[00000000-0000-0000-0000-000000000001]";
+        for envelope in [
+            r#"[1,{"tag":"anonymous"},null]"#,
+            r#"{"version":1,"principal":["anonymous",null],"state":null}"#,
+            r#"{"version":1,"principal":{"tag":"agent","val":["10203040-5060-7080-9012-3456789abcde","worker(7)"]},"state":null}"#,
+        ] {
+            let snapshot = load_snapshot::exports::golem::api::load_snapshot::Snapshot {
+                payload: format!("--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name=\"state\"\r\n\r\n{envelope}\r\n--b--\r\n").into_bytes(),
+                mime_type: "multipart/mixed; boundary=b".to_string(),
+            };
+            assert!(
+                load_agent_snapshot(snapshot, encoded_agent_id, |_| {
+                    panic!("malformed metadata must fail before identity resolution")
+                })
+                .await
+                .is_err()
+            );
+            assert!(get_principal().is_none());
+            assert!(get_resolved_agent().is_none());
+            assert_eq!(RESTORE_CALLS.load(Ordering::SeqCst), 0);
+            assert_eq!(INITIALIZE_CALLS.load(Ordering::SeqCst), 0);
+        }
         let failure = load_agent_snapshot(
             binary_snapshot(b"fail"),
             encoded_agent_id,
@@ -627,7 +677,10 @@ mod tests {
             agent.agent.borrow().save_snapshot_base().await.unwrap()
         })
         .await;
-        assert_eq!(saved.data, b"restored");
+        let SnapshotData::Bytes(saved) = saved else {
+            panic!("expected bytes");
+        };
+        assert_eq!(saved, b"restored");
 
         *get_state().agent_instance.borrow_mut() = Default::default();
     }
