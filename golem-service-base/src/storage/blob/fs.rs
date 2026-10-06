@@ -672,8 +672,13 @@ fn remove_old_staging_files(staging: &Path, now: SystemTime) -> std::io::Result<
 
 /// Runs each step of `steps`, also after a step failed, and gives the first error.
 fn first_error(steps: impl Iterator<Item = std::io::Result<()>>) -> std::io::Result<()> {
-    // Each step runs while the steps are collected; only then the first error is taken.
-    steps.collect::<Vec<_>>().into_iter().collect()
+    // The fold consumes every step, so each one runs, and it keeps only the first error. A
+    // `try_fold` would stop at the first error and skip the steps after it.
+    steps
+        .fold(None, |first: Option<std::io::Error>, step| {
+            first.or(step.err())
+        })
+        .map_or(Ok(()), Err)
 }
 
 /// Gives `None` for a read that found nothing at its path, which a remove of the path after its
