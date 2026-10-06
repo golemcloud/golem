@@ -17,7 +17,8 @@
 
 use super::*;
 use crate::services::agent_filesystem::lifecycle::baseline::{
-    TIMESTAMP_SETTLE, detection, settle_delay, unchanged,
+    GenerationFacts, TIMESTAMP_SETTLE, detection, every_declaration_left_out,
+    may_hold_only_initial_files, settle_delay, unchanged,
 };
 use test_r::{test, timeout};
 
@@ -1389,6 +1390,30 @@ fn only_a_change_of_the_modification_time_counts_and_a_chosen_time_counts_as_cho
             Some(Counted::Fresh),
             Some(Counted::Fresh),
         ]
+    );
+}
+
+#[test]
+fn a_chosen_time_a_provisioned_file_or_a_read_write_declaration_each_rule_out_initial_files() {
+    let facts = |chosen_times, provisioned, read_write_declared| GenerationFacts {
+        chosen_times,
+        provisioned,
+        read_write_declared,
+    };
+    assert_eq!(
+        [
+            facts(false, false, false),
+            facts(true, false, false),
+            facts(false, true, false),
+            facts(false, false, true),
+        ]
+        .map(may_hold_only_initial_files),
+        [true, false, false, false]
+    );
+    assert_eq!(
+        [(2, 2), (1, 2), (0, 0)]
+            .map(|(left_out, declared)| every_declaration_left_out(left_out, declared)),
+        [true, false, true]
     );
 }
 
