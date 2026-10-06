@@ -67,6 +67,56 @@ impl SnapshotCounter for SnapshotCounterImpl {
     }
 }
 
+/// An ephemeral agent with a snapshot policy, so a test can show that an ephemeral agent takes no
+/// snapshot whatever its policy says.
+#[agent_definition(ephemeral, snapshotting = "enabled")]
+trait EphemeralSnapshotCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct EphemeralSnapshotCounterImpl {
+    count: u32,
+    _id: String,
+}
+
+#[agent_implementation]
+impl EphemeralSnapshotCounter for EphemeralSnapshotCounterImpl {
+    fn new(id: String) -> Self {
+        Self { _id: id, count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(self.count.to_le_bytes().to_vec())
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        let count = u32::from_le_bytes(
+            bytes
+                .try_into()
+                .map_err(|bytes: Vec<u8>| format!("Invalid snapshot size: {}", bytes.len()))?,
+        );
+        let golem_rust::SchemaValue::Record { fields } = context.parameters else {
+            return Err("Invalid snapshot restore parameters".to_string());
+        };
+        let [golem_rust::SchemaValue::String(id)] = fields.as_slice() else {
+            return Err("Invalid snapshot restore parameters".to_string());
+        };
+        Ok(Self {
+            count,
+            _id: id.clone(),
+        })
+    }
+}
+
 #[agent_definition(snapshotting = "enabled")]
 trait JsonSnapshotCounter {
     fn new(id: String) -> Self;

@@ -12483,6 +12483,30 @@ mod tests {
     use std::path::Path;
     use test_r::test;
 
+    #[test]
+    fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_keeps_its_policy() {
+        let policies = || {
+            [
+                SnapshotPolicy::EveryNInvocation { count: 1 },
+                SnapshotPolicy::Periodic {
+                    period: Duration::from_secs(1),
+                },
+                SnapshotPolicy::Disabled,
+            ]
+        };
+        let resolved =
+            |mode| policies().map(|policy| format!("{:?}", snapshot_policy_of_mode(mode, policy)));
+
+        assert_eq!(
+            resolved(AgentMode::Durable),
+            policies().map(|policy| format!("{policy:?}"))
+        );
+        assert_eq!(
+            resolved(AgentMode::Ephemeral),
+            [(); 3].map(|()| format!("{:?}", SnapshotPolicy::Disabled))
+        );
+    }
+
     /// The first reason that is not `Requested` is the lost shard; a requested retirement and a
     /// later reason change nothing. The lost shard has one store, so every reader sees it.
     #[test]
@@ -13826,7 +13850,7 @@ fn resolve_agent_properties<T: HasConfig>(
 
     let agent_mode = resolved_agent_type.map_or(AgentMode::Durable, |at| at.mode);
 
-    let snapshot_policy = if let Some(agent_type) = resolved_agent_type {
+    let configured_policy = if let Some(agent_type) = resolved_agent_type {
         // Agent with explicit metadata — use agent-level snapshotting config
         resolve_snapshot_policy(
             &deps.config().oplog.default_snapshotting,
@@ -13843,7 +13867,17 @@ fn resolve_agent_properties<T: HasConfig>(
 
     ResolvedAgentProperties {
         agent_mode,
-        snapshot_policy,
+        snapshot_policy: snapshot_policy_of_mode(agent_mode, configured_policy),
+    }
+}
+
+/// The snapshot policy of an agent in `mode` whose configuration gives `configured`. An ephemeral
+/// agent takes no snapshot: a restart of an ephemeral agent replays only its initialization and
+/// never loads an application snapshot, so a snapshot record would only make the restart fail.
+fn snapshot_policy_of_mode(mode: AgentMode, configured: SnapshotPolicy) -> SnapshotPolicy {
+    match mode {
+        AgentMode::Durable => configured,
+        AgentMode::Ephemeral => SnapshotPolicy::Disabled,
     }
 }
 
