@@ -774,7 +774,7 @@ fn reflink_into_project(
     }
 }
 
-/// Writes the pending changes of the managed volume that holds `materialization_root` to stable
+/// Writes the pending changes of the XFS volume that holds `materialization_root` to stable
 /// storage.
 ///
 /// A seed call does this once, after its last entry, also when an entry fails. Buffered copies do
@@ -791,7 +791,7 @@ pub(super) fn sync_after_reflink(
                 xfs::sync_volume(materialization_root)
             }
             #[cfg(not(target_os = "linux"))]
-            unreachable!("managed XFS is unavailable on this platform")
+            unreachable!("XFS storage is unavailable on this platform")
         }
     }
 }
@@ -808,7 +808,7 @@ fn transfer_file(copy_mode: FileCopyMode, source: &File, target: &File) -> std::
                 xfs::clone_file(target, source)
             }
             #[cfg(not(target_os = "linux"))]
-            unreachable!("managed XFS is unavailable on this platform")
+            unreachable!("XFS storage is unavailable on this platform")
         }
     }
 }

@@ -1166,7 +1166,7 @@ pub(crate) async fn observe_space(
             #[cfg(not(target_os = "linux"))]
             {
                 let _ = (root, identity);
-                unreachable!("managed XFS is unavailable on this platform")
+                unreachable!("XFS storage is unavailable on this platform")
             }
         }
     }
@@ -1191,7 +1191,7 @@ pub(crate) fn observe_space_blocking(
             #[cfg(not(target_os = "linux"))]
             {
                 let _ = (root, identity);
-                unreachable!("managed XFS is unavailable on this platform")
+                unreachable!("XFS storage is unavailable on this platform")
             }
         }
     }
