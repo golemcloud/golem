@@ -7391,10 +7391,9 @@ async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
         },
     )
     .await?;
-    let (provider_port, provider_gate_port, provider_server, mut provider_arrivals) =
+    let (provider_port, provider_gate_port, _provider_server, mut provider_arrivals) =
         start_crash_checkpoint_server().await;
     let (trap_port, trap_server, trap_attempts) = start_trap_attempt_server().await;
-    let _provider_server = tokio_util::task::AbortOnDropHandle::new(provider_server);
     let _trap_server = tokio_util::task::AbortOnDropHandle::new(trap_server);
 
     let provider_component = executor
