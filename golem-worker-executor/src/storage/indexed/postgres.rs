@@ -223,6 +223,19 @@ impl PostgresIndexedStorage {
         Self::classify_repo_error(err, true)
     }
 
+    /// A blob manifest insert under an index the key already holds is a conflict, which the blob
+    /// layer acts on. Its other failures are classified as any other write's are.
+    fn classify_repo_error_manifest_insert(err: RepoError) -> IndexedStorageError {
+        if err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
+                "the blob oplog manifest already holds the index: {}",
+                err.to_safe_string()
+            ))
+        } else {
+            Self::classify_repo_error(err, false)
+        }
+    }
+
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         match &self.semaphore {
             Some(sem) => Some(sem.clone().acquire_owned().await.expect("semaphore closed")),
@@ -361,10 +374,15 @@ impl IndexedStorage for PostgresIndexedStorage {
             return Ok(());
         }
         let _permit = self.acquire_permit().await;
-        let primary_oplog_insert = matches!(
-            namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
+        let classify: fn(RepoError) -> IndexedStorageError = match namespace {
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. } => {
+                Self::classify_repo_error_oplog_insert
+            }
+            IndexedStorageNamespace::BlobOplogManifest { .. } => {
+                Self::classify_repo_error_manifest_insert
+            }
+            IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error_general,
+        };
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
         for (id, value) in pairs.iter() {
@@ -390,7 +408,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 )
                 .await
                 .map(|_| ())
-                .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert));
+                .map_err(classify);
         }
 
         self.pool
@@ -425,13 +443,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| {
-                err.into_indexed_storage_error(if primary_oplog_insert {
-                    Self::classify_repo_error_oplog_insert
-                } else {
-                    Self::classify_repo_error_general
-                })
-            })
+            .map_err(|err| err.into_indexed_storage_error(classify))
     }
 
     /// Postgres's half of [`IndexedStorage::set_key_epoch`], which states the rule this

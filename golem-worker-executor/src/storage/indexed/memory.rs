@@ -83,7 +83,7 @@ impl InMemoryIndexedStorage {
         key: &str,
         pairs: &[(u64, Vec<u8>)],
         expected_epoch: Option<ShardEpoch>,
-        primary_oplog_insert: bool,
+        conflict_on_held_index: bool,
     ) -> Result<(), IndexedStorageError> {
         let _record = match expected_epoch {
             None => None,
@@ -96,7 +96,7 @@ impl InMemoryIndexedStorage {
 
         let mut entry = self.data.entry_async(composite_key).await.or_default();
         if pairs.iter().any(|(id, _)| entry.contains_key(id)) {
-            return Err(if primary_oplog_insert {
+            return Err(if conflict_on_held_index {
                 IndexedStorageError::Conflict("Key already exists".to_string())
             } else {
                 IndexedStorageError::Other("Key already exists".to_string())
@@ -299,9 +299,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let primary_oplog_insert = matches!(
+        let conflict_on_held_index = matches!(
             &namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+            IndexedStorageNamespace::OpLog { .. }
+                | IndexedStorageNamespace::StagedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
         );
         let composite_key = Self::composite_key(namespace, key);
         self.append_checked(
@@ -309,7 +311,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
             key,
             &[(id, value)],
             expected_epoch,
-            primary_oplog_insert,
+            conflict_on_held_index,
         )
         .await
     }
@@ -328,9 +330,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         if pairs.is_empty() {
             return Ok(());
         }
-        let primary_oplog_insert = matches!(
+        let conflict_on_held_index = matches!(
             namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+            IndexedStorageNamespace::OpLog { .. }
+                | IndexedStorageNamespace::StagedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
         );
         let composite_key = Self::composite_key(namespace.clone(), key);
         let pairs: Vec<(u64, Vec<u8>)> = pairs
@@ -342,7 +346,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
             key,
             &pairs,
             expected_epoch,
-            primary_oplog_insert,
+            conflict_on_held_index,
         )
         .await
     }

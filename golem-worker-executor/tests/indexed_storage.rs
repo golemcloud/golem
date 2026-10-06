@@ -3117,6 +3117,64 @@ async fn a_repeated_id_in_a_staged_batch_is_a_conflict(
 
 #[test]
 #[tracing::instrument]
+async fn a_held_index_in_the_blob_manifest_is_a_conflict(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    // The blob layer deletes the object of a manifest append that gets this answer. So it must be
+    // the storage's own answer that the index is held, with or without an asserted epoch, for one
+    // entry as for a batch.
+    let is = is.get_indexed_storage().await;
+    let manifest = IndexedStorageNamespace::BlobOplogManifest {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "manifest-conflict".into(),
+        },
+        agent_mode: AgentMode::Durable,
+        level: BLOB_MANIFEST_LEVEL,
+    };
+    let key = format!("{}-manifest-conflict", Uuid::new_v4());
+
+    is.set_key_epoch("svc", "api", manifest.clone(), &key, ShardEpoch(6))
+        .await
+        .unwrap();
+    append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+
+    for epoch in [Some(ShardEpoch(6)), None] {
+        let single = is
+            .append(
+                "svc",
+                "api",
+                "entity",
+                manifest.clone(),
+                &key,
+                1,
+                b"again".to_vec(),
+                epoch,
+            )
+            .await;
+        assert!(
+            matches!(single, Err(IndexedStorageError::Conflict(_))),
+            "an append asserting {epoch:?} returned {single:?}"
+        );
+        let batch = append_fenced(&is, &manifest, &key, &[1], epoch).await;
+        assert!(
+            matches!(batch, Err(IndexedStorageError::Conflict(_))),
+            "a batch asserting {epoch:?} returned {batch:?}"
+        );
+    }
+    assert_eq!(
+        is.length("svc", "api", manifest.clone(), &key)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn a_failed_batch_leaves_no_partial_write(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,

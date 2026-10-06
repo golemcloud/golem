@@ -417,17 +417,29 @@ owner leaves by:
   only as far as its manifest lists them: a per-agent key in indexed storage
   (`IndexedStorageNamespace::BlobOplogManifest`) holding, per chunk, the object name and entry
   count, fenced like a compressed level (`services/oplog/blob.rs`). An append stores the chunk
-  under an object name no other write uses, then appends its manifest entry; a refused entry
-  deletes that object again. A manifest append that fails without a verdict is checked against
-  the manifest: if this attempt's entry landed, or an earlier attempt of the same transfer
-  listed a chunk holding the same entries, the append counts as stored, and otherwise it is a
-  maintenance failure to retry. When nothing is listed the object is kept, because the entry
-  may still land and a listed object must never be deleted. Reads, lengths and scans go through
-  the manifest, never a directory listing. A trim removes the manifest entries first and deletes
-  their objects after, and never deletes the agent's directory, which is recursive and unfenced.
-  An object no manifest lists is left behind by a crash after its upload, by a crash after its
-  trim, and by a listing that failed without a verdict and never landed; nothing reads it, and
-  deleting the agent removes it.
+  under an object name no other write uses, then appends its manifest entry. The rule for the
+  object is that it is deleted only when it is not listed and cannot become listed, which holds
+  in two cases. In the first, the storage answers the first attempt of the append that the
+  index is already held (`IndexedStorageError::Conflict`, which every backend reports for this
+  namespace as it does for a primary oplog insert): nothing was stored and nothing is on its
+  way, and the append counts as stored when the listed chunk holds the same entries, as it does
+  when a repeated transfer finds the chunk it listed before. In the second, the entry is refused
+  and the manifest does not list the object: no entry asserting the old epoch can be stored
+  after a refusal. A refused entry whose object the manifest lists keeps it, because an append
+  repeated after a lost reply is refused on its second run although its first run stored the
+  entry. A manifest append that fails in any other way keeps the object, because the entry may
+  still land, even under an index another chunk holds now, once a trim has freed it; that
+  includes a held index reported to a repeated attempt, since the attempt before it may have
+  been sent. Such an append is checked against the manifest: if this attempt's entry landed, or
+  another attempt listed a chunk holding the same entries, it counts as stored, and otherwise it
+  is a maintenance failure to retry. On Redis a manifest append is sent once, as a primary oplog
+  insert is, so that a lost reply is reported as a failure and not answered by a second run.
+  Reads, lengths and scans go through the manifest, never a directory listing. A trim removes
+  the manifest entries first and deletes their objects after, and never deletes the agent's
+  directory, which is recursive and unfenced. An object no manifest lists is left behind by a
+  crash after its upload, by a crash after its trim, and by a manifest append that failed
+  without an answer and whose entry never landed; nothing reads it, and deleting the agent
+  removes it.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and

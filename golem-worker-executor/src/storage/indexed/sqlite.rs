@@ -201,6 +201,19 @@ impl SqliteIndexedStorage {
             IndexedStorageError::Other(err.to_safe_string())
         }
     }
+
+    /// A blob manifest insert under an index the key already holds is a conflict, which the blob
+    /// layer acts on. Its other failures are classified as any other write's are.
+    fn classify_repo_error_manifest_insert(err: RepoError) -> IndexedStorageError {
+        if err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
+                "the blob oplog manifest already holds the index: {}",
+                err.to_safe_string()
+            ))
+        } else {
+            Self::classify_repo_error(err)
+        }
+    }
 }
 
 #[async_trait]
@@ -329,10 +342,15 @@ impl IndexedStorage for SqliteIndexedStorage {
             return Ok(());
         }
 
-        let primary_oplog_insert = matches!(
-            namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
+        let classify: fn(RepoError) -> IndexedStorageError = match namespace {
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. } => {
+                Self::classify_repo_error_primary_oplog_insert
+            }
+            IndexedStorageNamespace::BlobOplogManifest { .. } => {
+                Self::classify_repo_error_manifest_insert
+            }
+            IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error,
+        };
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
         for (_, value) in pairs.iter() {
@@ -373,13 +391,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                 })
             })
             .await
-            .map_err(|err| {
-                err.into_indexed_storage_error(if primary_oplog_insert {
-                    Self::classify_repo_error_primary_oplog_insert
-                } else {
-                    Self::classify_repo_error
-                })
-            })
+            .map_err(|err| err.into_indexed_storage_error(classify))
     }
 
     /// SQLite's half of [`IndexedStorage::set_key_epoch`], which states the rule this

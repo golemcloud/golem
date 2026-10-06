@@ -176,14 +176,44 @@ impl FencedIndexedStream {
         id: OplogIndex,
         value: &V,
     ) -> Result<(), OplogError> {
+        let (appended, _) = self.try_append(id, value).await;
+        appended.map_err(|error| self.write_error("append", error))
+    }
+
+    /// Appends like [`Self::append`], and returns `Ok(false)` when the storage answered that `id`
+    /// is already held. Nothing was stored then, and nothing of this append is still on its way.
+    /// The answer is passed on only when the first attempt received it: an attempt repeated after
+    /// a transient failure may follow one that was sent, so after a repeat it is a failure like
+    /// any other. Only a namespace whose storage reports [`IndexedStorageError::Conflict`] gives
+    /// the answer.
+    pub async fn append_unless_held<V: BinarySerializer + Sync>(
+        &self,
+        id: OplogIndex,
+        value: &V,
+    ) -> Result<bool, OplogError> {
+        match self.try_append(id, value).await {
+            (Ok(()), _) => Ok(true),
+            (Err(IndexedStorageError::Conflict(_)), 1) => Ok(false),
+            (Err(error), _) => Err(self.write_error("append", error)),
+        }
+    }
+
+    /// The outcome of an append under the retry policy, and how many attempts it took.
+    async fn try_append<V: BinarySerializer + Sync>(
+        &self,
+        id: OplogIndex,
+        value: &V,
+    ) -> (Result<(), IndexedStorageError>, u32) {
         let id: u64 = id.into();
         let labels = self.labels;
         let shard_epoch = self.shard_epoch;
+        let mut attempts = 0u32;
         let appended = retry_storage_op(
             &self.retry_config,
             &format!("{}_append", labels.op),
             &self.key,
             || {
+                attempts += 1;
                 let is = self.indexed_storage.clone();
                 let ns = self.namespace.clone();
                 let key = self.key.clone();
@@ -198,7 +228,7 @@ impl FencedIndexedStream {
         if shard_epoch.is_some() {
             record_epoch_verdict("archive_append", &appended);
         }
-        appended.map_err(|error| self.write_error("append", error))
+        (appended, attempts)
     }
 
     /// The first entry whose id is at least `id`.

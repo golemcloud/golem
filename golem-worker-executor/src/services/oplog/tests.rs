@@ -587,6 +587,23 @@ enum InjectedAppendFailure {
     /// asserted. Simulates the storage fencing the reconciliation probe `retry_oplog_append`
     /// repeats after a genuine indeterminate-write mismatch.
     Fenced,
+    /// Stores the entry, lets a newer owner record its epoch on the key, and runs the append
+    /// again: what a caller sees when the reply of a stored append is lost and the append is
+    /// repeated after the shard has moved.
+    RepeatedAfterTakeover,
+    /// Reports a lost connection without storing the entry, and keeps the append for
+    /// `land_held_appends` to store: a request that outlives the call that issued it.
+    HeldThenIndeterminate,
+}
+
+/// An append `InjectedAppendFailure::HeldThenIndeterminate` kept back.
+#[derive(Debug)]
+struct HeldAppend {
+    namespace: IndexedStorageNamespace,
+    key: String,
+    id: u64,
+    value: Vec<u8>,
+    shard_epoch: Option<ShardEpoch>,
 }
 
 impl InjectedAppendFailure {
@@ -625,7 +642,9 @@ impl InjectedAppendFailure {
             Self::IndeterminateBeforeWrite
             | Self::TransientBeforeWrite
             | Self::PermanentBeforeWrite
-            | Self::Fenced => unreachable!(),
+            | Self::Fenced
+            | Self::RepeatedAfterTakeover
+            | Self::HeldThenIndeterminate => unreachable!(),
         }
     }
 }
@@ -643,6 +662,7 @@ pub(crate) struct ReadCountingIndexedStorage {
     hidden_reads: AtomicUsize,
     append_failures: StdMutex<VecDeque<InjectedAppendFailure>>,
     append_many_failures: StdMutex<VecDeque<InjectedAppendFailure>>,
+    held_appends: StdMutex<Vec<HeldAppend>>,
     append_attempts: AtomicUsize,
     append_many_attempts: AtomicUsize,
     append_many_batch_ptr: AtomicUsize,
@@ -706,6 +726,27 @@ impl ReadCountingIndexedStorage {
         failures: impl IntoIterator<Item = InjectedAppendFailure>,
     ) {
         self.append_many_failures.lock().unwrap().extend(failures);
+    }
+
+    /// Stores the appends `InjectedAppendFailure::HeldThenIndeterminate` kept back, in the order
+    /// they were issued.
+    async fn land_held_appends(&self) -> Result<(), IndexedStorageError> {
+        let held = std::mem::take(&mut *self.held_appends.lock().unwrap());
+        for append in held {
+            self.inner
+                .append(
+                    "test",
+                    "land_held_append",
+                    "entry",
+                    append.namespace,
+                    &append.key,
+                    append.id,
+                    append.value,
+                    append.shard_epoch,
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     fn fail_next_delete(&self) {
@@ -854,6 +895,58 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             .unwrap_or(InjectedAppendFailure::None);
         if let Some(error) = failure.before_write_error(key, shard_epoch) {
             return Err(error);
+        }
+        match failure {
+            InjectedAppendFailure::RepeatedAfterTakeover => {
+                let epoch = shard_epoch.expect("a repeated append asserts an epoch");
+                self.inner
+                    .append(
+                        svc_name,
+                        api_name,
+                        entity_name,
+                        namespace.clone(),
+                        key,
+                        id,
+                        value.clone(),
+                        shard_epoch,
+                    )
+                    .await?;
+                self.inner
+                    .set_key_epoch(
+                        svc_name,
+                        api_name,
+                        namespace.clone(),
+                        key,
+                        ShardEpoch(epoch.0 + 1),
+                    )
+                    .await?;
+                return self
+                    .inner
+                    .append(
+                        svc_name,
+                        api_name,
+                        entity_name,
+                        namespace,
+                        key,
+                        id,
+                        value,
+                        shard_epoch,
+                    )
+                    .await;
+            }
+            InjectedAppendFailure::HeldThenIndeterminate => {
+                self.held_appends.lock().unwrap().push(HeldAppend {
+                    namespace,
+                    key: key.to_string(),
+                    id,
+                    value,
+                    shard_epoch,
+                });
+                return Err(IndexedStorageError::Indeterminate(
+                    "injected connection loss".to_string(),
+                ));
+            }
+            _ => {}
         }
         if matches!(
             failure,
@@ -6872,7 +6965,9 @@ async fn blob_archive_retry_after_a_failed_source_trim_reuses_the_listed_chunk(_
     );
 
     // The first attempt listed the chunk in the target before its source trim failed. The retry
-    // uploads the chunk again, finds the listed one holds the same entries, and discards its copy.
+    // uploads the chunk again, and the storage answers that its index is held. That answer is
+    // final, so the retry discards its copy. It succeeds because the listed chunk holds the same
+    // entries.
     let reopened_source = source_service
         .open(&owned_agent_id, AgentMode::Durable, None)
         .await;
@@ -7025,6 +7120,174 @@ async fn blob_archive_retries_past_a_listing_that_never_landed(_tracing: &Tracin
             .await
             .unwrap(),
         expected
+    );
+}
+
+#[test]
+async fn blob_archive_keeps_the_object_of_a_listing_refused_when_repeated(_tracing: &Tracing) {
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    let manifests = Arc::new(ReadCountingIndexedStorage::new());
+    let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let service = blob_archive(manifests.clone(), storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-archive-repeated-listing".to_string(),
+        },
+    );
+    let archive = service
+        .open_fresh(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .await;
+
+    // The manifest entry is stored and its reply lost. A newer owner records its epoch, and the
+    // append runs again and is refused. The refusal is of the second run only: the chunk is
+    // listed, so its object must stay.
+    manifests.inject_append_failure(InjectedAppendFailure::RepeatedAfterTakeover);
+    assert!(matches!(
+        archive.append(&entries).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(
+        blob_objects(&storage, &owned_agent_id, 1).await,
+        1,
+        "the object of a listed chunk was deleted"
+    );
+    assert_eq!(
+        service
+            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
+            .await
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap(),
+        expected,
+        "the new owner must read the chunk the manifest lists"
+    );
+}
+
+#[test]
+async fn blob_archive_keeps_the_object_of_a_refused_listing_it_cannot_look_up(_tracing: &Tracing) {
+    let entries = transfer_test_entries().into_iter().collect::<Vec<_>>();
+    let manifests = Arc::new(ReadCountingIndexedStorage::new());
+    let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let service = blob_archive(manifests.clone(), storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-archive-refused-unknown".to_string(),
+        },
+    );
+    let archive = service
+        .open_fresh(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .await;
+
+    // The manifest entry is refused, and the read that tells whether the manifest lists the
+    // object fails. Without that answer the object must stay.
+    manifests.inject_append_failure(InjectedAppendFailure::Fenced);
+    manifests
+        .read_failures
+        .lock()
+        .unwrap()
+        .push_back(IndexedStorageError::Other(
+            "injected manifest read failure".to_string(),
+        ));
+    assert!(matches!(
+        archive.append(&entries).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(
+        blob_objects(&storage, &owned_agent_id, 1).await,
+        1,
+        "an object that may be listed was deleted"
+    );
+}
+
+#[test]
+async fn blob_archive_keeps_its_object_when_another_is_listed_for_the_chunk(_tracing: &Tracing) {
+    let expected = transfer_test_entries();
+    let entries = expected.clone().into_iter().collect::<Vec<_>>();
+    let manifests = Arc::new(ReadCountingIndexedStorage::new());
+    let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let service = blob_archive(manifests.clone(), storage.clone(), 1);
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-archive-reused-index".to_string(),
+        },
+    );
+    let archive = service
+        .open_fresh(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .await;
+    archive.append(&entries).await.unwrap();
+
+    // A second attempt's manifest append reports a lost connection while its request is still on
+    // its way. The check that follows finds the first attempt's chunk listed, with the same
+    // entries, so the attempt succeeds. Its own entry may still land, so its object must stay.
+    manifests.inject_append_failure(InjectedAppendFailure::HeldThenIndeterminate);
+    archive.append(&entries).await.unwrap();
+    assert_eq!(
+        blob_objects(&storage, &owned_agent_id, 1).await,
+        2,
+        "the object of a listing that may still land was deleted"
+    );
+
+    // A trim takes the listed chunk out of the manifest, which frees its index. The request
+    // then arrives and lists the second attempt's chunk.
+    assert_eq!(
+        archive.drop_prefix(OplogIndex::from_u64(2)).await.unwrap(),
+        1
+    );
+    manifests.land_held_appends().await.unwrap();
+    assert_eq!(
+        service
+            .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+            .await
+            .read_source(OplogIndex::INITIAL, 2)
+            .await
+            .unwrap(),
+        expected,
+        "the chunk listed after the trim must be readable"
+    );
+}
+
+#[test]
+async fn blob_archive_keeps_its_object_when_a_repeated_listing_meets_a_held_index(
+    _tracing: &Tracing,
+) {
+    let entries = transfer_test_entries().into_iter().collect::<Vec<_>>();
+    let manifests = Arc::new(ReadCountingIndexedStorage::new());
+    let storage: Arc<dyn BlobStorage + Send + Sync> = Arc::new(ReadCountingBlobStorage::new());
+    let service = BlobOplogArchiveService::new(
+        storage.clone(),
+        manifests.clone(),
+        1,
+        immediate_archive_retry_config(2),
+    );
+    let owned_agent_id = OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "blob-archive-repeated-held-index".to_string(),
+        },
+    );
+    let archive = service
+        .open_fresh(&owned_agent_id, AgentMode::Durable, None)
+        .await;
+    archive.append(&entries).await.unwrap();
+
+    // A second attempt's manifest append fails in a way that permits a repeat, and the repeat is
+    // told that the index is held. That answer is final for the repeat only: what was sent first
+    // may still store the entry, so the object must stay.
+    manifests.inject_append_failure(InjectedAppendFailure::TransientBeforeWrite);
+    archive.append(&entries).await.unwrap();
+    assert_eq!(archive.length().await.unwrap(), 1);
+    assert_eq!(
+        blob_objects(&storage, &owned_agent_id, 1).await,
+        2,
+        "the object of a listing that may still land was deleted"
     );
 }
 
