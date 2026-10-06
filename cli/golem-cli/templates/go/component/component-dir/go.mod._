@@ -18,4 +18,7 @@ require (
 // globally, so `go tool componentize-go` always runs the version this app was
 // built against.
 tool github.com/bytecodealliance/componentize-go
+
+// Golem's fork of the bindings' async runtime; see GOLEM.md in that repository.
+GOLEM_GO_DEP_PKG_REPLACE
 GOLEM_GO_DEP_SDK_REPLACE

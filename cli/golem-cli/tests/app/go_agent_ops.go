@@ -2,8 +2,11 @@
 package ops
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/oplog"
@@ -25,6 +28,9 @@ var Source = golem.DefineAgent[SourceID](golem.Spec{Name: "SourceAgent"})
 
 // Failing streams one item and then fails its production.
 var Failing = Source.Method[golem.Unit, golem.AgentStream[int32]]("failing")
+
+// Slow sleeps for two seconds.
+var Slow = Source.Method[golem.Unit, string]("slow")
 
 type sourceState struct{}
 
@@ -54,6 +60,9 @@ var (
 	Invocations = Ops.Method[golem.Unit, int64]("invocations")
 	ReadFailing = Ops.Method[golem.Unit, string]("readFailing")
 	Reflected   = Ops.Method[golem.Unit, string]("reflected")
+	AwaitLate   = Ops.Method[golem.Unit, string]("awaitLate")
+	TimerVsRPC  = Ops.Method[golem.Unit, string]("timerVsRpc")
+	Sleepy      = Ops.Method[golem.Unit, string]("sleepy")
 )
 
 type counterState struct{ N int64 }
@@ -89,7 +98,45 @@ func init() {
 		return ctx.State.greeting + " " + ctx.State.name
 	})
 
+	source.Handle(Slow, func(*golem.Context[sourceState], golem.Unit) string {
+		time.Sleep(2 * time.Second)
+		return "slow-done"
+	})
+
 	ops := Ops.Implement(func(OpsID) *opsState { return &opsState{} })
+
+	ops.Handle(Sleepy, func(*golem.Context[opsState], golem.Unit) string {
+		start := time.Now()
+		time.Sleep(300 * time.Millisecond)
+		return fmt.Sprintf("slept:%t", time.Since(start) >= 300*time.Millisecond)
+	})
+
+	ops.Handle(TimerVsRPC, func(*golem.Context[opsState], golem.Unit) string {
+		start := time.Now()
+		done := make(chan string, 1)
+		fut := Slow.CallAsync(Source.Get(SourceID{Name: "slow"}), golem.Unit{})
+		go func() { done <- fut.Get() }()
+		select {
+		case r := <-done:
+			return fmt.Sprintf("rpc-first:%s:%dms", r, time.Since(start).Milliseconds())
+		case <-time.After(200 * time.Millisecond):
+			return fmt.Sprintf("timer-first:%dms", time.Since(start).Milliseconds())
+		}
+	})
+
+	// A wait on a promise gives up at its deadline; completing the promise
+	// afterwards still delivers to a new wait.
+	ops.Handle(AwaitLate, func(*golem.Context[opsState], golem.Unit) string {
+		p := golem.NewPromise[string]()
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_, err := p.AwaitContext(ctx)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Sprintf("the wait ended with %v", err)
+		}
+		golem.CompletePromise(p.ID(), "late")
+		return "timed-out|" + p.Await()
+	})
 
 	// A reflected caller creates a configured agent with an override, calls it
 	// both ways, and is refused an undeclared configuration path locally.

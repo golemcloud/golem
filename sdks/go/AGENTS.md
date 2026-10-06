@@ -159,6 +159,24 @@ wire form. Sending one where the other belongs is accepted by neither side.
   rebuilt the wasm does not always refresh it, so it can give a confidently wrong
   answer about which agents a component publishes. Check the binary.
 
+## Timers and the async runtime
+
+Go timers (`time.Sleep`, `time.After`, context deadlines) are not something the host
+can wait on. An async task whose goroutines wait only on a timer used to exit without
+its result, or stay suspended until an unrelated host call completed. Two forks fix
+it together, and both are pinned by the CLI:
+
+- [golemcloud/go](https://github.com/golemcloud/go) (patch 4) exposes the next timer's
+  due time to the idle callback as `runtime.wasiIdleTimer`;
+- [golemcloud/go-pkg](https://github.com/golemcloud/go-pkg), the bindings' async
+  runtime, arms a `wasi:clocks/monotonic-clock@0.3.0` `wait-for` until then, so the
+  world must import that interface.
+
+Every Go component replaces `go.bytecodealliance.org/pkg` with the fork in its own
+`go.mod` (a `replace` in the SDK's `go.mod` does not reach it); the CLI's build check
+adds the directive (`versions::go_dep::GO_PKG_FORK`). `go_agent_ops.rs` exercises a
+sleeping handler, a timeout racing an RPC, and a deadline on a promise.
+
 ## Dependencies
 
 Each module manages its own dependencies in its own `go.mod`; the root Cargo

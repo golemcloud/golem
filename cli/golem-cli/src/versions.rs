@@ -44,9 +44,10 @@ pub mod build_tool {
 // The Go toolchain the CLI builds Go components with.
 //
 // Go components need a Go runtime patched with `runtime.wasiOnIdle` (async
-// components deadlock without it) and, for durable replay, without the
-// goroutine scheduling-latency sampler, whose clock reads depend on execution
-// history. Golem maintains that toolchain as a fork of Go and releases the
+// components deadlock without it) and `runtime.wasiIdleTimer` (Go timers fire
+// while a component waits on the host, with the async runtime fork below) and,
+// for durable replay, without the goroutine scheduling-latency sampler, whose
+// clock reads depend on execution history. Golem maintains that toolchain as a fork of Go and releases the
 // bootstrap trees componentize-go expects; the CLI installs the pinned release
 // into componentize-go's own toolchain directory and puts it on PATH for every
 // Go command, so builds never depend on which Go the developer has installed.
@@ -55,7 +56,7 @@ pub mod build_tool {
 // whose recorded tag differs.
 pub mod go_toolchain {
     pub const REPO: &str = "golemcloud/go";
-    pub const TAG: &str = "go1.27.1-golem.2";
+    pub const TAG: &str = "go1.27.1-golem.3";
 }
 
 // Keep this aligned with the Go component template's `tool` directive.
@@ -65,6 +66,13 @@ pub mod go_toolchain {
 // silently ignores the pin.
 pub mod go_dep {
     pub const COMPONENTIZE_GO: &str = "v0.4.3";
+
+    // The async runtime the Go bindings run on. Golem's fork resumes a task when
+    // a Go timer is due (it pairs with the toolchain fork above); every Go
+    // component replaces the upstream module with it, since a `replace` in the
+    // SDK's own go.mod does not reach the components that depend on it.
+    pub const GO_PKG_MODULE: &str = "go.bytecodealliance.org/pkg";
+    pub const GO_PKG_FORK: &str = "github.com/golemcloud/go-pkg v0.2.3-golem.1";
 }
 
 pub mod effect_dep {

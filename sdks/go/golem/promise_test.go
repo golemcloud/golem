@@ -16,6 +16,8 @@ package golem
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -170,4 +172,25 @@ func TestPromiseTypeMismatchIsCaughtAtTheMistake(t *testing.T) {
 // an unknown id must pass rather than fail.
 func TestPromiseTypeCheckIsSilentWithoutARecord(t *testing.T) {
 	checkPromisePayloadType[string](PromiseID{AgentID: AgentID{AgentID: "never-created"}, OplogIndex: 99})
+}
+
+// TestAwaitWithContextGivesUp — waiting stops when the context ends, and a
+// completion that arrives first is returned.
+func TestAwaitWithContextGivesUp(t *testing.T) {
+	data, err := awaitWithContext(context.Background(), func() []byte { return []byte("done") })
+	if err != nil || string(data) != "done" {
+		t.Fatalf("a completed wait gave %q, %v", data, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	release := make(chan struct{})
+	defer close(release)
+	go cancel()
+	if _, err := awaitWithContext(ctx, func() []byte { <-release; return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled wait gave %v", err)
+	}
+
+	if _, err := awaitWithContext(ctx, func() []byte { t.Error("an ended context still waited"); return nil }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("an already-ended context gave %v", err)
+	}
 }

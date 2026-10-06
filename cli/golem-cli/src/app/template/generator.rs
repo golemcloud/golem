@@ -494,6 +494,14 @@ fn transform(
                 // Empty unless a local SDK checkout is being used.
                 replacements.insert("GOLEM_GO_DEP_SDK_REPLACE", sdk_overrides.go_sdk_replace());
                 replacements.insert(
+                    "GOLEM_GO_DEP_PKG_REPLACE",
+                    format!(
+                        "replace {} => {}",
+                        versions::go_dep::GO_PKG_MODULE,
+                        versions::go_dep::GO_PKG_FORK
+                    ),
+                );
+                replacements.insert(
                     "GOLEM_GO_DEP_GO_VERSION",
                     versions::build_tool::GO_MIN.to_string(),
                 );

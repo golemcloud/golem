@@ -20,3 +20,8 @@ require (
 // downstream main modules, which carry their own; it is here so the SDK builds
 // from a checkout.
 replace github.com/golemcloud/golem/sdks/go/core => ../core
+
+// The bindings' async runtime comes from Golem's fork, which resumes a task when
+// a Go timer is due (it needs Golem's Go toolchain fork). Downstream main
+// modules carry the same replace; the Golem CLI adds it to every component.
+replace go.bytecodealliance.org/pkg => github.com/golemcloud/go-pkg v0.2.3-golem.1

@@ -139,6 +139,15 @@ async fn test_go_agent_ops() {
         .unwrap_or_else(|| panic!("no count in {invocations}"));
     assert!(n >= 6, "{invocations}");
 
+    // Go timers fire while the agent waits on the host: a sleep, a timeout
+    // racing a call, and a deadline on a promise.
+    let slept = invoke("sleepy", &[]).await;
+    assert!(slept.contains("slept:true"), "{slept}");
+    let timer = invoke("timerVsRpc", &[]).await;
+    assert!(timer.contains("timer-first"), "{timer}");
+    let late = invoke("awaitLate", &[]).await;
+    assert!(late.contains("timed-out|late"), "{late}");
+
     let reflected = invoke("reflected", &[]).await;
     assert!(reflected.contains("hej r|hej r|true"), "{reflected}");
 

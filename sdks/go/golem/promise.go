@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -102,11 +103,61 @@ func (p *Promise[T]) ID() PromiseID { return p.id }
 // Only the agent that created the promise may Await it; awaiting from another
 // agent traps in the host.
 func (p *Promise[T]) Await() T {
+	return decodePromisePayload[T](p.id, p.awaitData())
+}
+
+func (p *Promise[T]) awaitData() []byte {
 	res := apiHost.GetPromise(p.id.toWit())
 	data := res.Get()
 	res.Drop()
-	return decodePromisePayload[T](p.id, data)
+	return data
 }
+
+// AwaitContext is [Promise.Await] that gives up when ctx ends first, returning
+// ctx.Err(). Giving up only stops this wait: the promise may still be completed,
+// and a later Await returns its value. Decoding failures panic, as for Await.
+func (p *Promise[T]) AwaitContext(ctx context.Context) (T, error) {
+	data, err := awaitWithContext(ctx, p.awaitData)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return decodePromisePayload[T](p.id, data), nil
+}
+
+// awaitWithContext runs wait on its own goroutine and returns its outcome, or
+// ctx.Err() if ctx ends first. Pure, so it is natively testable.
+func awaitWithContext(ctx context.Context, wait func() []byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	done := make(chan []byte, 1)
+	go func() { done <- wait() }()
+	select {
+	case data := <-done:
+		return data, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Webhook is a promise completed by an HTTP POST to its URL: the request body is
+// the payload. Create it with [NewWebhook]; await it like any promise.
+type Webhook[T any] struct {
+	*Promise[T]
+	url string
+}
+
+// NewWebhook creates a promise and the URL that completes it, in one step. It
+// requires the agent type to be served by an HTTP API, and panics otherwise, as
+// [Promise.WebhookURL] does.
+func NewWebhook[T any]() *Webhook[T] {
+	p := NewPromise[T]()
+	return &Webhook[T]{Promise: p, url: p.WebhookURL()}
+}
+
+// URL returns the address an off-platform system POSTs to.
+func (w *Webhook[T]) URL() string { return w.url }
 
 // WebhookURL mints an external URL that completes this promise: a POST to the URL
 // completes the promise with the request body, so a later [Promise.Await] returns

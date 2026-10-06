@@ -21,10 +21,13 @@ In Go a promise is a typed handle `golem.Promise[T]`: the completion payload is 
 | `golem.PromiseByID[T]` | `func PromiseByID[T any](id PromiseID) *Promise[T]` | Rebuild a handle from a stored `PromiseID` |
 | `(*Promise[T]).ID` | `func (p *Promise[T]) ID() PromiseID` | The durable identity to persist or hand out |
 | `(*Promise[T]).Await` | `func (p *Promise[T]) Await() T` | Durably block until completed; returns the payload as `T` |
+| `(*Promise[T]).AwaitContext` | `func (p *Promise[T]) AwaitContext(ctx context.Context) (T, error)` | `Await` that gives up with `ctx.Err()` when the context ends first |
 | `(*Promise[T]).WebhookURL` | `func (p *Promise[T]) WebhookURL() string` | Mint an external URL whose POST body completes the promise |
 | `golem.CompletePromise[T]` | `func CompletePromise[T any](id PromiseID, value T) bool` | Complete a promise from another agent; returns `false` if already completed |
 
 `Await` is **fail-loud**: an infra failure traps and surfaces as an agent-error rather than returning an `error`. Only the agent that created the promise may `Await` it — awaiting from another agent traps in the host.
+
+`p.AwaitContext(ctx)` gives up when the context ends — a deadline from `context.WithTimeout` or a cancellation — and returns `ctx.Err()`. Giving up only stops that wait: the promise can still be completed, and a later `Await` returns its value.
 
 ## `PromiseID` structure
 

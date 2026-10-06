@@ -29,3 +29,6 @@ tool github.com/bytecodealliance/componentize-go
 replace github.com/golemcloud/golem/sdks/go/golem => ../../../sdks/go/golem
 
 replace github.com/golemcloud/golem/sdks/go/core => ../../../sdks/go/core
+
+// Golem's fork of the bindings' async runtime, as in every Go component.
+replace go.bytecodealliance.org/pkg => github.com/golemcloud/go-pkg v0.2.3-golem.1

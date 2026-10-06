@@ -18,6 +18,7 @@ use crate::app::edit;
 use crate::fs;
 use crate::model::language::GuestLanguage;
 use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, SdkOverrides};
+use crate::versions;
 
 /// Reconcile each Go component's `go.mod` SDK dependency with the active SDK
 /// overrides — mirrors the Rust `Cargo.toml` and TS `package.json` fix steps, so
@@ -66,6 +67,13 @@ pub(super) fn plan_go_mod_fix_steps(
             GO_CORE_MODULE,
             &version,
             core_replace_path.as_deref(),
+        );
+        // The bindings' async runtime comes from Golem's fork; the SDK requires
+        // the upstream module, so only the replace is needed here.
+        let new = edit::go_mod::reconcile_replace(
+            &new,
+            versions::go_dep::GO_PKG_MODULE,
+            Some(versions::go_dep::GO_PKG_FORK),
         );
 
         // A trailing-whitespace-only difference is not a semantic dependency

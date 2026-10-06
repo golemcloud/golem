@@ -20,6 +20,8 @@ world agent-guest {
   import golem:secrets/reveal@0.1.0;
 
   import wasi:cli/environment@0.3.0;
+  // The async runtime waits on it to resume a task when a Go timer is due.
+  import wasi:clocks/monotonic-clock@0.3.0;
 
   import wasi:blobstore/blobstore;
   import wasi:blobstore/container;

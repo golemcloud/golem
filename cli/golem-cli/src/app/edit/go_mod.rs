@@ -48,6 +48,18 @@ pub fn reconcile_sdk_dependency(
     out
 }
 
+/// Ensure `replace <module> => <target>` when `target` is `Some`, and remove any
+/// replace of `module` when it is `None`; nothing else is touched.
+pub fn reconcile_replace(content: &str, module: &str, target: Option<&str>) -> String {
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    set_replace_directive(&mut lines, module, target);
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// A `require` entry for `module` — either `require <module> <ver>` (single) or
 /// `<module> <ver>` inside a `require (…)` block — has its version set. A require
 /// line has no `=>` (which distinguishes it from a `replace` line that also
@@ -260,6 +272,25 @@ mod tests {
         let out = reconcile_sdk_dependency(&src, MOD, "v0.2.0", None);
         assert!(out.contains("golang.org/x/sys v0.37.0 // indirect"));
         assert!(out.contains(&format!("{MOD} v0.2.0")));
+    }
+
+    #[test]
+    fn reconcile_replace_adds_updates_and_is_idempotent() {
+        let fork = "github.com/golemcloud/go-pkg v0.2.3-golem.1";
+        let added = reconcile_replace("module m\n", "go.bytecodealliance.org/pkg", Some(fork));
+        assert_eq!(
+            added,
+            "module m\n\nreplace go.bytecodealliance.org/pkg => github.com/golemcloud/go-pkg v0.2.3-golem.1\n"
+        );
+        assert_eq!(
+            reconcile_replace(&added, "go.bytecodealliance.org/pkg", Some(fork)),
+            added
+        );
+        let older = added.replace("golem.1", "golem.0");
+        assert_eq!(
+            reconcile_replace(&older, "go.bytecodealliance.org/pkg", Some(fork)),
+            added
+        );
     }
 
     #[test]
