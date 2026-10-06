@@ -3349,7 +3349,7 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
         .map(std::path::PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     a_volume_below_the_pressure_target_admits_no_periodic_upload(
-        FilesystemStorageMode::ManagedXfs { root },
+        FilesystemStorageMode::ManagedXfs { root: root.into() },
         "managed-xfs-pressure",
     )
     .await;
@@ -3364,7 +3364,7 @@ async fn reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
         .map(std::path::PathBuf::from)
         .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas");
     a_volume_below_the_pressure_target_admits_no_periodic_upload(
-        FilesystemStorageMode::ReflinkXfs { root },
+        FilesystemStorageMode::ReflinkXfs { root: root.into() },
         "reflink-xfs-pressure",
     )
     .await;

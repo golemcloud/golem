@@ -279,7 +279,7 @@ pub(super) fn bind_reflink(
     Ok((
         FilesystemVolume::copy_on_write(root_fd, identity),
         directories::DirectoryProvisioning::new(
-            Some(stable_root.into_path_buf()),
+            Some(Arc::from(stable_root)),
             cleanup_retry,
             NativeNameModeSource::ValidatedXfs(name_mode),
         ),
@@ -318,12 +318,14 @@ const REFLINK_PROBE: &str = ".golem-xfs-reflink-probe";
 fn probe_reflink(root: &XfsRoot) -> Result<(), FilesystemStorageError> {
     let probe = root.stable_root.join(REFLINK_PROBE);
     let configured_probe = root.root.join(REFLINK_PROBE);
-    remove_and_verify_blocking(&probe, "remove stale XFS reflink probe")?;
+    remove_and_verify_blocking(&probe, "remove stale XFS reflink probe")
+        .map_err(|error| error.about(&configured_probe))?;
     std::fs::create_dir(&probe).map_err(|error| {
         FilesystemStorageError::io("create XFS reflink probe", &configured_probe, error)
     })?;
     let probed = reflink_probe_contents(&probe);
-    let removed = remove_and_verify_blocking(&probe, "remove XFS reflink probe");
+    let removed = remove_and_verify_blocking(&probe, "remove XFS reflink probe")
+        .map_err(|error| error.about(&configured_probe));
     probed
         .map_err(|error| {
             FilesystemStorageError::io("validate XFS reflink support", &configured_probe, error)
@@ -1997,14 +1999,18 @@ mod tests {
             .map(PathBuf::from)
             .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            &FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
         .unwrap();
         assert!(
             SandboxFilesystemProvisioning::provision(
-                &FilesystemStorageMode::ManagedXfs { root: root.clone() },
+                &FilesystemStorageMode::ManagedXfs {
+                    root: root.clone().into()
+                },
                 RetryConfig::default()
             )
             .await
@@ -2056,7 +2062,7 @@ mod tests {
         let unmanaged_parent = tempfile::tempdir().unwrap();
         let unmanaged = SandboxFilesystemProvisioning::new(
             &FilesystemStorageMode::Directory {
-                root: unmanaged_parent.path().to_path_buf(),
+                root: unmanaged_parent.path().into(),
             },
             RetryConfig::default(),
         )
@@ -2464,7 +2470,9 @@ mod tests {
         let inherited_project = NonZeroU32::new(0x7fff_0001).unwrap();
         assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            &FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
@@ -2680,7 +2688,9 @@ mod tests {
 
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            &FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
@@ -2771,7 +2781,9 @@ mod tests {
     async fn managed_xfs_seed_charges_the_project_and_follows_the_placement() {
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            &FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
@@ -3007,7 +3019,7 @@ mod tests {
     }
 
     fn reflink_storage(root: PathBuf) -> FilesystemStorageMode {
-        FilesystemStorageMode::ReflinkXfs { root }
+        FilesystemStorageMode::ReflinkXfs { root: root.into() }
     }
 
     fn bind_error(storage: &FilesystemStorageMode) -> String {

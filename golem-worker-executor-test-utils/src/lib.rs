@@ -4068,7 +4068,7 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
-                    root: managed_xfs_root.to_path_buf(),
+                    root: managed_xfs_root.clone(),
                 };
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -4108,7 +4108,7 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ReflinkXfs {
-                    root: reflink_xfs_root.clone(),
+                    root: reflink_xfs_root.clone().into(),
                 };
                 config.resource_usage_metering.filesystem = false;
                 config.filesystem_snapshots = filesystem_snapshots.clone();
@@ -4140,7 +4140,7 @@ pub async fn start_with_filesystem_metering_on_reflink_xfs(
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ReflinkXfs {
-                    root: reflink_xfs_root.clone(),
+                    root: reflink_xfs_root.clone().into(),
                 };
                 config.resource_usage_metering = ResourceUsageMeteringConfig::all_enabled();
             })),
@@ -4243,7 +4243,7 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
-                    root: managed_xfs_root.clone(),
+                    root: managed_xfs_root.clone().into(),
                 };
                 config.filesystem_storage.pressure = pressure.clone();
                 config.resource_usage_metering = metering;
@@ -4316,7 +4316,7 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.filesystem_storage.storage = FilesystemStorageMode::ManagedXfs {
-                    root: managed_xfs_root.clone(),
+                    root: managed_xfs_root.clone().into(),
                 };
                 config.resource_usage_metering = metering;
                 config.filesystem_storage.filesystem_object_limit_policy =

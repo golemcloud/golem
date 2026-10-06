@@ -16,7 +16,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct DirectoryProvisioning {
-    deterministic_root: Option<PathBuf>,
+    deterministic_root: Option<Arc<Path>>,
     cleanup_retry: RetryConfig,
     name_mode: NativeNameModeSource,
 }
@@ -25,7 +25,7 @@ impl DirectoryProvisioning {
     /// Keeps the storage settings. Without a deterministic root, each sandbox gets its own
     /// temporary directory. `name_mode` tells how the sandboxes compare names.
     pub(super) fn new(
-        deterministic_root: Option<PathBuf>,
+        deterministic_root: Option<Arc<Path>>,
         cleanup_retry: RetryConfig,
         name_mode: NativeNameModeSource,
     ) -> Self {
@@ -37,8 +37,8 @@ impl DirectoryProvisioning {
     }
 
     /// The configured root of the sandboxes and the host directories, if one is configured.
-    pub(super) fn deterministic_root(&self) -> Option<&Path> {
-        self.deterministic_root.as_deref()
+    pub(super) fn deterministic_root(&self) -> Option<&Arc<Path>> {
+        self.deterministic_root.as_ref()
     }
 
     pub(super) async fn create_fresh(

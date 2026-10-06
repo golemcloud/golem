@@ -141,6 +141,13 @@ impl FilesystemStorageError {
         }
     }
 
+    /// Gives the same error about `path`, for an operation that reached the path under another
+    /// name, such as a path below `/proc/self/fd/`.
+    fn about(mut self, path: &Path) -> Self {
+        self.inner.path = path.to_path_buf();
+        self
+    }
+
     pub(crate) fn cleanup_failed(&self) -> bool {
         self.inner.cleanup_failed
     }
@@ -834,7 +841,7 @@ impl SandboxFilesystemProvisioning {
         match storage {
             FilesystemStorageMode::Temporary => Ok(development(None, cleanup_retry)),
             FilesystemStorageMode::Directory { root } => {
-                Ok(development(Some(root.clone()), cleanup_retry))
+                Ok(development(Some(Arc::from(&**root)), cleanup_retry))
             }
             FilesystemStorageMode::ManagedXfs { root } => configured_managed(root, &cleanup_retry),
             FilesystemStorageMode::ReflinkXfs { root } => configured_reflink(root, cleanup_retry),
@@ -875,7 +882,10 @@ impl SandboxFilesystemProvisioning {
 }
 
 /// Development storage: plain directories under `root`, or in temporary directories without one.
-fn development(root: Option<PathBuf>, cleanup_retry: RetryConfig) -> SandboxFilesystemProvisioning {
+fn development(
+    root: Option<Arc<Path>>,
+    cleanup_retry: RetryConfig,
+) -> SandboxFilesystemProvisioning {
     SandboxFilesystemProvisioning {
         volume: FilesystemVolume::unmanaged_development(),
         mode: SandboxFilesystemProvisioningMode::Directories(
@@ -1649,7 +1659,7 @@ mod tests {
         [
             FilesystemStorageMode::Temporary,
             FilesystemStorageMode::Directory {
-                root: root.path().to_path_buf(),
+                root: root.path().into(),
             },
         ]
         .iter()
@@ -1743,7 +1753,7 @@ mod tests {
 
     fn unmanaged_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
         SandboxFilesystemProvisioning::new(
-            &FilesystemStorageMode::Directory { root },
+            &FilesystemStorageMode::Directory { root: root.into() },
             RetryConfig::default(),
         )
         .unwrap()

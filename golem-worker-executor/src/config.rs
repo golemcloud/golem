@@ -302,7 +302,7 @@ mod tests {
             assert_eq!(
                 config.filesystem_storage.storage,
                 crate::services::golem_config::FilesystemStorageMode::ReflinkXfs {
-                    root: std::path::PathBuf::from("/var/lib/golem/agents"),
+                    root: std::path::PathBuf::from("/var/lib/golem/agents").into(),
                 }
             );
             Ok(())

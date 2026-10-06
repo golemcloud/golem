@@ -42,7 +42,7 @@ These switches control usage measurement and export. They do not control resourc
 | `memory` | Linear-memory byte-time is not accumulated or exported. | Per-agent memory limits, measured admission, and memory-pressure eviction |
 | `filesystem` | Allocated filesystem byte-time is not accumulated or exported. | Project quotas of `ManagedXfs` storage, filesystem-object limits, physical-pressure recovery, lifecycle, replay, and cleanup |
 
-Managed XFS does not enable storage billing. A self-hosted deployment may use managed XFS and quotas while leaving `filesystem = false`.
+The `ManagedXfs` storage mode does not enable storage billing. A self-hosted deployment may use `ManagedXfs` and its project quotas while leaving `filesystem = false`.
 
 Filesystem metering reads the project quota of each agent, so it needs the `ManagedXfs` storage mode. An executor with the `ReflinkXfs` storage mode and `filesystem = true` does not start: `filesystem metering requires XFS storage with project quotas`. The development modes `Temporary` and `Directory` meter no filesystem usage.
 

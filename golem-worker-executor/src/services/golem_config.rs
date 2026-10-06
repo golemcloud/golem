@@ -2197,14 +2197,14 @@ pub enum FilesystemStorageMode {
     /// Development storage in a new temporary directory for each agent filesystem.
     Temporary,
     /// Development storage under `root`, on any filesystem.
-    Directory { root: PathBuf },
+    Directory { root: Box<Path> },
     /// XFS with project quotas, at the root of a dedicated XFS filesystem. Each agent filesystem
     /// is a project, which enforces its disk limits and measures its usage. Copies are reflinks.
-    ManagedXfs { root: PathBuf },
+    ManagedXfs { root: Box<Path> },
     /// XFS with reflink and without project quotas, at the root of a dedicated XFS filesystem.
     /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
     /// per-agent usage.
-    ReflinkXfs { root: PathBuf },
+    ReflinkXfs { root: Box<Path> },
 }
 
 impl SafeDisplay for FilesystemStorageMode {

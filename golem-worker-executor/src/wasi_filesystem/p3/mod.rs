@@ -2368,7 +2368,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let profile = FilesystemStorageConfig {
                 storage: FilesystemStorageMode::Directory {
-                    root: root.path().to_path_buf(),
+                    root: root.path().into(),
                 },
                 ..FilesystemStorageConfig::default()
             };
@@ -3157,7 +3157,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let profile = FilesystemStorageConfig {
             storage: FilesystemStorageMode::Directory {
-                root: root.path().to_path_buf(),
+                root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
         };

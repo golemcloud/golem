@@ -1154,7 +1154,9 @@ mod tests {
     async fn managed_xfs_reobserves_fresh_space_after_verified_deletion() {
         let root = PathBuf::from(std::env::var("GOLEM_MANAGED_XFS_TEST_ROOT").unwrap());
         let provisioning = SandboxFilesystemProvisioning::new(
-            &FilesystemStorageMode::ManagedXfs { root: root.clone() },
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             golem_common::model::RetryConfig::default(),
         )
         .unwrap();

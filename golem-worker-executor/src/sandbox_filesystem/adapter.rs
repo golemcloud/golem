@@ -3599,7 +3599,7 @@ mod tests {
 
     fn unmanaged_provisioning(root: PathBuf) -> SandboxFilesystemProvisioning {
         SandboxFilesystemProvisioning::new(
-            &FilesystemStorageMode::Directory { root },
+            &FilesystemStorageMode::Directory { root: root.into() },
             RetryConfig::default(),
         )
         .unwrap()
@@ -3608,9 +3608,7 @@ mod tests {
     /// Makes the host directories under `root` on development storage, and gives `.scratch`.
     async fn host_directory_at(root: &Path) -> HostDirectory {
         SandboxFilesystemProvisioning::provision(
-            &FilesystemStorageMode::Directory {
-                root: root.to_path_buf(),
-            },
+            &FilesystemStorageMode::Directory { root: root.into() },
             RetryConfig::default(),
         )
         .await
