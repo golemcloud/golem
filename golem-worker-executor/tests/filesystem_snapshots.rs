@@ -2338,12 +2338,20 @@ where
 
     let restarted = start(managed_snapshots()).await?;
     let restored = agent.describe(&restarted).await?;
+    let restored_shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
     restarted.release().await?;
     let replaying = start(FilesystemSnapshotsConfig::default()).await?;
     let replayed = agent.describe(&replaying).await?;
+    let replayed_shape = invocation_shape(&replaying.stored_oplog(&agent.worker_id).await);
 
     assert_eq!(restored, live);
     assert_eq!(replayed, live);
+    let settled = || InvocationShape {
+        applied: 6,
+        ..InvocationShape::settled()
+    };
+    assert_eq!(restored_shape, settled());
+    assert_eq!(replayed_shape, settled());
     Ok(())
 }
 
