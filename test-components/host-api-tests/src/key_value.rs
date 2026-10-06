@@ -260,7 +260,7 @@ impl KeyValue for KeyValueImpl {
         cache::set(&key, &outgoing_value, None)
             .get()
             .await
-            .map_err(|error| format!("{}", error.trace()))
+            .map_err(|error| error.trace().to_string())
     }
 
     async fn cache_fill_after_promise(
@@ -272,7 +272,7 @@ impl KeyValue for KeyValueImpl {
         let vacancy = match cache::get_or_set(&key)
             .get()
             .await
-            .map_err(|error| format!("{}", error.trace()))?
+            .map_err(|error| error.trace().to_string())?
         {
             cache::GetOrSetEntry::Vacant(vacancy) => vacancy,
             cache::GetOrSetEntry::Occupied(_) => {
@@ -370,7 +370,7 @@ impl KeyValue for KeyValueImpl {
                 return match cache::get_or_set(&key)
                     .get()
                     .await
-                    .map_err(|error| format!("{}", error.trace()))?
+                    .map_err(|error| error.trace().to_string())?
                 {
                     cache::GetOrSetEntry::Vacant(vacancy) => {
                         vacancy.vacancy_fill(None);
@@ -381,6 +381,6 @@ impl KeyValue for KeyValueImpl {
             }
             _ => return Err(format!("unknown cache operation: {operation}")),
         }
-        .map_err(|error| format!("{}", error.trace()))
+        .map_err(|error| error.trace().to_string())
     }
 }

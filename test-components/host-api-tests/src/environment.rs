@@ -71,11 +71,10 @@ impl Environment for EnvironmentImpl {
 
 impl EnvironmentImpl {
     fn read_environment(p3: bool) -> Vec<(String, String)> {
-        let environment = if p3 {
+        if p3 {
             golem_rust::wasip3::cli::environment::get_environment()
         } else {
             wasi::cli::environment::get_environment()
-        };
-        environment
+        }
     }
 }

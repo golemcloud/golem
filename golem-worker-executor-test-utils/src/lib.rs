@@ -2017,6 +2017,7 @@ type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> A
     + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
+type WrapRdbmsServiceFn = dyn Fn(Arc<dyn RdbmsService>) -> Arc<dyn RdbmsService> + Send + Sync;
 type WrapComponentServiceFn =
     dyn Fn(Arc<dyn ComponentService>) -> Arc<dyn ComponentService> + Send + Sync;
 type WrapRpcFn = dyn Fn(Arc<dyn Rpc>) -> Arc<dyn Rpc> + Send + Sync;
@@ -2036,6 +2037,7 @@ pub struct TestExecutorOverrides {
     /// budget would.
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    pub wrap_rdbms_service: Option<Arc<WrapRdbmsServiceFn>>,
     pub wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
     pub wrap_worker_enumeration_service: Option<Arc<WrapWorkerEnumerationServiceFn>>,
@@ -3534,10 +3536,13 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         golem_config: &GolemConfig,
         additional_deps: &AdditionalTestDeps,
     ) -> Arc<dyn RdbmsService> {
-        Arc::new(TestRdmsService::new(
-            Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms)),
-            additional_deps.clone(),
-        ))
+        let service: Arc<dyn RdbmsService> =
+            Arc::new(rdbms::RdbmsServiceDefault::new(golem_config.rdbms));
+        let service = match &self.overrides.wrap_rdbms_service {
+            Some(wrap) => wrap(service),
+            None => service,
+        };
+        Arc::new(TestRdmsService::new(service, additional_deps.clone()))
     }
 
     fn wrap_rpc(&self, rpc: Arc<dyn Rpc>) -> Arc<dyn Rpc> {
@@ -3572,6 +3577,8 @@ struct ProductionContextTestServerBootstrap {
     resource_limits: Arc<dyn ResourceLimits>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
     wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
+    wrap_key_value_service: Option<Arc<WrapKeyValueServiceFn>>,
+    wrap_rdbms_service: Option<Arc<WrapRdbmsServiceFn>>,
     wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
     environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
     active_agents:
@@ -3615,6 +3622,29 @@ fn in_process_active_agents<Ctx: WorkerCtx>(
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn create_key_value_service(
+        &self,
+        storage: &Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueService> {
+        let service = Arc::new(DefaultKeyValueService::new(storage.clone()));
+        match &self.wrap_key_value_service {
+            Some(wrap) => wrap(service),
+            None => service,
+        }
+    }
+
+    fn create_rdbms_service(
+        &self,
+        config: &GolemConfig,
+        _additional_deps: &NoAdditionalDeps,
+    ) -> Arc<dyn RdbmsService> {
+        let service = Arc::new(rdbms::RdbmsServiceDefault::new(config.rdbms));
+        match &self.wrap_rdbms_service {
+            Some(wrap) => wrap(service),
+            None => service,
+        }
+    }
+
     fn wrap_key_value_storage(
         &self,
         storage: Arc<dyn KeyValueStorage + Send + Sync>,
@@ -3888,6 +3918,8 @@ async fn run_production_context_bootstrap(
             resource_limits,
             wrap_rpc: overrides.wrap_rpc,
             wrap_blob_store_service: overrides.wrap_blob_store_service,
+            wrap_key_value_service: overrides.wrap_key_value_service,
+            wrap_rdbms_service: overrides.wrap_rdbms_service,
             wrap_key_value_storage: overrides.wrap_key_value_storage,
             environment_state_service: overrides.environment_state_service,
             active_agents: production_active_agents.clone(),
