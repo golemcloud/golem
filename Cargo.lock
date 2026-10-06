@@ -3826,8 +3826,6 @@ dependencies = [
  "wasm-rquickjs",
  "wasmtime",
  "wasmtime-wasi",
- "wasmtime-wasi-http",
- "wasmtime-wizer",
  "wat",
  "wax",
  "which",
@@ -11602,16 +11600,6 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.247.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30b6733b8b91d010a6ac5b0fb237dc46a19650bc4c67db66857e2e787d437204"
-dependencies = [
- "leb128fmt",
- "wasmparser 0.247.0",
-]
-
-[[package]]
-name = "wasm-encoder"
 version = "0.248.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac92cf547bc18d27ecc521015c08c353b4f18b84ab388bb6d1b6b682c620d9b6"
@@ -11683,9 +11671,8 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8755b5e1f2a500d592a85460823f382c4ef4b153e6c43cc10ff0c0dbda326eb0"
+version = "0.0.0"
+source = "git+https://github.com/golemcloud/wasm-rquickjs.git?branch=fix%2Foptimizer-hostcall-fuel#2ec7d9298ecdf5d3b34494166d0c2cfafb4cb4fb"
 dependencies = [
  "anyhow",
  "camino",
@@ -11698,15 +11685,15 @@ dependencies = [
  "syn 2.0.119",
  "tokio",
  "toml_edit 0.22.27",
- "wasm-encoder 0.247.0",
- "wasmparser 0.247.0",
+ "wasm-encoder 0.251.0",
+ "wasmparser 0.251.0",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wasmtime-wizer",
- "wit-bindgen-core 0.57.1",
+ "wit-bindgen-core 0.58.0",
  "wit-encoder",
- "wit-parser 0.247.0",
+ "wit-parser 0.251.0",
 ]
 
 [[package]]
@@ -11731,19 +11718,6 @@ dependencies = [
  "logos 0.14.4",
  "thiserror 2.0.20",
  "wit-parser 0.248.0",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.247.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e6fb4c2bee46c5ea4d40f8cdb5c131725cd976718ec56f1c8e82fbde5fa2a80"
-dependencies = [
- "bitflags 2.13.1",
- "hashbrown 0.17.1",
- "indexmap 2.14.0",
- "semver",
- "serde",
 ]
 
 [[package]]
@@ -12686,13 +12660,13 @@ dependencies = [
 
 [[package]]
 name = "wit-bindgen-core"
-version = "0.57.1"
+version = "0.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02dee27a2dc20d1008016c742ec9fc6ea498492994ba3750be7454cbc97ff04c"
+checksum = "4738d1c9a78e97bc7f664bfafd5d8e67d7bb26faa5c41e6d628e8bbdad3ec351"
 dependencies = [
  "anyhow",
  "heck",
- "wit-parser 0.247.0",
+ "wit-parser 0.251.0",
 ]
 
 [[package]]
@@ -12775,34 +12749,15 @@ dependencies = [
 
 [[package]]
 name = "wit-encoder"
-version = "0.247.0"
+version = "0.251.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3357de198c434305d8d6875b86dd7922a839ab3a06a8d78c4777f4960c5066a"
+checksum = "d886122bc29547b48980f75a6bfe7db179c8f3637d633e32d9d43117c95dcee5"
 dependencies = [
  "id-arena",
  "pretty_assertions",
  "semver",
  "serde",
- "wit-parser 0.247.0",
-]
-
-[[package]]
-name = "wit-parser"
-version = "0.247.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ffe4064318cdf3c08cb99343b44c039fcefe61ccdf58aa9975285f13d74d1fc"
-dependencies = [
- "anyhow",
- "hashbrown 0.17.1",
- "id-arena",
- "indexmap 2.14.0",
- "log",
- "semver",
- "serde",
- "serde_derive",
- "serde_json",
- "unicode-xid",
- "wasmparser 0.247.0",
+ "wit-parser 0.251.0",
 ]
 
 [[package]]
