@@ -24,9 +24,9 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 mod adapter;
+mod directories;
 mod host_directory;
 mod tree_copy;
-mod unmanaged;
 
 #[allow(unused_imports)]
 pub(crate) use adapter::*;
@@ -482,7 +482,7 @@ pub(crate) struct SandboxFilesystem {
 enum NativeNameModeSource {
     NativeDetection,
     #[cfg(target_os = "linux")]
-    ValidatedManagedXfs(xfs::ValidatedManagedXfsNameMode),
+    ValidatedXfs(xfs::ValidatedXfsNameMode),
 }
 
 #[derive(Clone, Default)]
@@ -667,7 +667,7 @@ impl Drop for RestoringLeaseState<'_> {
 }
 
 enum NativeCleanup {
-    Unmanaged {
+    Directory {
         path: PathBuf,
         cleanup_retry: RetryConfig,
     },
@@ -678,10 +678,10 @@ enum NativeCleanup {
 impl NativeCleanup {
     async fn delete(&mut self) -> Result<(), FilesystemStorageError> {
         match self {
-            Self::Unmanaged {
+            Self::Directory {
                 path,
                 cleanup_retry,
-            } => remove_and_verify(path, "delete unmanaged runtime directory", cleanup_retry).await,
+            } => remove_and_verify(path, "delete runtime directory", cleanup_retry).await,
             #[cfg(target_os = "linux")]
             Self::Managed(cleanup) => cleanup.delete().await,
         }
@@ -689,8 +689,8 @@ impl NativeCleanup {
 
     fn delete_blocking(&mut self) -> Result<(), FilesystemStorageError> {
         match self {
-            Self::Unmanaged { path, .. } => {
-                remove_and_verify_blocking(path, "delete unmanaged runtime directory")
+            Self::Directory { path, .. } => {
+                remove_and_verify_blocking(path, "delete runtime directory")
             }
             #[cfg(target_os = "linux")]
             Self::Managed(cleanup) => cleanup.delete_blocking(),
@@ -775,9 +775,9 @@ pub(crate) struct SandboxFilesystemProvisioning {
 
 #[derive(Clone)]
 enum SandboxFilesystemProvisioningMode {
-    Unmanaged(unmanaged::UnmanagedProvisioning),
+    Directories(directories::DirectoryProvisioning),
     #[cfg(target_os = "linux")]
-    Managed(xfs::ManagedProvisioning),
+    ProjectQuotas(xfs::ManagedProvisioning),
 }
 
 impl SandboxFilesystemProvisioning {
@@ -821,10 +821,10 @@ impl SandboxFilesystemProvisioning {
             StorageMode::Managed(root) => configured_managed(root, &cleanup_retry),
             StorageMode::Unmanaged => {
                 let unmanaged =
-                    unmanaged::UnmanagedProvisioning::new(deterministic_root_dir, cleanup_retry);
+                    directories::DirectoryProvisioning::new(deterministic_root_dir, cleanup_retry);
                 Ok(Self {
                     volume: FilesystemVolume::unmanaged_development(),
-                    mode: SandboxFilesystemProvisioningMode::Unmanaged(unmanaged),
+                    mode: SandboxFilesystemProvisioningMode::Directories(unmanaged),
                 })
             }
         }
@@ -839,11 +839,11 @@ impl SandboxFilesystemProvisioning {
         name: SandboxFilesystemName,
     ) -> Result<SandboxFilesystem, FilesystemStorageError> {
         match &self.mode {
-            SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => {
-                unmanaged.create_fresh(self.volume.clone(), name).await
+            SandboxFilesystemProvisioningMode::Directories(directories) => {
+                directories.create_fresh(self.volume.clone(), name).await
             }
             #[cfg(target_os = "linux")]
-            SandboxFilesystemProvisioningMode::Managed(managed) => {
+            SandboxFilesystemProvisioningMode::ProjectQuotas(managed) => {
                 managed.create_fresh(self.volume.clone(), name).await
             }
         }
@@ -867,7 +867,7 @@ fn configured_managed(
     let volume = managed.volume().clone();
     Ok(SandboxFilesystemProvisioning {
         volume,
-        mode: SandboxFilesystemProvisioningMode::Managed(managed),
+        mode: SandboxFilesystemProvisioningMode::ProjectQuotas(managed),
     })
 }
 
@@ -1092,15 +1092,15 @@ pub(crate) async fn observe_space(
                 .await
                 .map_err(|error| {
                     FilesystemStorageError::task_failure(
-                        "observe managed filesystem space",
-                        Path::new("<managed-volume>"),
+                        "observe filesystem volume space",
+                        Path::new("<filesystem-volume>"),
                         error,
                     )
                 })?
                 .map_err(|error| {
                     FilesystemStorageError::io(
-                        "observe managed filesystem space",
-                        Path::new("<managed-volume>"),
+                        "observe filesystem volume space",
+                        Path::new("<filesystem-volume>"),
                         error,
                     )
                 })
@@ -1124,8 +1124,8 @@ pub(crate) fn observe_space_blocking(
             {
                 xfs::observe_space(root, *identity).map_err(|error| {
                     FilesystemStorageError::io(
-                        "observe managed filesystem space",
-                        Path::new("<managed-volume>"),
+                        "observe filesystem volume space",
+                        Path::new("<filesystem-volume>"),
                         error,
                     )
                 })

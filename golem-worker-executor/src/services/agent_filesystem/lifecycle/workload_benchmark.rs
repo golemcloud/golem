@@ -970,7 +970,7 @@ fn verify_managed_workload_gate(
 #[derive(Clone, Copy)]
 struct BenchmarkIsolationControls {
     disable_root_capability_reuse: bool,
-    disable_managed_xfs_name_mode_shortcut: bool,
+    disable_xfs_name_mode_shortcut: bool,
     eager_append_coordination: bool,
 }
 
@@ -982,8 +982,8 @@ impl BenchmarkIsolationControls {
             )
             .as_deref()
                 == Ok("1"),
-            disable_managed_xfs_name_mode_shortcut: std::env::var(
-                "GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT",
+            disable_xfs_name_mode_shortcut: std::env::var(
+                "GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT",
             )
             .as_deref()
                 == Ok("1"),
@@ -997,15 +997,15 @@ impl BenchmarkIsolationControls {
 
     fn uses_production_behavior(self) -> bool {
         !self.disable_root_capability_reuse
-            && !self.disable_managed_xfs_name_mode_shortcut
+            && !self.disable_xfs_name_mode_shortcut
             && !self.eager_append_coordination
     }
 
     fn record_fields(self) -> String {
         format!(
-            "\"disable_root_capability_reuse\":{},\"disable_managed_xfs_name_mode_shortcut\":{},\"eager_append_coordination\":{}",
+            "\"disable_root_capability_reuse\":{},\"disable_xfs_name_mode_shortcut\":{},\"eager_append_coordination\":{}",
             self.disable_root_capability_reuse,
-            self.disable_managed_xfs_name_mode_shortcut,
+            self.disable_xfs_name_mode_shortcut,
             self.eager_append_coordination,
         )
     }
@@ -1075,7 +1075,7 @@ fn report(
 fn production_benchmark_records_enforce_thresholds() {
     let controls = BenchmarkIsolationControls {
         disable_root_capability_reuse: false,
-        disable_managed_xfs_name_mode_shortcut: false,
+        disable_xfs_name_mode_shortcut: false,
         eager_append_coordination: false,
     };
     assert!(
@@ -1086,7 +1086,7 @@ fn production_benchmark_records_enforce_thresholds() {
     );
     assert_eq!(
         controls.record_fields(),
-        "\"disable_root_capability_reuse\":false,\"disable_managed_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false"
+        "\"disable_root_capability_reuse\":false,\"disable_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false"
     );
 }
 
@@ -1096,26 +1096,26 @@ fn isolated_baseline_records_bypass_production_thresholds() {
         (
             BenchmarkIsolationControls {
                 disable_root_capability_reuse: true,
-                disable_managed_xfs_name_mode_shortcut: false,
+                disable_xfs_name_mode_shortcut: false,
                 eager_append_coordination: false,
             },
-            "\"disable_root_capability_reuse\":true,\"disable_managed_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false",
+            "\"disable_root_capability_reuse\":true,\"disable_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false",
         ),
         (
             BenchmarkIsolationControls {
                 disable_root_capability_reuse: false,
-                disable_managed_xfs_name_mode_shortcut: true,
+                disable_xfs_name_mode_shortcut: true,
                 eager_append_coordination: false,
             },
-            "\"disable_root_capability_reuse\":false,\"disable_managed_xfs_name_mode_shortcut\":true,\"eager_append_coordination\":false",
+            "\"disable_root_capability_reuse\":false,\"disable_xfs_name_mode_shortcut\":true,\"eager_append_coordination\":false",
         ),
         (
             BenchmarkIsolationControls {
                 disable_root_capability_reuse: false,
-                disable_managed_xfs_name_mode_shortcut: false,
+                disable_xfs_name_mode_shortcut: false,
                 eager_append_coordination: true,
             },
-            "\"disable_root_capability_reuse\":false,\"disable_managed_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":true",
+            "\"disable_root_capability_reuse\":false,\"disable_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":true",
         ),
     ] {
         assert!(
@@ -1132,7 +1132,7 @@ fn isolated_baseline_records_bypass_production_thresholds() {
 fn quick_benchmark_records_keep_thresholds_disabled() {
     let controls = BenchmarkIsolationControls {
         disable_root_capability_reuse: false,
-        disable_managed_xfs_name_mode_shortcut: false,
+        disable_xfs_name_mode_shortcut: false,
         eager_append_coordination: false,
     };
     assert!(
