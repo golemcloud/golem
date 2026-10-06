@@ -130,7 +130,7 @@ For configuration, recovery, and deletion diagnostics, see [Operating Durable St
 | ------------------------------------------------- | --------- | ----------------- | -------------------------------------------------------------------------------- |
 | `filesystem_snapshot_capture_seconds`             | histogram | `outcome`         | Time that a capture of an agent filesystem stops the file calls                  |
 | `filesystem_snapshot_upload_seconds`              | histogram | `kind`, `outcome` | Time of an upload of a filesystem snapshot, with its retries                     |
-| `filesystem_snapshot_uploaded_bytes_total`        | counter   | `kind`            | Bytes of the trees of the uploaded filesystem snapshots                          |
+| `filesystem_snapshot_uploaded_bytes_total`        | counter   | `kind`            | File sizes of the trees of the uploaded filesystem snapshots                     |
 | `filesystem_snapshot_uploads_in_progress`         | gauge     |                   | Runs of uploads that hold a slot now                                             |
 | `filesystem_snapshot_restore_seconds`             | histogram | `outcome`         | Time of a restore of a filesystem snapshot, with the wait for a restore slot and the retries |
 | `filesystem_snapshot_dropped_confirmations_total` | counter   | `reason`          | Uploaded filesystem snapshots that no confirmation record names                  |

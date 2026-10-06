@@ -4,7 +4,7 @@ import { Callout, Steps } from "nextra/components"
 
 A filesystem snapshot is a copy of an agent's files that the worker executor keeps in blob storage. A snapshot record in the oplog of the agent names it. With filesystem snapshots, an agent keeps its files after a start from a snapshot record and after a manual update. [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots) describes what agents see. This page describes how to enable and operate the feature.
 
-Filesystem snapshots are disabled by default. A disabled executor keeps the earlier behaviour: it writes no filesystem snapshot name into snapshot records, and it does not save agent files. Ephemeral agents never get a filesystem snapshot.
+Filesystem snapshots are disabled by default. A disabled executor keeps the earlier behavior: it writes no filesystem snapshot name into snapshot records, and it does not save agent files. Ephemeral agents never get a filesystem snapshot.
 
 ## Requirements
 
@@ -65,7 +65,7 @@ At startup, the executor checks the volume and refuses to start when a check fai
 | A new directory gets the project of its parent, and reflink copies work. | `validate managed XFS project assignment and inheritance` |
 | `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within managed capacity` or `fit filesystem pressure object target within managed capacity` |
 | The executor removes any project from the root, and the root then belongs to no project. | `inspect managed XFS root project attributes`, `clear managed XFS root project inheritance`, `verify managed XFS root project attributes` or `verify managed XFS root has neutral project identity` |
-| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open managed XFS host directory`, `inspect managed XFS host directory project attributes` or `verify managed XFS host directory has no project identity` |
+| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open managed XFS host directory`, `inspect managed XFS host directory project attributes` `verify managed XFS host directory has no project identity` or `remove a host directory that has a project identity` |
 | The executor can read the free space of the volume. | `observe managed filesystem space` |
 | `deterministic_root_dir` is not set. The two storage modes exclude each other. | `select exactly one filesystem storage mode` |
 
@@ -136,6 +136,8 @@ Uploads and restores use memory outside the memory of the agents. `worker_memory
 ### Do the same on every executor
 
 Enable filesystem snapshots on every executor that can run the same agents, with the same key and the same blob storage.
+
+Snapshot records that an executor wrote before you enabled filesystem snapshots have no filesystem snapshot name. A start from such a record puts only the initial files in place, as before. The files of an agent are saved from its first snapshot after you enabled the feature.
 
 ### Check that it works
 
@@ -221,7 +223,7 @@ When you set this section, give `max_attempts`, `min_delay`, `max_delay` and `mu
 
 ## Where the snapshots are
 
-The executor keeps the snapshots of each agent incarnation in their own location. An agent that is deleted and created again with the same id is a new incarnation, and so is the target of a fork. Each gets a new, empty location. All incarnations of one agent share the agent part of the location.
+The executor keeps the snapshots of each agent incarnation in their own location. An agent that is deleted and created again with the same id is a new incarnation, and so is the target of a fork. Each gets a new location. A re-created agent starts with an empty one. The location of a fork target holds the copy of the snapshots of its source. All incarnations of one agent share the agent part of the location.
 
 | Blob storage | Location of the snapshots of one incarnation |
 | --- | --- |
@@ -266,11 +268,13 @@ A start restores the filesystem snapshot of its baseline before the agent's code
 
 ### Retention
 
-After a confirmed automatic snapshot, the executor deletes the older automatic snapshots of the agent. It keeps:
+After an upload confirms an automatic snapshot, the executor deletes the older automatic snapshots of the agent. A confirmation that a start writes does not apply retention; the next upload that confirms applies it. Retention keeps:
 
 - the new snapshot and the `retained_periodic_snapshots - 1` newest older ones,
 - the snapshots of the records that a start of the agent can select now, whatever their age,
 - each snapshot whose time is at most 2 minutes before the time of the new snapshot, or later, because the clocks of two executors can differ.
+
+The last two kinds do not count toward `retained_periodic_snapshots`.
 
 After a manual update record is written, the executor applies the same rule to the manual-update snapshots with `retained_update_snapshots`. It never deletes the snapshot of a successful or pending update of the agent, because a revert or a fork can make that update the baseline again. `retained_update_snapshots` limits only the other manual-update snapshots.
 
@@ -292,7 +296,7 @@ The queue also has fixed bounds over all agents: 65,536 agents with waiting work
 
 Snapshots can stay in blob storage. They use space. They do not make a start wrong:
 
-- A delete that fails after its retries. The executor counts it in `filesystem_snapshot_leaked_cleanups_total`.
+- A clean-up delete, or the delete of a snapshot that no confirmation record names, that fails after its retries. The executor counts it in `filesystem_snapshot_leaked_cleanups_total`.
 - A clean-up that waited or ran when the executor shut down. The executor counts it with the operation `shutdown`. After a crash, nothing counts the lost clean-ups.
 - The copy of a fork attempt whose outcome the executor does not know. The executor counts it with the operation `fork_stage`.
 
@@ -318,21 +322,21 @@ The worker executor exports these metrics for filesystem snapshots. The labels h
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
 | `filesystem_snapshot_capture_seconds` | histogram | `outcome` | The time that a capture stops the agent's file calls. `outcome` is `captured`, `unchanged`, `initial_files`, `busy`, `invalidated` or `failed`. |
-| `filesystem_snapshot_upload_seconds` | histogram | `kind`, `outcome` | The time of an upload with its retries, until its confirmation. `kind` is `periodic` for an automatic snapshot or `update` for a manual update. For `periodic`, `outcome` is `confirmed`, `superseded`, `deferred`, `replaced` or `failed`. For `update`, it is `saved` or `failed`. |
-| `filesystem_snapshot_uploaded_bytes_total` | counter | `kind` | The bytes of the trees of the uploaded snapshots. |
+| `filesystem_snapshot_upload_seconds` | histogram | `kind`, `outcome` | The time of an upload with its retries, until its confirmation (`periodic`) or the end of the save (`update`). `kind` is `periodic` for an automatic snapshot or `update` for a manual update. For `periodic`, `outcome` is `confirmed`, `superseded`, `deferred`, `replaced` or `failed`. For `update`, it is `saved` or `failed`. |
+| `filesystem_snapshot_uploaded_bytes_total` | counter | `kind` | The sum of the file sizes of the trees of the uploaded snapshots. It is not the number of bytes sent to blob storage. |
 | `filesystem_snapshot_uploads_in_progress` | gauge | | The runs of uploads that hold a slot now. |
 | `filesystem_snapshot_restore_seconds` | histogram | `outcome` | The time of a restore, with the wait for a restore slot and the retries. `outcome` is `restored` or `failed`. |
 | `filesystem_snapshot_copy_seconds` | histogram | `outcome` | The time of the copy of the snapshots of a fork source. `outcome` is `copied`, `stopped` or `failed`. |
 | `filesystem_snapshot_dropped_confirmations_total` | counter | `reason` | Uploaded snapshots that no confirmation record names. `reason` is `superseded`. |
 | `filesystem_snapshot_cleanups_pending` | gauge | | The agents with clean-up work that waits or runs. |
-| `filesystem_snapshot_leaked_cleanups_total` | counter | `operation` | Clean-ups that left snapshots in blob storage. `operation` is `delete` (a delete of some snapshots failed), `delete_all` (a delete of all snapshots of an agent failed), `overflow` (a full queue refused the request), `shutdown` (the executor shut down before the clean-up ended) or `fork_stage` (the outcome of a fork attempt is not known). |
+| `filesystem_snapshot_leaked_cleanups_total` | counter | `operation` | Clean-ups that left snapshots in blob storage. `operation` is `delete` (a delete of some snapshots failed), `delete_all` (a delete of all snapshots of an agent failed), `overflow` (a full queue refused a request, or removed the waiting revert deletes of another agent to make room), `shutdown` (the executor shut down before the clean-up ended) or `fork_stage` (the outcome of a fork attempt is not known). |
 | `filesystem_snapshot_failed_space_reclaims_total` | counter | | Deletes after which the release of unused storage failed. The next delete of the agent tries again. |
 
 Watch these values:
 
 - **Busy captures.** `filesystem_snapshot_capture_seconds_count{outcome="busy"}` counts the snapshots that Golem skipped, or the manual updates that failed, because a guest left a file call open.
 - **Failed uploads.** `filesystem_snapshot_upload_seconds_count{outcome="failed"}` counts uploads that failed after their retries.
-- **Deferred uploads.** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` counts uploads whose agent was not running when the upload ended. This is normal for agents that stop soon after a snapshot. A later start confirms them.
+- **Deferred uploads.** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` counts uploads that the instance which made the capture could not confirm, for example because the agent stopped or restarted, or its shard moved. This is normal for agents that stop soon after a snapshot. A later start confirms them.
 - **Dropped confirmations.** `filesystem_snapshot_dropped_confirmations_total` counts uploads that an update or a revert made useless.
 - **Leaked clean-ups.** `filesystem_snapshot_leaked_cleanups_total` counts clean-ups that left snapshots in blob storage. A growing `overflow` count means that deletes come faster than the clean-ups run. A `shutdown` count shows clean-ups that a shutdown cut off.
 - **Pending clean-ups.** A `filesystem_snapshot_cleanups_pending` value that grows all the time means that the clean-ups do not keep up.
@@ -345,11 +349,11 @@ The executor writes these messages. Search for the quoted text.
 
 | Message | Level | Meaning |
 | --- | --- | --- |
-| `Skipping the snapshot: the agent filesystem was not captured` | WARN | The capture failed. The `error` field gives the cause, for example `agent filesystem has an open call` when a file call stayed open for `capture_wait`. No snapshot record is written. |
+| `Skipping the snapshot: the agent filesystem was not captured` | WARN | The capture failed. The `error` field gives the cause, for example `agent filesystem has an open call` when a file call stayed open for `capture_wait`. No snapshot record is written. For a manual update, the update fails. |
 | `Periodic snapshot save function failed; restarting worker to recover the store` | WARN | The agent's snapshot code failed. The agent restarts and replays its oplog. |
 | `Failed to make the periodic snapshot record` | WARN | The executor could not make the periodic snapshot record, for example because the upload of the application snapshot failed. It writes no record, discards the capture, and the agent continues. |
 | `Failed to append the periodic snapshot record` | WARN | The executor could not write the periodic snapshot record to the oplog. It discards the capture, and the agent restarts. |
-| `Manual update failed with a conflict of the initial files` | WARN | At the start in the target revision, an initial file of the target revision conflicts with a file that the agent wrote. The update is recorded as failed, and the agent stays on its revision. |
+| `Manual update failed with a conflict of the initial files` | WARN | At the start in the target revision, an initial file of the target revision conflicts with a file that the agent wrote, changed or deleted, or with a file of the agent in the place of a directory that the initial file needs. The update is recorded as failed, and the agent stays on its revision. |
 | `Failed to upload a filesystem snapshot; no confirmation record follows its record` | WARN | An upload failed after its retries. A start uses an older snapshot. |
 | `The filesystem snapshot of an automatic snapshot record does not restore; the start uses the usable record before it` | WARN | A restore failed at a start. The start falls back. |
 | `Failed to check a filesystem snapshot before a start` | WARN | The check of blob storage at a start failed. The start uses an older snapshot. |
@@ -357,7 +361,7 @@ The executor writes these messages. Search for the quoted text.
 | `Failed to delete old filesystem snapshots; the next retention tries again` | WARN | A retention delete failed. |
 | `Failed to delete a filesystem snapshot that no confirmation record names` | WARN | The delete of a snapshot after a dropped confirmation failed. The snapshot stays until a later retention deletes it. |
 | `Failed to delete filesystem snapshots` | WARN | A clean-up failed after its retries. The `operation` field is `delete` or `delete_all`. The snapshots stay in blob storage. |
-| `The clean-up queue of filesystem snapshots is full; a clean-up is lost` | WARN | The queue refused a delete request. |
+| `The clean-up queue of filesystem snapshots is full; a clean-up is lost` | WARN | The queue refused a delete request, or a delete of all snapshots removed the waiting revert deletes of another agent. |
 | `The clean-up queue of filesystem snapshots is full; the snapshots of a fork stage are lost` | WARN | The queue refused the delete of the copy of a failed fork attempt. |
 | `The publication of a fork ended with an unknown outcome; the snapshots of its stage stay` | WARN | The executor does not know whether a fork created its new agent, so it keeps the copy. |
 | `A prune of the filesystem snapshots of an agent failed; the next delete prunes again` | WARN | A delete succeeded, but the release of the storage that the deleted snapshots used failed. The next delete of the agent tries again. |
