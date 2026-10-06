@@ -366,6 +366,87 @@ async fn a_check_decides_as_a_capture_and_makes_no_host_directory_and_no_copy() 
     delete_scripted_resident(&control, filesystem).await;
 }
 
+#[test]
+async fn the_facts_of_a_generation_name_its_chosen_times_provisioned_files_and_read_write_files() {
+    use crate::services::agent_filesystem::lifecycle::baseline::GenerationFacts;
+    use crate::services::agent_filesystem::lifecycle::initial_files::declarations_of;
+    let store = InitialFileStore::new().await;
+    let read_only = store
+        .declare("/ro.txt", AgentFilePermissions::ReadOnly, b"ro")
+        .await;
+    let read_write = store
+        .declare("/rw.txt", AgentFilePermissions::ReadWrite, b"rw")
+        .await;
+    let state =
+        |initial: Vec<InitialAgentFile>, provisioned: Vec<InitialAgentFile>| InitialFileState {
+            initial: Arc::new(declarations_of(initial, "initial").unwrap()),
+            provisioned: Arc::new(declarations_of(provisioned, "provisioned").unwrap()),
+            ..InitialFileState::default()
+        };
+    let facts = |state: &InitialFileState, chosen_times| {
+        let facts = GenerationFacts::of(state, chosen_times);
+        (
+            facts.chosen_times,
+            facts.provisioned,
+            facts.read_write_declared,
+        )
+    };
+
+    assert_eq!(
+        [
+            facts(&state(vec![read_only.clone()], vec![]), false),
+            facts(&state(vec![read_only.clone()], vec![]), true),
+            facts(&state(vec![], vec![read_only.clone()]), false),
+            facts(&state(vec![read_only, read_write], vec![]), false),
+        ],
+        [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ]
+    );
+}
+
+#[test]
+#[timeout("10s")]
+async fn a_check_of_a_tree_that_the_facts_rule_out_reads_nothing() {
+    let store = InitialFileStore::new().await;
+    let files = [
+        store
+            .declare("/ro.txt", AgentFilePermissions::ReadOnly, b"ro")
+            .await,
+        store
+            .declare("/rw.txt", AgentFilePermissions::ReadWrite, b"rw")
+            .await,
+    ];
+    let prepared = store.prepare(&files).await;
+    let (filesystem, control, _) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    control.push_seed(Ok(()));
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(file_attributes(1, 2, 1, true)));
+    let filesystem = materialize_baseline(filesystem, prepared, NO_RESTORE)
+        .await
+        .unwrap();
+    let filesystem = finish_replay(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let filesystem = finish_reconstruction(filesystem).await.unwrap();
+    let calls_before = control.calls().len();
+
+    let checked = check_initial_files(&filesystem, Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    assert_eq!(checked, InitialFilesCheck::Changed);
+    assert_eq!(
+        control.calls()[calls_before..].to_vec(),
+        Vec::<String>::new(),
+        "a check that the facts rule out reads nothing"
+    );
+    delete_scripted_resident(&control, filesystem).await;
+}
+
 /// A restore that gives the tree of another restore, and says that the tree holds the times of a
 /// save.
 struct WithSavedTimes<Restore>(Restore);

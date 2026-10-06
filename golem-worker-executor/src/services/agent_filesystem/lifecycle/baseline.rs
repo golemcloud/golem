@@ -691,7 +691,7 @@ pub(super) struct GenerationFacts {
 impl GenerationFacts {
     /// The facts of a generation with the initial files of `state`, where `chosen_times` tells
     /// whether a call put a chosen modification time at a path.
-    fn of(state: &InitialFileState, chosen_times: bool) -> Self {
+    pub(super) fn of(state: &InitialFileState, chosen_times: bool) -> Self {
         Self {
             chosen_times,
             provisioned: !state.provisioned.is_empty(),
