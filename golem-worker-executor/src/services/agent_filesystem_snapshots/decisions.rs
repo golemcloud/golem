@@ -67,12 +67,27 @@ pub(super) fn fork_outcome(found: ForkFound, stage: AgentFingerprint) -> ForkOut
     }
 }
 
-/// Whether an agent in `mode` keeps filesystem snapshots. Only a durable agent does: nothing
-/// restores an ephemeral agent, and nothing deletes the snapshots of one.
-pub(super) fn keeps_files(mode: AgentMode) -> bool {
-    match mode {
-        AgentMode::Durable => true,
-        AgentMode::Ephemeral => false,
+/// What a snapshot of an agent keeps on an executor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Keeping<Core> {
+    /// The snapshot keeps the files of the agent in a filesystem snapshot, with the core of the
+    /// service.
+    Snapshots(Core),
+    /// The executor keeps no filesystem snapshots. The snapshot record has no name, and it is
+    /// written only while the tree of the agent holds only initial files.
+    InitialFilesOnly,
+    /// The agent keeps no files: the snapshot record has no name, and nothing checks the tree.
+    NoFiles,
+}
+
+/// What a snapshot of an agent in `mode` keeps on an executor whose service has `core` when it
+/// keeps filesystem snapshots. An ephemeral agent keeps no files: nothing restores an ephemeral
+/// agent, and nothing deletes the snapshots of one.
+pub(super) fn keeping<Core>(core: Option<Core>, mode: AgentMode) -> Keeping<Core> {
+    match (mode, core) {
+        (AgentMode::Ephemeral, _) => Keeping::NoFiles,
+        (AgentMode::Durable, Some(core)) => Keeping::Snapshots(core),
+        (AgentMode::Durable, None) => Keeping::InitialFilesOnly,
     }
 }
 
@@ -222,10 +237,21 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     #[test]
-    fn only_a_durable_agent_keeps_files() {
+    fn a_durable_agent_keeps_snapshots_only_with_a_core_and_an_ephemeral_agent_keeps_no_files() {
         assert_eq!(
-            [AgentMode::Durable, AgentMode::Ephemeral].map(keeps_files),
-            [true, false]
+            [
+                (Some(7), AgentMode::Durable),
+                (None, AgentMode::Durable),
+                (Some(7), AgentMode::Ephemeral),
+                (None, AgentMode::Ephemeral),
+            ]
+            .map(|(core, mode)| keeping(core, mode)),
+            [
+                Keeping::Snapshots(7),
+                Keeping::InitialFilesOnly,
+                Keeping::NoFiles,
+                Keeping::NoFiles,
+            ]
         );
     }
 

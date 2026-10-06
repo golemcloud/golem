@@ -1078,9 +1078,17 @@ fn a_disabled_service_admits_nothing_and_restores_nothing() {
         let admitted = snapshots
             .admit_periodic(&agent, AgentMode::Durable)
             .await
-            .without_name();
+            .initial_files_only();
         let update = snapshots
             .admit_update(&agent, AgentMode::Durable, no_interrupt())
+            .await
+            .err();
+        let ephemeral = snapshots
+            .admit_periodic(&agent, AgentMode::Ephemeral)
+            .await
+            .without_name();
+        let ephemeral_update = snapshots
+            .admit_update(&agent, AgentMode::Ephemeral, no_interrupt())
             .await
             .err();
         let restored = snapshots
@@ -1088,8 +1096,12 @@ fn a_disabled_service_admits_nothing_and_restores_nothing() {
             .err();
 
         assert_eq!(
-            (admitted, update, restored),
+            (admitted, update, ephemeral, ephemeral_update, restored),
             (
+                Some(DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT),
+                Some(UpdateNotAdmitted::InitialFilesOnly {
+                    capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT
+                }),
                 true,
                 Some(UpdateNotAdmitted::WithoutName),
                 Some(SnapshotsDisabled)
@@ -1565,7 +1577,7 @@ fn an_admission_during_a_delete_of_all_snapshots_gets_deleting_all_snapshots_unt
                 .filter_map(|admitted| std::future::ready(admitted.is_ok().then_some(())));
             match admitted {
                 Admitted::Upload(_) => true,
-                Admitted::WithoutName | Admitted::Skip(_) => {
+                Admitted::WithoutName | Admitted::InitialFilesOnly { .. } | Admitted::Skip(_) => {
                     tokio::time::timeout(Duration::from_secs(5), std::pin::pin!(retried).next())
                         .await
                         .is_ok()

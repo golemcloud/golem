@@ -17,9 +17,10 @@ use crate::filesystem_snapshot::AgentSnapshots;
 use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::agent_filesystem::{
-    CaptureError, CaptureOutcome, DeleteFailure, LimitTransition, ResidentFilesystem,
-    ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture, capture, capture_whole,
-    drain_sealed_filesystem, filesystem_activity, seal, set_limits,
+    CaptureError, CaptureOutcome, DeleteFailure, InitialFilesCheck, LimitTransition,
+    ResidentFilesystem, ResidentFilesystemActivity, SealedFilesystem, TreeMark, WholeCapture,
+    capture, capture_whole, check_initial_files, drain_sealed_filesystem, filesystem_activity,
+    seal, set_limits,
 };
 use crate::services::agent_filesystem_snapshots::Confirm;
 use crate::services::golem_config::SnapshotPolicy;
@@ -3703,6 +3704,16 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
         .await
     }
 
+    async fn check_initial_files(&self, wait: std::time::Duration) -> Option<InitialFilesCheck> {
+        let snapshots = self.0.parent.agent_filesystem_snapshots();
+        measured_capture(
+            || check_initial_files(self.0.filesystem, wait),
+            InitialFilesCheck::label,
+            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+        )
+        .await
+    }
+
     async fn entry(
         &self,
         snapshot: golem_common::model::oplog::RawSnapshotData,
@@ -3799,6 +3810,16 @@ impl<Ctx: WorkerCtx> UpdateSnapshotHost for UpdateHost<'_, '_, Ctx> {
         measured_capture(
             || capture_whole(self.invocation.filesystem, wait),
             WholeCapture::label,
+            |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
+        )
+        .await
+    }
+
+    async fn check_initial_files(&self, wait: std::time::Duration) -> Option<InitialFilesCheck> {
+        let snapshots = self.invocation.parent.agent_filesystem_snapshots();
+        measured_capture(
+            || check_initial_files(self.invocation.filesystem, wait),
+            InitialFilesCheck::label,
             |outcome, elapsed| snapshots.record_capture(outcome, elapsed),
         )
         .await

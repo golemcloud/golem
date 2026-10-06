@@ -45,8 +45,10 @@ use crate::filesystem_snapshot::{
 use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
 use crate::services::golem_config::{
-    FilesystemPressureConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
+    DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT, FilesystemPressureConfig,
+    FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
 };
+use decisions::Keeping;
 use futures::future::BoxFuture;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::FilesystemSnapshotName;
@@ -221,9 +223,13 @@ pub(crate) enum StartCheck {
 pub(crate) enum Admitted {
     /// The upload of a snapshot with a new name.
     Upload(Admission),
-    /// The agent keeps no filesystem snapshots here: the service is disabled, or the agent keeps
-    /// no files. The record gets no name.
+    /// The agent keeps no files, such as an ephemeral agent. The record gets no name, and
+    /// nothing checks the tree.
     WithoutName,
+    /// This executor keeps no filesystem snapshots. The record gets no name, and it is written
+    /// only when the tree holds only initial files. The check waits up to `capture_wait` for
+    /// open file calls.
+    InitialFilesOnly { capture_wait: Duration },
     /// The snapshot is skipped for this reason.
     Skip(SnapshotSkip),
 }
@@ -234,7 +240,9 @@ impl Admitted {
     pub(crate) fn unwrap(self) -> Admission {
         match self {
             Self::Upload(admission) => admission,
-            Self::WithoutName => panic!("the admission gave no name"),
+            Self::WithoutName | Self::InitialFilesOnly { .. } => {
+                panic!("the admission gave no name")
+            }
             Self::Skip(skip) => panic!("the admission skipped the snapshot: {skip}"),
         }
     }
@@ -248,13 +256,21 @@ impl Admitted {
     pub(crate) fn err(self) -> Option<SnapshotSkip> {
         match self {
             Self::Skip(skip) => Some(skip),
-            Self::Upload(_) | Self::WithoutName => None,
+            Self::Upload(_) | Self::WithoutName | Self::InitialFilesOnly { .. } => None,
         }
     }
 
-    /// Whether the admission gave no name.
+    /// Whether the admission gave no name and no check.
     pub(crate) fn without_name(&self) -> bool {
         matches!(self, Self::WithoutName)
+    }
+
+    /// The wait of the check of a tree of initial files, when the admission asks for one.
+    pub(crate) fn initial_files_only(&self) -> Option<Duration> {
+        match self {
+            Self::InitialFilesOnly { capture_wait } => Some(*capture_wait),
+            Self::Upload(_) | Self::WithoutName | Self::Skip(_) => None,
+        }
     }
 
     /// The upload of the admission, as a `Result` with the reason of a skip.
@@ -264,7 +280,7 @@ impl Admitted {
     ) -> Result<T, Option<SnapshotSkip>> {
         match self {
             Self::Upload(admission) => Ok(map(admission)),
-            Self::WithoutName => Err(None),
+            Self::WithoutName | Self::InitialFilesOnly { .. } => Err(None),
             Self::Skip(skip) => Err(Some(skip)),
         }
     }
@@ -275,6 +291,7 @@ impl Admitted {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateNotAdmitted {
     WithoutName,
+    InitialFilesOnly { capture_wait: Duration },
     Skip(SnapshotSkip),
     Interrupted,
 }
@@ -299,6 +316,9 @@ impl UpdateAdmitted {
         match self {
             Self::Upload(_) => None,
             Self::WithoutName => Some(UpdateNotAdmitted::WithoutName),
+            Self::InitialFilesOnly { capture_wait } => {
+                Some(UpdateNotAdmitted::InitialFilesOnly { capture_wait })
+            }
             Self::Skip(skip) => Some(UpdateNotAdmitted::Skip(skip)),
             Self::Interrupted => Some(UpdateNotAdmitted::Interrupted),
         }
@@ -309,9 +329,13 @@ impl UpdateAdmitted {
 pub(crate) enum UpdateAdmitted {
     /// The upload of a snapshot with a new name.
     Upload(Admission),
-    /// The agent keeps no filesystem snapshots here: the service is disabled, or the agent keeps
-    /// no files. The record gets no name.
+    /// The agent keeps no files, such as an ephemeral agent. The record gets no name, and
+    /// nothing checks the tree.
     WithoutName,
+    /// This executor keeps no filesystem snapshots. The record gets no name, and the update
+    /// fails unless the tree holds only initial files. The check waits up to `capture_wait` for
+    /// open file calls.
+    InitialFilesOnly { capture_wait: Duration },
     /// The update gets no snapshot for this reason.
     Skip(SnapshotSkip),
     /// A terminal interrupt ended the wait for a running upload.
@@ -608,11 +632,17 @@ impl AgentFilesystemSnapshots {
     /// unless the upload is a periodic one that waits for its next run after a failed run: a new
     /// admission replaces such an upload, which then ends at once, never confirms its snapshot,
     /// and discards its capture. A dropped admission frees the agent and writes nothing durable.
-    /// An agent that keeps no files, such as an ephemeral agent, gets
-    /// [`Admitted::WithoutName`], as a disabled service gives.
+    /// An agent that keeps no files, such as an ephemeral agent, gets [`Admitted::WithoutName`].
+    /// Any other agent on a disabled service gets [`Admitted::InitialFilesOnly`].
     pub(crate) async fn admit_periodic(&self, agent: &AgentSnapshots, mode: AgentMode) -> Admitted {
-        let Some(core) = self.enabled_for(mode) else {
-            return Admitted::WithoutName;
+        let core = match self.keeping(mode) {
+            Keeping::Snapshots(core) => core,
+            Keeping::InitialFilesOnly => {
+                return Admitted::InitialFilesOnly {
+                    capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
+                };
+            }
+            Keeping::NoFiles => return Admitted::WithoutName,
         };
         match Core::admit(core, agent, SnapshotKind::Periodic, None).await {
             Ok(admission) => Admitted::Upload(admission),
@@ -631,16 +661,23 @@ impl AgentFilesystemSnapshots {
     /// is the deadline of the admission, and the admission at the deadline gives its refusal. A
     /// run of the upload that started before then runs to its end. A
     /// shutdown ends the wait like the deadline does, and a terminal interrupt that `interrupt`
-    /// reports ends it with [`UpdateAdmitted::Interrupted`]. An agent that keeps no files gets
-    /// [`UpdateAdmitted::WithoutName`], as a disabled service gives.
+    /// reports ends it with [`UpdateAdmitted::Interrupted`]. An agent that keeps no
+    /// files gets [`UpdateAdmitted::WithoutName`]. Any other agent on a disabled service gets
+    /// [`UpdateAdmitted::InitialFilesOnly`].
     pub(crate) async fn admit_update(
         &self,
         agent: &AgentSnapshots,
         mode: AgentMode,
         interrupt: watch::Receiver<bool>,
     ) -> UpdateAdmitted {
-        let Some(core) = self.enabled_for(mode) else {
-            return UpdateAdmitted::WithoutName;
+        let core = match self.keeping(mode) {
+            Keeping::Snapshots(core) => core,
+            Keeping::InitialFilesOnly => {
+                return UpdateAdmitted::InitialFilesOnly {
+                    capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
+                };
+            }
+            Keeping::NoFiles => return UpdateAdmitted::WithoutName,
         };
         let deadline = tokio::time::Instant::now() + core.settings.confirmation_wait();
         let asks = futures::stream::unfold(Some(None), |stopped| {
@@ -689,9 +726,10 @@ impl AgentFilesystemSnapshots {
         .unwrap_or(UpdateAdmitted::Skip(SnapshotSkip::UploadInFlight))
     }
 
-    /// The core of an enabled service, for an agent in `mode` that keeps files.
-    fn enabled_for(&self, mode: AgentMode) -> Option<&Arc<Core>> {
-        self.core.as_ref().filter(|_| decisions::keeps_files(mode))
+    /// What a snapshot of an agent in `mode` keeps on this executor, as [`decisions::keeping`]
+    /// says.
+    fn keeping(&self, mode: AgentMode) -> Keeping<&Arc<Core>> {
+        decisions::keeping(self.core.as_ref(), mode)
     }
 
     /// Tells whether the store holds the whole snapshot `name` of `agent`, before a start
@@ -800,7 +838,7 @@ impl AgentFilesystemSnapshots {
     /// delete ended. An agent in `mode` that keeps no files has no snapshots, and the call does
     /// nothing for it.
     pub(crate) fn delete_all_snapshots(&self, agent: &AgentSnapshots, mode: AgentMode) {
-        if let Some(core) = self.enabled_for(mode) {
+        if let Keeping::Snapshots(core) = self.keeping(mode) {
             let requested = core
                 .registry
                 .apply(|state| transitions::request_all(state, agent));

@@ -2457,8 +2457,9 @@ const DEFAULT_FILESYSTEM_SNAPSHOT_MAX_CONCURRENT_RESTORES: usize = 8;
 const DEFAULT_FILESYSTEM_SNAPSHOT_CONFIRMATION_WAIT: Duration = Duration::from_secs(60);
 /// The default of [`FilesystemSnapshotUploadConfig::store_check_limit`].
 const DEFAULT_FILESYSTEM_SNAPSHOT_STORE_CHECK_LIMIT: Duration = Duration::from_secs(5);
-/// The default of [`FilesystemSnapshotUploadConfig::capture_wait`].
-const DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT: Duration = Duration::from_secs(5);
+/// The default of [`FilesystemSnapshotUploadConfig::capture_wait`]. An executor without filesystem
+/// snapshots waits as long in the check of a tree of initial files.
+pub(crate) const DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT: Duration = Duration::from_secs(5);
 /// The largest jitter factor of the runs of a store call: a jitter at most doubles a wait.
 const MAX_FILESYSTEM_SNAPSHOT_JITTER_FACTOR: f64 = 1.0;
 /// The default of [`FilesystemSnapshotUploadConfig::retained_periodic_snapshots`]: about 20 min
