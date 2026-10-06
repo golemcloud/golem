@@ -1766,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn each_volume_mode_states_its_facts() {
+    fn a_development_volume_mode_states_its_facts() {
         assert_eq!(
             volume_facts(&FilesystemVolumeMode::UnmanagedDevelopment),
             VolumeFacts {

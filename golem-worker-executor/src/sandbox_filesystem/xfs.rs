@@ -82,7 +82,7 @@ fn validated_xfs_name_mode(
 #[derive(Default)]
 struct ProjectAllocator {
     next: u32,
-    active: HashMap<NonZeroU32, PathBuf>,
+    active: HashMap<NonZeroU32, Box<Path>>,
 }
 
 #[repr(C)]
@@ -458,7 +458,7 @@ impl ManagedProvisioning {
                 ),
             )),
             ExistingReservation::Free => {
-                allocator.active.insert(project_id, owner.to_path_buf());
+                allocator.active.insert(project_id, owner.into());
                 Ok(())
             }
         }
@@ -515,7 +515,7 @@ impl ManagedProvisioning {
             .expect("XFS project allocator lock poisoned");
         let project_id = next_free_project(allocator.next, &allocator.active)
             .ok_or_else(no_reusable_projects)?;
-        allocator.active.insert(project_id, owner.to_path_buf());
+        allocator.active.insert(project_id, owner.into());
         allocator.next = project_after(project_id);
         Ok(project_id)
     }
@@ -829,10 +829,10 @@ impl ManagedProvisioning {
 }
 
 /// The project that `owner` holds in `active`, if any.
-fn project_of_owner(active: &HashMap<NonZeroU32, PathBuf>, owner: &Path) -> Option<NonZeroU32> {
+fn project_of_owner(active: &HashMap<NonZeroU32, Box<Path>>, owner: &Path) -> Option<NonZeroU32> {
     active
         .iter()
-        .find_map(|(project_id, active_owner)| (active_owner == owner).then_some(*project_id))
+        .find_map(|(project_id, active_owner)| (&**active_owner == owner).then_some(*project_id))
 }
 
 /// What a reservation of an existing project finds in the active reservations.
@@ -848,12 +848,12 @@ enum ExistingReservation<'a> {
 
 /// What a reservation of `project_id` for `owner` finds in `active`.
 fn existing_reservation<'a>(
-    active: &'a HashMap<NonZeroU32, PathBuf>,
+    active: &'a HashMap<NonZeroU32, Box<Path>>,
     project_id: NonZeroU32,
     owner: &Path,
 ) -> ExistingReservation<'a> {
     match active.get(&project_id) {
-        Some(active_owner) if active_owner == owner => ExistingReservation::Held,
+        Some(active_owner) if &**active_owner == owner => ExistingReservation::Held,
         Some(active_owner) => ExistingReservation::HeldByOther(active_owner),
         None => ExistingReservation::Free,
     }
@@ -861,7 +861,7 @@ fn existing_reservation<'a>(
 
 /// The first project that `active` does not hold, scanning from `next` (0 counts as 1) up to
 /// `u32::MAX`, and then from 1 up to the start. `None` when every project is held.
-fn next_free_project(next: u32, active: &HashMap<NonZeroU32, PathBuf>) -> Option<NonZeroU32> {
+fn next_free_project(next: u32, active: &HashMap<NonZeroU32, Box<Path>>) -> Option<NonZeroU32> {
     let first = next.max(1);
     (first..=u32::MAX)
         .chain(1..first)
@@ -875,8 +875,8 @@ fn project_after(project_id: NonZeroU32) -> u32 {
     project_id.get().checked_add(1).unwrap_or(1)
 }
 
-/// Whether the reservation loop got back to `first`, the first candidate it reserved, so it saw
-/// every project that no other owner holds.
+/// Whether the reservation loop got back to `first`, the first candidate it reserved, so it went
+/// once around the project ids.
 fn candidate_repeats(first: Option<NonZeroU32>, candidate: NonZeroU32) -> bool {
     first == Some(candidate)
 }
@@ -1944,10 +1944,10 @@ mod tests {
         NonZeroU32::new(id).unwrap()
     }
 
-    fn reservations(entries: &[(u32, &str)]) -> HashMap<NonZeroU32, PathBuf> {
+    fn reservations(entries: &[(u32, &str)]) -> HashMap<NonZeroU32, Box<Path>> {
         entries
             .iter()
-            .map(|(id, owner)| (project(*id), PathBuf::from(owner)))
+            .map(|(id, owner)| (project(*id), Box::<Path>::from(Path::new(owner))))
             .collect()
     }
 
