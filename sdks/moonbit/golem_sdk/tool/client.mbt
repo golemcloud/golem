@@ -63,12 +63,16 @@ priv struct ToolInvocationObserver[E] {
   result_lock : @async-core.Mutex
   cached_result : Ref[Result[@toolCommon.InvocationResult, ToolError[E]]?]
   drive_started : Ref[Bool]
+  detached : Ref[Bool]
 }
 
 ///|
 async fn[E] ToolInvocationObserver::get(
   self : ToolInvocationObserver[E],
 ) -> Result[@toolCommon.InvocationResult, ToolError[E]] {
+  if self.detached.val {
+    return Err(tool_protocol_error("result observer was detached"))
+  }
   self.drive_started.val = true
   self.result_lock.acquire()
   defer self.result_lock.release()
@@ -87,11 +91,19 @@ async fn[E] ToolInvocationObserver::get(
 
 ///|
 fn[E] ToolInvocationObserver::drive(self : ToolInvocationObserver[E]) -> Unit {
-  if self.drive_started.val {
+  if self.drive_started.val || self.detached.val {
     return
   }
   self.drive_started.val = true
   @async-core.spawn_component_task_current(async fn() { ignore(self.get()) })
+}
+
+///|
+fn[E] ToolInvocationObserver::detach(self : ToolInvocationObserver[E]) -> Unit {
+  if !self.detached.val {
+    self.detached.val = true
+    self.future.drop()
+  }
 }
 
 ///|
@@ -135,6 +147,15 @@ pub fn[T, E] TypedToolInvocation::cancel(
 }
 
 ///|
+/// Stops observing the structured result without cancelling the accepted
+/// invocation or closing its output streams.
+pub fn[T, E] TypedToolInvocation::detach_result_observer(
+  self : TypedToolInvocation[T, E],
+) -> Unit {
+  self.invocation.detach_result_observer()
+}
+
+///|
 pub fn[T, E] TypedToolInvocation::drop(
   self : TypedToolInvocation[T, E],
 ) -> Unit {
@@ -165,7 +186,18 @@ pub async fn[T, E] TypedToolInvocation::collect(
 
 ///|
 pub fn[E] ToolInvocation::cancel(self : ToolInvocation[E]) -> Unit {
-  self.observer.future.cancel()
+  if !self.observer.detached.val {
+    self.observer.future.cancel()
+  }
+}
+
+///|
+/// Stops observing the structured result without cancelling the accepted
+/// invocation or closing its output streams.
+pub fn[E] ToolInvocation::detach_result_observer(
+  self : ToolInvocation[E],
+) -> Unit {
+  self.observer.detach()
 }
 
 ///|
@@ -184,7 +216,7 @@ pub fn[E] ToolInvocation::stderr_stream(
 
 ///|
 pub fn[E] ToolInvocation::drop(self : ToolInvocation[E]) -> Unit {
-  self.observer.future.drop()
+  self.observer.detach()
   match self.stdout_source {
     Some(source) => source.drop_sync()
     None => ()
@@ -335,6 +367,7 @@ pub fn[E] ToolClient::start(
     result_lock: @async-core.Mutex(),
     cached_result: Ref(None),
     drive_started: Ref(false),
+    detached: Ref(false),
   }
   let output = stdout_source.map(stream => {
     invocation_stdout(stream, () => observer.drive())

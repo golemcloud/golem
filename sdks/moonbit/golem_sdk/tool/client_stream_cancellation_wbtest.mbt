@@ -167,6 +167,38 @@ test "dropping a raw result observer does not cancel its output reader" {
 }
 
 ///|
+test "detaching a generated invocation result preserves its output reader" {
+  reset_tool_client_resource_drop_counts()
+  set_tool_client_host_mode(2)
+  defer set_tool_client_host_mode(0)
+  run_tool_client_stream_async(async fn() {
+    let created : Result[ToolClient, ToolError[NoToolError]] = ToolClient::try_new(
+      "terminal-test",
+    )
+    let client = match created {
+      Ok(client) => client
+      Err(_) => fail("failed to create tool client")
+    }
+    defer client.drop()
+    let invocation = start_output_invocation(client)
+    invocation.detach_result_observer()
+    assert_eq(tool_client_resource_drop_count(4), 1)
+    assert_eq(tool_client_resource_drop_count(5), 0)
+    assert_eq(tool_client_resource_drop_count(6), 0)
+    match invocation.get() {
+      Err(ToolError::Rpc(RpcError::Protocol("result observer was detached"))) =>
+        ()
+      _ => fail("detached invocation result remained observable")
+    }
+    invocation.cancel()
+    assert_eq(tool_client_resource_drop_count(5), 0)
+    invocation.drop()
+  })
+  assert_eq(tool_client_resource_drop_count(4), 1)
+  assert_eq(tool_client_resource_drop_count(6), 1)
+}
+
+///|
 test "cancelling a blocked output read preserves the result observer" {
   reset_tool_client_resource_drop_counts()
   set_tool_client_host_mode(3)

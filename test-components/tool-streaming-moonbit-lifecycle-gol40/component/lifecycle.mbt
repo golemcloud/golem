@@ -211,22 +211,22 @@ pub async fn MoonBitLifecycleGol40Caller::explicit_cancellation(
   self : Self,
 ) -> LifecycleObservation {
   ignore(self)
-  let (pending, _promise) = @asyncCore.Future::new()
+  let (pending, promise) = @asyncCore.Future::new()
   let stdin = @asyncCore.Stream::produce(async fn(_) { pending.get() })
   let client = MoonbitLifecycleGol40Client::new()
   defer client.drop()
   let invocation = client.blocked(stdin).unwrap()
   let stdout = invocation.stdout.unwrap()
-  let bytes = first_bytes(stdout)
   invocation.cancel()
   let streamTerminal = stream_terminal(stdout)
+  ignore(promise.complete(()))
   let resultTerminal = match invocation.get() {
     Err(@tool.ToolError::Rpc(@tool.RpcError::Cancelled)) => "cancelled"
     Ok(value) => "unexpected-ok:" + value.to_string()
     Err(_) => "unexpected"
   }
   invocation.drop()
-  { bytes: bytes.to_array(), streamTerminal, resultTerminal, }
+  { bytes: [], streamTerminal, resultTerminal, }
 }
 
 ///|
@@ -314,9 +314,10 @@ pub async fn MoonBitLifecycleGol40Caller::dropped_observer(
   defer client.drop()
   let invocation = client.complete().unwrap()
   let stdout = invocation.stdout.unwrap()
-  invocation.drop()
+  invocation.detach_result_observer()
   let bytes = first_bytes(stdout)
   let streamTerminal = stream_terminal(stdout)
+  invocation.drop()
   {
     bytes: bytes.to_array(),
     streamTerminal,

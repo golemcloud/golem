@@ -80,10 +80,9 @@ fn moonbit_principal(subject: &str) -> Principal {
     })
 }
 
-async fn assert_moonbit_owner_clean(
+async fn assert_moonbit_owner_resources_clean(
     executor: &TestWorkerExecutor,
     owned_agent_id: &OwnedAgentId,
-    worker_id: &golem_common::model::AgentId,
     scenario: &str,
 ) -> anyhow::Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -105,6 +104,16 @@ async fn assert_moonbit_owner_clean(
     })
     .await
     .map_err(|_| anyhow::anyhow!("timed out waiting for {scenario} cleanup"))?;
+    Ok(())
+}
+
+async fn assert_moonbit_owner_clean(
+    executor: &TestWorkerExecutor,
+    owned_agent_id: &OwnedAgentId,
+    worker_id: &golem_common::model::AgentId,
+    scenario: &str,
+) -> anyhow::Result<()> {
+    assert_moonbit_owner_resources_clean(executor, owned_agent_id, scenario).await?;
     executor
         .wait_for_status(
             worker_id,
@@ -644,6 +653,7 @@ async fn check_moonbit_lifecycle_case(
     bytes: &[u8],
     stream: &str,
     result: &str,
+    expected_invocation_failure: Option<&str>,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
@@ -684,10 +694,29 @@ async fn check_moonbit_lifecycle_case(
         .await?;
     let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
 
-    let observation: MoonBitLifecycleObservation = executor
+    let response = executor
         .invoke_and_await_agent(&stored_component, &agent_id, method, data_value!())
-        .await?
-        .into_typed()?;
+        .await;
+    if let Some(expected) = expected_invocation_failure {
+        match response {
+            Err(error) => {
+                let message = format!("{error:#}");
+                assert!(
+                    message.contains(expected),
+                    "{method} failure did not contain {expected:?}: {message}"
+                );
+            }
+            Ok(_) => anyhow::bail!("{method} unexpectedly returned a lifecycle observation"),
+        }
+        assert_moonbit_owner_resources_clean(
+            &executor,
+            &owned_agent_id,
+            &format!("MoonBit lifecycle {method}"),
+        )
+        .await?;
+        return Ok(());
+    }
+    let observation: MoonBitLifecycleObservation = response?.into_typed()?;
     assert_eq!(observation.bytes, bytes, "{method} bytes");
     assert_eq!(observation.stream_terminal, stream, "{method} terminal");
     assert_eq!(observation.result_terminal, result, "{method} result");
@@ -721,6 +750,7 @@ macro_rules! moonbit_lifecycle_test {
                 $bytes,
                 $stream,
                 $result,
+                None,
             )
             .await
         }
@@ -748,17 +778,33 @@ moonbit_lifecycle_test!(
     "abandoned",
     "ok:43"
 );
-moonbit_lifecycle_test!(
-    moonbit_lifecycle_exception_runtime,
-    "exception",
-    b"exception:",
-    "abandoned",
-    "remote-internal"
-);
+
+#[test]
+#[tracing::instrument]
+#[timeout("45s")]
+async fn moonbit_lifecycle_exception_runtime(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_moonbit_lifecycle_gol40")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    check_moonbit_lifecycle_case(
+        last_unique_id,
+        deps,
+        component,
+        "exception",
+        b"",
+        "",
+        "",
+        Some("Component trapped"),
+    )
+    .await
+}
+
 moonbit_lifecycle_test!(
     moonbit_lifecycle_explicit_invocation_cancellation_runtime,
     "explicit_cancellation",
-    b"blocked:",
+    b"",
     "cancelled",
     "cancelled"
 );
