@@ -1,10 +1,117 @@
 import { describe, expect, it } from "@effect/vitest"
+import { vi } from "vitest"
+import fixtures from "../../../test-data/snapshot-multipart/framing.json" with { type: "json" }
 import { decodeMultipart, encodeMultipart, extractBoundary } from "../src/internal/multipart.js"
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s)
 const dec = (b: Uint8Array): string => new TextDecoder().decode(b)
 
 describe("multipart encode/decode", () => {
+  const boundary = "b"
+  const header =
+    'Content-Type: application/octet-stream\r\nContent-Disposition: attachment; name="part:index"\r\n'
+  const wire = `--b\r\n${header}\r\nX\r\n--b--\r\n`
+
+  for (const bad of [
+    wire.slice(0, -7),
+    wire + "epilogue",
+    wire + "\r\n",
+    "preamble" + wire,
+    "\r\n\r\n" + wire,
+    wire.replace("--b\r\n", "--bextra\r\n"),
+    wire.replace("--b--\r\n", "--b--extra\r\n"),
+    wire.replace(header, header + "content-type: text/plain\r\n"),
+    wire.replace(header, header + 'CONTENT-DISPOSITION: attachment; name="other"\r\n'),
+    wire.replace('name="part:index"', 'name="part:index"; name="other"'),
+    wire.replace(header, header + "Content-Transfer-Encoding: base64\r\n"),
+    wire.replace("application/octet-stream", "application/\roctet-stream"),
+  ]) {
+    it(`rejects malformed framing/header ${JSON.stringify(bad)}`, () => {
+      expect(() => decodeMultipart(enc(bad), boundary)).toThrow()
+    })
+  }
+
+  it("accepts exactly one leading framing newline and closing EOF", () => {
+    expect(dec(decodeMultipart(enc("\r\n" + wire.slice(0, -2)), boundary)[0]!.body)).toBe("X")
+  })
+
+  it("round-trips every byte, including 0 and 255", () => {
+    const body = Uint8Array.from({ length: 256 }, (_, i) => i)
+    const encoded = encodeMultipart([
+      { name: "part:__proto__", contentType: "application/octet-stream", body },
+    ])
+    expect(decodeMultipart(encoded.data, encoded.boundary)[0]!.body).toEqual(body)
+  })
+
+  for (const payload of [
+    "--B\r\ninside",
+    "inside\r\n--B\r\nend",
+    "inside\r\n--B",
+    "--B--",
+    "inside\r\n--B--",
+  ]) {
+    it(`regenerates a forced collision ${JSON.stringify(payload)}`, () => {
+      const first = "11111111111111111111111111111111"
+      const second = "22222222222222222222222222222222"
+      const random = vi
+        .spyOn(crypto, "randomUUID")
+        .mockReturnValueOnce("11111111-1111-1111-1111-111111111111")
+        .mockReturnValue("22222222-2222-2222-2222-222222222222")
+      try {
+        const body = enc(payload.replace(/B/g, first))
+        const encoded = encodeMultipart([
+          { name: "part:index", contentType: "application/octet-stream", body },
+        ])
+        expect(encoded.boundary).toBe(second)
+        expect(decodeMultipart(encoded.data, encoded.boundary)[0]!.body).toEqual(body)
+      } finally {
+        random.mockRestore()
+      }
+    })
+  }
+
+  it("rejects header injection while encoding", () => {
+    expect(() =>
+      encodeMultipart([
+        { name: 'bad"\r\nInjected: yes', contentType: "text/plain", body: enc("") },
+      ]),
+    ).toThrow()
+    expect(() =>
+      encodeMultipart([
+        { name: "part:index", contentType: "text/plain\r\nInjected: yes", body: enc("") },
+      ]),
+    ).toThrow()
+  })
+
+  for (const mime of [
+    "multipart/mixedextra; boundary=b",
+    "multipart/mixed; boundary=b; boundary=b",
+    'multipart/mixed; boundary="b',
+    "multipart/mixed; boundary=",
+    'multipart/mixed; boundary="b c"',
+    "multipart/mixed; boundary=" + "b".repeat(71),
+  ]) {
+    it(`rejects invalid boundary MIME ${mime}`, () => expect(extractBoundary(mime)).toBeNull())
+  }
+
+  for (const fixture of fixtures.valid) {
+    it(`shared framing: ${fixture.name}`, () => {
+      const e = fixture.newline
+      const data = enc(
+        `--${fixtures.boundary}${e}Content-Type: application/octet-stream${e}Content-Disposition: attachment; name="part:index"${e}${e}${fixture.payload}${e}--${fixtures.boundary}--${e}`,
+      )
+      expect(Array.from(decodeMultipart(data, fixtures.boundary)[0]!.body)).toEqual(
+        fixture.hex.match(/../g)?.map((b) => parseInt(b, 16)) ?? [],
+      )
+    })
+  }
+
+  it("requires a closing delimiter", () => {
+    const raw =
+      '--b\r\nContent-Type: application/json\r\nContent-Disposition: attachment; name="state"\r\n\r\n{}'
+    expect(() => decodeMultipart(enc(raw), "b")).toThrow()
+  })
+
   it("round-trips a single text part", () => {
     const parts = [{ name: "state", contentType: "application/json", body: enc('{"x":1}') }]
     const { data, boundary } = encodeMultipart(parts)

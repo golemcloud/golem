@@ -25,22 +25,31 @@ pub struct MultipartPart<'a> {
 
 /// Extracts the boundary parameter from a `multipart/mixed; boundary=...` content-type string.
 pub fn extract_boundary(content_type: &str) -> Option<&str> {
-    let ct = content_type.strip_prefix("multipart/mixed")?;
-    let rest = ct.trim_start();
-    let rest = rest.strip_prefix(';')?;
-    let rest = rest.trim_start();
-    for param in rest.split(';') {
-        let param = param.trim();
-        if let Some(value) = param.strip_prefix("boundary=") {
-            let value = value.trim();
-            // Remove optional quotes
-            if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
-                return Some(&value[1..value.len() - 1]);
-            }
-            return Some(value);
-        }
+    let mut sections = content_type.split(';');
+    if !sections
+        .next()?
+        .trim()
+        .eq_ignore_ascii_case("multipart/mixed")
+    {
+        return None;
     }
-    None
+    let (key, value) = sections.next()?.split_once('=')?;
+    if sections.next().is_some() || !key.trim().eq_ignore_ascii_case("boundary") {
+        return None;
+    }
+    let value = value.trim();
+    let value = if value.starts_with('"') {
+        value.strip_prefix('"')?.strip_suffix('"')?
+    } else {
+        if !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"'+_.-".contains(&b))
+        {
+            return None;
+        }
+        value
+    };
+    valid_boundary(value).then_some(value)
 }
 
 /// Parses a multipart/mixed body into its constituent parts.
@@ -48,134 +57,127 @@ pub fn extract_boundary(content_type: &str) -> Option<&str> {
 /// The `boundary` should be extracted from the Content-Type header using `extract_boundary`.
 /// Returns `None` if the body cannot be parsed.
 pub fn parse_multipart_mixed<'a>(boundary: &str, data: &'a [u8]) -> Option<Vec<MultipartPart<'a>>> {
-    let delimiter = format!("--{boundary}");
-    let close_delimiter = format!("--{boundary}--");
-
-    let delimiter_bytes = delimiter.as_bytes();
-    let close_delimiter_bytes = close_delimiter.as_bytes();
-
+    if !valid_boundary(boundary) {
+        return None;
+    }
+    let marker = format!("--{boundary}");
+    let marker = marker.as_bytes();
+    let start = if data.starts_with(b"\r\n") {
+        2
+    } else if data.starts_with(b"\n") {
+        1
+    } else {
+        0
+    };
+    let suffix = start + marker.len();
+    let suffix = if data.get(suffix..suffix + 2) == Some(b"--") {
+        suffix + 2
+    } else {
+        suffix
+    };
+    let newline: &[u8] =
+        if data.get(suffix..suffix + 2) == Some(b"\r\n") || (suffix == data.len() && start == 2) {
+            b"\r\n"
+        } else {
+            b"\n"
+        };
+    if start != 0 && start != newline.len() {
+        return None;
+    }
+    let (mut pos, mut closing) = delimiter_at(data, marker, newline, start)?;
     let mut parts = Vec::new();
-    let mut pos = 0;
-
-    // Skip preamble: find the first delimiter
-    pos = find_bytes(data, pos, delimiter_bytes)?;
-    pos += delimiter_bytes.len();
-
-    // Skip CRLF or LF after delimiter
-    pos = skip_line_ending(data, pos);
-
-    loop {
-        // Check if we've hit the close delimiter
-        if data[pos..].starts_with(close_delimiter_bytes) {
-            break;
-        }
-
-        // Find the end of headers (empty line)
-        let header_end = find_empty_line(data, pos)?;
-        let headers_slice = &data[pos..header_end];
-        let headers_str = std::str::from_utf8(headers_slice).ok()?;
-
-        // Parse headers
+    let mut names = std::collections::HashSet::new();
+    while !closing {
         let mut name = None;
         let mut content_type = None;
-        for line in headers_str.lines() {
-            let line = line.trim();
-            if let Some(ct) = line.strip_prefix("Content-Type:") {
-                content_type = Some(ct.trim().to_string());
-            } else if let Some(cd) = line.strip_prefix("Content-Disposition:") {
-                // Extract name="..." parameter
-                if let Some(name_start) = cd.find("name=\"") {
-                    let rest = &cd[name_start + 6..];
-                    if let Some(name_end) = rest.find('"') {
-                        name = Some(rest[..name_end].to_string());
+        let mut headers = std::collections::HashSet::new();
+        loop {
+            let end = data[pos..].iter().position(|b| *b == b'\n')? + pos;
+            let line = data[pos..end]
+                .strip_suffix(b"\r")
+                .unwrap_or(&data[pos..end]);
+            pos = end + 1;
+            if line.is_empty() {
+                break;
+            }
+            if !line.iter().all(|b| (32..=126).contains(b)) || line[0] == b' ' {
+                return None;
+            }
+            let line = std::str::from_utf8(line).ok()?;
+            let (key, value) = line.split_once(':')?;
+            let key = key.to_ascii_lowercase();
+            if !headers.insert(key.clone()) {
+                return None;
+            }
+            let value = value.trim();
+            match key.as_str() {
+                "content-type" => content_type = Some(value.to_string()),
+                "content-disposition" => {
+                    let (disposition, parameter) = value.split_once(';')?;
+                    if !disposition.eq_ignore_ascii_case("attachment") {
+                        return None;
                     }
+                    let (key, value) = parameter.trim().split_once('=')?;
+                    if !key.eq_ignore_ascii_case("name") {
+                        return None;
+                    }
+                    let value = value.strip_prefix('"')?.strip_suffix('"')?;
+                    if value.is_empty() || value.contains(['"', '\\']) {
+                        return None;
+                    }
+                    name = Some(value.to_string());
                 }
+                // The renderer is generic: no SDK namespace or state-envelope policy.
+                _ => {}
             }
         }
-
-        // Body starts after the empty line
-        let body_start = skip_empty_line(data, header_end);
-
-        // Find the next delimiter
-        let body_end = find_bytes(data, body_start, delimiter_bytes)?;
-
-        // Strip trailing CRLF or LF before the delimiter
-        let body_end = strip_trailing_line_ending(data, body_start, body_end);
-
+        if let Some(name) = &name {
+            if !names.insert(name.clone()) {
+                return None;
+            }
+        }
+        let (body_end, next_pos, next_closing) = (pos..data.len()).find_map(|i| {
+            if data[i..].starts_with(newline) {
+                delimiter_at(data, marker, newline, i + newline.len())
+                    .map(|(end, closing)| (i, end, closing))
+            } else {
+                None
+            }
+        })?;
         parts.push(MultipartPart {
             name,
             content_type,
-            body: &data[body_start..body_end],
+            body: &data[pos..body_end],
         });
-
-        // Move past the delimiter
-        pos = body_end;
-        // Skip the line ending before the delimiter
-        pos = skip_line_ending(data, pos);
-        pos = find_bytes(data, pos, delimiter_bytes)?;
-        pos += delimiter_bytes.len();
-        // Check for close delimiter suffix
-        if data.get(pos..pos + 2) == Some(b"--") {
-            break;
-        }
-        pos = skip_line_ending(data, pos);
+        pos = next_pos;
+        closing = next_closing;
     }
-
-    Some(parts)
+    (pos == data.len()).then_some(parts)
 }
 
-fn find_bytes(haystack: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
-    haystack[start..]
-        .windows(needle.len())
-        .position(|w| w == needle)
-        .map(|p| p + start)
+fn valid_boundary(boundary: &str) -> bool {
+    !boundary.is_empty()
+        && boundary.len() <= 70
+        && boundary
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"'()+_,./:=?-".contains(&b))
 }
 
-fn skip_line_ending(data: &[u8], pos: usize) -> usize {
-    if data.get(pos..pos + 2) == Some(b"\r\n") {
-        pos + 2
-    } else if data.get(pos) == Some(&b'\n') {
-        pos + 1
+fn delimiter_at(data: &[u8], marker: &[u8], newline: &[u8], pos: usize) -> Option<(usize, bool)> {
+    if !data.get(pos..)?.starts_with(marker) {
+        return None;
+    }
+    let mut end = pos + marker.len();
+    let closing = data[end..].starts_with(b"--");
+    if closing {
+        end += 2;
+    }
+    if data[end..].starts_with(newline) {
+        Some((end + newline.len(), closing))
+    } else if closing && end == data.len() {
+        Some((end, closing))
     } else {
-        pos
-    }
-}
-
-fn find_empty_line(data: &[u8], start: usize) -> Option<usize> {
-    // Look for \r\n\r\n or \n\n
-    for i in start..data.len().saturating_sub(1) {
-        if data[i] == b'\n' && data[i + 1] == b'\n' {
-            return Some(i);
-        }
-        if i + 3 < data.len()
-            && data[i] == b'\r'
-            && data[i + 1] == b'\n'
-            && data[i + 2] == b'\r'
-            && data[i + 3] == b'\n'
-        {
-            return Some(i);
-        }
-    }
-    None
-}
-
-fn skip_empty_line(data: &[u8], pos: usize) -> usize {
-    if data.get(pos..pos + 4) == Some(b"\r\n\r\n") {
-        pos + 4
-    } else if data.get(pos..pos + 2) == Some(b"\n\n") {
-        pos + 2
-    } else {
-        pos
-    }
-}
-
-fn strip_trailing_line_ending(data: &[u8], body_start: usize, body_end: usize) -> usize {
-    if body_end >= body_start + 2 && data[body_end - 2] == b'\r' && data[body_end - 1] == b'\n' {
-        body_end - 2
-    } else if body_end > body_start && data[body_end - 1] == b'\n' {
-        body_end - 1
-    } else {
-        body_end
+        None
     }
 }
 
@@ -183,6 +185,78 @@ fn strip_trailing_line_ending(data: &[u8], body_start: usize, body_end: usize) -
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn rejects_malformed_framing_and_duplicate_headers() {
+        let header = "Content-Type: application/octet-stream\r\nContent-Disposition: attachment; name=\"part:index\"\r\n";
+        let wire = format!("--b\r\n{header}\r\nX\r\n--b--\r\n");
+        for bad in [
+            wire[..wire.len() - 7].to_string(),
+            format!("{wire}epilogue"),
+            format!("{wire}\r\n"),
+            format!("preamble{wire}"),
+            format!("\r\n\r\n{wire}"),
+            wire.replace("--b\r\n", "--bextra\r\n"),
+            wire.replace("--b--\r\n", "--b--extra\r\n"),
+            wire.replace(header, &format!("{header}content-type: text/plain\r\n")),
+            wire.replace(
+                header,
+                &format!("{header}CONTENT-DISPOSITION: attachment; name=\"other\"\r\n"),
+            ),
+            wire.replace("name=\"part:index\"", "name=\"part:index\"; name=\"other\""),
+            wire.replace("application/octet-stream", "application/\roctet-stream"),
+        ] {
+            assert!(
+                parse_multipart_mixed("b", bad.as_bytes()).is_none(),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            parse_multipart_mixed(
+                "b",
+                format!("\r\n{}", wire.trim_end_matches("\r\n")).as_bytes()
+            )
+            .unwrap()[0]
+                .body,
+            b"X"
+        );
+    }
+
+    #[test]
+    fn preserves_every_byte_and_generic_parts_without_sdk_metadata() {
+        let expected: Vec<u8> = (0..=255).collect();
+        let mut wire = b"--b\r\nX-Extra: generic\r\n\r\n".to_vec();
+        wire.extend_from_slice(&expected);
+        wire.extend_from_slice(b"\r\n--b--");
+        let parts = parse_multipart_mixed("b", &wire).unwrap();
+        assert_eq!(parts[0].body, expected);
+        assert_eq!(parts[0].name, None);
+        assert_eq!(parts[0].content_type, None);
+    }
+
+    #[test]
+    fn shared_framing_preserves_payload_bytes() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../test-data/snapshot-multipart/framing.json"
+        ))
+        .unwrap();
+        let boundary = fixtures["boundary"].as_str().unwrap();
+        for fixture in fixtures["valid"].as_array().unwrap() {
+            let e = fixture["newline"].as_str().unwrap();
+            let payload = fixture["payload"].as_str().unwrap();
+            let wire = format!(
+                "--{boundary}{e}Content-Type: application/octet-stream{e}Content-Disposition: attachment; name=\"part:index\"{e}{e}{payload}{e}--{boundary}--{e}"
+            );
+            let hex = fixture["hex"].as_str().unwrap();
+            let expected: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            let parts = parse_multipart_mixed(boundary, wire.as_bytes()).unwrap();
+            assert_eq!(parts.len(), 1, "{}", fixture["name"]);
+            assert_eq!(parts[0].body, expected, "{}", fixture["name"]);
+        }
+    }
 
     #[test]
     fn test_extract_boundary() {
