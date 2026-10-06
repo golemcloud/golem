@@ -1270,7 +1270,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     /// Skips the automatic snapshot entry at `index` until a start prepares the agent with
-    /// success: its payload or its filesystem snapshot could not be read.
+    /// success, or until a new startup attempt begins: its payload or its filesystem snapshot
+    /// could not be read.
     pub(crate) fn mark_periodic_unavailable(&self, index: OplogIndex) {
         self.update_exclusions(|exclusions| exclusions.with_unavailable(index), |_| ());
     }
