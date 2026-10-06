@@ -479,6 +479,7 @@ async fn audit_3_crash_after_sink_commit_retries_same_key_deduplicates_and_repla
     );
     invocation.abort();
     let _ = invocation.await;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
 
     executor = start_with_overrides(

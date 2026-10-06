@@ -1461,6 +1461,7 @@ async fn shipped_audit_sink_deduplicates_crash_after_commit_and_keeps_pinned_pol
     );
     invocation.abort();
     let _ = invocation.await;
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
     executor = start_with_overrides(deps, &context, overrides).await?;
     let result: String = executor
