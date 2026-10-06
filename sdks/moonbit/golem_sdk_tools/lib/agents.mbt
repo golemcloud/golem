@@ -148,6 +148,7 @@ pub(all) struct AgentInfo {
   methods : Array[MethodInfo]
   has_init : Bool
   has_snapshottable : Bool
+  has_multipart_snapshottable : Bool
   has_json_derives : Bool
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
@@ -1310,17 +1311,23 @@ fn extract_return_type(
 fn validate_snapshot_loader(
   fun_decl : @syntax.FunDecl,
   agent_name : String,
+  multipart? : Bool = false,
 ) -> Unit raise AgentParseError {
-  let expected_signature = "\{agent_name}::load_snapshot(Bytes, @agents.SnapshotRestoreContext) -> Result[\{agent_name}, String]"
+  let loader = if multipart {
+    "async \{agent_name}::load_snapshot_parts(@agents.MultipartSnapshot"
+  } else {
+    "\{agent_name}::load_snapshot(Bytes"
+  }
+  let expected_signature = "\{loader}, @agents.SnapshotRestoreContext) -> Result[\{agent_name}, String]"
   let invalid_signature = fn() raise AgentParseError {
     raise AgentParseError(
       "Snapshot loader must have signature '\{expected_signature}'",
     )
   }
   if !(fun_decl.vis is Pub(..)) ||
-    fun_decl.is_async is Some(_) ||
+    (fun_decl.is_async is Some(_)) != multipart ||
     !fun_decl.quantifiers.is_empty() ||
-    !(fun_decl.error_type is @syntax.ErrorType::NoErrorType) {
+    (!multipart && !(fun_decl.error_type is @syntax.ErrorType::NoErrorType)) {
     invalid_signature()
   }
   let params : Array[ParamType] = []
@@ -1339,7 +1346,8 @@ fn validate_snapshot_loader(
     }
   }
   guard params.length() == 2 &&
-    params[0] == Simple("Bytes") &&
+    params[0] ==
+    Simple(if multipart { "@agents.MultipartSnapshot" } else { "Bytes" }) &&
     params[1] == Simple("@agents.SnapshotRestoreContext") else {
     invalid_signature()
   }
@@ -1370,6 +1378,8 @@ pub fn parse_agents(
   let agent_methods : Map[String, Array[MethodInfo]] = Map([])
   let agent_snapshot_savers : Map[String, Bool] = Map([])
   let agent_snapshot_loaders : Map[String, Bool] = Map([])
+  let agent_multipart_savers : Map[String, Bool] = Map([])
+  let agent_multipart_loaders : Map[String, Bool] = Map([])
   let agent_json_derives : Map[String, Bool] = Map([])
   let agent_fields : Map[String, Array[(String, Bool)]] = Map([])
   let agent_mounts : Map[String, HttpMountInfo?] = Map([])
@@ -1538,6 +1548,13 @@ pub fn parse_agents(
               } else if fun_decl.name.name == "load_snapshot" {
                 validate_snapshot_loader(fun_decl, name)
                 agent_snapshot_loaders[name] = true
+              } else if fun_decl.name.name == "load_snapshot_parts" {
+                validate_snapshot_loader(fun_decl, name, multipart=true)
+                agent_multipart_loaders[name] = true
+              } else if fun_decl.name.name == "save_snapshot_parts" {
+                raise AgentParseError(
+                  "Multipart save_snapshot_parts must implement @agents.MultipartSnapshottable",
+                )
               } else if fun_decl.vis is Pub(..) {
                 // Public method — check if first param is Self
                 let mut is_method = false
@@ -1618,13 +1635,21 @@ pub fn parse_agents(
           Ident(name~) => name == "Snapshottable"
           Dot(pkg~, id~) => id == "Snapshottable" && pkg == "agents"
         }
-        if is_snapshottable {
+        let is_multipart = match trait_.name {
+          Ident(name~) => name == "MultipartSnapshottable"
+          Dot(pkg~, id~) => id == "MultipartSnapshottable" && pkg == "agents"
+        }
+        if is_snapshottable || is_multipart {
           match self_ty {
             Some(Name(constr_id~, ..)) =>
               match constr_id.id {
                 Ident(name~) =>
                   if agent_names.contains(name) {
-                    agent_snapshot_savers[name] = true
+                    if is_multipart {
+                      agent_multipart_savers[name] = true
+                    } else {
+                      agent_snapshot_savers[name] = true
+                    }
                   }
                 _ => ()
               }
@@ -1640,6 +1665,20 @@ pub fn parse_agents(
   for name, description in agent_names {
     let has_snapshot_saver = agent_snapshot_savers.get(name).unwrap_or(false)
     let has_snapshot_loader = agent_snapshot_loaders.get(name).unwrap_or(false)
+    let has_multipart = agent_multipart_savers.get(name).unwrap_or(false)
+    let has_multipart_loader = agent_multipart_loaders
+      .get(name)
+      .unwrap_or(false)
+    if has_multipart != has_multipart_loader {
+      raise AgentParseError(
+        "Agent '\{name}' must define both @agents.MultipartSnapshottable and static async load_snapshot_parts",
+      )
+    }
+    if has_multipart && (has_snapshot_saver || has_snapshot_loader) {
+      raise AgentParseError(
+        "Agent '\{name}' cannot combine byte and multipart snapshot hooks",
+      )
+    }
     if has_snapshot_saver != has_snapshot_loader {
       raise AgentParseError(
         "Agent '\{name}' must define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
@@ -1647,7 +1686,10 @@ pub fn parse_agents(
     }
     let snapshotting = agent_snapshotting.get(name).unwrap_or(Disabled)
     let has_json_derives = agent_json_derives.get(name).unwrap_or(false)
-    if !(snapshotting is Disabled) && !has_json_derives && !has_snapshot_saver {
+    if !(snapshotting is Disabled) &&
+      !has_json_derives &&
+      !has_snapshot_saver &&
+      !has_multipart {
       raise AgentParseError(
         "Agent '\{name}' has enabled snapshotting but must derive both ToJson and FromJson or define both an @agents.Snapshottable save_snapshot implementation and a static load_snapshot factory",
       )
@@ -1669,6 +1711,7 @@ pub fn parse_agents(
           methods: agent_methods.get(name).unwrap_or([]),
           has_init,
           has_snapshottable: has_snapshot_saver,
+          has_multipart_snapshottable: has_multipart,
           has_json_derives,
           fields: agent_fields.get(name).unwrap_or([]),
           http_mount: agent_mounts

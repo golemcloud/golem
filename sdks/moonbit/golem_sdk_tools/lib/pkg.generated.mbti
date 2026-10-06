@@ -163,6 +163,7 @@ pub(all) struct AgentInfo {
   methods : Array[MethodInfo]
   has_init : Bool
   has_snapshottable : Bool
+  has_multipart_snapshottable : Bool
   has_json_derives : Bool
   fields : Array[(String, Bool)]
   http_mount : HttpMountInfo?
