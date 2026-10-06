@@ -861,6 +861,64 @@ async fn a_replayed_time_of_a_directory_that_holds_initial_files_keeps_a_tree_of
 
 #[test]
 #[timeout("60s")]
+async fn a_time_that_the_agent_sets_with_a_size_on_a_removed_file_still_gives_a_copy() {
+    let agents = UnmanagedAgents::new().await;
+    let (_, filesystem) = read_only_agent(&agents, "chosen-file-time", &[]).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
+    assert_eq!(
+        write_file(&generation_handle, Ok(at("temporary.txt")), b"gone").await,
+        StepOutcome::Done
+    );
+    let opened = open(
+        &generation_handle,
+        at("temporary.txt"),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Write,
+            follow: Follow::No,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    set_attributes(
+        &generation_handle,
+        Target::Open(&opened.node),
+        AttributeChanges::File {
+            size: 4,
+            times: TimeChanges {
+                accessed: TimeChange::Keep,
+                modified: TimeChange::Set(
+                    std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000),
+                ),
+            },
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close(opened.node).await.unwrap();
+    assert_eq!(
+        namespace_edit(
+            &generation_handle,
+            Ok(NamespaceEdit::Remove {
+                target: at("temporary.txt"),
+                expected: ObjectKind::File,
+            }),
+        )
+        .await,
+        StepOutcome::Done
+    );
+
+    // The file is gone, but the agent chose a time on the way, so the tree is not a tree of
+    // initial files.
+    assert_eq!(look_without_mark(&filesystem).await, Seen::Full);
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+#[timeout("60s")]
 async fn an_update_that_keeps_every_directory_keeps_a_tree_of_initial_files() {
     let agents = UnmanagedAgents::new().await;
     let (_, filesystem) = read_only_agent(&agents, "updated-read-only", &[]).await;
