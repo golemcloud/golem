@@ -21,6 +21,7 @@ use rustix::ioctl::{Getter, Setter, ioctl};
 use std::collections::HashMap;
 use std::fs::File;
 use std::num::NonZeroU32;
+use std::ops::ControlFlow;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -431,12 +432,11 @@ impl ManagedProvisioning {
     }
 
     pub(super) fn reserved_project(&self, owner: &Path) -> Option<NonZeroU32> {
-        self.allocator
+        let allocator = self
+            .allocator
             .lock()
-            .expect("XFS project allocator lock poisoned")
-            .active
-            .iter()
-            .find_map(|(project_id, active_owner)| (active_owner == owner).then_some(*project_id))
+            .expect("XFS project allocator lock poisoned");
+        project_of_owner(&allocator.active, owner)
     }
 
     pub(super) fn reserve_existing_project(
@@ -448,16 +448,16 @@ impl ManagedProvisioning {
             .allocator
             .lock()
             .expect("XFS project allocator lock poisoned");
-        match allocator.active.get(&project_id) {
-            Some(active_owner) if active_owner == owner => Ok(()),
-            Some(active_owner) => Err(std::io::Error::new(
+        match existing_reservation(&allocator.active, project_id, owner) {
+            ExistingReservation::Held => Ok(()),
+            ExistingReservation::HeldByOther(active_owner) => Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 format!(
                     "XFS project {project_id} is owned by {}",
                     active_owner.display()
                 ),
             )),
-            None => {
+            ExistingReservation::Free => {
                 allocator.active.insert(project_id, owner.to_path_buf());
                 Ok(())
             }
@@ -465,61 +465,59 @@ impl ManagedProvisioning {
     }
 
     pub(super) fn reserve_project(&self, owner: &Path) -> std::io::Result<NonZeroU32> {
-        let mut first_candidate = None;
-        loop {
-            let project_id = self.reserve_project_candidate(owner)?;
-            if first_candidate == Some(project_id) {
+        // Each attempt reserves a new candidate, so the scan stops when it reaches its first
+        // candidate again. When another caller holds that candidate at that moment, the bound of
+        // 2^32 attempts stops it with the same error.
+        let outcome = (0..=u32::MAX).try_fold(None, |first, _| {
+            let project_id = match self.reserve_project_candidate(owner) {
+                Ok(project_id) => project_id,
+                Err(error) => return ControlFlow::Break(Err(error)),
+            };
+            if candidate_repeats(first, project_id) {
                 self.release_project(project_id);
-                return Err(std::io::Error::other(
-                    "no reusable XFS project IDs are available",
-                ));
+                return ControlFlow::Break(Err(no_reusable_projects()));
             }
-            first_candidate.get_or_insert(project_id);
-
-            let prepared = (|| {
-                let usage = self.project_usage(project_id.get())?;
-                if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
-                    return Ok(false);
+            match self.prepare_project(project_id) {
+                Ok(true) => ControlFlow::Break(Ok(project_id)),
+                Ok(false) => {
+                    self.release_project(project_id);
+                    ControlFlow::Continue(Some(first.unwrap_or(project_id)))
                 }
-                self.clear_project_limits(project_id)?;
-                Ok(true)
-            })();
-
-            match prepared {
-                Ok(true) => return Ok(project_id),
-                Ok(false) => self.release_project(project_id),
                 Err(error) => {
                     self.release_project(project_id);
-                    return Err(error);
+                    ControlFlow::Break(Err(error))
                 }
             }
+        });
+        match outcome {
+            ControlFlow::Break(result) => result,
+            ControlFlow::Continue(_) => Err(no_reusable_projects()),
         }
     }
 
+    /// Makes the reserved project `project_id` ready for a new owner when it holds nothing:
+    /// clears its limits, and gives true. Gives false when it still holds something. This is the
+    /// sequence of native calls; the decision is [`project_is_empty`].
+    fn prepare_project(&self, project_id: NonZeroU32) -> std::io::Result<bool> {
+        if !project_is_empty(self.project_usage(project_id.get())?) {
+            return Ok(false);
+        }
+        self.clear_project_limits(project_id)?;
+        Ok(true)
+    }
+
+    /// Reserves the next project that no owner holds for `owner`. The decision, the reservation and
+    /// the next scan start are made under one lock, so a concurrent caller sees the reservation.
     fn reserve_project_candidate(&self, owner: &Path) -> std::io::Result<NonZeroU32> {
         let mut allocator = self
             .allocator
             .lock()
             .expect("XFS project allocator lock poisoned");
-        let first = allocator.next.max(1);
-        let mut candidate = first;
-        loop {
-            let project_id = NonZeroU32::new(candidate).expect("candidate must be nonzero");
-            if let std::collections::hash_map::Entry::Vacant(entry) =
-                allocator.active.entry(project_id)
-            {
-                entry.insert(owner.to_path_buf());
-                allocator.next = candidate.checked_add(1).unwrap_or(1);
-                return Ok(project_id);
-            }
-
-            candidate = candidate.checked_add(1).unwrap_or(1);
-            if candidate == first {
-                return Err(std::io::Error::other(
-                    "no reusable XFS project IDs are available",
-                ));
-            }
-        }
+        let project_id = next_free_project(allocator.next, &allocator.active)
+            .ok_or_else(no_reusable_projects)?;
+        allocator.active.insert(project_id, owner.to_path_buf());
+        allocator.next = project_after(project_id);
+        Ok(project_id)
     }
 
     pub(super) fn release_project(&self, project_id: NonZeroU32) {
@@ -541,11 +539,11 @@ impl ManagedProvisioning {
 
     pub(super) fn finish_project_cleanup(&self, project_id: NonZeroU32) -> std::io::Result<()> {
         let mut usage = self.project_usage(project_id.get())?;
-        if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
+        if !project_is_empty(usage) {
             rustix::fs::syncfs(&self.root_fd).map_err(errno_to_io)?;
             usage = self.project_usage(project_id.get())?;
         }
-        if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
+        if !project_is_empty(usage) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,
                 format!(
@@ -607,7 +605,7 @@ impl ManagedProvisioning {
         let usage = self.project_usage(project_id.get()).map_err(|error| {
             FilesystemStorageError::io("validate 32-bit XFS project quota query", &self.root, error)
         })?;
-        if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
+        if !project_is_empty(usage) {
             return Err(FilesystemStorageError::verification(
                 "reserve unused 32-bit XFS startup probe project",
                 &self.root,
@@ -828,6 +826,68 @@ impl ManagedProvisioning {
             Ok(())
         }
     }
+}
+
+/// The project that `owner` holds in `active`, if any.
+fn project_of_owner(active: &HashMap<NonZeroU32, PathBuf>, owner: &Path) -> Option<NonZeroU32> {
+    active
+        .iter()
+        .find_map(|(project_id, active_owner)| (active_owner == owner).then_some(*project_id))
+}
+
+/// What a reservation of an existing project finds in the active reservations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingReservation<'a> {
+    /// The owner already holds the project.
+    Held,
+    /// Another owner holds the project.
+    HeldByOther(&'a Path),
+    /// No owner holds the project.
+    Free,
+}
+
+/// What a reservation of `project_id` for `owner` finds in `active`.
+fn existing_reservation<'a>(
+    active: &'a HashMap<NonZeroU32, PathBuf>,
+    project_id: NonZeroU32,
+    owner: &Path,
+) -> ExistingReservation<'a> {
+    match active.get(&project_id) {
+        Some(active_owner) if active_owner == owner => ExistingReservation::Held,
+        Some(active_owner) => ExistingReservation::HeldByOther(active_owner),
+        None => ExistingReservation::Free,
+    }
+}
+
+/// The first project that `active` does not hold, scanning from `next` (0 counts as 1) up to
+/// `u32::MAX`, and then from 1 up to the start. `None` when every project is held.
+fn next_free_project(next: u32, active: &HashMap<NonZeroU32, PathBuf>) -> Option<NonZeroU32> {
+    let first = next.max(1);
+    (first..=u32::MAX)
+        .chain(1..first)
+        .filter_map(NonZeroU32::new)
+        .find(|project_id| !active.contains_key(project_id))
+}
+
+/// Where the next scan starts after `project_id` is reserved: the next project, and 1 after
+/// `u32::MAX`.
+fn project_after(project_id: NonZeroU32) -> u32 {
+    project_id.get().checked_add(1).unwrap_or(1)
+}
+
+/// Whether the reservation loop got back to `first`, the first candidate it reserved, so it saw
+/// every project that no other owner holds.
+fn candidate_repeats(first: Option<NonZeroU32>, candidate: NonZeroU32) -> bool {
+    first == Some(candidate)
+}
+
+/// Whether a project with `usage` holds nothing, so it can be given to a new owner.
+fn project_is_empty(usage: FilesystemAllocation) -> bool {
+    usage.allocated_bytes == 0 && usage.filesystem_objects == 0
+}
+
+fn no_reusable_projects() -> std::io::Error {
+    std::io::Error::other("no reusable XFS project IDs are available")
 }
 
 // The root must have no project id and no inheritance before anything is created under it,
@@ -1878,6 +1938,97 @@ mod tests {
         assert!(names_are_case_sensitive(!XFS_FSOP_GEOM_FLAGS_DIRV2CI));
         assert!(!names_are_case_sensitive(XFS_FSOP_GEOM_FLAGS_DIRV2CI));
         assert!(!names_are_case_sensitive(u32::MAX));
+    }
+
+    fn project(id: u32) -> NonZeroU32 {
+        NonZeroU32::new(id).unwrap()
+    }
+
+    fn reservations(entries: &[(u32, &str)]) -> HashMap<NonZeroU32, PathBuf> {
+        entries
+            .iter()
+            .map(|(id, owner)| (project(*id), PathBuf::from(owner)))
+            .collect()
+    }
+
+    #[test]
+    fn project_of_owner_finds_the_project_of_that_owner_only() {
+        let active = reservations(&[(3, "/a"), (7, "/b")]);
+
+        assert_eq!(project_of_owner(&reservations(&[]), Path::new("/a")), None);
+        assert_eq!(project_of_owner(&active, Path::new("/a")), Some(project(3)));
+        assert_eq!(project_of_owner(&active, Path::new("/b")), Some(project(7)));
+        assert_eq!(project_of_owner(&active, Path::new("/c")), None);
+    }
+
+    #[test]
+    fn an_existing_reservation_is_held_held_by_its_owner_or_free() {
+        let active = reservations(&[(3, "/a")]);
+
+        assert_eq!(
+            existing_reservation(&active, project(3), Path::new("/a")),
+            ExistingReservation::Held
+        );
+        assert_eq!(
+            existing_reservation(&active, project(3), Path::new("/b")),
+            ExistingReservation::HeldByOther(Path::new("/a"))
+        );
+        assert_eq!(
+            existing_reservation(&active, project(4), Path::new("/b")),
+            ExistingReservation::Free
+        );
+    }
+
+    #[test]
+    fn the_next_free_project_scans_from_the_start_and_wraps_after_the_last_id() {
+        let none = reservations(&[]);
+
+        assert_eq!(next_free_project(0, &none), Some(project(1)));
+        assert_eq!(next_free_project(1, &none), Some(project(1)));
+        assert_eq!(next_free_project(5, &none), Some(project(5)));
+        assert_eq!(
+            next_free_project(5, &reservations(&[(5, "/a"), (6, "/b")])),
+            Some(project(7))
+        );
+        assert_eq!(
+            next_free_project(u32::MAX, &reservations(&[(u32::MAX, "/a")])),
+            Some(project(1))
+        );
+        assert_eq!(
+            next_free_project(
+                u32::MAX - 1,
+                &reservations(&[(u32::MAX - 1, "/a"), (u32::MAX, "/b"), (1, "/c")])
+            ),
+            Some(project(2))
+        );
+        assert_eq!(next_free_project(u32::MAX, &none), Some(project(u32::MAX)));
+    }
+
+    #[test]
+    fn the_scan_after_a_project_starts_at_the_next_id_and_wraps_to_one() {
+        assert_eq!(project_after(project(1)), 2);
+        assert_eq!(project_after(project(41)), 42);
+        assert_eq!(project_after(project(u32::MAX)), 1);
+    }
+
+    #[test]
+    fn a_candidate_repeats_only_when_it_is_the_first_candidate() {
+        assert!(!candidate_repeats(None, project(3)));
+        assert!(candidate_repeats(Some(project(3)), project(3)));
+        assert!(!candidate_repeats(Some(project(3)), project(4)));
+    }
+
+    #[test]
+    fn a_project_is_empty_only_without_bytes_and_objects() {
+        let usage = |allocated_bytes, filesystem_objects| FilesystemAllocation {
+            allocated_bytes,
+            filesystem_objects,
+        };
+
+        assert!(project_is_empty(usage(0, 0)));
+        assert!(!project_is_empty(usage(1, 0)));
+        assert!(!project_is_empty(usage(0, 1)));
+        assert!(!project_is_empty(usage(4096, 2)));
     }
 
     #[test]
