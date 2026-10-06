@@ -1991,7 +1991,9 @@ function decodeToolClientResult(
   const hasResult = invocation.result !== undefined;
 
   if (!body.result && hasResult) {
-    throw new Error('unit command returned an unexpected result');
+    return withWireValueOwnership(invocation.result!, () => {
+      throw new Error('unit command returned an unexpected result');
+    });
   }
   if (body.result && !hasResult) {
     throw new Error('structured command result is missing');
@@ -2184,7 +2186,10 @@ function decodeToolUnderlyingResult(
   callName: string,
 ): unknown {
   const hasResult = result !== undefined;
-  if (!body.result && hasResult) throw new Error('unit command returned an unexpected result');
+  if (!body.result && hasResult)
+    return withWireValueOwnership(result!, () => {
+      throw new Error('unit command returned an unexpected result');
+    });
   if (body.result && !hasResult) throw new Error('structured command result is missing');
 
   return body.result
@@ -2212,30 +2217,33 @@ export function decodeDeclaredToolError(
       readonly name: string;
       readonly payload: WireTypedSchemaValue;
     } {
-  const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
-  if (!errorCase) {
-    preflightWitTypedSchemaValue(wireError.payload);
-    return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
-  }
-
-  validateWireSchema(
-    errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
-    wireError.payload,
-    `${callName} custom error "${errorCase.name}"`,
-  );
-  const payload = typedSchemaValueFromWit(wireError.payload);
-  if (!errorCase.payloadCodec) {
-    if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
-      throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
+  return withWireValueOwnership(wireError.payload, (lift) => {
+    if (typeof wireError.name !== 'string') throw new Error('custom error name must be a string');
+    const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
+    if (!errorCase) {
+      preflightWitTypedSchemaValue(wireError.payload);
+      return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
     }
-    return err(errorCase.name);
-  }
-  const decoded = decodeTypedValue(
-    errorCase.payloadCodec,
-    payload,
-    `${callName} custom error "${errorCase.name}"`,
-  );
-  return err(errorCase.name, decoded);
+
+    validateWireSchema(
+      errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
+      wireError.payload,
+      `${callName} custom error "${errorCase.name}"`,
+    );
+    const payload = lift();
+    if (!errorCase.payloadCodec) {
+      if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
+        throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
+      }
+      return err(errorCase.name);
+    }
+    const decoded = decodeTypedValue(
+      errorCase.payloadCodec,
+      payload,
+      `${callName} custom error "${errorCase.name}"`,
+    );
+    return err(errorCase.name, decoded);
+  });
 }
 
 function decodeWireValue(
@@ -2243,8 +2251,28 @@ function decodeWireValue(
   wire: WireTypedSchemaValue,
   position: string,
 ): unknown {
+  return withWireValueOwnership(wire, (lift) => {
+    if (codec.direct) {
+      try {
+        return directSchemaValueFromWit(codec, wire.value);
+      } catch (error) {
+        throw new Error(
+          `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    validateWireSchema(codec.graph, wire, position);
+    return decodeTypedValue(codec, lift(), position);
+  });
+}
+
+function withWireValueOwnership<T>(
+  wire: WireTypedSchemaValue,
+  decode: (lift: () => TypedSchemaValue) => T,
+): T {
   const resources = new Map<object, Array<{ val: unknown }>>();
-  for (const node of wire.value.valueNodes) {
+  const nodes = wire?.value?.valueNodes;
+  for (const node of Array.isArray(nodes) ? nodes : []) {
     if (
       (node?.tag === 'secret-value' ||
         node?.tag === 'quota-token-handle' ||
@@ -2259,18 +2287,7 @@ function decodeWireValue(
   }
   let typed: TypedSchemaValue | undefined;
   try {
-    if (codec.direct) {
-      try {
-        return directSchemaValueFromWit(codec, wire.value);
-      } catch (error) {
-        throw new Error(
-          `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-    validateWireSchema(codec.graph, wire, position);
-    typed = typedSchemaValueFromWit(wire);
-    return decodeTypedValue(codec, typed, position);
+    return decode(() => (typed = typedSchemaValueFromWit(wire)));
   } catch (error) {
     if (typed !== undefined) relinquishSchemaValueCapabilities(typed.value);
     for (const [raw, nodes] of resources) {
