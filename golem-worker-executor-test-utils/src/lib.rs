@@ -4227,6 +4227,42 @@ pub async fn start_with_agent_storage_quota_and_pressure_without_metering_on_man
     .await
 }
 
+/// Starts an executor on XFS storage with reflink and without project quotas, at
+/// `reflink_xfs_root`, with the pressure settings `pressure` and without resource usage metering.
+/// The plan gives each agent the finite disk limit of the default plan, which this storage does
+/// not enforce.
+#[cfg(target_os = "linux")]
+pub async fn start_with_pressure_on_reflink_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    reflink_xfs_root: PathBuf,
+    pressure: FilesystemPressureConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.storage = FilesystemStorageMode::ReflinkXfs {
+                    root: reflink_xfs_root.clone(),
+                };
+                config.filesystem_storage.pressure = pressure.clone();
+                config.resource_usage_metering = ResourceUsageMeteringConfig::default();
+                config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for reflink XFS pressure server to start",
+    )
+    .await
+}
+
 #[cfg(target_os = "linux")]
 async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs(
     deps: &WorkerExecutorTestDependencies,

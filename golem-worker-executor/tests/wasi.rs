@@ -155,6 +155,13 @@ fn full_replay_config(config: &mut golem_worker_executor::services::golem_config
 }
 
 #[cfg(target_os = "linux")]
+fn reflink_xfs_test_root() -> PathBuf {
+    std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas")
+}
+
+#[cfg(target_os = "linux")]
 fn managed_xfs_test_root() -> PathBuf {
     std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
         .map(PathBuf::from)
@@ -1067,6 +1074,39 @@ async fn managed_xfs_resource_billing_survives_idle_and_replay(
 }
 
 #[cfg(target_os = "linux")]
+const PRESSURE_MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_OBSERVATION_DELAY: Duration = Duration::from_millis(25);
+
+/// The pressure settings of the physical-pressure tests: recovery starts below 64 MiB and stops at
+/// 384 MiB of free space, with fresh observations 25 ms apart.
+#[cfg(target_os = "linux")]
+fn physical_pressure_config()
+-> golem_worker_executor::services::golem_config::FilesystemPressureConfig {
+    let default_pressure =
+        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
+    golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
+        PRESSURE_MINIMUM_AVAILABLE_BYTES,
+        PRESSURE_TARGET_AVAILABLE_BYTES,
+        default_pressure.minimum_available_filesystem_objects(),
+        default_pressure.target_available_filesystem_objects(),
+        200,
+        PRESSURE_OBSERVATION_DELAY,
+    )
+    .unwrap()
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
@@ -1077,52 +1117,95 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-    use std::io::{Seek, SeekFrom, Write};
-
-    const MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
-    const TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
-    const PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
-    const VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
-    const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
-    const POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
-
-    assert_eq!(
-        PROJECT_QUOTA_BYTES - VICTIM_ALLOCATION_BYTES,
-        32 * 1024 * 1024,
-        "the victim allocation must remain safely below its project quota"
-    );
-    assert!(VICTIM_ALLOCATION_BYTES < TARGET_AVAILABLE_BYTES);
-    assert_eq!(
-        VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES - TARGET_AVAILABLE_BYTES,
-        64 * 1024 * 1024,
-        "victim and gate reclamation must retain margin above the recovery target"
-    );
-
+    const {
+        assert!(
+            PRESSURE_PROJECT_QUOTA_BYTES - PRESSURE_VICTIM_ALLOCATION_BYTES == 32 * 1024 * 1024,
+            "the victim allocation must remain safely below its project quota"
+        );
+    }
     let root = managed_xfs_test_root();
-    let allocation_unit = filesystem_fragment_size(&root)?;
-    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
     let context = TestContext::new(last_unique_id);
-    let default_pressure =
-        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
-    let observation_delay = Duration::from_millis(25);
-    let pressure = golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
-        MINIMUM_AVAILABLE_BYTES,
-        TARGET_AVAILABLE_BYTES,
-        default_pressure.minimum_available_filesystem_objects(),
-        default_pressure.target_available_filesystem_objects(),
-        200,
-        observation_delay,
-    )
-    .unwrap();
     let executor = start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs(
         deps,
         &context,
-        PROJECT_QUOTA_BYTES,
+        PRESSURE_PROJECT_QUOTA_BYTES,
         root.clone(),
-        pressure,
+        physical_pressure_config(),
     )
     .await?;
+    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+        executor,
+        &context,
+        host_api_tests,
+        root,
+        Some(PRESSURE_PROJECT_QUOTA_BYTES),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the unprivileged reflink XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_pressure_on_reflink_xfs;
+
+    let root = reflink_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_pressure_on_reflink_xfs(
+        deps,
+        &context,
+        root.clone(),
+        physical_pressure_config(),
+    )
+    .await?;
+    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+        executor,
+        &context,
+        host_api_tests,
+        root,
+        None,
+    )
+    .await
+}
+
+/// Fills the XFS volume at `root` until a write of an agent on `executor` finds no space, and
+/// checks that pressure recovery unloads an idle loaded agent and retries the write once the
+/// volume reaches its target. With `project_quota`, the agents have that project quota, and the
+/// write must fail for lack of space and not for the quota.
+#[cfg(target_os = "linux")]
+async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+    executor: TestWorkerExecutor,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    root: PathBuf,
+    project_quota: Option<u64>,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+    use std::io::{Seek, SeekFrom, Write};
+
+    const MINIMUM_AVAILABLE_BYTES: u64 = PRESSURE_MINIMUM_AVAILABLE_BYTES;
+    const TARGET_AVAILABLE_BYTES: u64 = PRESSURE_TARGET_AVAILABLE_BYTES;
+    const VICTIM_ALLOCATION_BYTES: u64 = PRESSURE_VICTIM_ALLOCATION_BYTES;
+    const POST_GATE_TARGET_MARGIN_BYTES: u64 = PRESSURE_POST_GATE_TARGET_MARGIN_BYTES;
+
+    const {
+        assert!(VICTIM_ALLOCATION_BYTES < TARGET_AVAILABLE_BYTES);
+        assert!(
+            VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES - TARGET_AVAILABLE_BYTES
+                == 64 * 1024 * 1024,
+            "victim and gate reclamation must retain margin above the recovery target"
+        );
+    }
+    let allocation_unit = filesystem_fragment_size(&root)?;
+    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
+    let observation_delay = PRESSURE_OBSERVATION_DELAY;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -1145,10 +1228,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
         .join(agent_path_segment(&victim_worker));
-    assert!(
-        victim_path.is_dir(),
-        "managed victim did not use the XFS root"
-    );
+    assert!(victim_path.is_dir(), "the victim did not use the XFS root");
     create_allocated_file(
         &victim_path.join("pressure-allocation"),
         VICTIM_ALLOCATION_BYTES,
@@ -1174,7 +1254,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
         .join(agent_path_segment(&trigger_worker));
     assert!(
         trigger_path.is_dir(),
-        "managed trigger did not use the XFS root"
+        "the trigger did not use the XFS root"
     );
 
     let observation_gate = root.join(format!("pressure-target-gate-{}", uuid::Uuid::new_v4()));
@@ -1246,11 +1326,13 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
         anyhow!("pressure residual probe never reached physical ENOSPC within its bounded attempts")
     })?;
     assert_eq!(probe_failure.raw_os_error(), Some(libc::ENOSPC));
-    let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
-    assert!(
-        trigger_project_allocated_bytes < PROJECT_QUOTA_BYTES / 2,
-        "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={PROJECT_QUOTA_BYTES}"
-    );
+    if let Some(project_quota) = project_quota {
+        let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
+        assert!(
+            trigger_project_allocated_bytes < project_quota / 2,
+            "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={project_quota}"
+        );
+    }
 
     let before_invocation = filesystem_available_bytes(&root)?;
     assert!(
