@@ -2,6 +2,7 @@ import { Duration, Effect, Ref, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
+import { normalizeSnapshotContentType, SnapshotEnvelopeError } from "./internal/snapshotEnvelope.js"
 import {
   __getUnderlyingDatabase,
   isSqliteClient,
@@ -267,6 +268,49 @@ export interface AutoSnapshotDef<S extends Schema.Top, DBs extends ReadonlyArray
   readonly [snapshotDefBrand]?: S["Type"]
 }
 
+/** Opaque application-owned binary part. @since 1.6.0 @category models */
+export interface SnapshotPart {
+  readonly bytes: Uint8Array
+  readonly contentType: string
+}
+
+/** Schema-backed state and dynamic, case-sensitive user parts. @since 1.6.0 @category models */
+export interface MultipartSnapshot<State> {
+  readonly state: State
+  readonly parts: ReadonlyMap<string, SnapshotPart>
+}
+
+/** Explicit multipart projection; a save/restore strategy is required. @since 1.6.0 @category models */
+export interface MultipartSnapshotDef<
+  S extends Schema.Top,
+  DBs extends ReadonlyArray<string> = [],
+> extends Omit<AutoSnapshotDef<S, DBs>, "_tag"> {
+  readonly _tag: "MultipartSnapshotDef"
+}
+
+/** Require a named part and compare normalized bare MIME types. @since 1.6.0 @category utilities */
+export const requirePart = (
+  parts: ReadonlyMap<string, SnapshotPart>,
+  name: string,
+  expectedContentType: string,
+): Effect.Effect<Uint8Array, SnapshotEnvelopeError> =>
+  Effect.try({
+    try: () => {
+      const part = parts.get(name)
+      if (part === undefined) throw new SnapshotEnvelopeError(`missing required part '${name}'`)
+      if (
+        normalizeSnapshotContentType(part.contentType) !==
+        normalizeSnapshotContentType(expectedContentType)
+      ) {
+        throw new SnapshotEnvelopeError(
+          `part '${name}' has Content-Type '${part.contentType}', expected '${expectedContentType}'`,
+        )
+      }
+      return part.bytes
+    },
+    catch: (error) => error as SnapshotEnvelopeError,
+  })
+
 /**
  * User-managed snapshot definition. Produced by {@link Snapshot.custom}.
  *
@@ -288,7 +332,10 @@ export interface CustomSnapshotDef {
  * @since 1.5.0
  * @category models
  */
-export type SnapshotDef = AutoSnapshotDef<Schema.Top, ReadonlyArray<string>> | CustomSnapshotDef
+export type SnapshotDef =
+  | AutoSnapshotDef<Schema.Top, ReadonlyArray<string>>
+  | MultipartSnapshotDef<Schema.Top, ReadonlyArray<string>>
+  | CustomSnapshotDef
 
 /**
  * SQLite database handle accepted from a snapshot strategy.
@@ -412,6 +459,24 @@ export const custom = (spec: { readonly policy: SnapshotPolicy }): CustomSnapsho
   policy: spec.policy,
 })
 
+/**
+ * Save schema-encoded state together with opaque named bytes. Uses whole buffers,
+ * not streaming; payload and framing copies amplify memory use. Hooks run outside
+ * the invocation journal and must tolerate reconstruction/retry. Restore creates
+ * fresh state; declared SQLite images hydrate after restore and before methods,
+ * so DB-dependent reconstruction belongs in the methods factory.
+ * @since 1.6.0
+ * @category constructors
+ */
+export const multipart = <
+  S extends Schema.Top,
+  const DBs extends ReadonlyArray<string> = [],
+>(spec: {
+  readonly schema: S
+  readonly policy: SnapshotPolicy
+  readonly databases?: DBs
+}): MultipartSnapshotDef<S, DBs> => ({ _tag: "MultipartSnapshotDef", ...spec })
+
 // ---------------------------------------------------------------------------
 // Compiled bundle (consumed by agent.ts)
 // ---------------------------------------------------------------------------
@@ -424,7 +489,7 @@ export const custom = (spec: { readonly policy: SnapshotPolicy }): CustomSnapsho
  */
 export type CompiledSnapshot =
   | {
-      readonly kind: "auto"
+      readonly kind: "auto" | "multipart"
       readonly policy: SnapshotPolicy
       readonly witConfig: AgentCommon.SnapshottingConfig
       readonly schema: Schema.Top
@@ -456,7 +521,7 @@ export const compileSnapshot = (
 ): Effect.Effect<CompiledSnapshot, InvalidSnapshotError> =>
   Effect.gen(function* () {
     const witConfig = yield* policyToWit(def.policy, `agent '${agentName}' snapshot`)
-    if (def._tag === "AutoSnapshotDef") {
+    if (def._tag === "AutoSnapshotDef" || def._tag === "MultipartSnapshotDef") {
       const rawDbs = def.databases ?? []
       const seenNames = new Set<string>()
       for (const name of rawDbs) {
@@ -477,7 +542,7 @@ export const compileSnapshot = (
         seenNames.add(name)
       }
       return {
-        kind: "auto",
+        kind: def._tag === "AutoSnapshotDef" ? "auto" : "multipart",
         policy: def.policy,
         witConfig,
         schema: def.schema,
@@ -500,7 +565,7 @@ export const compileSnapshot = (
  */
 export type BoundSnapshot =
   | {
-      readonly kind: "auto"
+      readonly kind: "auto" | "multipart"
       readonly schema: Schema.Top
       readonly declaredDatabases: ReadonlyArray<string>
       readonly databases: ReadonlyMap<string, DatabaseSync>
@@ -537,7 +602,7 @@ export const createSnapshot = (
     resolved.set(name, isSqliteClient(database) ? __getUnderlyingDatabase(database) : database)
   }
   return {
-    kind: "auto",
+    kind: compiled.kind,
     schema: compiled.schema,
     declaredDatabases: compiled.declaredDatabases,
     databases: resolved,

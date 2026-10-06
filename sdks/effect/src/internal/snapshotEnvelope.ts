@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import * as CoreTypes from "golem:core/types@2.0.0"
+import type { SnapshotPart } from "../Snapshot.js"
 import {
   decodeMultipart,
   encodeMultipart,
@@ -33,6 +34,22 @@ const MULTIPART_MIME_PREFIX = "multipart/mixed"
 const SQLITE_PART_MIME = "application/x-sqlite3"
 const STATE_PART_NAME = "state"
 const DB_PART_PREFIX = "db:"
+const USER_PART_PREFIX = "part:"
+
+/** Validate logical user names before prefixing or inserting into maps. */
+const validatePartName = (name: string): void => {
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(name)) {
+    throw new SnapshotEnvelopeError(`invalid snapshot part name '${name}'`)
+  }
+}
+
+/** Bare ASCII MIME type/subtype; parameters have no user-part semantics. */
+export const normalizeSnapshotContentType = (contentType: string): string => {
+  if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+\/[A-Za-z0-9!#$%&'*+.^_`|~-]+$/.test(contentType)) {
+    throw new SnapshotEnvelopeError(`invalid snapshot part Content-Type '${contentType}'`)
+  }
+  return contentType.toLowerCase()
+}
 
 // ---------------------------------------------------------------------------
 // Schemas — the JSON-safe wire shapes
@@ -262,7 +279,12 @@ export const encodeMultipartJsonEnvelope = (
   principal: AgentCommon.Principal,
   state: unknown,
   databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>,
+  userParts: ReadonlyMap<string, SnapshotPart> = new Map(),
 ): ApiHost.Snapshot => {
+  if (state === undefined)
+    throw new SnapshotEnvelopeError(
+      "multipart state must be JSON; use null for binary-only snapshots",
+    )
   const stateJson = encodeEnvelope({
     version: 1,
     principal: serializePrincipal(principal),
@@ -276,6 +298,16 @@ export const encodeMultipartJsonEnvelope = (
       contentType: SQLITE_PART_MIME,
       body: db.bytes,
     })),
+    ...Array.from(userParts, ([name, part]) => {
+      validatePartName(name)
+      if (!(part.bytes instanceof Uint8Array))
+        throw new SnapshotEnvelopeError(`part '${name}' bytes must be Uint8Array`)
+      return {
+        name: `${USER_PART_PREFIX}${name}`,
+        contentType: normalizeSnapshotContentType(part.contentType),
+        body: part.bytes,
+      }
+    }),
   ]
   const { data, boundary } = encodeMultipart(parts)
   return { payload: data, mimeType: `${MULTIPART_MIME_PREFIX}; boundary=${boundary}` }
@@ -319,6 +351,7 @@ export interface DecodedMultipartEnvelope {
   readonly principal: AgentCommon.Principal
   readonly state: unknown
   readonly databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>
+  readonly parts: ReadonlyMap<string, SnapshotPart>
 }
 
 export type DecodedEnvelope = DecodedJsonEnvelope | DecodedBinaryEnvelope | DecodedMultipartEnvelope
@@ -333,7 +366,7 @@ export const decodeEnvelope = (
   fallbackPrincipal: AgentCommon.Principal,
 ): DecodedEnvelope => {
   const mime = snapshot.mimeType
-  if (mime.startsWith(MULTIPART_MIME_PREFIX)) {
+  if (mime.split(";", 1)[0]?.trim().toLowerCase() === MULTIPART_MIME_PREFIX) {
     return decodeMultipartEnvelope(snapshot.payload, mime)
   }
   if (mime === JSON_MIME) {
@@ -345,8 +378,33 @@ export const decodeEnvelope = (
   throw new UnsupportedSnapshotFormatError(mime)
 }
 
-const parseEnvelopeJson = (text: string, ctx: string) => {
+const parseEnvelopeJson = (text: string, ctx: string, strict = false) => {
   try {
+    if (strict) {
+      // JSON.parse validates syntax but discards duplicate keys. Inspect the
+      // valid token stream before schema decoding so metadata cannot be replaced.
+      const value = JSON.parse(text)
+      if (value === null || typeof value !== "object" || !Object.hasOwn(value, "state")) {
+        throw new Error("multipart envelope missing state")
+      }
+      const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}[\],:]|[^{}[\],:\s]+/g)!
+      const objects: Array<Set<string> | undefined> = []
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i]!
+        if (token === "{") objects.push(new Set())
+        else if (token === "[") objects.push(undefined)
+        else if (token === "}" || token === "]") objects.pop()
+        else if (token.startsWith('"') && tokens[i + 1] === ":") {
+          const key: string = JSON.parse(token)
+          const keys = objects[objects.length - 1]!
+          if (keys.has(key)) throw new Error(`duplicate JSON key '${key}'`)
+          keys.add(key)
+          if (objects.length === 1 && key === "version" && tokens[i + 2] !== "1") {
+            throw new Error("multipart envelope version must be integer 1")
+          }
+        }
+      }
+    }
     return decodeEnvelopeFromString(text)
   } catch (err) {
     throw new SnapshotEnvelopeError(`${ctx}: ${String((err as Error).message ?? err)}`)
@@ -388,15 +446,33 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
     )
   }
   const stateText = decodeUtf8(statePart.body, "multipart envelope: 'state' part")
-  const env = parseEnvelopeJson(stateText, "multipart envelope: 'state' part")
+  // Enforce strict UTF-8 even when the guest runtime lacks fatal TextDecoder.
+  const reencoded = encoder.encode(stateText)
+  if (
+    reencoded.length !== statePart.body.length ||
+    reencoded.some((b, i) => b !== statePart.body[i])
+  ) {
+    throw new SnapshotEnvelopeError("multipart envelope state is not canonical UTF-8")
+  }
+  const env = parseEnvelopeJson(stateText, "multipart envelope: 'state' part", true)
   const principal = deserializePrincipal(env.principal)
 
   const databases: Array<{ name: string; bytes: Uint8Array }> = []
+  const userParts = new Map<string, SnapshotPart>()
   for (const part of parts) {
     if (part.name === STATE_PART_NAME) continue
+    if (part.name.startsWith(USER_PART_PREFIX)) {
+      const name = part.name.slice(USER_PART_PREFIX.length)
+      validatePartName(name)
+      userParts.set(name, {
+        bytes: part.body,
+        contentType: normalizeSnapshotContentType(part.contentType),
+      })
+      continue
+    }
     if (!part.name.startsWith(DB_PART_PREFIX)) {
       throw new SnapshotEnvelopeError(
-        `multipart envelope: unrecognised part name '${part.name}' (expected 'state' or 'db:<name>')`,
+        `multipart envelope: unrecognised part name '${part.name}' (expected 'state', 'part:<name>' or 'db:<name>')`,
       )
     }
     if (part.contentType !== SQLITE_PART_MIME) {
@@ -405,10 +481,12 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
       )
     }
     const dbName = part.name.slice(DB_PART_PREFIX.length)
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(dbName))
+      throw new SnapshotEnvelopeError(`invalid database name '${dbName}'`)
     databases.push({ name: dbName, bytes: part.body })
   }
 
-  return { kind: "multipart", principal, state: env.state, databases }
+  return { kind: "multipart", principal, state: env.state, databases, parts: userParts }
 }
 
 const decodeBinaryEnvelope = (

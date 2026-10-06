@@ -237,12 +237,17 @@ export type CfgTagOf<F> = [F] extends [never]
     ? ConfigShape<F>
     : never
 
-type SavedState<S> = S extends import("../Snapshot.js").AutoSnapshotDef<
+type SavedState<S> = S extends import("../Snapshot.js").MultipartSnapshotDef<
   infer Sc extends Schema.Top,
   ReadonlyArray<string>
 >
-  ? Sc["Type"]
-  : Uint8Array
+  ? import("../Snapshot.js").MultipartSnapshot<Sc["Type"]>
+  : S extends import("../Snapshot.js").AutoSnapshotDef<
+        infer Sc extends Schema.Top,
+        ReadonlyArray<string>
+      >
+    ? Sc["Type"]
+    : Uint8Array
 
 /** State initialization, shared methods, and optional typed snapshot reconstruction.
  * @since 1.6.0
@@ -269,24 +274,37 @@ export type AgentImpl<
       >
 } & ([S] extends [never]
   ? { readonly snapshot?: never }
-  : S extends import("../Snapshot.js").AutoSnapshotDef<
+  : S extends import("../Snapshot.js").MultipartSnapshotDef<
         Schema.Top,
         infer DBs extends ReadonlyArray<string>
       >
-    ? [DBs[number]] extends [never]
-      ? [NoInfer<State>] extends [SavedState<S>]
-        ? [SavedState<S>] extends [NoInfer<State>]
-          ? { readonly snapshot?: StateStrategy<C, State, F, S> }
+    ? { readonly snapshot: StateStrategy<C, State, F, S> } & ([DBs[number]] extends [never]
+        ? unknown
+        : {
+            readonly snapshot: {
+              readonly databases: (
+                state: NoInfer<State>,
+              ) => Readonly<Record<DBs[number], import("../Snapshot.js").AttachableDatabase>>
+            }
+          })
+    : S extends import("../Snapshot.js").AutoSnapshotDef<
+          Schema.Top,
+          infer DBs extends ReadonlyArray<string>
+        >
+      ? [DBs[number]] extends [never]
+        ? [NoInfer<State>] extends [SavedState<S>]
+          ? [SavedState<S>] extends [NoInfer<State>]
+            ? { readonly snapshot?: StateStrategy<C, State, F, S> }
+            : { readonly snapshot: StateStrategy<C, State, F, S> }
           : { readonly snapshot: StateStrategy<C, State, F, S> }
-        : { readonly snapshot: StateStrategy<C, State, F, S> }
-      : {
-          readonly snapshot: StateStrategy<C, State, F, S> & {
-            readonly databases: (
-              state: NoInfer<State>,
-            ) => Readonly<Record<DBs[number], import("../Snapshot.js").AttachableDatabase>>
+        : {
+            readonly snapshot: StateStrategy<C, State, F, S> & {
+              readonly databases: (
+                state: NoInfer<State>,
+              ) => Readonly<Record<DBs[number], import("../Snapshot.js").AttachableDatabase>>
+            }
           }
-        }
-    : { readonly snapshot: StateStrategy<C, State, F, S> })
+      : { readonly snapshot: StateStrategy<C, State, F, S> })
 
 type StateStrategy<
   C extends MethodParams,
@@ -853,6 +871,16 @@ export const registerAgent = <
     let snapshotting: AgentCommon.Snapshotting = { tag: "disabled" }
     if (metadata.snapshotting !== undefined) {
       const cs = yield* compileSnapshot(metadata.name, metadata.snapshotting)
+      if (
+        cs.kind === "multipart" &&
+        (typeof impl.snapshot?.save !== "function" || typeof impl.snapshot?.restore !== "function")
+      ) {
+        return yield* Effect.fail(
+          new InvalidSnapshotError(
+            `agent '${metadata.name}' multipart snapshot requires save and restore strategies`,
+          ),
+        )
+      }
       compiledSnapshot = cs
       snapshotting = { tag: "enabled", val: cs.witConfig }
     }
@@ -1299,24 +1327,34 @@ const resolveSqliteHostExtSync = (): {
 const encodeAutoSnapshot = async (
   agent: ActiveAgent,
   compiled: CompiledAgent,
-  snap: Extract<BoundSnapshot, { kind: "auto" }>,
+  snap: Exclude<BoundSnapshot, { kind: "custom" }>,
 ): Promise<ApiHost.Snapshot> => {
-  const state =
+  const saved =
     compiled.impl.snapshot === undefined ? agent.state : await saveSnapshotState(agent, compiled)
+  const bundle =
+    snap.kind === "multipart"
+      ? (saved as import("../Snapshot.js").MultipartSnapshot<unknown>)
+      : undefined
+  if (snap.kind === "multipart" && !(bundle?.parts instanceof Map)) {
+    throw new InvalidSnapshotError(
+      `agent '${agent.name}' multipart save must return a state and a Map of parts`,
+    )
+  }
+  const state = bundle === undefined ? saved : bundle.state
   const encoded = Effect.runSync(
     Schema.encodeUnknownEffect(snap.schema)(state) as Effect.Effect<unknown, Schema.SchemaError>,
   )
-  if (snap.declaredDatabases.length === 0) {
+  if (snap.kind === "auto" && snap.declaredDatabases.length === 0) {
     return encodeJsonEnvelope(agent.principal, encoded)
   }
-  const sqliteExt = resolveSqliteHostExtSync()
+  const sqliteExt = snap.declaredDatabases.length > 0 ? resolveSqliteHostExtSync() : undefined
   const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
   for (const dbName of snap.declaredDatabases) {
     const handle = snap.databases.get(dbName)
     if (handle === undefined) {
       throw new SnapshotDatabaseMissingPartError(agent.name, dbName, "save")
     }
-    if (!sqliteExt.isAutocommitDatabaseSync(handle)) {
+    if (!sqliteExt!.isAutocommitDatabaseSync(handle)) {
       throw new SnapshotDatabaseNotInAutocommitError(agent.name, dbName)
     }
     const rows = handle.prepare("PRAGMA database_list").all() as Array<{ name?: string }>
@@ -1326,9 +1364,9 @@ const encodeAutoSnapshot = async (
     if (extra.length > 0) {
       throw new SnapshotDatabaseHasAttachmentsError(agent.name, dbName, extra)
     }
-    dbParts.push({ name: dbName, bytes: sqliteExt.serializeDatabaseSync(handle) })
+    dbParts.push({ name: dbName, bytes: sqliteExt!.serializeDatabaseSync(handle) })
   }
-  return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts)
+  return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts, bundle?.parts)
 }
 
 /**
@@ -1353,7 +1391,7 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
     )
   }
   const snap = agent.snapshot
-  if (snap.kind === "auto") {
+  if (snap.kind !== "custom") {
     return encodeAutoSnapshot(agent, compiled, snap)
   }
   const bytes = await saveSnapshotState(agent, compiled)
@@ -1443,18 +1481,45 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   const principal = decoded.principal
 
   let saved: unknown
-  if (compiled.compiledSnapshot.kind === "auto") {
+  if (compiled.compiledSnapshot.kind !== "custom") {
     if (decoded.kind !== "json" && decoded.kind !== "multipart") {
       throw new SnapshotEnvelopeError(
         `agent '${agentTypeName}' expects a JSON snapshot state but received ${snapshot.mimeType}`,
       )
     }
-    saved = await Effect.runPromise(
+    const config = compiled.compiledSnapshot
+    const expectsMultipart = config.kind === "multipart" || config.declaredDatabases.length > 0
+    if ((decoded.kind === "multipart") !== expectsMultipart) {
+      throw new SnapshotEnvelopeError(
+        `agent '${agentTypeName}' expects ${expectsMultipart ? "multipart/mixed" : "JSON"} envelope`,
+      )
+    }
+    if (decoded.kind === "multipart") {
+      if (config.kind === "auto" && decoded.parts.size > 0) {
+        throw new SnapshotEnvelopeError(
+          `agent '${agentTypeName}' simple snapshot cannot restore user parts`,
+        )
+      }
+      const declared = new Set(config.declaredDatabases)
+      const received = new Set(decoded.databases.map((part) => part.name))
+      for (const name of received) {
+        if (!declared.has(name)) throw new SnapshotDatabaseUnknownPartError(agentTypeName, name)
+      }
+      for (const name of declared) {
+        if (!received.has(name))
+          throw new SnapshotDatabaseMissingPartError(agentTypeName, name, "load-envelope")
+      }
+    }
+    const state = await Effect.runPromise(
       Schema.decodeUnknownEffect(compiled.compiledSnapshot.schema)(decoded.state) as Effect.Effect<
         unknown,
         Schema.SchemaError
       >,
     )
+    saved =
+      config.kind === "multipart" && decoded.kind === "multipart"
+        ? { state, parts: decoded.parts }
+        : state
   } else {
     if (decoded.kind !== "binary") {
       throw new SnapshotEnvelopeError(
@@ -1465,10 +1530,10 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
   }
 
   const restoreDatabases = (bound: BoundSnapshot): void => {
-    if (bound.kind === "auto") {
+    if (bound.kind !== "custom") {
       const declared = bound.declaredDatabases
       if (declared.length === 0) {
-        if (decoded.kind !== "json") {
+        if (decoded.kind !== (bound.kind === "multipart" ? "multipart" : "json")) {
           throw new SnapshotEnvelopeError(
             `agent '${agentTypeName}' expects a JSON envelope but received ${snapshot.mimeType}`,
           )
@@ -1478,26 +1543,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
           throw new SnapshotEnvelopeError(
             `agent '${agentTypeName}' expects a multipart/mixed envelope (declared databases: ${declared.join(", ")}) but received ${snapshot.mimeType}`,
           )
-        }
-        // Strict part validation: every declared name must be present
-        // exactly once; no unknown names allowed.
-        const declaredSet = new Set(declared)
-        const seen = new Set<string>()
-        for (const part of decoded.databases) {
-          if (!declaredSet.has(part.name)) {
-            throw new SnapshotDatabaseUnknownPartError(agentTypeName, part.name)
-          }
-          if (seen.has(part.name)) {
-            throw new SnapshotEnvelopeError(
-              `multipart envelope: duplicate db part 'db:${part.name}'`,
-            )
-          }
-          seen.add(part.name)
-        }
-        for (const dbName of declared) {
-          if (!seen.has(dbName)) {
-            throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load-envelope")
-          }
         }
         // Validate that the user attached every declared database.
         for (const dbName of declared) {
