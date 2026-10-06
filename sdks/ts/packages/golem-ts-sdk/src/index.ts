@@ -24,7 +24,9 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
-import { encodeMultipart, decodeMultipart } from './internal/multipart';
+import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/multipart';
+import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
+import type { SnapshotPart } from './snapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
@@ -68,6 +70,9 @@ export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';
+export { SnapshotError } from './snapshot';
+export type { SnapshotPart, MultipartSnapshot } from './snapshot';
+export { Snapshot } from './snapshot';
 export { defineHttpRouter } from './defineHttpRouter';
 export type {
   HttpRouterBuilder,
@@ -752,7 +757,42 @@ function serializePrincipal(p: Principal): object {
   }
 }
 
-function deserializePrincipal(obj: any): Principal {
+function deserializePrincipal(obj: any, strict = false): Principal {
+  if (strict) {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj))
+      throw new SnapshotError('invalid snapshot principal');
+    if (obj.tag !== 'anonymous') {
+      if (obj.val === null || typeof obj.val !== 'object' || Array.isArray(obj.val))
+        throw new SnapshotError('invalid snapshot principal value');
+      const val = obj.val;
+      if (
+        obj.tag === 'agent' &&
+        (typeof val.componentId !== 'string' || typeof val.agentId !== 'string')
+      )
+        throw new SnapshotError('invalid agent principal');
+      if (obj.tag === 'golem-user' && typeof val.accountId !== 'string')
+        throw new SnapshotError('invalid golem-user principal');
+      if (obj.tag === 'oidc') {
+        for (const key of ['sub', 'issuer', 'claims']) {
+          if (typeof val[key] !== 'string')
+            throw new SnapshotError(`invalid oidc principal ${key}`);
+        }
+        for (const key of [
+          'email',
+          'name',
+          'givenName',
+          'familyName',
+          'picture',
+          'preferredUsername',
+        ]) {
+          if (val[key] != null && typeof val[key] !== 'string')
+            throw new SnapshotError(`invalid oidc principal ${key}`);
+        }
+        if (val.emailVerified != null && typeof val.emailVerified !== 'boolean')
+          throw new SnapshotError('invalid oidc principal emailVerified');
+      }
+    }
+  }
   switch (obj.tag) {
     case 'anonymous':
       return { tag: 'anonymous' };
@@ -806,40 +846,27 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const { data: agentSnapshot, mimeType } = await initializedAgent.agent.saveSnapshot();
+  const transport = await initializedAgent.agent.saveSnapshot();
   const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
 
-  if (mimeType.startsWith('multipart/mixed')) {
-    // Multipart snapshot: the state JSON part already contains agent properties.
-    // We need to inject version and principal into the state part.
-    const boundaryMatch = mimeType.match(/boundary=([^\s;]+)/);
-    if (!boundaryMatch) {
-      throw new Error('multipart/mixed snapshot missing boundary parameter');
-    }
-    const boundary = boundaryMatch[1];
-    const parts = decodeMultipart(agentSnapshot, boundary);
-
-    const stateIdx = parts.findIndex((p) => p.name === 'state');
-    if (stateIdx === -1) {
-      throw new Error('multipart snapshot missing "state" part');
-    }
-
-    const stateJson = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    const envelope = { version: 1, principal: serializedPrincipal, state: stateJson };
-    parts[stateIdx] = {
-      ...parts[stateIdx],
-      body: new TextEncoder().encode(JSON.stringify(envelope)),
-    };
-
-    const { data, boundary: newBoundary } = encodeMultipart(parts);
+  if (transport.kind === 'multipart') {
+    const envelope = { version: 1, principal: serializedPrincipal, state: transport.state };
+    const { data, boundary } = encodeMultipart([
+      {
+        name: 'state',
+        contentType: 'application/json',
+        body: new TextEncoder().encode(JSON.stringify(envelope)),
+      },
+      ...transport.parts,
+    ]);
     return {
       payload: data,
-      mimeType: `multipart/mixed; boundary=${newBoundary}`,
+      mimeType: `multipart/mixed; boundary=${boundary}`,
     };
-  } else if (mimeType === 'application/json') {
+  } else if (transport.kind === 'json') {
     // JSON snapshot: wrap in envelope { version, principal, state }
-    const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
+    const state = JSON.parse(new TextDecoder().decode(transport.data));
     const envelope = { version: 1, principal: serializedPrincipal, state };
     return {
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
@@ -850,13 +877,13 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     const principalJson = JSON.stringify(serializedPrincipal);
     const principalBytes = new TextEncoder().encode(principalJson);
 
-    const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
+    const totalLength = 1 + 4 + principalBytes.length + transport.data.length;
     const fullSnapshot = new Uint8Array(totalLength);
     const view = new DataView(fullSnapshot.buffer);
     view.setUint8(0, 2); // version
     view.setUint32(1, principalBytes.length, false); // big-endian
     fullSnapshot.set(principalBytes, 5);
-    fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
+    fullSnapshot.set(transport.data, 5 + principalBytes.length);
 
     return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
@@ -880,9 +907,34 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
   let databases: Array<{ name: string; bytes: Uint8Array }> = [];
+  const userParts = new Map<string, SnapshotPart>();
 
-  const decodeJsonEnvelope = (data: Uint8Array, description: string) => {
-    const envelope = JSON.parse(new TextDecoder().decode(data));
+  const decodeJsonEnvelope = (data: Uint8Array, description: string, strict = false) => {
+    const text = new TextDecoder().decode(data);
+    const envelope = JSON.parse(text);
+    if (strict) {
+      const encoded = new TextEncoder().encode(text);
+      if (encoded.length !== data.length || encoded.some((byte, i) => byte !== data[i])) {
+        throw new SnapshotError('multipart state must be valid UTF-8');
+      }
+      const tokens = text.match(/"(?:[^"\\]|\\.)*"|[{}[\],:]|[^{}[\],:\s]+/g)!;
+      const objects: Array<Set<string> | undefined> = [];
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        if (token === '{') objects.push(new Set());
+        else if (token === '[') objects.push(undefined);
+        else if (token === '}' || token === ']') objects.pop();
+        else if (token.startsWith('"') && tokens[i + 1] === ':') {
+          const key: string = JSON.parse(token);
+          const keys = objects[objects.length - 1]!;
+          if (keys.has(key)) throw new SnapshotError(`duplicate JSON key '${key}'`);
+          keys.add(key);
+          if (objects.length === 1 && key === 'version' && tokens[i + 2] !== '1') {
+            throw new SnapshotError('multipart version must be integer 1');
+          }
+        }
+      }
+    }
     if (envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)) {
       throw `${description} must be a JSON object`;
     }
@@ -901,13 +953,10 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     return envelope;
   };
 
-  if (snapshot.mimeType.startsWith('multipart/mixed')) {
+  if (snapshot.mimeType.split(';', 1)[0].trim().toLowerCase() === 'multipart/mixed') {
     // Multipart snapshot: extract principal from the state JSON part
-    const boundaryMatch = snapshot.mimeType.match(/boundary=([^\s;]+)/);
-    if (!boundaryMatch) {
-      throw 'multipart/mixed snapshot missing boundary parameter';
-    }
-    const boundary = boundaryMatch[1];
+    const boundary = extractBoundary(snapshot.mimeType);
+    if (!boundary) throw new SnapshotError('multipart snapshot missing boundary');
     const parts = decodeMultipart(bytes, boundary);
 
     const stateIdx = parts.findIndex((p) => p.name === 'state');
@@ -915,14 +964,29 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
       throw 'multipart snapshot missing "state" part';
     }
 
-    const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part');
-    principal = deserializePrincipal(envelope.principal);
+    if (parts[stateIdx].contentType !== 'application/json')
+      throw new SnapshotError('state part must be application/json');
+    const envelope = decodeJsonEnvelope(parts[stateIdx].body, 'multipart state part', true);
+    principal = deserializePrincipal(envelope.principal, true);
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
-    agentSnapshotMimeType = 'application/json';
-    databases = parts
-      .filter((part) => part.name.startsWith('db:'))
-      .map((part) => ({ name: part.name.slice(3), bytes: part.body }));
+    agentSnapshotMimeType = 'multipart/mixed';
+    for (const part of parts) {
+      if (part.name === 'state') continue;
+      if (part.name.startsWith('part:')) {
+        const name = part.name.slice(5);
+        validatePartName(name);
+        userParts.set(name, {
+          bytes: part.body,
+          contentType: normalizeContentType(part.contentType),
+        });
+      } else if (part.name.startsWith('db:')) {
+        const name = part.name.slice(3);
+        if (part.contentType !== 'application/x-sqlite3')
+          throw new SnapshotError('database part must be application/x-sqlite3');
+        databases.push({ name, bytes: part.body });
+      } else throw new SnapshotError(`unknown snapshot namespace '${part.name}'`);
+    }
   } else if (snapshot.mimeType === 'application/json') {
     // JSON snapshot: unwrap envelope { version, principal, state }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
@@ -968,6 +1032,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     agentSnapshot,
     agentSnapshotMimeType,
     databases,
+    userParts,
   );
 
   if (initiateResult.tag === 'ok') {

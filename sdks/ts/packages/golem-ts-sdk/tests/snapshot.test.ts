@@ -8,10 +8,9 @@ import { method } from '../src/method';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { schemaValueToWit, v } from '../src/internal/schema-model';
 import type { Principal } from '../src/principal';
+import type { ResolvedAgent, SnapshotTransport } from '../src/internal/resolvedAgent';
 
-interface Resolved {
-  saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }>;
-}
+type Resolved = ResolvedAgent;
 
 async function initiate(name: string): Promise<Resolved> {
   // id is `{ name: z.string() }` → a one-field record.
@@ -22,7 +21,7 @@ async function initiate(name: string): Promise<Resolved> {
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
   if (res.tag !== 'ok') throw new Error(`initiate failed: ${JSON.stringify(res.val)}`);
-  return res.val as unknown as Resolved;
+  return res.val;
 }
 
 async function restore(name: string, data: Uint8Array): Promise<Resolved> {
@@ -42,6 +41,10 @@ async function restore(name: string, data: Uint8Array): Promise<Resolved> {
 }
 
 const jsonOf = (data: Uint8Array) => JSON.parse(new TextDecoder().decode(data));
+const simpleSnapshot = (snapshot: SnapshotTransport) => {
+  if (snapshot.kind === 'multipart') throw new Error('expected a simple snapshot');
+  return snapshot;
+};
 
 let separationInitCount = 0;
 let separationRestoreCount = 0;
@@ -257,7 +260,7 @@ defineAgent({
 describe('snapshot — typed state', () => {
   it('serializes the declared state fields without config or helpers', async () => {
     const agent = await initiate('SnapTypedCounter');
-    const snap = await agent.saveSnapshot();
+    const snap = simpleSnapshot(await agent.saveSnapshot());
     expect(snap.mimeType).toBe('application/json');
     expect(jsonOf(snap.data)).toEqual({ count: 7 });
   });
@@ -279,7 +282,7 @@ describe('snapshot — typed state', () => {
       'SnapTypedCounter',
       new TextEncoder().encode(JSON.stringify({ count: 42 })),
     );
-    expect(jsonOf((await agent.saveSnapshot()).data)).toEqual({ count: 42 });
+    expect(jsonOf(simpleSnapshot(await agent.saveSnapshot()).data)).toEqual({ count: 42 });
   });
 
   it('rejects a snapshot that violates the declared schema', async () => {
@@ -292,7 +295,7 @@ describe('snapshot — typed state', () => {
 describe('snapshot — schema-backed config', () => {
   it('does NOT serialize the live config accessor', async () => {
     const agent = await initiate('SnapReflConfig');
-    const state = jsonOf((await agent.saveSnapshot()).data);
+    const state = jsonOf(simpleSnapshot(await agent.saveSnapshot()).data);
     expect(state).toEqual({ count: 3 });
     expect('config' in state).toBe(false);
   });
@@ -301,27 +304,29 @@ describe('snapshot — schema-backed config', () => {
 describe('snapshot — custom save/load', () => {
   it('uses typed saving with a custom load-only restoration factory', async () => {
     const initial = await initiate('SnapTypedSaveCustomLoad');
-    const snapshot = await initial.saveSnapshot();
+    const snapshot = simpleSnapshot(await initial.saveSnapshot());
     expect(snapshot.mimeType).toBe('application/json');
     expect(jsonOf(snapshot.data)).toEqual({ count: 4 });
 
     const restored = await restore('SnapTypedSaveCustomLoad', snapshot.data);
-    expect(jsonOf((await restored.saveSnapshot()).data)).toEqual({ count: 4 });
+    expect(jsonOf(simpleSnapshot(await restored.saveSnapshot()).data)).toEqual({ count: 4 });
   });
 
   it('uses the user bytes verbatim (octet-stream) and restores from them', async () => {
     const agent = await initiate('SnapCustom');
-    const snap = await agent.saveSnapshot();
+    const snap = simpleSnapshot(await agent.saveSnapshot());
     expect(snap.mimeType).toBe('application/octet-stream');
     expect(new TextDecoder().decode(snap.data)).toBe('count=5');
 
     const restored = await restore('SnapCustom', new TextEncoder().encode('count=99'));
-    expect(new TextDecoder().decode((await restored.saveSnapshot()).data)).toBe('count=99');
+    expect(new TextDecoder().decode(simpleSnapshot(await restored.saveSnapshot()).data)).toBe(
+      'count=99',
+    );
   });
 
   it('keeps the complete custom-restored state when a state schema is also declared', async () => {
     const restored = await restore('SnapCustomWithStateSchema', new Uint8Array());
-    expect(jsonOf((await restored.saveSnapshot()).data)).toMatchObject({
+    expect(jsonOf(simpleSnapshot(await restored.saveSnapshot()).data)).toMatchObject({
       count: 11,
       resource: { marker: 'restored' },
     });
@@ -341,7 +346,7 @@ describe('snapshot — custom save/load', () => {
     expect(restoredId).toEqual({ name: 'c1' });
     expect((restoredAgentId as { value: string }).value).toContain('SnapSeparatedFactories(');
     expect(Object.getOwnPropertyDescriptor(restoredConfig, 'greeting')?.get).toBeTypeOf('function');
-    const saved = jsonOf((await restored.saveSnapshot()).data);
+    const saved = jsonOf(simpleSnapshot(await restored.saveSnapshot()).data);
     expect(saved).toMatchObject({ count: 12, principal: 'anonymous' });
     expect(saved.agentId).toContain('SnapSeparatedFactories(');
 

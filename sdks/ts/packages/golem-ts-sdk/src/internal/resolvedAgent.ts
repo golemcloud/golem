@@ -16,6 +16,12 @@ import { Result } from 'golem:agent/host@2.0.0';
 import { AgentError, AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { ParsedAgentId } from '../agentId';
+import type { MultipartPart } from './multipart';
+
+/** Unenveloped transport: principal metadata is added once by the guest. */
+export type SnapshotTransport =
+  | { kind: 'binary' | 'json'; data: Uint8Array; mimeType: string }
+  | { kind: 'multipart'; state: unknown; parts: MultipartPart[] };
 
 /**
  * The minimal resolved-agent contract the guest runtime (`src/index.ts`) drives:
@@ -31,5 +37,5 @@ export interface ResolvedAgent {
     methodArgs: SchemaValueTree,
     principal: Principal,
   ): Promise<Result<SchemaValueTree | undefined, AgentError>>;
-  saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }>;
+  saveSnapshot(): Promise<SnapshotTransport>;
 }

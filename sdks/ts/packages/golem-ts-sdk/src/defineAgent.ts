@@ -34,6 +34,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { buildAgentClientSurface } from './client';
 import type { RouterMountOptions } from './httpRouterContract';
 import type { FullAgentClientFactory } from './client';
+import type { MultipartSnapshot } from './snapshot';
 
 export type { ConfigSpec } from './config';
 
@@ -159,37 +160,50 @@ export interface SnapshotRestoreContext<
   readonly agentId: ParsedAgentId;
 }
 
-export interface AgentImplementation<
+export type AgentImplementation<
   Id extends IdRecord,
   Methods extends MethodsRecord,
   Config extends ConfigSpec,
   State extends object,
-  HasSnapshotState extends boolean = false,
-> {
+  HasSnapshotState extends boolean | StandardSchemaV1 = false,
+> = {
   init: (ctx: InitContext<Id, Config>) => State | Promise<State>;
   /** One handler per declared method; `this` is bound to `State` + SDK helpers. */
   methods: { [K in keyof Methods]: HandlerFor<Methods[K]> } & ThisType<
     State & AgentContext<Config>
   >;
-  /**
-   * Optional custom snapshot serializer and restoration factory. Restoration is
-   * an alternative to `init`: it must return a complete fresh state object. When
-   * a snapshot state schema is declared, `save` may be omitted to use typed saving.
-   */
-  snapshot?: {
-    load: (
-      this: void,
-      bytes: Uint8Array,
-      ctx: SnapshotRestoreContext<Id, Config>,
-    ) => State | Promise<State>;
-  } & (HasSnapshotState extends true
-    ? {
-        save?: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
-      }
-    : {
-        save: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
-      });
-}
+} & (HasSnapshotState extends StandardSchemaV1
+  ? {
+      /** Explicit projection and fresh-state restoration; ordinary init is skipped. */
+      snapshot: {
+        save: (
+          this: State & AgentContext<Config>,
+        ) =>
+          | MultipartSnapshot<StandardSchemaV1.InferInput<HasSnapshotState>>
+          | Promise<MultipartSnapshot<StandardSchemaV1.InferInput<HasSnapshotState>>>;
+        load: (
+          this: void,
+          saved: MultipartSnapshot<StandardSchemaV1.InferOutput<HasSnapshotState>>,
+          ctx: SnapshotRestoreContext<Id, Config>,
+        ) => State | Promise<State>;
+      };
+    }
+  : {
+      /** Custom byte hooks, or a restoration factory for automatic typed saving. */
+      snapshot?: {
+        load: (
+          this: void,
+          bytes: Uint8Array,
+          ctx: SnapshotRestoreContext<Id, Config>,
+        ) => State | Promise<State>;
+      } & (HasSnapshotState extends true
+        ? {
+            save?: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+          }
+        : {
+            save: (this: State & AgentContext<Config>) => Uint8Array | Promise<Uint8Array>;
+          });
+    });
 
 export interface AgentImpl {
   readonly name: string;
@@ -242,10 +256,15 @@ export interface AgentDefinition<
   Config extends ConfigSpec = {},
   StateSchema extends StandardSchemaV1 = StandardSchemaV1,
   Mode extends 'durable' | 'ephemeral' = 'durable',
-  HasSnapshotState extends boolean = false,
+  HasSnapshotState extends boolean | StandardSchemaV1 = false,
 > extends FullAgentClientDefinition<Id, Methods, Config, Mode> {
   /** Supply the runtime behaviour. Registers the agent at module-load time. */
-  implement<State extends object & StandardSchemaV1.InferOutput<StateSchema>>(
+  implement<
+    State extends object &
+      (HasSnapshotState extends StandardSchemaV1
+        ? unknown
+        : StandardSchemaV1.InferOutput<StateSchema>),
+  >(
     impl: AgentImplementation<Id, Methods, Config, State, HasSnapshotState>,
   ): AgentImpl;
 }
@@ -266,11 +285,16 @@ export type SnapshotPolicy =
 /**
  * Snapshotting configuration. Use `{ policy, state }` for automatic schema-driven
  * save and restoration. A bare {@link SnapshotPolicy} requires a custom
- * `snapshot: { save, load }` implementation when enabled.
+ * `snapshot: { save, load }` implementation when enabled. Explicit `{ multipart:
+ * { state }, policy? }` always requires both hooks and keeps live state independent
+ * of saved schema. Save returns schema input JSON; load receives validated output.
+ * Hooks run unpersisted and must tolerate retries. Whole-buffer copies amplify
+ * memory use; the host inline/blob threshold is not a snapshot size cap.
  */
 export type SnapshottingSpec<StateSchema extends StandardSchemaV1 = StandardSchemaV1> =
   | SnapshotPolicy
-  | { policy?: SnapshotPolicy; state: StateSchema };
+  | { policy?: SnapshotPolicy; state: StateSchema; multipart?: never }
+  | { policy?: SnapshotPolicy; multipart: { state: StateSchema }; state?: never };
 
 interface AgentSpecBase<
   Id extends IdRecord,
@@ -370,6 +394,19 @@ export function defineAgent<
   Mode extends 'durable' | 'ephemeral' = 'durable',
 >(
   spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode> & {
+    snapshotting: { policy?: SnapshotPolicy; multipart: { state: StateSchema }; state?: never };
+  },
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, StateSchema>;
+export function defineAgent<
+  Id extends IdRecord,
+  Methods extends MethodsRecord,
+  Config extends ConfigSpec = {},
+  MV extends string = keyof Id & string,
+  WV extends string = never,
+  StateSchema extends StandardSchemaV1 = StandardSchemaV1,
+  Mode extends 'durable' | 'ephemeral' = 'durable',
+>(
+  spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode> & {
     snapshotting: { policy?: SnapshotPolicy; state: StateSchema };
   },
 ): AgentDefinition<Id, Methods, Config, StateSchema, Mode, true>;
@@ -394,7 +431,7 @@ export function defineAgent<
   Mode extends 'durable' | 'ephemeral' = 'durable',
 >(
   spec: AgentSpec<Id, Methods, Config, MV, WV, StateSchema, Mode>,
-): AgentDefinition<Id, Methods, Config, StateSchema, Mode, boolean> {
+): AgentDefinition<Id, Methods, Config, StateSchema, Mode, boolean | StateSchema> {
   const name = spec.name;
   let registered: RegisteredAgent | undefined;
   try {
@@ -486,7 +523,7 @@ export function defineAgent<
           }
           registerAgentInitiator(
             registered,
-            impl as AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
+            impl as unknown as Parameters<typeof registerAgentInitiator>[1],
           );
         } catch (error) {
           AgentTypeRegistry.recordRegistrationError(

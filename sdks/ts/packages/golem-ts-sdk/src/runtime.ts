@@ -57,7 +57,14 @@ import {
   restoreDatabaseSync,
   serializeDatabaseSync,
 } from './internal/sqlite';
-import { encodeMultipart, MultipartPart } from './internal/multipart';
+import { MultipartPart } from './internal/multipart';
+import type { SnapshotTransport } from './internal/resolvedAgent';
+import {
+  MultipartSnapshot,
+  normalizeContentType,
+  SnapshotError,
+  validatePartName,
+} from './snapshot';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
@@ -148,6 +155,7 @@ export interface AgentRuntime {
   >;
   configAccessor(): ReturnType<typeof buildConfigAccessor>;
   snapshotStateSchema?: StandardSchemaV1;
+  multipartSnapshotSchema?: StandardSchemaV1;
 }
 
 /** Dynamic metadata compilation retains model codecs only for explicit runtime definitions. */
@@ -228,12 +236,33 @@ export function registerAgentType(
   const configTree = compileConfigTree(metadata.config);
   const configDeclarations = collectConfigLeaves(configTree);
 
+  const snap = metadata.snapshotting;
+  if (snap !== undefined && typeof snap === 'object' && 'multipart' in snap) {
+    if ('state' in snap)
+      throw new SnapshotError('snapshotting state and multipart are mutually exclusive');
+    const config = snap.multipart;
+    const standard = config?.state?.['~standard'];
+    if (
+      config === null ||
+      typeof config !== 'object' ||
+      standard?.version !== 1 ||
+      typeof standard.vendor !== 'string' ||
+      typeof standard.validate !== 'function'
+    ) {
+      throw new SnapshotError('multipart snapshotting requires a Standard Schema state validator');
+    }
+  }
   const agentType = assembleAgentType(name, idCodecs, methodCodecs, configDeclarations, metadata);
   AgentTypeRegistry.completeRegistration(className, agentType);
-
-  const snap = metadata.snapshotting;
   const snapshotStateSchema =
     snap !== undefined && typeof snap === 'object' && 'state' in snap ? snap.state : undefined;
+  const multipartSnapshotSchema =
+    snap !== undefined &&
+    typeof snap === 'object' &&
+    'multipart' in snap &&
+    snap.multipart !== undefined
+      ? snap.multipart.state
+      : undefined;
   return {
     name,
     className,
@@ -243,6 +272,7 @@ export function registerAgentType(
     configDeclarations,
     configTree,
     snapshotStateSchema,
+    multipartSnapshotSchema,
     readId: (input, principal) => readNamedInputs(idCodecs, input, principal),
     runtimeMethods: new Map(
       [...methodCodecs].map(([methodName, mc]) => [
@@ -289,7 +319,7 @@ function readNamedInputs(
  */
 /** Extract the WHEN-policy from a snapshotting spec (the `{ policy, state }` form defaults to `'default'`). */
 function snapshotPolicyOf(spec: SnapshottingSpec | undefined): SnapshotPolicy | undefined {
-  if (spec !== undefined && typeof spec === 'object' && 'state' in spec)
+  if (spec !== undefined && typeof spec === 'object' && ('state' in spec || 'multipart' in spec))
     return spec.policy ?? 'default';
   return spec;
 }
@@ -616,7 +646,10 @@ class ResolvedAgentImpl {
     private readonly agentId: ParsedAgentId,
     /** Optional user-supplied snapshot serializer (`implement({ snapshot })`). */
     private readonly customSnapshot?: {
-      save?: () => Uint8Array | Promise<Uint8Array>;
+      save?: () =>
+        | Uint8Array
+        | MultipartSnapshot<unknown>
+        | Promise<Uint8Array | MultipartSnapshot<unknown>>;
     },
   ) {}
 
@@ -684,10 +717,34 @@ class ResolvedAgentImpl {
   //  - typed  (`snapshotting: { state }`): JSON of ONLY the schema-validated state
   //           fields of `this`, plus a `db:<field>` SQLite part per DatabaseSync.
   // The principal/version envelope is added by the guest (`src/index.ts`).
-  async saveSnapshot(): Promise<{ data: Uint8Array; mimeType: string }> {
+  async saveSnapshot(): Promise<SnapshotTransport> {
+    if (this.reg.multipartSnapshotSchema) {
+      const saved = await this.customSnapshot!.save!.call(this.instance);
+      if (saved instanceof Uint8Array || !(saved.parts instanceof Map)) {
+        throw new SnapshotError('multipart save must return state and a Map of parts');
+      }
+      assertJsonSnapshotValue(saved.state, 'state');
+      // Standard Schema validates input but has no reverse encoder. Persist the
+      // original JSON, not transformed output that may not validate on load.
+      const stateJson = JSON.stringify(saved.state);
+      await validateSnapshotState(this.reg.multipartSnapshotSchema, JSON.parse(stateJson));
+      const parts: MultipartPart[] = Array.from(saved.parts, ([name, part]) => {
+        validatePartName(name);
+        if (!(part.bytes instanceof Uint8Array))
+          throw new SnapshotError(`part '${name}' bytes must be Uint8Array`);
+        return {
+          name: `part:${name}`,
+          contentType: normalizeContentType(part.contentType),
+          body: part.bytes,
+        };
+      });
+      return { kind: 'multipart', state: JSON.parse(stateJson), parts };
+    }
     if (this.customSnapshot?.save) {
       const data = await this.customSnapshot.save.call(this.instance);
-      return { data, mimeType: 'application/octet-stream' };
+      if (!(data instanceof Uint8Array))
+        throw new SnapshotError('custom save must return Uint8Array');
+      return { kind: 'binary', data, mimeType: 'application/octet-stream' };
     }
     if (!this.reg.snapshotStateSchema) {
       throw 'snapshot saving requires a declared state schema or custom save/load functions';
@@ -725,18 +782,14 @@ class ResolvedAgentImpl {
 
     const stateJson = new TextEncoder().encode(JSON.stringify(state));
     if (databases.length === 0) {
-      return { data: stateJson, mimeType: 'application/json' };
+      return { kind: 'json', data: stateJson, mimeType: 'application/json' };
     }
-    const parts: MultipartPart[] = [
-      { name: 'state', contentType: 'application/json', body: stateJson },
-      ...databases.map((db) => ({
-        name: `db:${db.name}`,
-        contentType: 'application/x-sqlite3',
-        body: db.bytes,
-      })),
-    ];
-    const { data, boundary } = encodeMultipart(parts);
-    return { data, mimeType: `multipart/mixed; boundary=${boundary}` };
+    const parts: MultipartPart[] = databases.map((db) => ({
+      name: `db:${db.name}`,
+      contentType: 'application/x-sqlite3',
+      body: db.bytes,
+    }));
+    return { kind: 'multipart', state, parts };
   }
 }
 
@@ -852,7 +905,13 @@ async function validateSnapshotState(
 /** Register the agent's initiator. On `initiate`, decode id, run `init`, wire handlers. */
 export function registerAgentInitiator(
   reg: AgentRuntime,
-  impl: AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>,
+  impl: AgentImplementation<
+    IdRecord,
+    MethodsRecord,
+    ConfigSpec,
+    object,
+    boolean | StandardSchemaV1
+  >,
 ): void {
   if (AgentInitiatorRegistry.exists(reg.name)) {
     throw new Error(`Agent "${reg.name}" already has an implementation`);
@@ -959,14 +1018,48 @@ export function registerAgentInitiator(
         val: complete(state, resolved.val) as never,
       };
     },
-    async loadSnapshot(constructorInput, principal, bytes, _mimeType, databases) {
+    async loadSnapshot(constructorInput, principal, bytes, mimeType, databases, parts = new Map()) {
       const resolved = resolveContext(constructorInput, principal);
       if (resolved.tag === 'err') return resolved;
       const { idRecord, phantomId, sdkPrincipal, config } = resolved.val;
       let state: object;
       try {
-        if (impl.snapshot?.load) {
-          const load = impl.snapshot.load;
+        if (reg.multipartSnapshotSchema) {
+          if (mimeType !== 'multipart/mixed' || databases.length > 0) {
+            throw new SnapshotError(
+              'explicit multipart restoration requires multipart without database parts',
+            );
+          }
+          const savedState = await validateSnapshotState(
+            reg.multipartSnapshotSchema,
+            JSON.parse(new TextDecoder().decode(bytes)),
+          );
+          const load = (
+            impl.snapshot as AgentImplementation<
+              IdRecord,
+              MethodsRecord,
+              ConfigSpec,
+              object,
+              StandardSchemaV1
+            >['snapshot']
+          ).load;
+          state = await load(
+            { state: savedState, parts },
+            {
+              id: idRecord as never,
+              agentId: resolved.val.agentId,
+              principal: sdkPrincipal,
+              phantomId,
+              config,
+            },
+          );
+        } else if (parts.size > 0) {
+          throw new SnapshotError('simple snapshot modes cannot restore user parts');
+        } else if (impl.snapshot?.load) {
+          const snapshot = impl.snapshot as NonNullable<
+            AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>['snapshot']
+          >;
+          const load = snapshot.load;
           state = await load(bytes, {
             id: idRecord as never,
             agentId: resolved.val.agentId,
