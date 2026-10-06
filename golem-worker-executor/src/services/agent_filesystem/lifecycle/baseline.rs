@@ -684,7 +684,8 @@ pub(super) struct GenerationFacts {
     pub(super) chosen_times: bool,
     /// The generation has entity-provisioned files.
     pub(super) provisioned: bool,
-    /// An initial file is declared read-write.
+    /// An initial file of the component revision is declared read-write. A provisioned file rules
+    /// out a tree of initial files by itself, so its permissions do not matter here.
     pub(super) read_write_declared: bool,
 }
 
@@ -699,7 +700,6 @@ impl GenerationFacts {
             read_write_declared: state
                 .initial
                 .values()
-                .chain(state.provisioned.values())
                 .any(|file| file.permissions != AgentFilePermissions::ReadOnly),
         }
     }
@@ -719,17 +719,15 @@ pub(super) fn every_declaration_left_out(left_out: usize, declared: usize) -> bo
 }
 
 /// Whether a tree with `facts`, whose `left_out` read-only paths hold their initial files, still
-/// needs a walk to tell if it holds only initial files. It reads the sizes of the declaration maps
-/// `initial` and `provisioned` as they are, so a tree that the rules rule out costs no other view
-/// of the declarations.
+/// needs a walk to tell if it holds only initial files. A tree that the facts allow has no
+/// provisioned file, so the declarations are the initial declarations `initial`, read as they are:
+/// a tree that the rules rule out costs no other view of the declarations.
 pub(super) fn needs_a_walk(
     facts: GenerationFacts,
     left_out: usize,
     initial: &Declarations,
-    provisioned: &Declarations,
 ) -> bool {
-    may_hold_only_initial_files(facts)
-        && every_declaration_left_out(left_out, initial.len() + provisioned.len())
+    may_hold_only_initial_files(facts) && every_declaration_left_out(left_out, initial.len())
 }
 
 /// Tells whether the tree holds only what a start from the initial files gives, from the facts of
@@ -742,7 +740,7 @@ async fn holds_only_initial_files<Adapter: SandboxFilesystemAdapter>(
     facts: GenerationFacts,
     left_out: &[Box<Path>],
 ) -> Result<bool, FilesystemStorageError> {
-    if !needs_a_walk(facts, left_out.len(), &state.initial, &state.provisioned) {
+    if !needs_a_walk(facts, left_out.len(), &state.initial) {
         return Ok(false);
     }
     holds_nothing_else(sandbox, &state.declarations()).await

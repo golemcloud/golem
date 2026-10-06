@@ -397,11 +397,16 @@ async fn the_facts_of_a_generation_name_its_chosen_times_provisioned_files_and_r
             facts(&state(vec![read_only.clone()], vec![]), false),
             facts(&state(vec![read_only.clone()], vec![]), true),
             facts(&state(vec![], vec![read_only.clone()]), false),
+            facts(
+                &state(vec![read_only.clone()], vec![read_write.clone()]),
+                false
+            ),
             facts(&state(vec![read_only, read_write], vec![]), false),
         ],
         [
             (false, false, false),
             (true, false, false),
+            (false, true, false),
             (false, true, false),
             (false, false, true),
         ]
@@ -425,7 +430,6 @@ async fn only_a_tree_that_the_facts_and_the_left_out_count_allow_needs_a_walk() 
         "initial",
     )
     .unwrap();
-    let none = declarations_of(vec![], "provisioned").unwrap();
     let facts = |chosen_times, provisioned, read_write_declared| GenerationFacts {
         chosen_times,
         provisioned,
@@ -440,7 +444,7 @@ async fn only_a_tree_that_the_facts_and_the_left_out_count_allow_needs_a_walk() 
             (facts(false, true, false), 2),
             (facts(false, false, true), 2),
         ]
-        .map(|(facts, left_out)| needs_a_walk(facts, left_out, &initial, &none)),
+        .map(|(facts, left_out)| needs_a_walk(facts, left_out, &initial)),
         [true, false, false, false, false]
     );
 }
