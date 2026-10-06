@@ -881,16 +881,20 @@ are all read-only, and then applies the initial files of the target revision.
 An application snapshot is used only when the files of the agent can come back with it. With
 `filesystem_snapshots` disabled, the admission answers `InitialFilesOnly`, and the snapshot checks
 the tree in place of the capture (`agent_filesystem::check_initial_files`): the same fence and
-the same rule as a capture, with no host directory and no copy. A tree of initial files gives a
-record without a name. Any other tree, or a check that fails, gives no periodic record, so a
-restart replays from an older record without a name or from the start; a snapshot-based manual
+the same rule as a capture, with no host directory, copy or store call. The tree holds only
+initial files when each declaration is a read-only initial file that is untouched and has a single
+name, no entity-provisioned file exists, and the tree holds nothing else; a read-write initial
+file counts as a change. A tree of initial files gives a record without a name. Any other tree,
+or a check that cannot decide (a file call that stays open, a sandbox error), gives no periodic
+record, so a start uses an older usable record or replays the whole oplog; a snapshot-based manual
 update fails as a failed update (`UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`), and the agent stays on its
-revision. A periodic snapshot that writes no record waits a period before the next one
-(`invocation_loop.rs::snapshot_baseline_timestamp`). A start from the initial files of the source
-revision of a manual update counts as an install, not a restore of saved times
+revision. A periodic boundary that writes no record waits one period before the next attempt
+(`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
+agent: a boundary that writes no record is not replayed. A start from the initial files of the
+source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
-A record without a name that an executor wrote before this rule, while the files had changed, is
-still usable, and its start does not get those files back.
+Records without a name that executors wrote before this rule, while the files had changed, stay
+usable without a migration, and a start from one does not get those files back.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
 open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
