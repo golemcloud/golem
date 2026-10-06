@@ -34,7 +34,9 @@
 //! than the generated code needs. Go's build and module caches are safe for
 //! concurrent use, so the suite runs in parallel.
 
-use crate::bridge_gen::fixtures::{agent, def, field, method, named_field, ref_to, variant_case};
+use crate::bridge_gen::fixtures::{
+    agent, def, field, local_config, method, named_field, ref_to, variant_case,
+};
 use crate::bridge_gen::scala::{command_node, doc, grep_tool, option, positional, tool_body};
 use camino::{Utf8Path, Utf8PathBuf};
 use golem_cli::app::build::go_toolchain::{GoToolchain, ensure_go_toolchain};
@@ -43,7 +45,10 @@ use golem_cli::bridge_gen::go::tool::GoToolBridgeGenerator;
 use golem_cli::bridge_gen::go::{GoBridgeGenerator, GoBridgeMode};
 use golem_cli::model::app::ApplicationConfig;
 use golem_cli::sdk_overrides::workspace_root;
-use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
+use golem_common::model::agent::{
+    AgentConfigSource, AgentMode, CorsOptions, FileMapping, HttpMountDetails,
+};
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::schema_type::{DiscriminatorRule, ResultSpec, UnionBranch, UnionSpec};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
@@ -1155,4 +1160,122 @@ fn go_external_ephemeral_client_reports_the_instance(env: &GoEnv) {
     assert!(!client.contains("func GetRequestAgent("), "{client}");
     generated.assert_gofmt_clean(env);
     generated.assert_vets_natively(env);
+}
+
+fn configured_counter_agent() -> AgentTypeSchema {
+    let mut configured = counter_agent();
+    configured.schema.defs.push(def(
+        "cfg.Db",
+        SchemaType::record(vec![
+            named_field("host", SchemaType::string()),
+            named_field("mode", ref_to("cfg.Mode")),
+        ]),
+    ));
+    configured.schema.defs.push(def(
+        "cfg.Mode",
+        SchemaType::r#enum(vec!["read-only".into(), "read-write".into()]),
+    ));
+    configured.config = vec![
+        local_config(vec!["greeting"], SchemaType::string()),
+        local_config(vec!["limits", "max-items"], SchemaType::u16()),
+        local_config(vec!["db"], ref_to("cfg.Db")),
+        AgentConfigDeclarationSchema {
+            source: AgentConfigSource::Secret,
+            path: vec!["token".into()],
+            value_type: SchemaType::string(),
+        },
+    ];
+    configured
+}
+
+/// A guest client of an agent with local configuration gets the same typed
+/// configuration struct, applied as per-path entries.
+#[test]
+fn go_guest_client_overrides_typed_configuration(env: &GoEnv) {
+    let generated = GeneratedGo::guest(env, configured_counter_agent());
+    let client = generated.read("client.go");
+    for expected in [
+        "type CounterAgentConfig struct",
+        "LimitsMaxItems values.Option[uint16]",
+        "func WithCounterAgentConfig(cfg CounterAgentConfig) golem.ClientOpt {",
+        "golem.ConfigEntryOf([]string{\"limits\", \"max-items\"}, v)",
+        "func GetCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) CounterAgentClient {",
+    ] {
+        assert!(
+            client.contains(expected),
+            "missing {expected} in:\n{client}"
+        );
+    }
+    assert!(!client.contains("Token"), "{client}");
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_for_wasip1(env);
+}
+
+/// An agent with local configuration gets a typed configuration struct whose
+/// set fields travel as canonical JSON; secret configuration is left out.
+#[test]
+fn go_external_client_overrides_typed_configuration(env: &GoEnv) {
+    let generated = GeneratedGo::external(env, configured_counter_agent());
+    let client = generated.read("client.go");
+    assert!(
+        client.contains("type CounterAgentConfig struct"),
+        "{client}"
+    );
+    assert!(!client.contains("Token"), "{client}");
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+
+    let package = generated.package();
+    generated.run_native_test(
+        env,
+        &format!(
+            r#"package {package}
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/bridge"
+	"github.com/golemcloud/golem/sdks/go/core/values"
+)
+
+func TestSetConfigurationFieldsTravelAsCanonicalJSON(t *testing.T) {{
+	var config string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &body)
+		config = string(body["config"])
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{{"agentId":{{"componentId":"c","agentId":"a"}},"idempotencyKey":"k"}}`)
+	}}))
+	defer server.Close()
+
+	client, err := GetCounterAgent(CounterAgentId{{Name: "c1"}},
+		bridge.WithConfiguration(bridge.Configuration{{
+			Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
+		}}),
+		WithCounterAgentConfig(CounterAgentConfig{{
+			LimitsMaxItems: values.Some[uint16](7),
+			Db:             values.Some(CfgDb{{Host: "h", Mode: CfgModeReadWrite}}),
+		}}),
+	)
+	if err != nil {{
+		t.Fatal(err)
+	}}
+	if err := client.Add(context.Background(), 1); err != nil {{
+		t.Fatal(err)
+	}}
+	want := `[{{"path":["limits","max-items"],"value":7}},{{"path":["db"],"value":{{"host":"h","mode":"read-write"}}}}]`
+	if config != want {{
+		t.Fatalf("config sent as %s, want %s", config, want)
+	}}
+}}
+"#
+        ),
+    );
 }

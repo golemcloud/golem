@@ -121,7 +121,7 @@ client := shop.Agent.Get(
 )
 ```
 
-Only declared local keys can be overridden; secret fields are always platform-provisioned and are skipped.
+Only declared local keys can be overridden; secret fields are always platform-provisioned and are skipped. `golem.WithConfig` sends every local field of the struct. To set only some, or to call an agent in another component, use the generated guest client's `With<Agent>Config` option (see `golem-call-another-agent-go`). It sends only the fields you set, through `golem.WithConfigEntries(golem.ConfigEntryOf(path, value)…)`.
 
 ## Key Constraints
 

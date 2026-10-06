@@ -255,6 +255,28 @@ func TestWithConfigEncodesLocalsSkipsSecrets(t *testing.T) {
 	})
 }
 
+// TestWithConfigEntriesSendsOnlyTheGivenPaths — entries carry their own paths,
+// whatever the field names; a client declared without its target's config
+// leaves checking them to the target.
+func TestWithConfigEntriesSendsOnlyTheGivenPaths(t *testing.T) {
+	withDefs(t, func(d *definitions) {
+		defineFullAgentClientInto[RemoteCounterID, NoConfig](d, "CounterAgent", AgentClientSpec{})
+		var o clientOpts
+		WithConfigEntries(ConfigEntryOf([]string{"limits", "max-items"}, uint16(7)))(&o)
+		got, err := buildAgentConfig(d, d.agents["CounterAgent"], o.configs)
+		if err != nil {
+			t.Fatalf("buildAgentConfig: %v", err)
+		}
+		if len(got) != 1 || strings.Join(got[0].Path, "/") != "limits/max-items" {
+			t.Fatalf("overrides = %+v", got)
+		}
+		val, err := decodeConfigValue[uint16](d, got[0].Path, got[0].Value.Value)
+		if err != nil || val != 7 {
+			t.Fatalf("override decoded as %v, %v", val, err)
+		}
+	})
+}
+
 // TestWithConfigUndeclaredRejected — Overriding config against an agent that
 // declares none is rejected client-side (no key matches). Encodes demoAppConfig
 // overrides directly and validates them against a no-config agent's entry.

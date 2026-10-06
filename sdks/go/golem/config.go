@@ -401,6 +401,40 @@ func WithConfig[Cfg any](value Cfg) ClientOpt {
 	}
 }
 
+// ConfigEntry is one typed local config value of a client's target, for
+// [WithConfigEntries]. Make one with [ConfigEntryOf].
+type ConfigEntry struct {
+	path   []string
+	encode func(d *definitions) (types.TypedSchemaValue, error)
+}
+
+// ConfigEntryOf is the config value at path, typed as T.
+func ConfigEntryOf[T any](path []string, value T) ConfigEntry {
+	return ConfigEntry{path: slices.Clone(path), encode: func(d *definitions) (types.TypedSchemaValue, error) {
+		return encodeReflectValue(d, reflect.ValueOf(value))
+	}}
+}
+
+// WithConfigEntries supplies some of the callee's local config values at
+// client creation, each at its own path; the rest keep their provisioned
+// values. Generated clients build these from their typed configuration
+// structs, whose fields need not follow [WithConfig]'s field-name paths.
+func WithConfigEntries(entries ...ConfigEntry) ClientOpt {
+	return func(o *clientOpts) {
+		o.configs = append(o.configs, func(d *definitions) ([]common.TypedAgentConfigValue, error) {
+			out := make([]common.TypedAgentConfigValue, 0, len(entries))
+			for _, entry := range entries {
+				tv, err := entry.encode(d)
+				if err != nil {
+					return nil, fmt.Errorf("config override %v: %w", entry.path, err)
+				}
+				out = append(out, common.TypedAgentConfigValue{Path: clonePath(entry.path), Value: tv})
+			}
+			return out, nil
+		})
+	}
+}
+
 // WithConfigJSON supplies one local config value of a reflected client's
 // target at creation, as canonical JSON for the declared path. It is checked
 // against the snapshot's declaration before anything is sent.
@@ -463,7 +497,9 @@ func buildAgentConfig(d *definitions, e *agentEntry, overrides []configOverrideF
 			return nil, err
 		}
 		for _, tv := range tvs {
-			if !configDeclared(e, tv.Path) {
+			// A client declared without its target's configuration leaves
+			// the check to the target.
+			if (!e.remote || len(e.configs) > 0) && !configDeclared(e, tv.Path) {
 				return nil, fmt.Errorf("config override %v is not a declared config key on the agent", tv.Path)
 			}
 			out = append(out, tv)

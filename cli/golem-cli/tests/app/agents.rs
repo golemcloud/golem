@@ -2158,7 +2158,8 @@ async fn test_go_bridge_e2e() {
     ctx.cd(app_name);
 
     // An ephemeral agent beside the template's durable counter: its client
-    // constructs a phantom per call and reports the instance that ran.
+    // constructs a phantom per call and reports the instance that ran. Its
+    // configuration, one value nested, is overridden through the typed option.
     let lib = walkdir::WalkDir::new(ctx.cwd_path())
         .into_iter()
         .filter_map(Result::ok)
@@ -2168,20 +2169,38 @@ async fn test_go_bridge_e2e() {
     std::fs::write(
         lib.with_file_name("echo_agent.rs"),
         indoc! {r#"
-            use golem_rust::{agent_definition, agent_implementation};
+            use golem_rust::agentic::Config;
+            use golem_rust::{agent_definition, agent_implementation, ConfigSchema};
+
+            #[derive(ConfigSchema)]
+            pub struct EchoConfig {
+                pub mark: String,
+                #[config_schema(nested)]
+                pub style: EchoStyle,
+            }
+
+            #[derive(ConfigSchema)]
+            pub struct EchoStyle {
+                pub repeat: u8,
+            }
 
             #[agent_definition(ephemeral)]
             pub trait EchoAgent {
-                fn new(prefix: String) -> Self;
+                fn new(prefix: String, #[agent_config] config: Config<EchoConfig>) -> Self;
                 fn echo(&self, text: String) -> String;
             }
 
-            struct EchoAgentImpl { prefix: String }
+            struct EchoAgentImpl { prefix: String, config: Config<EchoConfig> }
 
             #[agent_implementation]
             impl EchoAgent for EchoAgentImpl {
-                fn new(prefix: String) -> Self { Self { prefix } }
-                fn echo(&self, text: String) -> String { format!("{}{text}", self.prefix) }
+                fn new(prefix: String, #[agent_config] config: Config<EchoConfig>) -> Self {
+                    Self { prefix, config }
+                }
+                fn echo(&self, text: String) -> String {
+                    let config = self.config.get().expect("echo config");
+                    format!("{}{}{}", self.prefix, text.repeat(config.style.repeat as usize), config.mark)
+                }
             }
         "#},
     )
@@ -2190,6 +2209,23 @@ async fn test_go_bridge_e2e() {
     std::fs::write(
         &lib,
         format!("{lib_source}\nmod echo_agent;\npub use echo_agent::*;\n"),
+    )
+    .unwrap();
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let manifest_source = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!(
+            "{manifest_source}\n{}",
+            indoc! {"
+                agents:
+                  EchoAgent:
+                    config:
+                      mark: ''
+                      style:
+                        repeat: 1
+            "}
+        ),
     )
     .unwrap();
 
@@ -2278,6 +2314,7 @@ async fn test_go_bridge_e2e() {
             	"log"
 
             	"github.com/golemcloud/golem/sdks/go/bridge"
+            	"github.com/golemcloud/golem/sdks/go/core/values"
             	client "golem.local/bridge/counter-agent-client"
             	echo "golem.local/bridge/echo-agent-client"
             )
@@ -2316,8 +2353,26 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s fresh=%t\n",
-            		first, second, one.Value, two.Value, one.AgentID != two.AgentID)
+            	marked, err := echo.NewPhantomEchoAgent(echo.EchoAgentId{{Prefix: "go:"}},
+            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{Mark: values.Some("!")}}))
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	three, err := marked.Echo(ctx, "c")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	doubled, err := echo.NewPhantomEchoAgent(echo.EchoAgentId{{Prefix: "go:"}},
+            		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{StyleRepeat: values.Some[uint8](2)}}))
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	four, err := doubled.Echo(ctx, "d")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s,%s,%s fresh=%t\n",
+            		first, second, one.Value, two.Value, three.Value, four.Value, one.AgentID != two.AgentID)
             }}
             "#
         },
@@ -2350,7 +2405,7 @@ async fn test_go_bridge_e2e() {
         program_dir.display()
     );
     assert!(
-        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b fresh=true"),
+        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b,go:c!,go:dd fresh=true"),
         "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }
@@ -3898,6 +3953,51 @@ async fn test_go_agent_guest_bridge_e2e() {
                 dependencies:
                   agents:
                     - go-agent-bridge:provider/CounterAgent
+            agents:
+              CounterAgent:
+                config:
+                  step: 1
+        "#},
+    )
+    .unwrap();
+
+    // The provider's counter steps by a configured amount, which the consumer
+    // overrides for one instance through the generated client's typed option.
+    fs::write_str(
+        ctx.cwd_path_join("provider/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::agentic::Config;
+            use golem_rust::{agent_definition, agent_implementation, endpoint, ConfigSchema};
+
+            #[derive(ConfigSchema)]
+            pub struct CounterConfig {
+                pub step: u32,
+            }
+
+            #[agent_definition(mount = "/counters/{name}")]
+            pub trait CounterAgent {
+                fn new(name: String, #[agent_config] config: Config<CounterConfig>) -> Self;
+
+                #[endpoint(post = "/increment")]
+                fn increment(&mut self) -> u32;
+            }
+
+            struct CounterImpl {
+                count: u32,
+                config: Config<CounterConfig>,
+            }
+
+            #[agent_implementation]
+            impl CounterAgent for CounterImpl {
+                fn new(_name: String, #[agent_config] config: Config<CounterConfig>) -> Self {
+                    Self { count: 0, config }
+                }
+
+                fn increment(&mut self) -> u32 {
+                    self.count += self.config.get().expect("counter config").step;
+                    self.count
+                }
+            }
         "#},
     )
     .unwrap();
@@ -3953,7 +4053,9 @@ async fn test_go_agent_guest_bridge_e2e() {
             func init() {{
             	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
             		counter := provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName}})
-            		return fmt.Sprintf("ok:%d", counter.Increment())
+            		stepped := provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName + "-stepped"}},
+            			provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}}))
+            		return fmt.Sprintf("ok:%d:%d", counter.Increment(), stepped.Increment())
             	}})
             }}
         "#},
@@ -4007,8 +4109,8 @@ async fn test_go_agent_guest_bridge_e2e() {
         .await;
     assert!(outputs.success_or_dump());
     assert!(
-        outputs.stdout_contains("ok:1"),
-        "expected the Go consumer to return ok:1 through the generated guest client"
+        outputs.stdout_contains("ok:1:5"),
+        "expected the Go consumer to return ok:1:5 through the generated guest client"
     );
 }
 

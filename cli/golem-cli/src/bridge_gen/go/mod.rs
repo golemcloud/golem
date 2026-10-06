@@ -52,6 +52,7 @@ use crate::bridge_gen::go::go::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
+use crate::bridge_gen::go::type_ref::{VALUES, VALUES_PKG};
 use crate::bridge_gen::type_naming::{TypeNaming, user_supplied_fields};
 use crate::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name,
@@ -63,7 +64,8 @@ use crate::sdk_overrides::{GO_CORE_MODULE, GO_SDK_MODULE, sdk_overrides};
 use crate::versions;
 use anyhow::{Context, bail};
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentConfigSource, AgentMode};
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::agent::contains_stream_in_graph;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::{DiscriminatorRule, SchemaType};
@@ -111,6 +113,9 @@ struct AgentNames {
     client: String,
     get: String,
     new_phantom: String,
+    /// The typed configuration struct and its option, when the agent declares
+    /// local configuration.
+    config: Option<(String, String)>,
     /// Per method, in schema order: the input struct's name.
     inputs: Vec<String>,
     /// Per method, in schema order: the Go method name on the client.
@@ -136,6 +141,11 @@ impl AgentNames {
             client: format!("{agent}Client"),
             get: format!("Get{agent}"),
             new_phantom: format!("NewPhantom{agent}"),
+            config: agent_type
+                .config
+                .iter()
+                .any(|c| c.source == AgentConfigSource::Local)
+                .then(|| (format!("{agent}Config"), format!("With{agent}Config"))),
             agent,
             inputs,
             methods,
@@ -149,6 +159,10 @@ impl AgentNames {
             self.get.clone(),
             self.new_phantom.clone(),
         ];
+        if let Some((config, option)) = &self.config {
+            out.push(config.clone());
+            out.push(option.clone());
+        }
         out.extend(self.inputs.iter().cloned());
         out
     }
@@ -440,6 +454,92 @@ impl GoBridgeGenerator {
 
     // --- client.go (guest) ----------------------------------------------
 
+    /// The option overriding configuration, as a doc reference.
+    fn config_option_hint(&self) -> String {
+        match &self.names.config {
+            Some((_, option)) => format!(" ({option})"),
+            None => " (golem.WithConfigEntries)".to_string(),
+        }
+    }
+
+    /// The local configuration declarations a caller may override.
+    fn local_configs(&self) -> Vec<&AgentConfigDeclarationSchema> {
+        self.agent_type
+            .config
+            .iter()
+            .filter(|c| c.source == AgentConfigSource::Local)
+            .collect()
+    }
+
+    /// The typed configuration struct's field names, one per local
+    /// declaration: the path segments joined.
+    fn config_field_idents(&self) -> Vec<String> {
+        unique_idents(
+            self.local_configs()
+                .iter()
+                .map(|c| c.path.iter().map(|s| to_field_ident(s)).collect())
+                .collect(),
+        )
+    }
+
+    /// The typed configuration struct, with one optional field per local
+    /// declaration. Shared by both modes; only the option applying it differs.
+    fn write_config_struct(&self, writer: &mut GoWriter) -> anyhow::Result<()> {
+        let Some((config, _)) = &self.names.config else {
+            return Ok(());
+        };
+        writer.doc(&format!(
+            "{config} overrides {}'s configuration; unset fields keep the\n\
+             provisioned values.",
+            self.agent_type.type_name.as_str()
+        ));
+        writer.line(format!("type {config} struct {{"));
+        writer.indent();
+        for (decl, ident) in self.local_configs().iter().zip(self.config_field_idents()) {
+            let typ = self.render(&decl.value_type, writer)?;
+            writer.import(VALUES_PKG);
+            writer.line(format!("// {}", decl.path.join(".")));
+            writer.line(format!("{ident} {VALUES}.Option[{typ}]"));
+        }
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+        Ok(())
+    }
+
+    fn write_guest_config(&self, writer: &mut GoWriter) -> anyhow::Result<()> {
+        let Some((config, option)) = &self.names.config else {
+            return Ok(());
+        };
+        self.write_config_struct(writer)?;
+        writer.doc(&format!(
+            "{option} applies the set fields of cfg as configuration overrides."
+        ));
+        writer.line(format!("func {option}(cfg {config}) golem.ClientOpt {{"));
+        writer.indent();
+        writer.line("var entries []golem.ConfigEntry");
+        for (decl, ident) in self.local_configs().iter().zip(self.config_field_idents()) {
+            let path = decl
+                .path
+                .iter()
+                .map(|s| go_string(s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            writer.line(format!("if v, ok := cfg.{ident}.Get(); ok {{"));
+            writer.indent();
+            writer.line(format!(
+                "entries = append(entries, golem.ConfigEntryOf([]string{{{path}}}, v))"
+            ));
+            writer.dedent();
+            writer.line("}");
+        }
+        writer.line("return golem.WithConfigEntries(entries...)");
+        writer.dedent();
+        writer.line("}");
+        writer.blank();
+        Ok(())
+    }
+
     fn guest_client_file(&self) -> anyhow::Result<String> {
         let mut writer = GoWriter::new();
         writer.import(GOLEM_PKG);
@@ -501,6 +601,8 @@ impl GoBridgeGenerator {
             outputs.push(output);
         }
 
+        self.write_guest_config(&mut writer)?;
+
         // The client.
         writer.doc(&format!(
             "{} calls a {agent_name} agent. A failed call panics with the SDK's own\n\
@@ -519,29 +621,39 @@ impl GoBridgeGenerator {
         if !ephemeral {
             writer.doc(&format!(
                 "{} returns a client for the {agent_name} instance identified by id,\n\
-                 creating it if it does not exist yet.",
-                n.get
+                 creating it if it does not exist yet. Options address a phantom\n\
+                 (golem.WithPhantomID) and override configuration{}.",
+                n.get,
+                self.config_option_hint()
             ));
             // Always multi-line: gofmt keeps a one-line body only below a size
             // limit, and an agent's name decides which side of it this falls on.
-            writer.line(format!("func {}(id {}) {} {{", n.get, n.id, n.client));
+            writer.line(format!(
+                "func {}(id {}, opts ...golem.ClientOpt) {} {{",
+                n.get, n.id, n.client
+            ));
             writer.indent();
-            writer.line(format!("return {}{{client: {remote}.Get(id)}}", n.client));
+            writer.line(format!(
+                "return {}{{client: {remote}.Get(id, opts...)}}",
+                n.client
+            ));
             writer.dedent();
             writer.line("}");
             writer.blank();
         }
         writer.doc(&format!(
-            "{} allocates a fresh phantom {agent_name} instance.",
-            n.new_phantom
+            "{} allocates a fresh phantom {agent_name} instance. Options override\n\
+             configuration{}.",
+            n.new_phantom,
+            self.config_option_hint()
         ));
         writer.line(format!(
-            "func {}(id {}) {} {{",
+            "func {}(id {}, opts ...golem.ClientOpt) {} {{",
             n.new_phantom, n.id, n.client
         ));
         writer.indent();
         writer.line(format!(
-            "return {}{{client: {remote}.NewPhantom(id)}}",
+            "return {}{{client: {remote}.NewPhantom(id, opts...)}}",
             n.client
         ));
         writer.dedent();

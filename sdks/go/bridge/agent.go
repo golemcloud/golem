@@ -38,6 +38,7 @@ type Agent struct {
 	parameters    schema.SchemaValue
 	phantomID     *string
 	config        []ConfigEntry
+	typedConfig   []TypedConfigEntry
 	id            *AgentID
 }
 
@@ -74,6 +75,21 @@ func WithConfig(entries ...ConfigEntry) AgentOption {
 	return func(a *Agent) { a.config = append(a.config, entries...) }
 }
 
+// TypedConfigEntry overrides one configuration value given as a schema value,
+// with the schema graph of its type in the schema-native wire form. Generated
+// clients build these from typed configuration structs.
+type TypedConfigEntry struct {
+	Path  []string
+	Type  string
+	Value schema.SchemaValue
+}
+
+// WithTypedConfig overrides configuration values given as schema values; each
+// is rendered as canonical JSON against its type when the agent is built.
+func WithTypedConfig(entries ...TypedConfigEntry) AgentOption {
+	return func(a *Agent) { a.typedConfig = append(a.typedConfig, entries...) }
+}
+
 // NewAgent addresses an agent without contacting the server. parameters is the
 // constructor's arguments as a schema-native record.
 //
@@ -93,6 +109,17 @@ func NewAgent(typeName string, parameters schema.SchemaValue, opts ...AgentOptio
 	}
 	if err := a.configuration.validate(); err != nil {
 		return nil, err
+	}
+	for _, entry := range a.typedConfig {
+		graph, err := schema.UnmarshalWireGraph([]byte(entry.Type))
+		if err != nil {
+			return nil, fmt.Errorf("golem: %s config %v: %w", typeName, entry.Path, err)
+		}
+		value, err := schema.NewRef(graph).UnpackJSON(entry.Value)
+		if err != nil {
+			return nil, fmt.Errorf("golem: %s config %v: %w", typeName, entry.Path, err)
+		}
+		a.config = append(a.config, ConfigEntry{Path: entry.Path, Value: value})
 	}
 	return a, nil
 }

@@ -131,6 +131,12 @@ forecast := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"}).Fore
 - The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
 - The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
 - Methods that take or return streams are included, with each stream spelled `golem.AgentStream[T]` (see `golem-streaming-agent-go`).
+- `Get<Agent>` and `NewPhantom<Agent>` take `golem.ClientOpt`s. When the callee declares local configuration, the client also has a `<Agent>Config` struct, with one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`), and a `With<Agent>Config` option. Only the fields you set are sent; the rest keep their provisioned values:
+
+```go
+counter := counters.GetCounterAgent(counters.CounterAgentId{Name: "fast"},
+	counters.WithCounterAgentConfig(counters.CounterAgentConfig{Step: golem.Some[uint32](5)}))
+```
 
 ## Key Constraints
 

@@ -95,14 +95,15 @@ func run(ctx context.Context) error {
 
 Every method has three forms — `M(ctx, …)`, `TriggerM(ctx, …)` and `ScheduleM(ctx, when, …)` — and every call returns an `error`: a transport failure, an error status (`*bridge.Error`, carrying the status and body) and a result that does not decode are all reported, never panicked.
 
-`GetCounterAgent` takes options:
+`GetCounterAgent` (and `NewPhantom<Agent>`) takes options:
 
 | Option | Effect |
 |--------|--------|
 | `bridge.WithConfiguration(cfg)` | Use this server/app/env instead of the one set with `bridge.Configure` |
 | `bridge.WithPhantomID(id)` | Address the phantom instance with this id |
 | `bridge.WithNewPhantomID()` | Address a fresh phantom instance, under a random id |
-| `bridge.WithConfig(bridge.ConfigEntry{Path: []string{"retries"}, Value: 3})` | Override agent configuration; values are plain JSON |
+| `With<Agent>Config(<Agent>Config{…})` | Override agent configuration, typed: generated when the agent declares local configuration, one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`); only set fields are sent |
+| `bridge.WithConfig(bridge.ConfigEntry{Path: []string{"retries"}, Value: 3})` | Override agent configuration by path; values are plain JSON |
 
 An **ephemeral** agent has no durable instance to get: its client is constructed with `NewPhantom<Agent>(id, opts...)`, every call runs in a fresh instance, and an awaited call returns `bridge.InvocationResult[T]` (`Value`, plus the `AgentID` and `IdempotencyKey` of the instance that ran) — or a `bridge.Receipt` for a method without a result.
 

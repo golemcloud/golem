@@ -30,11 +30,12 @@ use crate::bridge_gen::go::go::{
     unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
-use crate::bridge_gen::go::{GoBridgeGenerator, case_idents};
+use crate::bridge_gen::go::{AgentNames, GoBridgeGenerator, case_idents};
 use crate::bridge_gen::type_naming::user_supplied_fields;
 use crate::sdk_overrides::{GO_BRIDGE_MODULE, GO_CORE_MODULE, sdk_overrides};
 use crate::versions;
 use golem_common::model::agent::AgentMode;
+use golem_common::schema::graph::{SchemaGraph, reachable_defs};
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::{AgentMethodSchema, OutputSchema};
 use std::collections::HashMap;
@@ -641,8 +642,9 @@ impl GoBridgeGenerator {
                  runs in a fresh instance with these constructor arguments, and reports\n\
                  that instance's id with its result. Options select the server\n\
                  (bridge.WithConfiguration, otherwise the one set with bridge.Configure)\n\
-                 and configuration overrides (bridge.WithConfig).",
-                n.new_phantom
+                 and configuration overrides ({}).",
+                n.new_phantom,
+                external_config_option(n)
             ));
             &n.new_phantom
         } else {
@@ -651,8 +653,9 @@ impl GoBridgeGenerator {
                  instance is created on first use. Options select the server\n\
                  (bridge.WithConfiguration, otherwise the one set with bridge.Configure),\n\
                  a phantom instance (bridge.WithPhantomID, bridge.WithNewPhantomID) and\n\
-                 configuration overrides (bridge.WithConfig).",
-                n.get
+                 configuration overrides ({}).",
+                n.get,
+                external_config_option(n)
             ));
             &n.get
         };
@@ -679,6 +682,8 @@ impl GoBridgeGenerator {
         w.line("}");
         w.blank();
 
+        self.write_external_config(&mut codecs, &mut w)?;
+
         let names = ExternalMethodNames::new(&n.methods);
         for (idx, method) in self.agent_type.methods.iter().enumerate() {
             self.write_external_method(idx, method, &names, &mut codecs, &mut w)?;
@@ -695,6 +700,59 @@ impl GoBridgeGenerator {
             w.finish(&self.package_name()),
             codec.finish(&self.package_name()),
         ))
+    }
+
+    /// The typed configuration struct and the option that applies it, for an
+    /// agent declaring local configuration. Each set field travels with the
+    /// schema of its type, against which the bridge renders it as JSON.
+    fn write_external_config(
+        &self,
+        codecs: &mut Codecs<'_>,
+        w: &mut GoWriter,
+    ) -> anyhow::Result<()> {
+        let Some((config, option)) = &self.names.config else {
+            return Ok(());
+        };
+        self.write_config_struct(w)?;
+
+        w.doc(&format!(
+            "{option} applies the set fields of cfg as configuration overrides."
+        ));
+        w.line(format!("func {option}(cfg {config}) bridge.AgentOption {{"));
+        w.indent();
+        w.line("var entries []bridge.TypedConfigEntry");
+        for (decl, ident) in self.local_configs().iter().zip(self.config_field_idents()) {
+            let graph = SchemaGraph {
+                defs: reachable_defs(&self.agent_type.schema, &decl.value_type),
+                root: decl.value_type.clone(),
+            };
+            let encode = codecs.func(Dir::Encode, &decl.value_type)?;
+            let path = decl
+                .path
+                .iter()
+                .map(|s| go_string(s))
+                .collect::<Vec<_>>()
+                .join(", ");
+            w.line(format!("if v, ok := cfg.{ident}.Get(); ok {{"));
+            w.indent();
+            w.line("entries = append(entries, bridge.TypedConfigEntry{");
+            w.indent();
+            w.line(format!("Path:  []string{{{path}}},"));
+            w.line(format!(
+                "Type:  {},",
+                go_string(&serde_json::to_string(&graph)?)
+            ));
+            w.line(format!("Value: {encode}(v),"));
+            w.dedent();
+            w.line("})");
+            w.dedent();
+            w.line("}");
+        }
+        w.line("return bridge.WithTypedConfig(entries...)");
+        w.dedent();
+        w.line("}");
+        w.blank();
+        Ok(())
     }
 
     fn write_external_method(
@@ -855,6 +913,13 @@ impl GoBridgeGenerator {
         w.blank();
         Ok(())
     }
+}
+
+/// The option overriding configuration, as named in a constructor's doc.
+fn external_config_option(n: &AgentNames) -> &str {
+    n.config
+        .as_ref()
+        .map_or("bridge.WithConfig", |(_, option)| option.as_str())
 }
 
 /// The three client methods each agent method produces. They share the
