@@ -5262,6 +5262,7 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         webhook_suffix: vec![],
         static_bindings,
         filesystem_bindings,
+        file_response_headers: vec![],
         openapi_provider_method,
     };
     let endpoint = |http_method| HttpEndpointDetails {
