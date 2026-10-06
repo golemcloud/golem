@@ -313,6 +313,7 @@ async fn check_moonbit_resource_observation(
     deps: &WorkerExecutorTestDependencies,
     component: &PrecompiledComponent,
     scenario: &str,
+    method: &str,
     check: impl FnOnce(&MoonBitResourceObservation, &str),
 ) -> anyhow::Result<()> {
     use golem_common::model::agent_secret::{
@@ -375,11 +376,17 @@ async fn check_moonbit_resource_observation(
             &stored_component,
             &agent_id,
             moonbit_principal("resource-principal"),
-            "matrix_resource_observation",
+            method,
             data_value!(),
         )
         .await?
         .into_typed()?;
+    assert!(!observation.permission_supported);
+    assert_eq!(observation.permission_provider, "");
+    assert!(!observation.permission_same_identity);
+    assert!(!observation.permission_original_consumed);
+    assert_eq!(observation.permission_principal, "");
+    assert_eq!(observation.permission_owner_agent_id, "");
     check(&observation, &owner_agent_id);
     assert_moonbit_owner_clean(&executor, &owned_agent_id, &worker_id, scenario).await?;
 
@@ -400,6 +407,7 @@ async fn moonbit_resource_secret_returned_handle_runtime(
         deps,
         component,
         "MoonBit secret",
+        "matrix_secret_observation",
         |o, owner| {
             assert_eq!(o.secret_first_provider, "moonbit");
             assert_eq!(o.secret_second_provider, "moonbit");
@@ -426,6 +434,7 @@ async fn moonbit_resource_quota_returned_handle_runtime(
         deps,
         component,
         "MoonBit quota",
+        "matrix_quota_observation",
         |o, owner| {
             assert_eq!(o.quota_provider, "moonbit");
             assert!(o.quota_reserved);
@@ -433,32 +442,6 @@ async fn moonbit_resource_quota_returned_handle_runtime(
             assert!(o.quota_original_consumed);
             assert_eq!(o.quota_principal, "oidc:resource-principal");
             assert_eq!(o.quota_owner_agent_id, owner);
-        },
-    )
-    .await
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout("90s")]
-async fn moonbit_resource_permission_boundary_runtime(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("tool_streaming_moonbit")] component: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    check_moonbit_resource_observation(
-        last_unique_id,
-        deps,
-        component,
-        "MoonBit permission",
-        |o, _| {
-            assert!(!o.permission_supported);
-            assert_eq!(o.permission_provider, "");
-            assert!(!o.permission_same_identity);
-            assert!(!o.permission_original_consumed);
-            assert_eq!(o.permission_principal, "");
-            assert_eq!(o.permission_owner_agent_id, "");
         },
     )
     .await
@@ -478,6 +461,7 @@ async fn moonbit_resource_typed_stream_runtime(
         deps,
         component,
         "MoonBit typed stream",
+        "matrix_typed_stream_observation",
         |o, _| {
             assert_eq!(o.typed_values, [7, 16, 28]);
         },
