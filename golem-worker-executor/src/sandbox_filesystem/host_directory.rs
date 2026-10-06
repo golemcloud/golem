@@ -176,7 +176,7 @@ pub(super) async fn make_host_directories(
 ) -> Result<HostDirectories, FilesystemStorageError> {
     let root: Option<Arc<Path>> = match &provisioning.mode {
         SandboxFilesystemProvisioningMode::Directories(directories) => {
-            directories.deterministic_root().map(Arc::from)
+            directories.deterministic_root().cloned()
         }
         #[cfg(target_os = "linux")]
         SandboxFilesystemProvisioningMode::ProjectQuotas(managed) => {
@@ -320,9 +320,7 @@ mod tests {
     async fn provision(root: Option<&Path>) -> (SandboxFilesystemProvisioning, HostDirectories) {
         SandboxFilesystemProvisioning::provision(
             &root.map_or(FilesystemStorageMode::Temporary, |root| {
-                FilesystemStorageMode::Directory {
-                    root: root.to_path_buf(),
-                }
+                FilesystemStorageMode::Directory { root: root.into() }
             }),
             RetryConfig::default(),
         )
@@ -431,7 +429,7 @@ mod tests {
 
         let failure = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::Directory {
-                root: root.path().to_path_buf(),
+                root: root.path().into(),
             },
             RetryConfig::default(),
         )

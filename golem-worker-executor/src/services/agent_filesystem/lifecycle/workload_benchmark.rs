@@ -1263,7 +1263,9 @@ async fn filesystem_workload_benchmark() {
     let (provisioning, limits, filesystem_metering) = match mode.as_str() {
         "managed" => (
             SandboxFilesystemProvisioning::new(
-                &FilesystemStorageMode::ManagedXfs { root: managed_root },
+                &FilesystemStorageMode::ManagedXfs {
+                    root: managed_root.into(),
+                },
                 RetryConfig::default(),
             )
             .unwrap(),
@@ -1275,7 +1277,9 @@ async fn filesystem_workload_benchmark() {
         ),
         "managed-unmetered" => (
             SandboxFilesystemProvisioning::new(
-                &FilesystemStorageMode::ManagedXfs { root: managed_root },
+                &FilesystemStorageMode::ManagedXfs {
+                    root: managed_root.into(),
+                },
                 RetryConfig::default(),
             )
             .unwrap(),
@@ -1290,7 +1294,7 @@ async fn filesystem_workload_benchmark() {
             std::fs::create_dir_all(&root).unwrap();
             (
                 SandboxFilesystemProvisioning::new(
-                    &FilesystemStorageMode::Directory { root },
+                    &FilesystemStorageMode::Directory { root: root.into() },
                     RetryConfig::default(),
                 )
                 .unwrap(),

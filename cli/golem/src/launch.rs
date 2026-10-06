@@ -438,7 +438,7 @@ fn worker_executor_config(
                 .agent_filesystem_root
                 .clone()
                 .map_or(FilesystemStorageMode::Temporary, |root| {
-                    FilesystemStorageMode::Directory { root }
+                    FilesystemStorageMode::Directory { root: root.into() }
                 }),
             ..Default::default()
         },

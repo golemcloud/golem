@@ -103,13 +103,11 @@ fn snapshotting(
     let root: Option<Box<Path>> = root.map(Box::from);
     TestExecutorOverrides {
         configure: Some(Arc::new(move |config| {
-            config.filesystem_storage.storage =
-                root.as_deref()
-                    .map_or(FilesystemStorageMode::Temporary, |root| {
-                        FilesystemStorageMode::Directory {
-                            root: root.to_path_buf(),
-                        }
-                    });
+            config.filesystem_storage.storage = root
+                .as_deref()
+                .map_or(FilesystemStorageMode::Temporary, |root| {
+                    FilesystemStorageMode::Directory { root: root.into() }
+                });
             config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
         })),
         filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
@@ -141,9 +139,8 @@ async fn start_replaying_with(
         context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.storage = FilesystemStorageMode::Directory {
-                    root: root.to_path_buf(),
-                };
+                config.filesystem_storage.storage =
+                    FilesystemStorageMode::Directory { root: root.clone() };
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
             })),

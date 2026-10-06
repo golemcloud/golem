@@ -113,7 +113,7 @@ pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathB
     let created = create_fresh(
         sandbox_provisioning(&FilesystemStorageConfig {
             storage: FilesystemStorageMode::Directory {
-                root: parent.to_path_buf(),
+                root: parent.into(),
             },
             ..FilesystemStorageConfig::default()
         })
@@ -5653,7 +5653,7 @@ async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
         storage: FilesystemStorageMode::Directory {
-            root: parent.path().to_path_buf(),
+            root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
     };
@@ -5685,7 +5685,7 @@ async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
         storage: FilesystemStorageMode::Directory {
-            root: parent.path().to_path_buf(),
+            root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
     };
@@ -5725,7 +5725,7 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
         storage: FilesystemStorageMode::Directory {
-            root: parent.path().to_path_buf(),
+            root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
     };
@@ -5774,7 +5774,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
         storage: FilesystemStorageMode::Directory {
-            root: parent.path().to_path_buf(),
+            root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
     };
@@ -5979,7 +5979,7 @@ async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
         storage: FilesystemStorageMode::Directory {
-            root: parent.path().to_path_buf(),
+            root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
     };
@@ -6119,7 +6119,7 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::ManagedXfs { root },
+        storage: FilesystemStorageMode::ManagedXfs { root: root.into() },
         ..FilesystemStorageConfig::default()
     };
     let initial_limits = limits(128 * 1024 * 1024, 8192);
@@ -6166,7 +6166,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::ManagedXfs { root },
+        storage: FilesystemStorageMode::ManagedXfs { root: root.into() },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -7884,7 +7884,7 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
     let parent = tempfile::tempdir().unwrap();
     let provisioning = SandboxFilesystemProvisioning::new(
         &FilesystemStorageMode::Directory {
-            root: parent.path().to_path_buf(),
+            root: parent.path().into(),
         },
         golem_common::model::RetryConfig {
             max_attempts: 1,

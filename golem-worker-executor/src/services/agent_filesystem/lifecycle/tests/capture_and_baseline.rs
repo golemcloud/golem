@@ -1505,7 +1505,7 @@ impl UnmanagedAgents {
         let parent = tempfile::tempdir().unwrap();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::Directory {
-                root: parent.path().to_path_buf(),
+                root: parent.path().into(),
             },
             golem_common::model::RetryConfig::default(),
         )
