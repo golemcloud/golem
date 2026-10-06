@@ -87,8 +87,7 @@ pub(crate) struct InitialFilesRestore {
 impl InitialFilesRestore {
     /// The restore of `files` when they are all read-only. Only a tree of read-only initial files
     /// gives a record without a name, so `None` comes from a source revision without initial
-    /// files, whose start seeds the initial files of the target revision on the empty tree, or
-    /// from a record that an executor wrote before that rule, whose start does the same.
+    /// files, whose start seeds the initial files of the target revision on the empty tree.
     pub(crate) fn of_read_only(files: Box<[InitialAgentFile]>) -> Option<Self> {
         (!files.is_empty()
             && files

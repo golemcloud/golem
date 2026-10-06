@@ -896,8 +896,6 @@ update fails as a failed update, with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` for ch
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times
 (`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
-Records without a name that executors wrote before this rule, while the files had changed, stay
-usable without a migration, and a start from one does not get those files back.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
 open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are
