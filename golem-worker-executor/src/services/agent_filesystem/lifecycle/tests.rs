@@ -8969,3 +8969,97 @@ fn a_change_of_a_read_only_file_is_refused_and_a_change_of_another_object_is_not
     ));
     assert!(refuse_read_only_change(false).is_ok());
 }
+
+/// Gives a resident filesystem on storage that reports no usage, with `pressure_recovery`, and
+/// the window of its resource usage.
+async fn unaccounted_resident_with_recovery(
+    pressure_recovery: Option<FilesystemWriteRecovery>,
+) -> (
+    TestAgentFilesystem<Resident>,
+    ScriptedSandboxFilesystemControl,
+    ResourceUsageMeteringWindow,
+) {
+    let (filesystem, control, entry) =
+        reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, pressure_recovery).await;
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let filesystem = finish_reconstruction(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let window = open_resource_usage_window(&filesystem, permit(&entry).await)
+        .await
+        .unwrap();
+    (filesystem, control, window)
+}
+
+#[test]
+async fn a_full_volume_without_quotas_runs_pressure_recovery_and_retries_the_write() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::Recovered]);
+    let (filesystem, control, window) =
+        unaccounted_resident_with_recovery(Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 48).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    control.push_write(Ok(SandboxWriteAttempt::completed(4)));
+
+    assert_eq!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await
+        .unwrap(),
+        WriteResult { written: 4 }
+    );
+    assert_eq!(recovery.calls(), 1);
+    assert_eq!(call_count(&control, "write("), 2);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_full_volume_without_quotas_and_without_pressure_keeps_the_write_failure() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::NotUnderPressure]);
+    let (filesystem, control, window) =
+        unaccounted_resident_with_recovery(Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 49).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+
+    assert!(matches!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await,
+        Err(Error::Sandbox(_))
+    ));
+    assert_eq!(recovery.calls(), 1);
+    assert_eq!(call_count(&control, "write("), 1);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}

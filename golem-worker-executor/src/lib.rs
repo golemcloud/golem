@@ -992,6 +992,12 @@ pub async fn create_worker_executor_impl<
     )
     .await?;
 
+    services::resource_usage_metering::check_filesystem_metering(
+        golem_config.resource_usage_metering,
+        active_agents.agent_filesystems().agent_accounting(),
+    )
+    .map_err(|error| anyhow!(error))?;
+
     let file_loader = active_agents.agent_filesystems().file_loader();
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(

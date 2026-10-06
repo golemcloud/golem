@@ -48,20 +48,28 @@ pub(crate) use lifecycle::*;
 
 const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
 
-/// Resolves an agent's byte allocation into storage limits with `policy`.
+/// Resolves an agent's byte allocation into storage limits with `policy`, on storage that
+/// accounts for each agent as `accounting` says.
 ///
-/// An allocation at or above the effectively-unlimited sentinel of the resource service gives
-/// `Unlimited`. A smaller allocation gives the finite limits of `policy`, which refuses zero bytes.
+/// Storage without per-agent accounting enforces no per-agent limit, so every allocation gives
+/// `Unlimited` there. Elsewhere, an allocation at or above the effectively-unlimited sentinel of
+/// the resource service gives `Unlimited`, and a smaller allocation gives the finite limits of
+/// `policy`, which refuses zero bytes.
 fn resolve_storage_limits(
     policy: &FilesystemObjectLimitPolicyConfig,
     allocated_bytes: u64,
+    accounting: AgentAccounting,
 ) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
-    if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE {
-        Ok(ResolvedStorageLimits::Unlimited)
-    } else {
-        policy
+    match accounting {
+        AgentAccounting::Unaccounted => Ok(ResolvedStorageLimits::Unlimited),
+        AgentAccounting::ProjectQuotas | AgentAccounting::Development
+            if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE =>
+        {
+            Ok(ResolvedStorageLimits::Unlimited)
+        }
+        AgentAccounting::ProjectQuotas | AgentAccounting::Development => policy
             .resolve(allocated_bytes)
-            .map(ResolvedStorageLimits::Finite)
+            .map(ResolvedStorageLimits::Finite),
     }
 }
 
@@ -240,6 +248,11 @@ impl AgentFilesystems {
                 });
             return Err(error);
         }
+        if provisioning.agent_accounting() == AgentAccounting::Unaccounted {
+            tracing::info!(
+                "Per-agent disk limits are not enforced on XFS storage without project quotas"
+            );
+        }
         Ok(Self {
             provisioning,
             pressure: settings.pressure.clone(),
@@ -287,7 +300,11 @@ impl AgentFilesystems {
         &self,
         allocated_bytes: u64,
     ) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
-        resolve_storage_limits(&self.filesystem_object_limit_policy, allocated_bytes)
+        resolve_storage_limits(
+            &self.filesystem_object_limit_policy,
+            allocated_bytes,
+            self.provisioning.agent_accounting(),
+        )
     }
 
     /// Creates an empty filesystem generation for an agent with the requested limits.
@@ -506,35 +523,64 @@ mod tests {
         let policy = FilesystemObjectLimitPolicyConfig::default();
         let sentinel = AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE;
 
-        assert_eq!(
-            resolve_storage_limits(&policy, sentinel).unwrap(),
-            ResolvedStorageLimits::Unlimited
-        );
-        assert_eq!(
-            resolve_storage_limits(&policy, u64::MAX).unwrap(),
-            ResolvedStorageLimits::Unlimited
-        );
-        match resolve_storage_limits(&policy, sentinel - 1).unwrap() {
-            ResolvedStorageLimits::Finite(limits) => {
-                assert_eq!(limits.allocated_bytes, sentinel - 1)
-            }
-            ResolvedStorageLimits::Unlimited => {
-                panic!("an allocation one byte below the sentinel must be finite")
-            }
-        }
+        [AgentAccounting::ProjectQuotas, AgentAccounting::Development]
+            .into_iter()
+            .for_each(|accounting| {
+                assert_eq!(
+                    resolve_storage_limits(&policy, sentinel, accounting).unwrap(),
+                    ResolvedStorageLimits::Unlimited
+                );
+                assert_eq!(
+                    resolve_storage_limits(&policy, u64::MAX, accounting).unwrap(),
+                    ResolvedStorageLimits::Unlimited
+                );
+                match resolve_storage_limits(&policy, sentinel - 1, accounting).unwrap() {
+                    ResolvedStorageLimits::Finite(limits) => {
+                        assert_eq!(limits.allocated_bytes, sentinel - 1)
+                    }
+                    ResolvedStorageLimits::Unlimited => {
+                        panic!("an allocation one byte below the sentinel must be finite")
+                    }
+                }
+            });
     }
 
     #[test]
     fn storage_limits_refuse_an_allocation_of_zero_bytes() {
-        let error =
-            resolve_storage_limits(&FilesystemObjectLimitPolicyConfig::default(), 0).unwrap_err();
+        [AgentAccounting::ProjectQuotas, AgentAccounting::Development]
+            .into_iter()
+            .for_each(|accounting| {
+                let error = resolve_storage_limits(
+                    &FilesystemObjectLimitPolicyConfig::default(),
+                    0,
+                    accounting,
+                )
+                .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("resolve nonzero agent filesystem storage limit"),
-            "{error}"
-        );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("resolve nonzero agent filesystem storage limit"),
+                    "{error}"
+                );
+            });
+    }
+
+    #[test]
+    fn storage_without_per_agent_accounting_enforces_no_limit() {
+        let policy = FilesystemObjectLimitPolicyConfig::default();
+        let sentinel = AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE;
+
+        [0, 1024 * 1024 * 1024, sentinel - 1, sentinel, u64::MAX]
+            .into_iter()
+            .for_each(|allocated_bytes| {
+                assert_eq!(
+                    resolve_storage_limits(&policy, allocated_bytes, AgentAccounting::Unaccounted)
+                        .unwrap(),
+                    ResolvedStorageLimits::Unlimited,
+                    "{allocated_bytes}"
+                );
+            });
     }
 
     #[test]

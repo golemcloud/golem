@@ -4077,9 +4077,9 @@ async fn decide_write_effect<Adapter: SandboxFilesystemAdapter>(
     }
 
     let quota_exhausted = match generation.observe_usage_sandbox().await {
-        Ok(FilesystemUsage::Unsupported) => {
-            return EffectDecision::ReturnFailure(FailureCause::UnclassifiedIo);
-        }
+        // Storage without a quota has no agent quota to exhaust: the volume itself is full, which
+        // pressure recovery can relieve.
+        Ok(FilesystemUsage::Unsupported) => false,
         Ok(FilesystemUsage::Authoritative {
             allocated_bytes,
             filesystem_objects,
