@@ -137,7 +137,7 @@ Uploads and restores use memory outside the memory of the agents. `worker_memory
 
 Enable filesystem snapshots on every executor that can run the same agents, with the same key and the same blob storage.
 
-Snapshot records that an executor wrote before you enabled filesystem snapshots have no filesystem snapshot name. A start from such a record puts the initial files in place. A disabled executor writes such a record only when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory, so the start gives the agent its files. Records without a name that earlier Golem versions wrote stay usable, and a start from them also puts only the initial files in place. The files of an agent are saved from its first snapshot after you enabled the feature.
+A snapshot record without a filesystem snapshot name means that the agent's files were its initial files. A disabled executor writes such a record only when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory, so the start gives the agent its files. The files of an agent are saved from its first snapshot after you enabled the feature.
 
 ### Check that it works
 

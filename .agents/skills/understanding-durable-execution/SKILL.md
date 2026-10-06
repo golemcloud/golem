@@ -745,7 +745,10 @@ its index, time, revision, filesystem snapshot name and confirmation), and
 `previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it
 has no filesystem snapshot name, or when a `SnapshotConfirmed` entry confirms its name. A start takes the first of the two that is usable, has
 the current revision, is not in the rejected set, is not unavailable for this start, and has no
-name when filesystem snapshots are disabled. It skips `INITIAL+1..=snapshot_idx`. No automatic
+name when filesystem snapshots are disabled. It skips `INITIAL+1..=snapshot_idx`. An ephemeral
+agent never has an automatic record: `resolve_agent_properties` gives it
+`SnapshotPolicy::Disabled`, because a start from a snapshot record skips the initialization that
+the replay of an ephemeral agent needs, and that replay then fails. No automatic
 record is used while an update is pending. Without a selected record, the last manual-update
 snapshot is the baseline, else `OplogIndex::INITIAL`. `prepare_instance` (`durable_host/mod.rs`)
 then branches on `PendingUpdate`:
@@ -781,7 +784,7 @@ underlying cause.
 With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
 (`services/agent_filesystem_snapshots`). The snapshots belong to one agent incarnation: they are
 keyed by `AgentSnapshots::agent(agent, fingerprint)`, and a fork target uses its stage id as its
-fingerprint. Ephemeral agents take no filesystem snapshot. `invocation_loop.rs::take_guest_snapshot` calls one function,
+fingerprint. `invocation_loop.rs::take_guest_snapshot` calls one function,
 `worker/filesystem_snapshots.rs::periodic_snapshot`, which asks the service for admission, runs
 the guest snapshot hook (`snapshot_guest`), captures the tree (`agent_filesystem::capture`), appends the
 `Snapshot` entry, commits, and gives the capture to an upload job. The record has no name when the
@@ -875,6 +878,24 @@ filesystem through `materialize_baseline`: the filesystem snapshot of a named re
 initial files for a record without a name. A
 manual-update record without a name restores the initial files of the source revision when they
 are all read-only, and then applies the initial files of the target revision.
+
+An application snapshot is used only when the files of the agent can come back with it. With
+`filesystem_snapshots` disabled, the admission answers `InitialFilesOnly`, and the snapshot checks
+the tree in place of the capture (`agent_filesystem::check_initial_files`): the same fence and
+the same rule as a capture, with no host directory, copy or store call. The tree holds only
+initial files when each declaration is a read-only initial file that is untouched and has a single
+name, no entity-provisioned file exists, no call set a chosen modification time, and the tree
+holds nothing else; a read-write initial file counts as a change. A rename or hard link of any
+file, or a given time that the agent sets, counts as a change; a time that Golem puts back from a
+recorded stat does not. A tree of initial files gives a record without a name. Any other tree,
+or a check that cannot decide (a file call that stays open, a sandbox error), gives no periodic
+record, so a start uses an older usable record or replays the whole oplog; a snapshot-based manual
+update fails as a failed update, with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` for changed files and with
+`UPDATE_CHECK_FAILED` and the cause for a failed check, and the agent stays on its revision. A periodic boundary that writes no record waits one period before the next attempt
+(`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
+agent: a boundary that writes no record is not replayed. A start from the initial files of the
+source revision of a manual update counts as an install, not a restore of saved times
+(`RestoreTree::gives_saved_times`), so the check after it can still find a tree of initial files.
 
 `SnapshotBoundaryConditions` lists what blocks taking a snapshot: replaying, open atomic region,
 open durable scope, snapshotting already, in-flight live host call. Automatic snapshots are

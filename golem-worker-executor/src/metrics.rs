@@ -1798,7 +1798,8 @@ pub mod filesystem_snapshots {
     lazy_static! {
         static ref CAPTURE_SECONDS: HistogramVec = register_histogram_vec!(
             "filesystem_snapshot_capture_seconds",
-            "Time that a capture of an agent filesystem stops the file calls, by outcome",
+            "Time that a capture of an agent filesystem, or a check of its initial files on an executor \
+             without filesystem snapshots, stops the file calls, by outcome",
             &["outcome"],
             golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )

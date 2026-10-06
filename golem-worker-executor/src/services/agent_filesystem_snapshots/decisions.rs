@@ -67,8 +67,9 @@ pub(super) fn fork_outcome(found: ForkFound, stage: AgentFingerprint) -> ForkOut
     }
 }
 
-/// Whether an agent in `mode` keeps filesystem snapshots. Only a durable agent does: nothing
-/// restores an ephemeral agent, and nothing deletes the snapshots of one.
+/// Whether an agent in `mode` can have filesystem snapshots. Only a durable agent can: the snapshot
+/// policy of an ephemeral agent resolves to disabled, so it takes no snapshot and has none in the
+/// store. A delete of all snapshots of an ephemeral agent therefore makes no store call.
 pub(super) fn keeps_files(mode: AgentMode) -> bool {
     match mode {
         AgentMode::Durable => true,

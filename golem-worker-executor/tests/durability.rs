@@ -1850,14 +1850,13 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     Ok(())
 }
 
-/// On an executor without filesystem snapshots, the periodic snapshots of `SqliteSnapshotAgent`
-/// have no filesystem snapshot name, so a start from one of them finds no file at the recorded
-/// locations of its file-backed databases. The start tries the newest periodic snapshot and the
-/// usable one before it; both loads fail, and the start replays the whole oplog, which rebuilds
-/// the databases.
+/// On an executor without filesystem snapshots, `SqliteSnapshotAgent` takes no periodic snapshot:
+/// its constructor writes the file of its file-backed database, so the tree differs from its
+/// initial files, and a start from a record without a name would not get the file back. The
+/// restart replays the whole oplog, which rebuilds the databases.
 #[test]
 #[tracing::instrument]
-async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_full_replay(
+async fn ts_sqlite_file_database_without_filesystem_snapshots_takes_no_snapshot_and_replays(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
@@ -1889,30 +1888,25 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
     let state_before = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
+    // The snapshot after an invocation, and its check, run after the invocation returned to the
+    // caller, so the test waits for the checks.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        std::pin::pin!(
+            futures::stream::repeat(())
+                .then(|()| tokio::time::sleep(Duration::from_millis(50)))
+                .filter(|()| std::future::ready(executor.filesystem_captures("changed") >= 2))
+        )
+        .next(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("fewer than two checks found a changed tree"))?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let snapshots: Vec<_> = oplog
         .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Snapshot(snapshot) => {
-                Some((entry.oplog_index, snapshot.filesystem_snapshot.clone()))
-            }
-            _ => None,
-        })
-        .collect();
-    assert!(
-        snapshots.len() >= 2,
-        "fewer than two periodic snapshots before the restart: {snapshots:?}"
-    );
-    assert!(
-        snapshots.iter().all(|(_, name)| name.is_none()),
-        "a periodic snapshot has a filesystem snapshot name: {snapshots:?}"
-    );
-    let newest_two: Vec<OplogIndex> = snapshots
-        .iter()
-        .rev()
-        .take(2)
-        .map(|(index, _)| *index)
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .map(|entry| entry.oplog_index)
         .collect();
 
     drop(executor);
@@ -1922,9 +1916,7 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
-    assert_eq!(state_before, state_after);
-
-    let failures: Vec<(OplogIndex, String)> = tokio::time::timeout(
+    let recoveries: Vec<String> = tokio::time::timeout(
         Duration::from_secs(10),
         futures::stream::poll_fn(|context| events.poll_recv(context))
             .filter_map(|event| std::future::ready(AgentEvent::try_from(event).ok()))
@@ -1933,13 +1925,11 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
             })
             .filter_map(|event| {
                 std::future::ready(match event {
-                    AgentEvent::SnapshotRecoveryFailed {
-                        snapshot_index,
-                        error,
-                        ..
-                    } => Some((snapshot_index, error)),
+                    AgentEvent::SnapshotRecoveryFailed { snapshot_index, .. } => {
+                        Some(format!("failed at {snapshot_index}"))
+                    }
                     AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
-                        panic!("the snapshot at {snapshot_index} loaded without its database file")
+                        Some(format!("loaded at {snapshot_index}"))
                     }
                     _ => None,
                 })
@@ -1947,19 +1937,91 @@ async fn ts_sqlite_file_database_without_filesystem_snapshots_falls_back_to_a_fu
             .collect(),
     )
     .await?;
-    let failed_indexes: Vec<OplogIndex> = failures.iter().map(|(index, _)| *index).collect();
-    assert_eq!(failed_indexes, newest_two);
-    assert!(
-        failures.iter().all(|(_, error)| error.contains("fileDb")
-            && error.contains("no database file at /tmp/sqlite-snapshot-test.db")),
-        "{failures:?}"
-    );
 
+    assert!(
+        snapshots.is_empty(),
+        "a periodic snapshot was taken after the database file existed: {snapshots:?}"
+    );
+    assert_eq!(state_before, state_after);
+    assert!(recoveries.is_empty(), "{recoveries:?}");
     executor.check_oplog_is_queryable(&worker_id).await?;
     assert_eq!(
         invocation_shape(&executor.stored_oplog(&worker_id).await),
         InvocationShape::settled()
     );
+    drop(executor);
+    Ok(())
+}
+
+/// The snapshot entries in the oplog of `agent_id`.
+async fn snapshot_count(
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    agent_id: &AgentId,
+) -> anyhow::Result<usize> {
+    Ok(executor
+        .get_oplog(agent_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count())
+}
+
+/// With a policy that takes a snapshot after each invocation, an ephemeral agent whose definition
+/// enables snapshots takes none, and a durable agent of the same component still takes snapshots.
+/// The executor keeps no filesystem snapshots, so each snapshot checks the tree of its agent after
+/// the save hook: a check count of zero shows that no snapshot of the ephemeral agent ran.
+#[test]
+#[tracing::instrument]
+async fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_does(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let checks = || {
+        ["initial_files", "changed", "captured", "unchanged"]
+            .map(|outcome| executor.filesystem_captures(outcome))
+            .into_iter()
+            .sum::<u64>()
+    };
+    let ephemeral = agent_id!("EphemeralSnapshotCounter", "no-snapshot");
+    executor
+        .start_agent(&component.id, ephemeral.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &ephemeral, "increment", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &ephemeral, "increment", data_value!())
+        .await?;
+    // The snapshot after an invocation runs after the invocation returned to the caller.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let ephemeral_checks = checks();
+    let durable = agent_id!("SnapshotCounter", "snapshots");
+    let durable_id = executor.start_agent(&component.id, durable.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &durable, "increment", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &durable, "increment", data_value!())
+        .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    assert_eq!(ephemeral_checks, 0);
+    assert!(snapshot_count(&executor, &durable_id).await? >= 1);
+    assert!(checks() >= 1);
     drop(executor);
     Ok(())
 }

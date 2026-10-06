@@ -55,9 +55,9 @@ mod baseline;
 mod initial_files;
 
 pub(crate) use baseline::{
-    CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesRestore,
-    RestoreError, RestoreTree, WholeCapture, capture, capture_whole, materialize_baseline,
-    tree_mark,
+    CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesCheck,
+    InitialFilesRestore, RestoreError, RestoreTree, WholeCapture, capture, capture_whole,
+    check_initial_files, materialize_baseline, tree_mark,
 };
 pub(crate) use initial_files::InitialFileConflict;
 use initial_files::{InitialFileSources, InitialFileState};
@@ -1330,6 +1330,41 @@ enum Counted {
     Installed,
     /// The change puts an existing or a chosen modification time at a path outside an install.
     Chosen,
+    /// The times that a stat recorded are put back at a path, live or in a replay. A start from
+    /// initial files does not hold such a time, but the agent did not choose it either: a replay
+    /// of the same history puts it back again, so it does not count as a chosen time.
+    Replayed,
+}
+
+/// Who asks for a change of the times of an object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TimeOrigin {
+    /// A call of the agent.
+    Call,
+    /// The times that a stat recorded, put back live or in a replay.
+    Replay,
+}
+
+/// The modification times that a restored baseline holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestoredTimes {
+    /// The times of a save. `kept` tells whether the tree keeps them, which is false when the
+    /// initial-file rule changes the tree.
+    Saved { kept: bool },
+    /// The times of an install of initial files.
+    Installed,
+}
+
+impl RestoredTimes {
+    /// The times of a restored tree that holds the times of a save when `saved_times` is true,
+    /// and whose declarations did not change at the restore when `unchanged` is true.
+    fn of(saved_times: bool, unchanged: bool) -> Self {
+        if saved_times {
+            Self::Saved { kept: unchanged }
+        } else {
+            Self::Installed
+        }
+    }
 }
 
 /// The counters of the tree of one generation. They only grow.
@@ -1341,7 +1376,9 @@ struct TreeCounters {
     /// path.
     carried: u64,
     /// The number of changes that could put a chosen modification time at a path outside an
-    /// install of initial files: a rename, a hard link, a set of a given time, and a restore.
+    /// install of initial files: a rename, a hard link, a set of a given time by a call of the
+    /// agent, and a restore of the times of a save. A time that a stat recorded and that is put
+    /// back does not count.
     chosen: u64,
     /// Whether the baseline is a restored tree with the modification times of its save.
     restored_times: bool,
@@ -1352,7 +1389,7 @@ impl TreeCounters {
     fn after(self, counted: Counted) -> Self {
         let (carried, chosen) = match counted {
             Counted::Fresh => (0, 0),
-            Counted::Installed => (1, 0),
+            Counted::Installed | Counted::Replayed => (1, 0),
             Counted::Chosen => (1, 1),
         };
         Self {
@@ -1363,14 +1400,17 @@ impl TreeCounters {
         }
     }
 
-    /// The counters after a restore of the baseline. A restored tree holds the modification times
-    /// of its save, which a start without the restore does not give, so the restore counts as a
-    /// chosen time. `saved_times` tells whether the tree keeps the times of its save, which is
-    /// false when the initial-file rule changes it.
-    fn after_restore(self, saved_times: bool) -> Self {
-        Self {
-            restored_times: saved_times,
-            ..self.after(Counted::Chosen)
+    /// The counters after a restore of the baseline that holds `times`. A tree with the
+    /// modification times of a save holds times that a start without the restore does not give,
+    /// so its restore counts as a chosen time. A tree with the times of an install of initial
+    /// files holds what a start without the restore gives, so its restore counts as an install.
+    fn after_restore(self, times: RestoredTimes) -> Self {
+        match times {
+            RestoredTimes::Saved { kept } => Self {
+                restored_times: kept,
+                ..self.after(Counted::Chosen)
+            },
+            RestoredTimes::Installed => self.after(Counted::Installed),
         }
     }
 
@@ -1400,18 +1440,22 @@ impl TreeCounters {
     }
 }
 
-/// What a change of the times of an object with the modification time `before_modified` counts.
-/// A snapshot keeps no access time, so only a change of the modification time changes the tree.
+/// What a change of the times of an object with the modification time `before_modified` counts,
+/// when `origin` asks for it. A snapshot keeps no access time, so only a change of the modification
+/// time changes the tree. A given time is a chosen time when a call of the agent asks for it, and a
+/// replayed time when it is a time that a stat recorded, put back live or in a replay.
 fn set_times_change(
     before_modified: Option<std::time::SystemTime>,
     requested: TimeChange,
+    origin: TimeOrigin,
 ) -> Option<Counted> {
     if time_change_satisfied(before_modified, before_modified, requested, None) {
         return None;
     }
-    Some(match requested {
-        TimeChange::Set(_) => Counted::Chosen,
-        TimeChange::Now | TimeChange::Keep => Counted::Fresh,
+    Some(match (requested, origin) {
+        (TimeChange::Set(_), TimeOrigin::Call) => Counted::Chosen,
+        (TimeChange::Set(_), TimeOrigin::Replay) => Counted::Replayed,
+        (TimeChange::Now | TimeChange::Keep, _) => Counted::Fresh,
     })
 }
 
@@ -1511,10 +1555,11 @@ impl GenerationRegistry {
         state.counters = state.counters.after(counted);
     }
 
-    /// Records that the baseline is a restored tree, as [`TreeCounters::after_restore`] tells.
-    fn record_restore(&self, saved_times: bool) {
+    /// Records that the baseline is a restored tree with `times`, as
+    /// [`TreeCounters::after_restore`] tells.
+    fn record_restore(&self, times: RestoredTimes) {
         let mut state = self.state.lock().unwrap();
-        state.counters = state.counters.after_restore(saved_times);
+        state.counters = state.counters.after_restore(times);
     }
 
     /// The number of the generation and its counters now.
@@ -2506,10 +2551,10 @@ pub(crate) fn set_attributes<Adapter: SandboxFilesystemAdapter>(
     }))
 }
 
-/// Restores recorded timestamps on an open or path target during durable replay.
+/// Puts back the times that a stat recorded on an open or path target, live or in a replay.
 ///
 /// Replay adapters call this with a reconstruction handle after replaying the matching metadata
-/// operation. Path targets obey `Follow`; `Keep` leaves a timestamp unchanged. Generation and
+/// operation. A live stat calls it too, and then the times already match, so nothing changes. Path targets obey `Follow`; `Keep` leaves a timestamp unchanged. Generation and
 /// admission errors are immediate, while restoration or invalidation errors are deferred.
 pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,
@@ -2520,7 +2565,7 @@ pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
     let target = sandbox_target(&generation, target)?;
     let lease = generation.registry.lease_call(CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
-        execute_set_times(generation, target, times).await
+        execute_set_times(generation, target, times, TimeOrigin::Replay).await
     }))
 }
 
@@ -2897,7 +2942,9 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
     changes: AttributeChanges,
 ) -> Result<(), Error> {
     match changes {
-        AttributeChanges::Times(times) => execute_set_times(generation, target, times).await,
+        AttributeChanges::Times(times) => {
+            execute_set_times(generation, target, times, TimeOrigin::Call).await
+        }
         AttributeChanges::File { size, times } => {
             let AttributeTarget::Open(SandboxNode::File(file)) = target else {
                 return Err(Error::Access(AccessError::WrongGeneration));
@@ -2907,6 +2954,7 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
                 generation,
                 AttributeTarget::Open(SandboxNode::File(file)),
                 times,
+                TimeOrigin::Call,
             )
             .await
         }
@@ -3057,6 +3105,7 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: AttributeTarget,
     times: TimeChanges,
+    origin: TimeOrigin,
 ) -> Result<(), Error> {
     if time_changes_are_noop(times) {
         return Ok(());
@@ -3065,7 +3114,7 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     if time_changes_satisfied(&before, &before, times, None) {
         return Ok(());
     }
-    if let Some(counted) = set_times_change(before.modified, times.modified) {
+    if let Some(counted) = set_times_change(before.modified, times.modified, origin) {
         generation.registry.record(counted);
     }
     let mut budget = RetryBudget::new(2);

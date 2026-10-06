@@ -4138,8 +4138,9 @@ async fn an_ephemeral_agent_with_a_snapshot_policy_makes_no_store_call(
     #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    // The executor takes a snapshot after each invocation. An ephemeral agent keeps no files, so
-    // the snapshot service makes no store call for it.
+    // The executor takes a snapshot after each invocation of a durable agent. An ephemeral agent
+    // takes no snapshot, so nothing captures or checks its files, and the snapshot service makes
+    // no store call for it.
     let context = TestContext::new(last_unique_id);
     with_snapshot_store(|store| async move {
         let executor =
@@ -4163,7 +4164,271 @@ async fn an_ephemeral_agent_with_a_snapshot_policy_makes_no_store_call(
 
         assert_eq!(answers.len(), 3);
         assert_eq!((store.save_count(), store.copy_count()), (0, 0));
+        assert_eq!(
+            ["captured", "unchanged", "initial_files", "changed"]
+                .map(|outcome| executor.filesystem_captures(outcome)),
+            [0, 0, 0, 0]
+        );
         Ok(())
     })
     .await
+}
+
+/// Starts an executor without filesystem snapshots that takes snapshots as `policy` says.
+async fn start_without_filesystem_snapshots(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    policy: SnapshotPolicy,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_overrides(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.oplog.default_snapshotting = policy.clone();
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await
+}
+
+/// Waits until the executor counted at least `count` checks or captures with the outcome
+/// `outcome`.
+async fn captures_reach(
+    executor: &TestWorkerExecutor,
+    outcome: &str,
+    count: u64,
+) -> anyhow::Result<()> {
+    eventually(Duration::from_secs(30), || async {
+        Ok((executor.filesystem_captures(outcome) >= count).then_some(()))
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn without_filesystem_snapshots_a_tree_of_initial_files_takes_snapshots_and_updates(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let every_invocation = SnapshotPolicy::EveryNInvocation { count: 1 };
+    let executor =
+        start_without_filesystem_snapshots(deps, &context, every_invocation.clone()).await?;
+    let files = [
+        entry("foo.txt", "/ro-top.txt", AgentFilePermissions::ReadOnly),
+        entry(
+            "bar.txt",
+            "/nested/ro-deep.txt",
+            AgentFilePermissions::ReadOnly,
+        ),
+    ];
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "initial-files-without-snapshots",
+        &files,
+    )
+    .await?;
+
+    let live = agent.describe(&executor).await?;
+    agent.applied(&executor).await?;
+    eventually(Duration::from_secs(30), || async {
+        Ok((agent.records(&executor).await?.snapshots.len() >= 2).then_some(()))
+    })
+    .await?;
+    let records = agent.records(&executor).await?;
+    executor.release().await?;
+
+    let executor =
+        start_without_filesystem_snapshots(deps, &context, every_invocation.clone()).await?;
+    let mut events = executor.capture_output(&agent.worker_id).await?;
+    let restarted = agent.describe(&executor).await?;
+    assert_snapshot_recovery_loaded(&mut events).await;
+    let updated = executor
+        .update_component_with_files(
+            &agent.component.id,
+            AGENT_TYPE,
+            "it_initial_file_system_release",
+            files.to_vec(),
+        )
+        .await?;
+    executor
+        .manual_update_worker(&agent.worker_id, updated.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
+        .await?;
+    let updated_agent = Agent {
+        component: updated,
+        agent: agent.agent.clone(),
+        worker_id: agent.worker_id.clone(),
+    };
+    let before_update = updated_agent.records(&executor).await?.snapshots.len();
+    let after_update = updated_agent.describe(&executor).await?;
+    updated_agent.applied(&executor).await?;
+    eventually(Duration::from_secs(30), || async {
+        Ok((updated_agent.records(&executor).await?.snapshots.len() > before_update).then_some(()))
+    })
+    .await?;
+    let updated_records = updated_agent.records(&executor).await?;
+    let outcomes = updated_agent.update_results(&executor).await?;
+    executor.release().await?;
+    let replay_root = tempfile::tempdir()?;
+    let replaying = start_replaying(deps, &context, replay_root.path()).await?;
+    let replayed = updated_agent.describe(&replaying).await?;
+
+    assert!(records.snapshots.iter().all(Option::is_none), "{records:?}");
+    assert!(records.confirmations.is_empty());
+    // A restart from a record without a name seeds the initial files, as a full replay does.
+    assert_eq!(restarted, live);
+    assert_eq!(
+        outcomes,
+        [format!("updated to {:?}", updated_agent.component.revision)]
+    );
+    // The start of the update seeds the initial files of the source revision, as an install does,
+    // so the snapshots after it still find a tree of initial files.
+    assert!(
+        updated_records.snapshots.iter().all(Option::is_none),
+        "{updated_records:?}"
+    );
+    assert_eq!(replayed, after_update);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn without_filesystem_snapshots_changed_files_take_no_snapshot_and_fail_a_manual_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let every_invocation = SnapshotPolicy::EveryNInvocation { count: 1 };
+    let executor =
+        start_without_filesystem_snapshots(deps, &context, every_invocation.clone()).await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "changed-without-snapshots",
+        &[],
+    )
+    .await?;
+
+    agent.applied(&executor).await?;
+    // The initialization and `applied` each take a snapshot after they returned, so both records
+    // exist before the write.
+    eventually(Duration::from_secs(30), || async {
+        Ok((agent.records(&executor).await?.snapshots.len() >= 2).then_some(()))
+    })
+    .await?;
+    let before_write = agent.records(&executor).await?.snapshots.len();
+    agent
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "data.txt",
+                content: "kept",
+            }],
+        )
+        .await?;
+    agent.applied(&executor).await?;
+    captures_reach(&executor, "changed", 2).await?;
+    let after_write = agent.records(&executor).await?.snapshots.len();
+    let revision = agent.component.revision;
+    let updated = agent.manual_update(&executor, vec![]).await?;
+    let outcomes = agent.update_results(&executor).await?;
+    let live = agent.describe(&executor).await?;
+    let applied = agent.applied(&executor).await?;
+    let metadata = executor.get_worker_metadata(&agent.worker_id).await?;
+    executor.release().await?;
+
+    let executor = start_without_filesystem_snapshots(deps, &context, every_invocation).await?;
+    let restarted = agent.describe(&executor).await?;
+
+    assert_eq!(after_write, before_write);
+    assert_eq!(
+        outcomes,
+        [format!(
+            "failed to update to {:?}: cannot take a snapshot for the update: the files of the \
+             agent differ from its initial files, and filesystem snapshots are disabled on this \
+             executor",
+            updated.revision
+        )]
+    );
+    assert_eq!(metadata.component_revision, revision);
+    assert!(
+        live.iter()
+            .any(|line| line == r#"data.txt file links=1 writable=true content="kept""#),
+        "{live:?}"
+    );
+    // The start uses the record from before the write and replays the write after it.
+    assert_eq!(restarted, live);
+    assert_eq!(agent.applied(&executor).await?, applied);
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn without_filesystem_snapshots_a_skipped_periodic_snapshot_waits_a_period(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_without_filesystem_snapshots(
+        deps,
+        &context,
+        SnapshotPolicy::Periodic {
+            period: Duration::from_secs(1),
+        },
+    )
+    .await?;
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "periodic-changed-without-snapshots",
+        &[],
+    )
+    .await?;
+
+    agent
+        .apply_all(
+            &executor,
+            &[Operation::Write {
+                path: "data.txt",
+                content: "kept",
+            }],
+        )
+        .await?;
+    captures_reach(&executor, "changed", 1).await?;
+    // A record without a name from a period before the write is correct. After the first check
+    // that found the change, the tree stays changed, so no record may follow.
+    let after_change = agent.records(&executor).await?.snapshots.len();
+    let first = executor.filesystem_captures("changed");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let later = executor.filesystem_captures("changed");
+    executor
+        .wait_for_status(
+            &agent.worker_id,
+            golem_common::model::AgentStatus::Idle,
+            Duration::from_secs(10),
+        )
+        .await?;
+    let records = agent.records(&executor).await?;
+
+    // One check each period: three periods give about three checks, and a loop that checks again
+    // at once gives thousands.
+    assert!(later - first <= 5, "{first} then {later} checks");
+    assert_eq!(records.snapshots.len(), after_change, "{records:?}");
+    assert!(records.snapshots.iter().all(Option::is_none), "{records:?}");
+    Ok(())
 }

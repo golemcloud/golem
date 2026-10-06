@@ -45,7 +45,8 @@ use crate::filesystem_snapshot::{
 use crate::sandbox_filesystem::FilesystemVolume;
 use crate::services::agent_filesystem::FilesystemCapture;
 use crate::services::golem_config::{
-    FilesystemPressureConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
+    DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT, FilesystemPressureConfig,
+    FilesystemSnapshotUploadConfig, FilesystemSnapshotsConfig,
 };
 use futures::future::BoxFuture;
 use golem_common::model::agent::AgentMode;
@@ -221,9 +222,10 @@ pub(crate) enum StartCheck {
 pub(crate) enum Admitted {
     /// The upload of a snapshot with a new name.
     Upload(Admission),
-    /// The agent keeps no filesystem snapshots here: the service is disabled, or the agent keeps
-    /// no files. The record gets no name.
-    WithoutName,
+    /// This executor keeps no filesystem snapshots. The record gets no name, and it is written
+    /// only when the tree holds only initial files. The check waits up to `capture_wait` for
+    /// open file calls.
+    InitialFilesOnly { capture_wait: Duration },
     /// The snapshot is skipped for this reason.
     Skip(SnapshotSkip),
 }
@@ -234,7 +236,7 @@ impl Admitted {
     pub(crate) fn unwrap(self) -> Admission {
         match self {
             Self::Upload(admission) => admission,
-            Self::WithoutName => panic!("the admission gave no name"),
+            Self::InitialFilesOnly { .. } => panic!("the admission gave no name"),
             Self::Skip(skip) => panic!("the admission skipped the snapshot: {skip}"),
         }
     }
@@ -248,13 +250,16 @@ impl Admitted {
     pub(crate) fn err(self) -> Option<SnapshotSkip> {
         match self {
             Self::Skip(skip) => Some(skip),
-            Self::Upload(_) | Self::WithoutName => None,
+            Self::Upload(_) | Self::InitialFilesOnly { .. } => None,
         }
     }
 
-    /// Whether the admission gave no name.
-    pub(crate) fn without_name(&self) -> bool {
-        matches!(self, Self::WithoutName)
+    /// The wait of the check of a tree of initial files, when the admission asks for one.
+    pub(crate) fn initial_files_only(&self) -> Option<Duration> {
+        match self {
+            Self::InitialFilesOnly { capture_wait } => Some(*capture_wait),
+            Self::Upload(_) | Self::Skip(_) => None,
+        }
     }
 
     /// The upload of the admission, as a `Result` with the reason of a skip.
@@ -264,7 +269,7 @@ impl Admitted {
     ) -> Result<T, Option<SnapshotSkip>> {
         match self {
             Self::Upload(admission) => Ok(map(admission)),
-            Self::WithoutName => Err(None),
+            Self::InitialFilesOnly { .. } => Err(None),
             Self::Skip(skip) => Err(Some(skip)),
         }
     }
@@ -274,7 +279,7 @@ impl Admitted {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateNotAdmitted {
-    WithoutName,
+    InitialFilesOnly { capture_wait: Duration },
     Skip(SnapshotSkip),
     Interrupted,
 }
@@ -298,7 +303,9 @@ impl UpdateAdmitted {
     pub(crate) fn err(self) -> Option<UpdateNotAdmitted> {
         match self {
             Self::Upload(_) => None,
-            Self::WithoutName => Some(UpdateNotAdmitted::WithoutName),
+            Self::InitialFilesOnly { capture_wait } => {
+                Some(UpdateNotAdmitted::InitialFilesOnly { capture_wait })
+            }
             Self::Skip(skip) => Some(UpdateNotAdmitted::Skip(skip)),
             Self::Interrupted => Some(UpdateNotAdmitted::Interrupted),
         }
@@ -309,9 +316,10 @@ impl UpdateAdmitted {
 pub(crate) enum UpdateAdmitted {
     /// The upload of a snapshot with a new name.
     Upload(Admission),
-    /// The agent keeps no filesystem snapshots here: the service is disabled, or the agent keeps
-    /// no files. The record gets no name.
-    WithoutName,
+    /// This executor keeps no filesystem snapshots. The record gets no name, and the update
+    /// fails unless the tree holds only initial files. The check waits up to `capture_wait` for
+    /// open file calls.
+    InitialFilesOnly { capture_wait: Duration },
     /// The update gets no snapshot for this reason.
     Skip(SnapshotSkip),
     /// A terminal interrupt ended the wait for a running upload.
@@ -600,7 +608,7 @@ impl AgentFilesystemSnapshots {
             .unwrap_or_default()
     }
 
-    /// Asks for an upload of a periodic snapshot of the agent `agent` in `mode`, before the guest
+    /// Asks for an upload of a periodic snapshot of the agent `agent`, before the guest
     /// saves.
     ///
     /// The admission holds a new name. While it exists, and while the upload that it starts
@@ -608,11 +616,12 @@ impl AgentFilesystemSnapshots {
     /// unless the upload is a periodic one that waits for its next run after a failed run: a new
     /// admission replaces such an upload, which then ends at once, never confirms its snapshot,
     /// and discards its capture. A dropped admission frees the agent and writes nothing durable.
-    /// An agent that keeps no files, such as an ephemeral agent, gets
-    /// [`Admitted::WithoutName`], as a disabled service gives.
-    pub(crate) async fn admit_periodic(&self, agent: &AgentSnapshots, mode: AgentMode) -> Admitted {
-        let Some(core) = self.enabled_for(mode) else {
-            return Admitted::WithoutName;
+    /// A disabled service gives [`Admitted::InitialFilesOnly`].
+    pub(crate) async fn admit_periodic(&self, agent: &AgentSnapshots) -> Admitted {
+        let Some(core) = &self.core else {
+            return Admitted::InitialFilesOnly {
+                capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
+            };
         };
         match Core::admit(core, agent, SnapshotKind::Periodic, None).await {
             Ok(admission) => Admitted::Upload(admission),
@@ -620,7 +629,7 @@ impl AgentFilesystemSnapshots {
         }
     }
 
-    /// Asks for an upload of a manual-update snapshot of the agent `agent` in `mode`. When a job of
+    /// Asks for an upload of a manual-update snapshot of the agent `agent`. When a job of
     /// the agent runs, a periodic upload or an update job, the call stops the deletes that the
     /// running job makes after its save, and waits until the job is gone or an admission can
     /// replace it: a periodic job that has not decided, whose store call still holds the save
@@ -631,16 +640,17 @@ impl AgentFilesystemSnapshots {
     /// is the deadline of the admission, and the admission at the deadline gives its refusal. A
     /// run of the upload that started before then runs to its end. A
     /// shutdown ends the wait like the deadline does, and a terminal interrupt that `interrupt`
-    /// reports ends it with [`UpdateAdmitted::Interrupted`]. An agent that keeps no files gets
-    /// [`UpdateAdmitted::WithoutName`], as a disabled service gives.
+    /// reports ends it with [`UpdateAdmitted::Interrupted`]. A disabled service
+    /// gives [`UpdateAdmitted::InitialFilesOnly`].
     pub(crate) async fn admit_update(
         &self,
         agent: &AgentSnapshots,
-        mode: AgentMode,
         interrupt: watch::Receiver<bool>,
     ) -> UpdateAdmitted {
-        let Some(core) = self.enabled_for(mode) else {
-            return UpdateAdmitted::WithoutName;
+        let Some(core) = &self.core else {
+            return UpdateAdmitted::InitialFilesOnly {
+                capture_wait: DEFAULT_FILESYSTEM_SNAPSHOT_CAPTURE_WAIT,
+            };
         };
         let deadline = tokio::time::Instant::now() + core.settings.confirmation_wait();
         let asks = futures::stream::unfold(Some(None), |stopped| {

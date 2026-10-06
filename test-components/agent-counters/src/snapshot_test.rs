@@ -42,18 +42,14 @@ impl SnapshotCounter for SnapshotCounterImpl {
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-        Ok(self.count.to_le_bytes().to_vec())
+        Ok(count_bytes(self.count))
     }
 
     async fn load_snapshot(
         bytes: Vec<u8>,
         context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
-        let count = if bytes.len() == 4 {
-            u32::from_le_bytes(bytes.try_into().unwrap())
-        } else {
-            return Err(format!("Invalid snapshot size: {}", bytes.len()));
-        };
+        let count = count_of(bytes)?;
         let golem_rust::SchemaValue::Record { fields } = context.parameters else {
             return Err("Invalid snapshot restore parameters".to_string());
         };
@@ -63,6 +59,55 @@ impl SnapshotCounter for SnapshotCounterImpl {
         Ok(Self {
             count,
             _id: id.clone(),
+        })
+    }
+}
+
+/// The application snapshot of a counter: the count in four little-endian bytes.
+fn count_bytes(count: u32) -> Vec<u8> {
+    count.to_le_bytes().to_vec()
+}
+
+/// The count of an application snapshot that [`count_bytes`] made.
+fn count_of(bytes: Vec<u8>) -> Result<u32, String> {
+    bytes
+        .try_into()
+        .map(u32::from_le_bytes)
+        .map_err(|bytes: Vec<u8>| format!("Invalid snapshot size: {}", bytes.len()))
+}
+
+/// An ephemeral counter whose definition enables snapshots.
+#[agent_definition(ephemeral, snapshotting = "enabled")]
+trait EphemeralSnapshotCounter {
+    fn new(id: String) -> Self;
+    fn increment(&mut self) -> u32;
+}
+
+struct EphemeralSnapshotCounterImpl {
+    count: u32,
+}
+
+#[agent_implementation]
+impl EphemeralSnapshotCounter for EphemeralSnapshotCounterImpl {
+    fn new(_id: String) -> Self {
+        Self { count: 0 }
+    }
+
+    fn increment(&mut self) -> u32 {
+        self.count += 1;
+        self.count
+    }
+
+    async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+        Ok(count_bytes(self.count))
+    }
+
+    async fn load_snapshot(
+        bytes: Vec<u8>,
+        _context: golem_rust::agentic::SnapshotRestoreContext,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            count: count_of(bytes)?,
         })
     }
 }

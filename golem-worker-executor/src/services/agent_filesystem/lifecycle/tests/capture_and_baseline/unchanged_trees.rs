@@ -17,7 +17,8 @@
 
 use super::*;
 use crate::services::agent_filesystem::lifecycle::baseline::{
-    TIMESTAMP_SETTLE, detection, settle_delay, unchanged,
+    GenerationFacts, TIMESTAMP_SETTLE, detection, every_declaration_left_out,
+    may_hold_only_initial_files, settle_delay, unchanged,
 };
 use test_r::{test, timeout};
 
@@ -822,6 +823,101 @@ async fn untouched_read_only_initial_files_make_no_copy_and_no_host_directory() 
     delete(seal(filesystem)).await.unwrap();
 }
 
+/// Starts a tree of read-only initial files, lets a replay put back a past time at `path`, and
+/// gives what a capture and a check then find.
+async fn after_a_replayed_time_at(path: &str) -> (Seen, InitialFilesCheck) {
+    let agents = UnmanagedAgents::new().await;
+    let (_, filesystem) = read_only_agent(&agents, "replayed-time", &[]).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    restore_times_of(
+        &generation_handle,
+        path,
+        TimeChange::Keep,
+        TimeChange::Set(std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000)),
+    )
+    .await;
+    let checked = check_initial_files(&filesystem, WAIT).await.unwrap();
+    let seen = look_without_mark(&filesystem).await;
+    delete(seal(filesystem)).await.unwrap();
+    (seen, checked)
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_replayed_time_of_a_read_only_initial_file_keeps_a_tree_of_initial_files() {
+    assert_eq!(
+        after_a_replayed_time_at("a.txt").await,
+        (Seen::InitialFiles, InitialFilesCheck::InitialFiles)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_replayed_time_of_a_directory_that_holds_initial_files_keeps_a_tree_of_initial_files() {
+    assert_eq!(
+        after_a_replayed_time_at("nested").await,
+        (Seen::InitialFiles, InitialFilesCheck::InitialFiles)
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_time_that_the_agent_sets_with_a_size_on_a_removed_file_still_gives_a_copy() {
+    let agents = UnmanagedAgents::new().await;
+    let (_, filesystem) = read_only_agent(&agents, "chosen-file-time", &[]).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let at = |path: &str| PathTarget::at_root(&generation_handle, path).unwrap();
+    assert_eq!(
+        write_file(&generation_handle, Ok(at("temporary.txt")), b"gone").await,
+        StepOutcome::Done
+    );
+    let opened = open(
+        &generation_handle,
+        at("temporary.txt"),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Write,
+            follow: Follow::No,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    set_attributes(
+        &generation_handle,
+        Target::Open(&opened.node),
+        AttributeChanges::File {
+            size: 4,
+            times: TimeChanges {
+                accessed: TimeChange::Keep,
+                modified: TimeChange::Set(
+                    std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000),
+                ),
+            },
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    close(opened.node).await.unwrap();
+    assert_eq!(
+        namespace_edit(
+            &generation_handle,
+            Ok(NamespaceEdit::Remove {
+                target: at("temporary.txt"),
+                expected: ObjectKind::File,
+            }),
+        )
+        .await,
+        StepOutcome::Done
+    );
+
+    // The file is gone, but the agent chose a time on the way, so the tree is not a tree of
+    // initial files.
+    assert_eq!(look_without_mark(&filesystem).await, Seen::Full);
+    delete(seal(filesystem)).await.unwrap();
+}
+
 #[test]
 #[timeout("60s")]
 async fn an_update_that_keeps_every_directory_keeps_a_tree_of_initial_files() {
@@ -1050,7 +1146,9 @@ async fn each_change_of_a_tree_of_initial_files_gives_a_copy() {
         &[("/config.txt", AgentFilePermissions::ReadWrite)];
     let cases: [ChangeCase; 12] = [
         ("untouched", &[], Change::None, Seen::InitialFiles),
-        // A kernel time on a directory comes back from a replay as a new time too.
+        // The write and the remove change only the time of the root, which the kernel gives. The
+        // check does not compare the times of directories: a replay that stats the root puts the
+        // live time back, and a time that a replay puts back is not a chosen time.
         (
             "temporary-file",
             &[],
@@ -1206,19 +1304,53 @@ fn each_counted_change_grows_its_counters_and_keeps_the_restored_times() {
 }
 
 #[test]
-fn a_restore_counts_a_chosen_time_and_sets_whether_the_tree_keeps_its_saved_times() {
+fn a_restore_of_saved_times_counts_a_chosen_time_and_sets_whether_the_tree_keeps_them() {
     let start = TreeCounters {
         restored_times: true,
         ..counters(1, 1, 0)
     };
     assert_eq!(
-        [true, false].map(|saved_times| start.after_restore(saved_times)),
+        [true, false].map(|kept| start.after_restore(RestoredTimes::Saved { kept })),
         [
             TreeCounters {
                 restored_times: true,
                 ..counters(2, 2, 1)
             },
             counters(2, 2, 1),
+        ]
+    );
+}
+
+#[test]
+fn a_restore_of_initial_files_counts_an_install_and_keeps_the_restored_times() {
+    assert_eq!(
+        [false, true].map(|restored_times| {
+            TreeCounters {
+                restored_times,
+                ..counters(1, 1, 0)
+            }
+            .after_restore(RestoredTimes::Installed)
+        }),
+        [
+            counters(2, 2, 0),
+            TreeCounters {
+                restored_times: true,
+                ..counters(2, 2, 0)
+            },
+        ]
+    );
+}
+
+#[test]
+fn only_a_restore_with_the_times_of_a_save_has_saved_times() {
+    assert_eq!(
+        [(true, true), (true, false), (false, true), (false, false)]
+            .map(|(saved_times, unchanged)| RestoredTimes::of(saved_times, unchanged)),
+        [
+            RestoredTimes::Saved { kept: true },
+            RestoredTimes::Saved { kept: false },
+            RestoredTimes::Installed,
+            RestoredTimes::Installed,
         ]
     );
 }
@@ -1249,7 +1381,7 @@ fn only_a_change_of_the_modification_time_counts_and_a_chosen_time_counts_as_cho
             (Some(before), TimeChange::Now),
             (None, TimeChange::Now),
         ]
-        .map(|(before, requested)| set_times_change(before, requested)),
+        .map(|(before, requested)| set_times_change(before, requested, TimeOrigin::Call)),
         [
             None,
             None,
@@ -1258,6 +1390,55 @@ fn only_a_change_of_the_modification_time_counts_and_a_chosen_time_counts_as_cho
             Some(Counted::Fresh),
             Some(Counted::Fresh),
         ]
+    );
+}
+
+#[test]
+fn a_chosen_time_a_provisioned_file_or_a_read_write_declaration_each_rule_out_initial_files() {
+    let facts = |chosen_times, provisioned, read_write_declared| GenerationFacts {
+        chosen_times,
+        provisioned,
+        read_write_declared,
+    };
+    assert_eq!(
+        [
+            facts(false, false, false),
+            facts(true, false, false),
+            facts(false, true, false),
+            facts(false, false, true),
+        ]
+        .map(may_hold_only_initial_files),
+        [true, false, false, false]
+    );
+    assert_eq!(
+        [(2, 2), (1, 2), (0, 0)]
+            .map(|(left_out, declared)| every_declaration_left_out(left_out, declared)),
+        [true, false, true]
+    );
+}
+
+#[test]
+fn a_time_that_a_replay_puts_back_is_a_replayed_time_and_never_a_chosen_time() {
+    let before = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let other = before + Duration::from_secs(1);
+    assert_eq!(
+        [
+            (Some(before), TimeChange::Set(before)),
+            (Some(before), TimeChange::Set(other)),
+            (None, TimeChange::Set(other)),
+            (Some(before), TimeChange::Now),
+        ]
+        .map(|(before, requested)| set_times_change(before, requested, TimeOrigin::Replay)),
+        [
+            None,
+            Some(Counted::Replayed),
+            Some(Counted::Replayed),
+            Some(Counted::Fresh),
+        ]
+    );
+    assert_eq!(
+        counters(4, 2, 1).after(Counted::Replayed),
+        counters(5, 3, 1)
     );
 }
 

@@ -33,12 +33,20 @@ const RECORD_FILE: &str = "record.json";
 pub(crate) trait RestoreTree: Send {
     /// Fills the empty directory `into`. A failure can leave a part of the contents in `into`.
     fn restore(self, into: &Path) -> impl Future<Output = Result<(), RestoreError>> + Send;
+
+    /// Whether the restored tree holds the modification times of a save. A tree that holds only
+    /// the times of an install of initial files gives `false`.
+    fn gives_saved_times(&self) -> bool;
 }
 
 #[cfg(test)]
 impl RestoreTree for std::convert::Infallible {
     async fn restore(self, _into: &Path) -> Result<(), RestoreError> {
         match self {}
+    }
+
+    fn gives_saved_times(&self) -> bool {
+        match *self {}
     }
 }
 
@@ -78,9 +86,8 @@ pub(crate) struct InitialFilesRestore {
 
 impl InitialFilesRestore {
     /// The restore of `files` when they are all read-only. Only a tree of read-only initial files
-    /// gives a record without a name. A record without a name and with other declarations comes
-    /// from an executor without filesystem snapshots, and its start seeds the initial files of
-    /// the target revision, so it gets `None`.
+    /// gives a record without a name, so `None` comes from a source revision without initial
+    /// files, whose start seeds the initial files of the target revision on the empty tree.
     pub(crate) fn of_read_only(files: Box<[InitialAgentFile]>) -> Option<Self> {
         (!files.is_empty()
             && files
@@ -122,6 +129,12 @@ impl RestoreTree for InitialFilesRestore {
                 retryable: true,
                 source: anyhow::Error::new(error).context("write the initial files of a restore"),
             })
+    }
+
+    /// The restore makes each directory now and leaves out every file, which the baseline then
+    /// installs from the initial-file cache, so the tree holds no time of a save.
+    fn gives_saved_times(&self) -> bool {
+        false
     }
 }
 
@@ -236,6 +249,34 @@ impl WholeCapture {
             Self::InitialFiles => None,
         }
     }
+}
+
+/// Whether a tree is what a start from the initial files of the generation gives, as a check
+/// without a copy finds it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InitialFilesCheck {
+    /// The tree holds only initial files.
+    InitialFiles,
+    /// The tree holds something that a start from the initial files does not give.
+    Changed,
+}
+
+impl InitialFilesCheck {
+    /// The metric label of the outcome.
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            Self::InitialFiles => "initial_files",
+            Self::Changed => "changed",
+        }
+    }
+}
+
+/// What a capture does with a tree.
+enum Decision {
+    /// The tree is what a start from the initial files gives. Nothing is copied.
+    InitialFiles,
+    /// The tree is copied without the bytes of the files at the paths `left_out`.
+    Copy { left_out: Box<[Box<Path>]> },
 }
 
 /// Whether the tree at the mark `now` is the tree of `since`.
@@ -436,6 +477,25 @@ pub(crate) fn capture_whole<Adapter: SandboxFilesystemAdapter>(
     )
 }
 
+/// Tells whether a resident filesystem is what a start from the initial files of the generation
+/// gives, by the rule of [`capture`], and leaves the filesystem resident.
+///
+/// Use this only at a boundary. The check stops new filesystem calls and waits for the calls that
+/// are open, as [`capture`] does. It makes no host directory and copies nothing. The wait for open
+/// calls ends at `wait`. A call that is still open then gives `Busy`, and the filesystem opens
+/// again at once.
+pub(crate) fn check_initial_files<Adapter: SandboxFilesystemAdapter>(
+    filesystem: &ResidentFilesystem<Adapter>,
+    wait: Duration,
+) -> impl Future<Output = Result<InitialFilesCheck, CaptureError>> + Send + 'static {
+    fenced(
+        filesystem,
+        wait,
+        |generation| async move { check_fenced(&generation).await },
+        |_| None,
+    )
+}
+
 /// Runs `run` in a task of the module while no filesystem call runs. The task stops new calls,
 /// waits up to `wait` for the open calls, runs `run`, and opens the filesystem again. A copy that
 /// the caller does not take, because it went away, is discarded.
@@ -521,6 +581,35 @@ async fn copy_fenced<Adapter: SandboxFilesystemAdapter>(
     Ok(WholeCapture::Captured { capture, mark })
 }
 
+/// Decides, while no call runs, whether the tree is what a start from the initial files gives.
+async fn check_fenced<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+) -> Result<InitialFilesCheck, CaptureError> {
+    let (_, counters) = generation.registry.counters();
+    let sandbox = generation.sandbox.read().await;
+    let sandbox = sandbox.as_ref().ok_or(CaptureError::Invalidated)?;
+    let state = Arc::clone(&generation.initial_files.lock().unwrap());
+    let facts = GenerationFacts::of(&state, counters.has_chosen_times());
+    // A tree that the facts rule out needs no read: the check makes no exclusion paths and reads
+    // no file.
+    if !may_hold_only_initial_files(facts) {
+        return Ok(InitialFilesCheck::Changed);
+    }
+    let left_out = left_out_files(sandbox.as_ref(), &state)
+        .await
+        .map_err(CaptureError::Sandbox)?;
+    Ok(
+        if holds_only_initial_files(sandbox.as_ref(), &state, facts, &left_out)
+            .await
+            .map_err(CaptureError::Sandbox)?
+        {
+            InitialFilesCheck::InitialFiles
+        } else {
+            InitialFilesCheck::Changed
+        },
+    )
+}
+
 /// The time left until [`TIMESTAMP_SETTLE`] passed since the last call ended at `last_millis`
 /// after the Unix epoch, or `None` when it passed at `now`.
 pub(super) fn settle_delay(last_millis: u64, now: std::time::SystemTime) -> Option<Duration> {
@@ -542,16 +631,13 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
     let sandbox = generation.sandbox.read().await;
     let sandbox = sandbox.as_ref().ok_or(CaptureError::Invalidated)?;
     let state = Arc::clone(&generation.initial_files.lock().unwrap());
-    let left_out = left_out_files(sandbox.as_ref(), &state)
+    let left_out = match decide(sandbox.as_ref(), &state, chosen_times)
         .await
-        .map_err(CaptureError::Sandbox)?;
-    if !chosen_times
-        && holds_only_initial_files(sandbox.as_ref(), &state, &left_out)
-            .await
-            .map_err(CaptureError::Sandbox)?
+        .map_err(CaptureError::Sandbox)?
     {
-        return Ok(None);
-    }
+        Decision::InitialFiles => return Ok(None),
+        Decision::Copy { left_out } => left_out,
+    };
     let directory = HostDirectory::create_in(
         generation.scratch.path(),
         OsStr::new(&uuid::Uuid::new_v4().to_string()),
@@ -567,6 +653,96 @@ async fn capture_into_scratch<Adapter: SandboxFilesystemAdapter>(
             Err(CaptureError::Sandbox(error))
         }
     }
+}
+
+/// Decides what a capture does with the tree of `sandbox` with the initial files of `state`: it
+/// copies nothing when the tree is what a start from the initial files gives and no call outside
+/// an install put a chosen modification time at a path, which `chosen_times` tells. The caller
+/// holds the read guard of the sandbox, so a deletion waits for the decision.
+async fn decide<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    state: &InitialFileState,
+    chosen_times: bool,
+) -> Result<Decision, FilesystemStorageError> {
+    // The copy needs the left-out paths whatever the decision is.
+    let left_out = left_out_files(sandbox, state).await?;
+    let facts = GenerationFacts::of(state, chosen_times);
+    Ok(
+        if holds_only_initial_files(sandbox, state, facts, &left_out).await? {
+            Decision::InitialFiles
+        } else {
+            Decision::Copy { left_out }
+        },
+    )
+}
+
+/// What a capture and a check know of a generation before they read its tree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct GenerationFacts {
+    /// A call outside an install put a chosen modification time at a path.
+    pub(super) chosen_times: bool,
+    /// The generation has entity-provisioned files.
+    pub(super) provisioned: bool,
+    /// An initial file of the component revision is declared read-write. A provisioned file rules
+    /// out a tree of initial files by itself, so its permissions do not matter here.
+    pub(super) read_write_declared: bool,
+}
+
+impl GenerationFacts {
+    /// The facts of a generation with the initial files of `state`, where `chosen_times` tells
+    /// whether a call put a chosen modification time at a path.
+    /// It reads the declaration maps of `state` as they are and builds no other view of them.
+    pub(super) fn of(state: &InitialFileState, chosen_times: bool) -> Self {
+        Self {
+            chosen_times,
+            provisioned: !state.provisioned.is_empty(),
+            read_write_declared: state
+                .initial
+                .values()
+                .any(|file| file.permissions != AgentFilePermissions::ReadOnly),
+        }
+    }
+}
+
+/// Whether a tree with `facts` can hold only initial files. A chosen time, a provisioned file and a
+/// read-write declaration each rule it out, because a start from the initial files does not give
+/// them back as they are.
+pub(super) fn may_hold_only_initial_files(facts: GenerationFacts) -> bool {
+    !facts.chosen_times && !facts.provisioned && !facts.read_write_declared
+}
+
+/// Whether each of the `declared` paths holds its initial file with a single name, when `left_out`
+/// of them do.
+pub(super) fn every_declaration_left_out(left_out: usize, declared: usize) -> bool {
+    left_out == declared
+}
+
+/// Whether a tree with `facts`, whose `left_out` read-only paths hold their initial files, still
+/// needs a walk to tell if it holds only initial files. A tree that the facts allow has no
+/// provisioned file, so the declarations are the initial declarations `initial`, read as they are:
+/// a tree that the rules rule out costs no other view of the declarations.
+pub(super) fn needs_a_walk(
+    facts: GenerationFacts,
+    left_out: usize,
+    initial: &Declarations,
+) -> bool {
+    may_hold_only_initial_files(facts) && every_declaration_left_out(left_out, initial.len())
+}
+
+/// Tells whether the tree holds only what a start from the initial files gives, from the facts of
+/// the generation and the read-only paths `left_out` that hold their initial files. The tree is read
+/// only when the facts and the left-out paths still allow a tree of initial files. The caller holds
+/// the read guard of the sandbox.
+async fn holds_only_initial_files<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    state: &InitialFileState,
+    facts: GenerationFacts,
+    left_out: &[Box<Path>],
+) -> Result<bool, FilesystemStorageError> {
+    if !needs_a_walk(facts, left_out.len(), &state.initial) {
+        return Ok(false);
+    }
+    holds_nothing_else(sandbox, &state.declarations()).await
 }
 
 /// Finds the read-only declared paths that hold the declared initial file with a single name. A
@@ -606,26 +782,15 @@ async fn left_out_files<Adapter: SandboxFilesystemAdapter>(
         .map(|(_, paths)| paths.into_boxed_slice())
 }
 
-/// Tells whether the tree holds only what a start from the initial files gives: each declaration is
-/// a read-only initial file, each declared path is in `left_out`, and the tree holds nothing else
-/// except the directories on the way to the declared paths.
+/// Tells whether the tree holds nothing but the paths of `declarations` and the directories on the
+/// way to them.
 ///
 /// The function reads each such directory one time, and stops at the first entry that is not a
 /// declared path or a directory on the way to one.
-async fn holds_only_initial_files<Adapter: SandboxFilesystemAdapter>(
+async fn holds_nothing_else<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
-    state: &InitialFileState,
-    left_out: &[Box<Path>],
+    declarations: &DeclarationView<'_>,
 ) -> Result<bool, FilesystemStorageError> {
-    let declarations = state.declarations();
-    if !state.provisioned.is_empty()
-        || declarations
-            .values()
-            .any(|file| file.permissions != AgentFilePermissions::ReadOnly)
-        || left_out.len() != declarations.len()
-    {
-        return Ok(false);
-    }
     let directories = declarations
         .keys()
         .flat_map(|path| path.ancestors().skip(1))
@@ -870,6 +1035,7 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     restore: Restore,
     directory: &HostPath,
 ) -> Result<InitialFileState, Error> {
+    let saved_times = restore.gives_saved_times();
     restore
         .restore(directory.as_path())
         .await
@@ -932,7 +1098,9 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     )
     .await?;
     let new = declaration_view([&initial, &provisioned]);
-    generation.registry.record_restore(old == new);
+    generation
+        .registry
+        .record_restore(RestoredTimes::of(saved_times, old == new));
     let states = observe(sandbox, &old, &new, &seeded)
         .await
         .map_err(|source| classify_query_error(generation, source))?;
