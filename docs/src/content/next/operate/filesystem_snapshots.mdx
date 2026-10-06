@@ -8,10 +8,10 @@ Filesystem snapshots are disabled by default. A disabled executor keeps the earl
 
 ## Requirements
 
-- The executor runs on Linux and uses managed XFS storage for the agent filesystems.
+- The executor runs on Linux 5.8 or later and uses managed XFS storage for the agent filesystems. Each executor has its own XFS filesystem.
 - The executor process may change XFS project quotas. See [Prepare managed XFS storage](#prepare-managed-xfs-storage).
 - All executors that can run the same agents enable filesystem snapshots, and use the same blob storage and the same `repository_key`.
-- With S3 blob storage, the bucket for filesystem snapshots exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
+- With S3 blob storage, `filesystem_snapshots_bucket` is set and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
 
 ## Enable filesystem snapshots
@@ -33,7 +33,7 @@ Make the mount persist across reboots, for example with a line in `/etc/fstab`:
 /dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
 ```
 
-The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. In a container, run the executor as a privileged container or add `CAP_SYS_ADMIN`, and mount the XFS filesystem into the container. Linux changes the project of a directory only for a process in the initial user namespace, so the container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`.
+The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. In a container, run the executor as a privileged container or add `CAP_SYS_ADMIN`, and mount the XFS filesystem into the container. Give the container the root directory of the XFS filesystem, for example with a `hostPath` volume at the host mount point. Do not give it a subdirectory of the filesystem, a bind mount of a subdirectory, or a `subPath`: the startup check of the mount root then fails. Linux changes the project of a directory only for a process in the initial user namespace, so the container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`.
 
 Use one XFS root for each executor process. At startup, the executor takes an exclusive lock on the root, so a second process on the same root does not start.
 
@@ -50,16 +50,20 @@ At startup, the executor checks the volume and refuses to start when a check fai
 
 | Check | `<check>` in the error |
 | --- | --- |
+| The executor can open the path and read its filesystem. | `open managed XFS root` or `inspect managed XFS root` |
 | The path is an XFS filesystem. | `validate managed XFS root filesystem type` |
-| The path is the root of its mount. | `validate managed XFS root is the filesystem mount root` |
+| The path is the root of its mount and the root directory of the XFS filesystem. A subdirectory, also through a bind mount, fails. | `validate managed XFS root is the filesystem mount root` |
 | No other process holds the lock on the root. | `acquire exclusive ownership of managed XFS root` |
+| The filesystem has a valid block size. | `validate managed XFS filesystem block size` |
+| The executor can open the root through its open file and identify its filesystem. | `open managed XFS root through its stable descriptor` or `identify managed XFS root` |
 | Project quota accounting and enforcement are on. | `validate managed XFS project quota accounting and enforcement`, with the cause `managed XFS project quota accounting or enforcement is disabled` |
 | The executor can read project quotas. | `validate managed XFS project quota query permissions` |
+| The executor can read the quota of a 32-bit project id. | `validate 32-bit XFS project quota query` |
 | The project id 2147483648, which the check uses, is not in use. | `reserve unused 32-bit XFS startup probe project` |
 | The executor can change project quotas. | `validate XFS project quota update permissions` |
 | The executor can write to the root. It makes the directory `.golem-xfs-project-probe` there for the next check, and removes it after the check. | `create managed XFS startup probe` |
 | A new directory gets the project of its parent, and reflink copies work. | `validate managed XFS project assignment and inheritance` |
-| The volume is larger than the targets of `[filesystem_storage.pressure]` (`target_available_bytes` and `target_available_filesystem_objects`). | `fit filesystem pressure byte target within managed capacity` or `fit filesystem pressure object target within managed capacity` |
+| `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within managed capacity` or `fit filesystem pressure object target within managed capacity` |
 | `deterministic_root_dir` is not set. The two storage modes exclude each other. | `select exactly one filesystem storage mode` |
 
 The executor makes the directories `.scratch` and `.initial-files` directly under the root, outside the quota of every agent. A capture goes into `.scratch`. At startup, the executor removes what an earlier process left in these directories.
@@ -82,7 +86,7 @@ Keep the key secret, and give the same key to every executor. Do not change the 
 
 ### Set the blob storage bucket
 
-With S3 blob storage, the executor keeps filesystem snapshots in the bucket that `filesystem_snapshots_bucket` names, in the `[blob_storage.config]` section. The default is `filesystem-snapshots`. Make the bucket before you start the executor:
+With S3 blob storage, the executor keeps filesystem snapshots in the bucket that `filesystem_snapshots_bucket` names, in the `[blob_storage.config]` section. An S3 configuration must set this field, also when filesystem snapshots are disabled; without it the executor does not start. The example configuration uses `filesystem-snapshots`. Make the bucket before you start the executor:
 
 ```toml
 [blob_storage.config]
@@ -277,7 +281,7 @@ The executor deletes filesystem snapshots in the background when the life of an 
 - **Revert.** A revert first writes its revert entry. Then the executor deletes the snapshots of the records in the reverted part of the oplog, except a snapshot that a remaining record uses. When another executor took over the agent before the revert entry was written, the revert fails with `OplogFenced` and deletes nothing.
 - **Fork.** The executor copies the snapshots of the source incarnation into the location of the new agent, inside blob storage, before it creates the new agent. With S3 and SQLite, the data does not pass through the executor. With file system blob storage, the executor copies the files. When the new agent would start from a manual-update record whose filesystem snapshot is not in the copy, the fork is refused: `Cannot fork worker at oplog index <index>: the filesystem snapshot <name> of the target's baseline is not in the store`. An executor without filesystem snapshots copies nothing, so it refuses such a fork too. A fork attempt that does not create the new agent deletes its copy.
 
-The clean-ups wait in a queue in the memory of the executor. At most `max_concurrent_uploads` clean-ups run at the same time. Retention does not use this queue. The deletes of a revert and the delete of all snapshots of an agent do.
+The clean-ups wait in a queue in the memory of the executor. At most `max_concurrent_uploads` clean-ups run at the same time. Retention does not use this queue. These deletes do: the deletes of a revert, the delete of all snapshots of a deleted agent, the delete of all snapshots of an incarnation that the recovery of a shard finds stale, and the delete of the copy of a fork attempt that did not create its new agent.
 
 One agent can have at most `max_pending_deletes_per_agent` snapshots of a revert waiting for deletion. The snapshots that wait keep their place. A revert gives its snapshots newest first. The executor queues them up to the bound, refuses the rest, and counts a leaked clean-up with the operation `overflow`. The refused snapshots stay in the location of the agent, and retention deletes them later by count, as it deletes other old snapshots.
 

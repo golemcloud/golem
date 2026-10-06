@@ -378,7 +378,7 @@ Typed state snapshotting in the TypeScript SDK handles each top-level `DatabaseS
 
 A typed snapshot with a file-backed database relies on filesystem snapshots. An executor without filesystem snapshots keeps the earlier behaviour, in which the files that the agent wrote before a snapshot are not restored. On such an executor, use an in-memory database, or custom `save` and `load` functions.
 
-These cases make the save fail:
+These cases, among others, make the save fail. The guide linked below lists all of them:
 
 - A database with an open transaction, also a file-backed one. Commit or roll back before the invocation ends.
 - A field that holds a closed `DatabaseSync`. Remove the field, or set it to an open database, before the invocation ends.
