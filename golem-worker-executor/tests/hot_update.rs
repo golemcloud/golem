@@ -2510,7 +2510,7 @@ async fn assert_promoted_automatic_snapshot_load_failure_retries_required_baseli
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    assert_eq!(replay_revision.into_typed::<u32>()?, 1);
+    assert_eq!(replay_revision.into_typed::<u32>()?, 0);
     assert_eq!(revision_two_only.into_typed::<u32>()?, 2);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));

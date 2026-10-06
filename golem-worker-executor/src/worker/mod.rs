@@ -12627,15 +12627,7 @@ fn component_revision_for_replay(
                         ..
                     } => Some(source_component_revision),
                 })
-                .unwrap_or_else(|| {
-                    if status.authoritative_snapshot.is_some_and(|snapshot| {
-                        snapshot.kind == AuthoritativeSnapshotKind::SnapshotAssistedAutomatic
-                    }) {
-                        status.component_revision
-                    } else {
-                        status.component_revision_for_replay
-                    }
-                })
+                .unwrap_or(status.component_revision_for_replay)
         },
         |(_, snapshot_revision)| snapshot_revision,
     )
@@ -13180,7 +13172,7 @@ mod tests {
 
         assert_eq!(
             component_revision_for_replay(&status, false, u64::from(automatic_snapshot_index)),
-            active_revision
+            source_revision
         );
     }
 
