@@ -602,14 +602,22 @@ mod tests {
         withdraw_at: usize,
     }
 
+    /// Whether the take number `take`, counted from 1, of slots that withdraw the call at the take
+    /// number `withdraw_at` gives a slot.
+    fn grants(take: usize, withdraw_at: usize) -> Result<(), Withdrawal> {
+        if take < withdraw_at {
+            Ok(())
+        } else {
+            Err(Withdrawal::Stopped)
+        }
+    }
+
     impl RunSlots for CountedSlots {
         fn take(&self, _immediate: bool) -> BoxFuture<'_, Result<Slot, Withdrawal>> {
             let take = self.takes.fetch_add(1, Ordering::SeqCst) + 1;
-            Box::pin(std::future::ready(if take >= self.withdraw_at {
-                Err(Withdrawal::Stopped)
-            } else {
-                Ok(Slot::new(()))
-            }))
+            Box::pin(std::future::ready(
+                grants(take, self.withdraw_at).map(|()| Slot::new(())),
+            ))
         }
 
         fn withdrawn(&self) -> BoxFuture<'_, Withdrawal> {
@@ -619,6 +627,19 @@ mod tests {
         fn waiting_after_failure(&self) {
             self.waits.fetch_add(1, Ordering::SeqCst);
         }
+    }
+
+    #[test]
+    fn counted_slots_grant_each_take_before_the_withdrawing_one() {
+        assert_eq!(
+            [grants(1, 3), grants(2, 3), grants(3, 3), grants(4, 3)],
+            [
+                Ok(()),
+                Ok(()),
+                Err(Withdrawal::Stopped),
+                Err(Withdrawal::Stopped)
+            ]
+        );
     }
 
     #[test]
