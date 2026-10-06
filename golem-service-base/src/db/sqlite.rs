@@ -64,6 +64,7 @@ impl SqlitePool {
             svc_name,
             api_name,
             pool: self.read_pool.clone(),
+            write_transaction: false,
         }
     }
 
@@ -72,6 +73,7 @@ impl SqlitePool {
             svc_name,
             api_name,
             pool: self.write_pool.clone(),
+            write_transaction: true,
         }
     }
 }
@@ -187,6 +189,7 @@ pub struct SqliteLabelledApi {
     svc_name: &'static str,
     api_name: &'static str,
     pool: sqlx::SqlitePool,
+    write_transaction: bool,
 }
 
 impl SqliteLabelledApi {
@@ -288,7 +291,14 @@ impl super::LabelledPoolApi for SqliteLabelledApi {
     type LabelledTransaction = SqliteLabelledTransaction;
 
     async fn begin(&self) -> Result<Self::LabelledTransaction, RepoError> {
-        let tx = self.pool.begin().await?;
+        let tx = if self.write_transaction {
+            // Acquire SQLite's write reservation before any reads in the transaction. A deferred
+            // transaction can lose a cross-process lock-upgrade race with SQLITE_BUSY immediately;
+            // BEGIN IMMEDIATE instead lets the configured busy timeout wait for the current writer.
+            self.pool.begin_with("BEGIN IMMEDIATE").await?
+        } else {
+            self.pool.begin().await?
+        };
         Ok(SqliteLabelledTransaction {
             svc_name: self.svc_name,
             api_name: self.api_name,
@@ -309,4 +319,71 @@ pub async fn migrate(
 
     let _ = conn.close().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{LabelledPoolApi, LabelledPoolTransaction};
+    use std::time::Duration;
+
+    #[test_r::test]
+    async fn write_transactions_wait_for_a_writer_from_another_pool() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let config = DbSqliteConfig {
+            database: tempdir
+                .path()
+                .join("shared.db")
+                .to_string_lossy()
+                .into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        };
+        let first = SqlitePool::configured(&config).await.unwrap();
+        let second = SqlitePool::configured(&config).await.unwrap();
+
+        let first_tx = first.with_rw("test", "first").begin().await.unwrap();
+        let second_tx =
+            tokio::spawn(async move { second.with_rw("test", "second").begin().await.unwrap() });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !second_tx.is_finished(),
+            "a second write transaction acquired the shared SQLite file"
+        );
+
+        first_tx.commit().await.unwrap();
+        let second_tx = tokio::time::timeout(Duration::from_secs(1), second_tx)
+            .await
+            .expect("second writer did not acquire the released SQLite file")
+            .unwrap();
+        second_tx.rollback().await.unwrap();
+    }
+
+    #[test_r::test]
+    async fn read_only_transaction_does_not_wait_for_a_writer() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let config = DbSqliteConfig {
+            database: tempdir
+                .path()
+                .join("shared.db")
+                .to_string_lossy()
+                .into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        };
+        let pool = SqlitePool::configured(&config).await.unwrap();
+
+        let writer = pool.with_rw("test", "writer").begin().await.unwrap();
+        let reader = tokio::time::timeout(
+            Duration::from_millis(250),
+            pool.with_ro("test", "reader").begin(),
+        )
+        .await
+        .expect("a read-only transaction was blocked by an active writer")
+        .unwrap();
+
+        reader.rollback().await.unwrap();
+        writer.rollback().await.unwrap();
+    }
 }

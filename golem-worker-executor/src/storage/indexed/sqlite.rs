@@ -330,16 +330,10 @@ impl IndexedStorage for SqliteIndexedStorage {
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
-                    // SQLite has no `SELECT ... FOR UPDATE`, and it does not need one here: the
-                    // write pool is capped at a single connection (golem-service-base
-                    // db/sqlite.rs:46-50), so this transaction holds the only writer and the
-                    // check cannot be interleaved. Raising that cap means switching this to
-                    // `BEGIN IMMEDIATE`.
-                    //
-                    // That holds within one process. Two processes on one SQLite file would rely
-                    // on SQLite's own lock upgrade, which surfaces a loser as `SQLITE_BUSY` - a
-                    // storage error, not a fence - so a SQLite file shared between executors is
-                    // not supported; give each its own file, or use PostgreSQL.
+                    // SQLite has no `SELECT ... FOR UPDATE`, so labelled write transactions use
+                    // `BEGIN IMMEDIATE` (golem-service-base db/sqlite.rs). The reservation covers
+                    // this epoch check and insert atomically, including when another process uses
+                    // the same SQLite file; a competing writer waits via SQLite's busy timeout.
                     if let Some(expected) = expected_epoch {
                         Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
