@@ -1190,22 +1190,17 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
     use golem_common::{agent_id, data_value};
     use std::io::{Seek, SeekFrom, Write};
 
-    const MINIMUM_AVAILABLE_BYTES: u64 = PRESSURE_MINIMUM_AVAILABLE_BYTES;
-    const TARGET_AVAILABLE_BYTES: u64 = PRESSURE_TARGET_AVAILABLE_BYTES;
-    const VICTIM_ALLOCATION_BYTES: u64 = PRESSURE_VICTIM_ALLOCATION_BYTES;
-    const POST_GATE_TARGET_MARGIN_BYTES: u64 = PRESSURE_POST_GATE_TARGET_MARGIN_BYTES;
-
     const {
-        assert!(VICTIM_ALLOCATION_BYTES < TARGET_AVAILABLE_BYTES);
+        assert!(PRESSURE_VICTIM_ALLOCATION_BYTES < PRESSURE_TARGET_AVAILABLE_BYTES);
         assert!(
-            VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES - TARGET_AVAILABLE_BYTES
+            PRESSURE_VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES
+                - PRESSURE_TARGET_AVAILABLE_BYTES
                 == 64 * 1024 * 1024,
             "victim and gate reclamation must retain margin above the recovery target"
         );
     }
     let allocation_unit = filesystem_fragment_size(&root)?;
     let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
-    let observation_delay = PRESSURE_OBSERVATION_DELAY;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -1231,7 +1226,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
     assert!(victim_path.is_dir(), "the victim did not use the XFS root");
     create_allocated_file(
         &victim_path.join("pressure-allocation"),
-        VICTIM_ALLOCATION_BYTES,
+        PRESSURE_VICTIM_ALLOCATION_BYTES,
         0x5a,
     )?;
 
@@ -1271,7 +1266,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
     );
     let probe_start_available = filesystem_available_bytes(&root)?;
     assert!(
-        probe_start_available < MINIMUM_AVAILABLE_BYTES,
+        probe_start_available < PRESSURE_MINIMUM_AVAILABLE_BYTES,
         "global filler did not cross the configured physical-pressure watermark: available={probe_start_available}"
     );
     let probe_fragment = vec![0x4d; usize::try_from(allocation_unit)?];
@@ -1336,7 +1331,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
 
     let before_invocation = filesystem_available_bytes(&root)?;
     assert!(
-        before_invocation < MINIMUM_AVAILABLE_BYTES,
+        before_invocation < PRESSURE_MINIMUM_AVAILABLE_BYTES,
         "test setup did not cross the configured physical-pressure watermark"
     );
     assert_eq!(
@@ -1365,19 +1360,19 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
             "verified victim deletion did not increase fresh available capacity"
         );
         assert!(
-            before_gate_release < TARGET_AVAILABLE_BYTES,
+            before_gate_release < PRESSURE_TARGET_AVAILABLE_BYTES,
             "victim deletion unexpectedly reached the configured target before the observation gate was released: available={before_gate_release}"
         );
-        let minimum_margin_setup = TARGET_AVAILABLE_BYTES
+        let minimum_margin_setup = PRESSURE_TARGET_AVAILABLE_BYTES
             .saturating_sub(PRESSURE_GATE_BYTES)
-            .saturating_add(POST_GATE_TARGET_MARGIN_BYTES);
+            .saturating_add(PRESSURE_POST_GATE_TARGET_MARGIN_BYTES);
         assert!(
             before_gate_release >= minimum_margin_setup,
             "victim deletion left insufficient gate-release margin: available={before_gate_release}, required={minimum_margin_setup}"
         );
         // Allow recovery polling while leaving budget for verified unloading and
         // a target-reaching observation within the 250 ms recovery deadline.
-        tokio::time::sleep(observation_delay * 2).await;
+        tokio::time::sleep(PRESSURE_OBSERVATION_DELAY * 2).await;
         assert_eq!(
             std::fs::read(trigger_path.join("pressure-target"))?,
             b"seed",
@@ -1388,7 +1383,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let available = filesystem_available_bytes(&root)?;
-                if available >= TARGET_AVAILABLE_BYTES {
+                if available >= PRESSURE_TARGET_AVAILABLE_BYTES {
                     return Ok::<(u64, u64), anyhow::Error>((before_gate_release, available));
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1404,7 +1399,7 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
     .expect("physical-pressure recovery did not finish");
     let retried = retried?;
     let (before_gate_release, observed_target) = observed_target?;
-    assert!(observed_target >= TARGET_AVAILABLE_BYTES);
+    assert!(observed_target >= PRESSURE_TARGET_AVAILABLE_BYTES);
     assert!(
         observed_target > before_gate_release,
         "removing the observation gate did not increase fresh available capacity"

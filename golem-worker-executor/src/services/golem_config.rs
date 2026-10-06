@@ -2190,8 +2190,9 @@ pub struct FilesystemStorageConfig {
 /// With a root, an agent filesystem is the directory
 /// `<root>/<environment_id>/<component_id>/<agent segment>/`. The agent segment is the agent name
 /// with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32
-/// characters, then `-` and the BLAKE3 hash of the agent id. The executor also makes the host directories `.scratch` and `.initial-files`
-/// directly under the root.
+/// characters, then `-` and the BLAKE3 hash of the agent id. An empty agent name gives `agent`.
+/// The executor also makes the host directories `.scratch` and `.initial-files` directly under the
+/// root.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config", deny_unknown_fields)]
 pub enum FilesystemStorageMode {
