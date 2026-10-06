@@ -2241,6 +2241,35 @@ async fn reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
     .await
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the unprivileged reflink XFS test runner"]
+#[timeout("2m")]
+async fn reflink_xfs_with_filesystem_metering_fails_at_startup(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_filesystem_metering_on_reflink_xfs;
+
+    let context = TestContext::new(last_unique_id);
+    match start_with_filesystem_metering_on_reflink_xfs(deps, &context, reflink_xfs_test_root())
+        .await
+    {
+        Ok(_) => Err(anyhow!(
+            "the executor started with filesystem metering on XFS storage without project quotas"
+        )),
+        Err(error) => {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("filesystem metering requires XFS storage with project quotas"),
+                "{message}"
+            );
+            Ok(())
+        }
+    }
+}
+
 /// Starts the agent `name` with read-only and read-write initial files on executors that `start`
 /// makes, changes its files with a write, renames, a hard link and a symlink, and checks that a
 /// restart from a snapshot and a restart with a full replay both give the tree of the live agent.

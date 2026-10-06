@@ -4082,12 +4082,16 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
     .await
 }
 
-/// Starts an executor on XFS storage with reflink and without project quotas, at `reflink_xfs_root`,
-/// that takes a snapshot after each invocation, with the filesystem snapshot settings
-/// `filesystem_snapshots`.
+/// The per-agent disk limit of the default plan, 1 GiB.
+#[cfg(target_os = "linux")]
+const DEFAULT_PLAN_DISK_SPACE: u64 = 1024 * 1024 * 1024;
+
+/// Starts an executor on XFS storage with reflink and without project quotas, at
+/// `reflink_xfs_root`, that takes a snapshot after each invocation, with the filesystem snapshot
+/// settings `filesystem_snapshots`.
 ///
-/// The storage has no per-agent accounting, so the agents get no disk limit and the executor
-/// meters no filesystem usage.
+/// The plan gives each agent the finite disk limit of the default plan. The storage has no
+/// per-agent accounting, so the executor enforces no disk limit. It meters no filesystem usage.
 #[cfg(target_os = "linux")]
 pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
     deps: &WorkerExecutorTestDependencies,
@@ -4099,7 +4103,7 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
         deps,
         context,
         Arc::new(FixedFilesystemStorageQuotaResourceLimits {
-            max_disk_space_bytes: u64::MAX,
+            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
@@ -4115,6 +4119,35 @@ pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
         },
         None,
         "Timeout waiting for reflink XFS filesystem snapshot server to start",
+    )
+    .await
+}
+
+/// Starts an executor on XFS storage with reflink and without project quotas, at
+/// `reflink_xfs_root`, with all resource usage metering on, filesystem metering included.
+#[cfg(target_os = "linux")]
+pub async fn start_with_filesystem_metering_on_reflink_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    reflink_xfs_root: PathBuf,
+) -> anyhow::Result<TestWorkerExecutor> {
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.storage = FilesystemStorageMode::ReflinkXfs {
+                    root: reflink_xfs_root.clone(),
+                };
+                config.resource_usage_metering = ResourceUsageMeteringConfig::all_enabled();
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for reflink XFS metering server to start",
     )
     .await
 }
