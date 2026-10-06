@@ -699,8 +699,8 @@ enum FileCopyMode {
     Buffered,
 }
 
-/// How a sandbox charges what is written into it. A sandbox with a project identity charges its
-/// project, and it copies files by reflink. A sandbox without one copies bytes.
+/// Who enforces and measures the limits of a sandbox. A sandbox with a project identity charges
+/// its project. A sandbox without one has no per-sandbox accounting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum QuotaAuthority {
     Unsupported,
@@ -710,30 +710,47 @@ enum QuotaAuthority {
     },
 }
 
-/// Gives the storage profile of the native calls on a sandbox with `authority`. A sandbox with a
-/// project identity is on known local storage. The storage of a sandbox without one is unknown.
-fn storage_profile(authority: QuotaAuthority) -> NativeStorageProfile {
-    match authority {
-        QuotaAuthority::Project { .. } => NativeStorageProfile::KnownLocal,
-        QuotaAuthority::Unsupported => NativeStorageProfile::Unknown,
+/// Gives the storage profile of the native calls on a sandbox on `volume`. A copy-on-write volume
+/// is known local storage, which an XFS storage mode opened and checked. The storage of another
+/// volume is unknown.
+fn storage_profile(volume: &FilesystemVolume) -> NativeStorageProfile {
+    match volume.mode {
+        FilesystemVolumeMode::CopyOnWrite { .. } => NativeStorageProfile::KnownLocal,
+        FilesystemVolumeMode::UnmanagedDevelopment => NativeStorageProfile::Unknown,
     }
 }
 
-/// Gives the project into which a sandbox with `authority` reflinks the files that it copies, or
-/// `None` when the sandbox copies bytes.
-fn reflink_project(authority: QuotaAuthority) -> Option<NonZeroU32> {
-    match authority {
-        QuotaAuthority::Unsupported => None,
-        QuotaAuthority::Project { project_id, .. } => Some(project_id),
+/// Gives how the files of a sandbox on `volume` are copied: by reflink on a copy-on-write volume,
+/// with or without a project quota, and by bytes otherwise.
+fn file_copy_mode(volume: &FilesystemVolume) -> FileCopyMode {
+    match volume.mode {
+        FilesystemVolumeMode::CopyOnWrite { .. } => FileCopyMode::Reflink,
+        FilesystemVolumeMode::UnmanagedDevelopment => FileCopyMode::Buffered,
     }
 }
 
-/// Gives how the files of a sandbox with `authority` are copied: by reflink when
-/// [`reflink_project`] gives a project, and by bytes otherwise.
-fn file_copy_mode(authority: QuotaAuthority) -> FileCopyMode {
-    match reflink_project(authority) {
-        None => FileCopyMode::Buffered,
-        Some(_) => FileCopyMode::Reflink,
+/// How one seeded file gets its contents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SeedTransfer {
+    /// The bytes are copied.
+    Bytes,
+    /// The file shares the extents of the source.
+    Reflink,
+    /// The file shares the extents of the source and must belong to this project, which is then
+    /// charged for them.
+    ReflinkIntoProject(NonZeroU32),
+}
+
+/// Gives how a sandbox that copies files with `mode` and charges what is written into it as
+/// `authority` says gets the contents of a seeded file. A reflink goes into the project of the
+/// sandbox when it has one.
+fn seed_transfer(mode: FileCopyMode, authority: QuotaAuthority) -> SeedTransfer {
+    match (mode, authority) {
+        (FileCopyMode::Buffered, _) => SeedTransfer::Bytes,
+        (FileCopyMode::Reflink, QuotaAuthority::Unsupported) => SeedTransfer::Reflink,
+        (FileCopyMode::Reflink, QuotaAuthority::Project { project_id, .. }) => {
+            SeedTransfer::ReflinkIntoProject(project_id)
+        }
     }
 }
 
@@ -1637,46 +1654,60 @@ mod tests {
         });
     }
 
+    /// A volume on a copy-on-write root, for the rules that read only the mode of the volume.
+    #[cfg(target_os = "linux")]
+    fn copy_on_write_volume() -> FilesystemVolume {
+        let directory = tempfile::tempdir().unwrap();
+        let root = File::open(directory.path()).unwrap();
+        FilesystemVolume::copy_on_write(Arc::new(root), FilesystemIdentity { device: 1 })
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
-    fn storage_profile_follows_the_quota_authority() {
+    fn storage_profile_follows_the_volume() {
         assert_eq!(
-            storage_profile(QuotaAuthority::Unsupported),
+            storage_profile(&FilesystemVolume::unmanaged_development()),
             NativeStorageProfile::Unknown
         );
         assert_eq!(
-            storage_profile(QuotaAuthority::Project {
-                project_id: NonZeroU32::new(1).unwrap(),
-                filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
-            }),
+            storage_profile(&copy_on_write_volume()),
             NativeStorageProfile::KnownLocal
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn reflink_project_is_the_project_of_the_quota_authority() {
-        let project_id = NonZeroU32::new(7).unwrap();
-        assert_eq!(reflink_project(QuotaAuthority::Unsupported), None);
+    fn file_copy_mode_follows_the_volume() {
         assert_eq!(
-            reflink_project(QuotaAuthority::Project {
-                project_id,
-                filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
-            }),
-            Some(project_id)
+            file_copy_mode(&FilesystemVolume::unmanaged_development()),
+            FileCopyMode::Buffered
+        );
+        assert_eq!(
+            file_copy_mode(&copy_on_write_volume()),
+            FileCopyMode::Reflink
         );
     }
 
     #[test]
-    fn file_copy_mode_follows_the_quota_authority() {
+    fn seed_transfer_reflinks_on_copy_on_write_storage_into_the_project_when_there_is_one() {
+        let project_id = NonZeroU32::new(7).unwrap();
+        let project = QuotaAuthority::Project {
+            project_id,
+            filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
+        };
         assert_eq!(
-            file_copy_mode(QuotaAuthority::Unsupported),
-            FileCopyMode::Buffered
-        );
-        assert_eq!(
-            file_copy_mode(QuotaAuthority::Project {
-                project_id: NonZeroU32::new(1).unwrap(),
-                filesystem_block_bytes: NonZeroU64::new(4096).unwrap(),
-            }),
-            FileCopyMode::Reflink
+            [
+                seed_transfer(FileCopyMode::Buffered, QuotaAuthority::Unsupported),
+                seed_transfer(FileCopyMode::Buffered, project),
+                seed_transfer(FileCopyMode::Reflink, QuotaAuthority::Unsupported),
+                seed_transfer(FileCopyMode::Reflink, project),
+            ],
+            [
+                SeedTransfer::Bytes,
+                SeedTransfer::Bytes,
+                SeedTransfer::Reflink,
+                SeedTransfer::ReflinkIntoProject(project_id),
+            ]
         );
     }
 
@@ -1847,10 +1878,7 @@ mod tests {
                 .next()
                 .is_none()
         );
-        assert_eq!(
-            file_copy_mode(filesystem.quota_authority),
-            FileCopyMode::Buffered
-        );
+        assert_eq!(file_copy_mode(&filesystem.volume), FileCopyMode::Buffered);
         assert!(matches!(
             filesystem.quota_authority,
             QuotaAuthority::Unsupported
