@@ -65,7 +65,7 @@ At startup, the executor checks the volume and refuses to start when a check fai
 | A new directory gets the project of its parent, and reflink copies work. | `validate managed XFS project assignment and inheritance` |
 | `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within managed capacity` or `fit filesystem pressure object target within managed capacity` |
 | The executor removes any project from the root, and the root then belongs to no project. | `inspect managed XFS root project attributes`, `clear managed XFS root project inheritance`, `verify managed XFS root project attributes` or `verify managed XFS root has neutral project identity` |
-| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root` or `create host directory` |
+| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open managed XFS host directory`, `inspect managed XFS host directory project attributes` or `verify managed XFS host directory has no project identity` |
 | The executor can read the free space of the volume. | `observe managed filesystem space` |
 | `deterministic_root_dir` is not set. The two storage modes exclude each other. | `select exactly one filesystem storage mode` |
 
@@ -140,7 +140,7 @@ Enable filesystem snapshots on every executor that can run the same agents, with
 ### Check that it works
 
 - At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`.
-- Make an agent take snapshots. Snapshots are off by default: the agent definition enables them with a snapshotting policy (see [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery)). An agent whose policy is `enabled` uses the executor setting `[oplog.default_snapshotting]`, which is `type = "Disabled"` by default.
+- Make an agent that writes a file take snapshots. An agent that has only its read-only initial files uploads nothing, and its snapshot records have no filesystem snapshot name. Snapshots are off by default: the agent definition enables them with a snapshotting policy (see [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery)). An agent whose policy is `enabled` uses the executor setting `[oplog.default_snapshotting]`, which is `type = "Disabled"` by default.
 - After the agent takes a snapshot, `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` grows.
 - `golem agent oplog <agent_id>` shows a `SNAPSHOT` entry with a `filesystem:` name, and a `SNAPSHOT CONFIRMED` entry with the same name.
 
@@ -270,7 +270,7 @@ After a confirmed automatic snapshot, the executor deletes the older automatic s
 
 - the new snapshot and the `retained_periodic_snapshots - 1` newest older ones,
 - the snapshots of the records that a start of the agent can select now, whatever their age,
-- each snapshot whose time is less than 2 minutes before the time of the new snapshot, because the clocks of two executors can differ.
+- each snapshot whose time is at most 2 minutes before the time of the new snapshot, or later, because the clocks of two executors can differ.
 
 After a manual update record is written, the executor applies the same rule to the manual-update snapshots with `retained_update_snapshots`. It never deletes the snapshot of a successful or pending update of the agent, because a revert or a fork can make that update the baseline again. `retained_update_snapshots` limits only the other manual-update snapshots.
 
@@ -330,7 +330,7 @@ The worker executor exports these metrics for filesystem snapshots. The labels h
 
 Watch these values:
 
-- **Busy captures.** `filesystem_snapshot_capture_seconds_count{outcome="busy"}` counts the snapshots that Golem skipped because a guest left a file call open.
+- **Busy captures.** `filesystem_snapshot_capture_seconds_count{outcome="busy"}` counts the snapshots that Golem skipped, or the manual updates that failed, because a guest left a file call open.
 - **Failed uploads.** `filesystem_snapshot_upload_seconds_count{outcome="failed"}` counts uploads that failed after their retries.
 - **Deferred uploads.** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` counts uploads whose agent was not running when the upload ended. This is normal for agents that stop soon after a snapshot. A later start confirms them.
 - **Dropped confirmations.** `filesystem_snapshot_dropped_confirmations_total` counts uploads that an update or a revert made useless.
@@ -361,4 +361,4 @@ The executor writes these messages. Search for the quoted text.
 | `The clean-up queue of filesystem snapshots is full; the snapshots of a fork stage are lost` | WARN | The queue refused the delete of the copy of a failed fork attempt. |
 | `The publication of a fork ended with an unknown outcome; the snapshots of its stage stay` | WARN | The executor does not know whether a fork created its new agent, so it keeps the copy. |
 | `A prune of the filesystem snapshots of an agent failed; the next delete prunes again` | WARN | A delete succeeded, but the release of the storage that the deleted snapshots used failed. The next delete of the agent tries again. |
-| `Failed to observe the free space of the volume` | WARN | The executor could not read the free space of the volume, so it skips snapshots until it can. |
+| `Failed to observe the free space of the volume` | WARN | The executor could not read the free space of the volume, so it skips automatic snapshots and refuses manual updates until it can. |

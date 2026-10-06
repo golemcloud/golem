@@ -303,7 +303,7 @@ Golem captures the files at the same boundary where it takes the application sna
 4. The agent continues with its next invocation. Golem uploads the copy to blob storage in the background.
 5. When the upload is complete, Golem writes a second oplog entry that confirms the name.
 
-The capture keeps the agent's files, directories, symbolic links, hard links and modification times. Golem leaves out an untouched read-only initial file, because the component revision already has its content. Golem uploads nothing when the files are exactly the initial files of the component revision, or when nothing changed the files since the last confirmed filesystem snapshot. In the second case the new record uses the name of that snapshot and is confirmed at once.
+The capture keeps the agent's files, directories, symbolic links, hard links and modification times. Golem leaves out an untouched read-only initial file, because the component revision already has its content. Golem uploads nothing when each initial file of the component revision is read-only and untouched and the agent has no other files, or when nothing changed the files since the last confirmed filesystem snapshot. In the second case the new record uses the name of that snapshot and is confirmed at once.
 
 Ephemeral agents get no filesystem snapshot. Golem never restores an ephemeral agent, so their snapshot records have no filesystem snapshot name.
 
@@ -329,7 +329,7 @@ After a restore, the files are the files that the agent had at the capture. This
 
 A manual update also captures the files. The update waits until the upload of the filesystem snapshot is complete, and only then writes its update record. If an automatic snapshot upload of the agent runs at that moment, the update waits for that upload for at most a limit that the operator sets, 60 seconds by default. It does not wait for later retries of that upload. When that upload still runs after the limit, the update fails. The update also fails at once when the free space of the executor's volume is low, or while Golem deletes the filesystem snapshots of the agent.
 
-At the start in the target revision, Golem restores the files and then applies the initial files of the target revision. The files that the agent wrote in the old revision are kept. If the target revision changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file, the update fails. The update also fails when a file of the agent is in the place of a directory that the new initial file needs. The error names the path, and the agent stays on its current revision with its files.
+At the start in the target revision, Golem restores the files and then applies the initial files of the target revision. The files that the agent wrote in the old revision are kept. If the target revision changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file, the update fails. The only exception is an initial file that the agent deleted and that the target revision no longer declares. The update also fails when a file of the agent is in the place of a directory that the new initial file needs. The error names the path, and the agent stays on its current revision with its files.
 
 ### When a snapshot fails
 
