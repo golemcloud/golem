@@ -127,6 +127,8 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub(super) filesystem_activity: Arc<StdMutex<Option<ResidentFilesystemActivity>>>,
     /// The filesystem snapshots of the generation that runs.
     pub(super) filesystem_snapshot_slot: SnapshotSlot,
+    /// When the last periodic snapshot of this loop started, whether it wrote a record or not.
+    pub(super) last_periodic_attempt: Option<Timestamp>,
     pub(super) unload_request: Arc<StdMutex<Option<UnloadRequest>>>,
     pub idle_since_millis: Arc<AtomicU64>,
     /// `ResumeReplay` is not represented in the internal queue, so we track it
@@ -442,6 +444,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         store: &agent.runtime.store,
                         filesystem: &agent.filesystem,
                         filesystem_snapshot_slot: &self.filesystem_snapshot_slot,
+                        last_periodic_attempt: &mut self.last_periodic_attempt,
                         invocations_since_snapshot: 0,
                         idle_snapshot_task: None,
                         filesystem_turn_used: false,
@@ -1592,6 +1595,9 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
     store: &'a Mutex<Store<Ctx>>,
     filesystem: &'a ResidentFilesystem,
     filesystem_snapshot_slot: &'a SnapshotSlot,
+    /// When the last periodic snapshot started. A snapshot that writes no record waits a period
+    /// from it, as one that writes a record does.
+    last_periodic_attempt: &'a mut Option<Timestamp>,
     invocations_since_snapshot: u64,
     idle_snapshot_task: Option<JoinHandle<()>>,
     filesystem_turn_used: bool,
@@ -2170,6 +2176,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 .last_automatic_snapshot
                 .as_ref()
                 .map(|last| last.timestamp),
+            *self.last_periodic_attempt,
             created_at,
         );
 
@@ -2218,6 +2225,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// The queued invocations internal invocations that we use for
     /// concurrency control.
     async fn internal_invocation(&mut self, message: QueuedWorkerInvocation) -> CommandOutcome {
+        if matches!(message, QueuedWorkerInvocation::SaveSnapshot) {
+            *self.last_periodic_attempt = Some(Timestamp::now_utc());
+        }
         let mut store = self.store.lock().await;
         let store = store.deref_mut();
 
@@ -3605,11 +3615,20 @@ fn periodic_snapshot_failure_outcome(
     }
 }
 
+/// The time that the period of the next periodic snapshot starts at: the later of the last
+/// automatic snapshot record and the start of the last periodic snapshot, which can end without a
+/// record, or the creation of the agent before both. So a snapshot that writes no record does not
+/// make the next one due at once.
 fn snapshot_baseline_timestamp(
     last_snapshot_timestamp: Option<Timestamp>,
+    last_attempt: Option<Timestamp>,
     created_at: Timestamp,
 ) -> Timestamp {
-    last_snapshot_timestamp.unwrap_or(created_at)
+    last_snapshot_timestamp
+        .into_iter()
+        .chain(last_attempt)
+        .max()
+        .unwrap_or(created_at)
 }
 
 fn snapshot_action_at(
@@ -4815,9 +4834,34 @@ mod tests {
     fn periodic_snapshot_uses_creation_time_until_the_first_snapshot() {
         let created_at = Timestamp::from(1_000);
 
-        let baseline = snapshot_baseline_timestamp(None, created_at);
+        let baseline = snapshot_baseline_timestamp(None, None, created_at);
 
         assert_eq!(baseline, created_at);
+    }
+
+    #[test]
+    fn periodic_snapshot_waits_a_period_from_the_later_of_the_last_record_and_the_last_attempt() {
+        let created_at = Timestamp::from(1_000);
+        let record = Timestamp::from(2_000);
+        let attempt = Timestamp::from(3_000);
+
+        assert_eq!(
+            [
+                snapshot_baseline_timestamp(Some(record), Some(attempt), created_at),
+                snapshot_baseline_timestamp(Some(attempt), Some(record), created_at),
+                snapshot_baseline_timestamp(None, Some(attempt), created_at),
+                snapshot_baseline_timestamp(Some(record), None, created_at),
+            ],
+            [attempt, attempt, attempt, record]
+        );
+        assert_eq!(
+            snapshot_action_at(
+                snapshot_baseline_timestamp(Some(record), Some(attempt), created_at),
+                Duration::from_secs(5),
+                Timestamp::from(4_000),
+            ),
+            PeriodicSnapshotAction::Wait(Duration::from_secs(4))
+        );
     }
 
     #[test]

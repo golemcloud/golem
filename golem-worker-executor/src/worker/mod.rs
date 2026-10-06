@@ -11923,6 +11923,7 @@ impl RunningWorker {
             ),
             filesystem_activity,
             filesystem_snapshot_slot,
+            last_periodic_attempt: None,
             unload_request,
             idle_since_millis,
             resume_replay_pending,
