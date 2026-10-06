@@ -66,14 +66,12 @@ async-broadcast = "0.7.2"
 async-fs = "2.1.2"
 async-hash = "0.5.4"
 async-lock = "3.4.0"
-async-recursion = "1.1.1"
 async-rwlock = "1.3.0"
-async-scoped = "0.9.0"
 async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
 aws-config = "1.5.10"
-aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio", "rustls"] }
+aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 backtrace-on-stack-overflow = "0.3.0"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22.1"
@@ -119,7 +117,6 @@ fancy-regex = "0.14.0"
 fastrand = "2.3.0"
 fd-lock = "4.0.4"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-fmt = "0.1.0"
 flate2 = "1.1.0"
 fred = { version = "10.1.0", features = ["metrics", "serde-json", "partial-tracing", "enable-rustls-ring", "custom-reconnect-errors"] }
 fs-set-times = "0.20.3"
@@ -154,11 +151,11 @@ im = "15.1.0"
 include_dir = "0.7.4"
 indexmap = { version = "2.12.0", features = ["serde"] }
 indoc = "2.0.6"
-inquire = "0.7.5"
+inquire = { version = "0.9.4", default-features = false, features = ["crossterm", "fuzzy"] }
 iso8601 = "0.6.2"
 iso8601-timestamp = "0.3.3"
 itertools = "0.14.0"
-jsonschema = "0.38.1"
+jsonschema = { version = "0.38.1", default-features = false }
 jsonwebtoken = "9.2.0"
 k8s-openapi = { version = "0.24.0", features = ["earliest"] }
 kill_tree = "0.2.4"
@@ -181,7 +178,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 mimalloc = "0.1.52"
-minijinja = "2.7.0"
+minijinja = { version = "2.7.0", default-features = false, features = ["builtins", "debug", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde"] }
 
 nanoid = "0.4.0"
 nondestructive = "0.0.26"
@@ -193,21 +190,20 @@ oauth2 = { version = "5.0.0", default-features = false }
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "4.0.1"
-opentelemetry = "0.30.0"
-opentelemetry-otlp = { version = "0.30.0" }
-opentelemetry-prometheus-text-exporter = "=0.2.0"
-opentelemetry_sdk = "0.30.0"
-phf = { version = "0.11.3", features = ["macros"] }
+opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
+opentelemetry-prometheus-text-exporter = "=0.3.0"
+opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "internal-logs"] }
+phf = { version = "0.12.1", features = ["macros"] }
 pin-project = "1.1.10"
 pgvector = { version = "=0.4.1", features = ["sqlx", "halfvec"] }
-poem = { version = "=3.1.12", features = ["cookie", "multipart", "opentelemetry", "prometheus", "requestid", "test", ] }
+poem = { version = "=3.1.12", features = ["cookie", "multipart", "requestid", "test", ] }
 poem-derive = { version = "=3.1.12" }
 poem-openapi = { version = "=5.1.16", features = ["chrono", "cookie", "humantime", "swagger-ui", "time", "url", "uuid", "websocket", ] }
 poem-openapi-derive = "=5.1.16"
 portable-pty = "0.9.0"
 postgres = "0.19.10"
 pretty_assertions = "1.4.1"
-pretty_env_logger = "0.5.0"
 prettyplease = "0.2.25"
 proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.92"
@@ -228,7 +224,7 @@ regex = "1.11.1"
 reqwest = { version = "0.13.1", features = ["gzip", "json", "multipart", "stream", "query"] }
 reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "query"] }
 reqwest-retry = "0.9.1"
-reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_30"] }
+reqwest-tracing = { version = "0.7", features = ["opentelemetry_0_32"] }
 ringbuf = "0.4.7"
 rlimit = "0.10.2"
 rmcp = { version = "3.4.0", features = ["server", "transport-streamable-http-server"] }
@@ -246,12 +242,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0.219"
 serde_json = { version = "1.0", features = ["raw_value"] }
 serde_json_path = "0.7.1"
-serde_with = "3.5.0"
+serde_with = "3.24.0"
 serde_yaml = { version = "0.9.34" }
 sha2 = "0.10.8"
-shadow-rs = "1.2.0"
+shadow-rs = { version = "1.2.0", default-features = false, features = ["build"] }
 shell-words = "1.1.0"
-shlex = "1.3.0"
+shlex = "2.0.1"
 similar = "2.7.0"
 spdx = "0.10.8"
 sqlparser = { version = "=0.62.0", features = ["visitor"] }
@@ -264,7 +260,7 @@ strum = "0.27.1"
 strum_macros = "0.27.1"
 syn = "2.0.90"
 synoptic = "2.2.9"
-sysinfo = "0.33.1"
+sysinfo = { version = "0.33.1", default-features = false, features = ["system"] }
 system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
@@ -272,7 +268,7 @@ terminal_size = "0.4.2"
 test-r = { version = "3.0.12", default-features = true }
 testcontainers = { version = "0.27.1" }
 testcontainers-modules = { version = "0.15.0", features = ["postgres", "redis", "mysql", ] }
-textwrap = "0.16.1"
+textwrap = { version = "0.16.1", default-features = false, features = ["unicode-linebreak", "unicode-width"] }
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["default", "macros"] }
 tokio = { version = "1.44", features = ["macros", "rt-multi-thread", "sync", "io-std", "net", "tracing", "process", "signal"] }
@@ -289,11 +285,11 @@ tonic-health = "0.14.2"
 tonic-prost = "0.14.2"
 tonic-prost-build = "0.14.2"
 tonic-reflection = "0.14.2"
-tonic-tracing-opentelemetry = { version = "0.30.0", features = ["tracing_level_info"] }
+tonic-tracing-opentelemetry = { version = "0.38.0", features = ["tracing_level_info"] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-core = "0.1"
 tracing-futures = "0.2.5"
-tracing-opentelemetry = "0.31.0"
+tracing-opentelemetry = "0.33.0"
 tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
@@ -303,7 +299,7 @@ tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 tower = "0.5.2"
-try_match = "0.4.2"
+try_match = { version = "0.4.2", default-features = false }
 trybuild = "1.0"
 tryhard = "0.5.1"
 typed-path = { version = "0.10.0", default-features = false }
@@ -316,26 +312,26 @@ version-compare = "0.2.0"
 walkdir = "2.5.0"
 warp = "0.3.7"
 wasip2 = "1.0.2"
-wasm-encoder = "0.248.0"
-wasm-metadata = { version = "0.248.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.6", features = ["optimize", "use-golem-wasmtime"] }
-wasm-wave = "0.248"
-wasmparser = "0.248.0"
-wasmprinter = "0.248.0"
+wasm-encoder = "0.251.0"
+wasm-metadata = { version = "0.251.0", features = ["oci"] }
+wasm-rquickjs = { version = "0.4.8", features = ["optimize", "use-golem-wasmtime"] }
+wasm-wave = "0.251"
+wasmparser = "0.251.0"
+wasmprinter = "0.251.0"
 wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
-wasmtime-wasi = { version = "=46.0.1", features = ["p3"] }
+wasmtime-wasi = { version = "=46.0.1", default-features = false, features = ["p2", "p3"] }
 wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
 wat = "1.248.0"
-wax = "0.6.0"
+wax = "0.7.0"
 webbrowser = "1.0.4"
 webpki-roots = { version = "0.26.7" }
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console"] }
 which = "8.0.0"
 wit-bindgen = { git = "https://github.com/golemcloud/wit-bindgen", branch = "wit-bindgen-golem-1.6", version = "=0.59.0" }
 wit-bindgen-rust = "0.58.0"
-wit-component = "0.248"
-wit-encoder = "0.248"
-wit-parser = "0.248"
+wit-component = "0.251"
+wit-encoder = "0.251"
+wit-parser = "0.251"
 x509-certificate = "0.23.1"
 zstd = "0.13"
 

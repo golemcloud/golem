@@ -41,7 +41,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 const MAX_QUEUED_WRITE_BATCHES: usize = 2;
 const MAX_RETAINED_RECEIPT_BATCHES: usize = 32;
@@ -68,6 +68,7 @@ pub struct EphemeralOplog {
     closed: OplogCloseCompletion,
     tasks: super::WorkerTasks,
     retired: AtomicBool,
+    executor_shutdown: Arc<AtomicBool>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     transfer_fiber: TransferFiber,
@@ -82,6 +83,9 @@ pub struct EphemeralOplog {
 /// [`EphemeralOplogState`].
 enum EphemeralJob {
     Close,
+    Shutdown {
+        done: tokio::sync::oneshot::Sender<()>,
+    },
     Add {
         entry: OplogEntry,
         done: tokio::sync::oneshot::Sender<Result<OplogIndex, OplogError>>,
@@ -268,6 +272,21 @@ impl EphemeralOplogState {
         Ok(())
     }
 
+    async fn wait_for_admitted_writes(&mut self) {
+        let (barrier, barrier_rx) = tokio::sync::oneshot::channel();
+        self.writer
+            .send(WriteCommand::Append {
+                entries: Vec::new(),
+                barrier: Some(barrier),
+            })
+            .await
+            .expect("ephemeral oplog writer terminated unexpectedly");
+        barrier_rx
+            .await
+            .expect("ephemeral oplog writer failed before the storage barrier");
+        self.reap_completed();
+    }
+
     fn take_receipts(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
         std::mem::take(&mut self.retained_receipts)
             .into_iter()
@@ -332,11 +351,19 @@ impl EphemeralOplog {
 
         let actor_primary_service = primary_service.clone();
         let actor_owned_agent_id = owned_agent_id.clone();
+        let executor_shutdown = Arc::new(AtomicBool::new(false));
         let actor = tokio::spawn(async move {
+            let mut flush_on_close = true;
             while let Some(job) = job_rx.recv().await {
                 state.reap_completed();
                 match job {
                     EphemeralJob::Close => break,
+                    EphemeralJob::Shutdown { done } => {
+                        state.wait_for_admitted_writes().await;
+                        flush_on_close = false;
+                        let _ = done.send(());
+                        break;
+                    }
                     EphemeralJob::Add { entry, done } => {
                         let result = state.add(entry).await;
                         let _ = done.send(result);
@@ -488,7 +515,9 @@ impl EphemeralOplog {
                     }
                 }
             }
-            let _ = state.flush(true).await;
+            if flush_on_close {
+                let _ = state.flush(true).await;
+            }
         });
 
         let transfer_closed = MultiLayerOplogService::transfer_closed(&transfer_fiber);
@@ -516,6 +545,7 @@ impl EphemeralOplog {
             closed,
             tasks: super::WorkerTasks::default(),
             retired: AtomicBool::new(false),
+            executor_shutdown,
             lower,
             transfer,
             transfer_fiber,
@@ -901,7 +931,12 @@ impl Drop for EphemeralOplog {
         if let Some(close_fn) = self.close_fn.get_mut().unwrap().take() {
             close_fn();
         }
-        let _ = self.jobs.send(EphemeralJob::Close);
+        if self.executor_shutdown.load(Ordering::Acquire) {
+            let (done, _done_rx) = tokio::sync::oneshot::channel();
+            let _ = self.jobs.send(EphemeralJob::Shutdown { done });
+        } else {
+            let _ = self.jobs.send(EphemeralJob::Close);
+        }
     }
 }
 
@@ -915,6 +950,43 @@ impl Debug for EphemeralOplog {
 
 #[async_trait]
 impl Oplog for EphemeralOplog {
+    fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
+        let executor_shutdown = self.executor_shutdown.clone();
+        let service = self.multi_layer_oplog_service.clone();
+        let agent_id = self.owned_agent_id.agent_id.clone();
+        let transfer_fiber = self.transfer_fiber.clone();
+        let close_executor_shutdown = executor_shutdown.clone();
+        let close_service = service.clone();
+        let close_agent_id = agent_id.clone();
+        let close_transfer_fiber = transfer_fiber.clone();
+        let jobs = self.jobs.clone();
+        let closed = self.closed();
+        super::OplogShutdownHandle::new(
+            move || {
+                executor_shutdown.store(true, Ordering::Release);
+                service.unregister_transfer(&agent_id, &transfer_fiber);
+                service.abort_transfer_in_drop(&transfer_fiber);
+            },
+            move || {
+                let executor_shutdown = close_executor_shutdown.clone();
+                let service = close_service.clone();
+                let agent_id = close_agent_id.clone();
+                let transfer_fiber = close_transfer_fiber.clone();
+                let jobs = jobs.clone();
+                let closed = closed.clone();
+                async move {
+                    executor_shutdown.store(true, Ordering::Release);
+                    service.unregister_transfer(&agent_id, &transfer_fiber);
+                    service.abort_transfer_in_drop(&transfer_fiber);
+                    let (done, _done_rx) = tokio::sync::oneshot::channel();
+                    let _ = jobs.send(EphemeralJob::Shutdown { done });
+                    closed.await
+                }
+                .boxed()
+            },
+        )
+    }
+
     fn retire(&self) {
         if !self.retired.swap(true, Ordering::AcqRel) {
             let _ = self.jobs.send(EphemeralJob::Close);

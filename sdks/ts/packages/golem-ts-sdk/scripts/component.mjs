@@ -1,12 +1,36 @@
+import fs from 'node:fs';
 import ts from 'typescript';
 import { minify } from 'terser';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { staticTools } from './static-tools.mjs';
 
-const sdk = '@golemcloud/golem-ts-sdk';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+const sdk = manifest.name;
 const runtime = path.join(packageRoot, 'dist/runtime');
+const componentExports = Object.entries(manifest.exports).flatMap(([subpath, target]) => {
+  if (!target || typeof target !== 'object' || typeof target['golem-component'] !== 'string')
+    return [];
+  if (!target['golem-component'].startsWith('./dist/runtime/'))
+    throw new Error(`Invalid ${sdk} component export target: ${target['golem-component']}`);
+  return [
+    {
+      specifier: subpath === '.' ? sdk : `${sdk}/${subpath.slice(2)}`,
+      declaration:
+        typeof target.types === 'string' ? path.join(packageRoot, target.types) : undefined,
+      runtime: path.join(packageRoot, target['golem-component']),
+    },
+  ];
+});
+const componentEntries = new Map(
+  componentExports.map(({ specifier, runtime }) => [specifier, runtime]),
+);
+const componentDeclarations = new Map(
+  componentExports.flatMap(({ declaration, runtime }) =>
+    declaration ? [[path.normalize(declaration), runtime]] : [],
+  ),
+);
 
 function referencesSdk(node) {
   const specifier =
@@ -38,9 +62,9 @@ export function discoverCapabilities(parsedConfig) {
     Object.assign(capabilities, { agents: true, tools: true, middleware: true, schemas: true });
   const sdkDeclarations = new Set();
   for (const source of program.getSourceFiles()) {
-    for (const subpath of ['', '/middleware']) {
+    for (const { specifier } of componentExports) {
       const resolved = ts.resolveModuleName(
-        sdk + subpath,
+        specifier,
         source.fileName,
         parsedConfig.options,
         ts.sys,
@@ -202,10 +226,10 @@ export function componentPlugin(parsedConfig, main) {
     },
     resolveId(id, importer) {
       if (id === 'virtual:agent-main') return entry;
-      if (id === sdk) return path.join(runtime, 'index.mjs');
-      if (id === `${sdk}/middleware`) return path.join(runtime, 'middleware.mjs');
-      if (id === `${sdk}/schema`) return path.join(runtime, 'schema/public.mjs');
-      if (id === `${sdk}/reflection`) return path.join(runtime, 'reflection.mjs');
+      const componentEntry = componentEntries.get(id);
+      if (componentEntry) return componentEntry;
+      if (id === sdk || id.startsWith(`${sdk}/`))
+        this.error(`Package import ${id} is not available to component builds`);
       if (importer && !importer.startsWith('\0') && !importer.startsWith(runtime + path.sep)) {
         const resolved = ts.resolveModuleName(
           id,
@@ -213,16 +237,10 @@ export function componentPlugin(parsedConfig, main) {
           parsedConfig.options,
           ts.sys,
         ).resolvedModule;
-        for (const [declaration, module] of [
-          ['index', 'index'],
-          ['middleware', 'middleware'],
-          ['schema', 'schema/public'],
-          ['reflection', 'reflection'],
-        ]) {
-          if (resolved?.resolvedFileName === path.join(packageRoot, `dist/${declaration}.d.mts`)) {
-            return path.join(runtime, `${module}.mjs`);
-          }
-        }
+        const componentEntry = componentDeclarations.get(
+          path.normalize(resolved?.resolvedFileName ?? ''),
+        );
+        if (componentEntry) return componentEntry;
       }
     },
     load(id) {

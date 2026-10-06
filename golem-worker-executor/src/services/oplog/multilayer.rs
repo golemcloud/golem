@@ -563,6 +563,20 @@ impl MultiLayerOplogService {
             transfer_fibers.remove(agent_id);
         }
     }
+
+    #[cfg(test)]
+    pub(super) fn has_registered_transfer(
+        &self,
+        agent_id: &AgentId,
+        transfer_fiber: &TransferFiber,
+    ) -> bool {
+        let transfer_fiber = Arc::downgrade(transfer_fiber);
+        self.transfer_fibers
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .is_some_and(|registered| registered.ptr_eq(&transfer_fiber))
+    }
 }
 
 impl Clone for MultiLayerOplogService {
@@ -1218,7 +1232,7 @@ pub struct MultiLayerOplog {
     agent_mode: AgentMode,
     primary: Arc<dyn Oplog>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
-    retired: AtomicBool,
+    retired: Arc<AtomicBool>,
     multi_layer_oplog_service: MultiLayerOplogService,
     transfer_fiber: TransferFiber,
     transfer: UnboundedSender<BackgroundTransferMessage>,
@@ -1302,7 +1316,7 @@ impl MultiLayerOplog {
             agent_mode,
             primary: primary.clone(),
             lower: lower.clone(),
-            retired: AtomicBool::new(false),
+            retired: Arc::new(AtomicBool::new(false)),
             multi_layer_oplog_service: multi_layer_oplog_service.clone(),
             transfer_fiber: new_transfer_fiber(),
             transfer: tx,
@@ -1621,6 +1635,44 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
+    fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
+        let retired = self.retired.clone();
+        let service = self.multi_layer_oplog_service.clone();
+        let agent_id = self.owned_agent_id.agent_id.clone();
+        let transfer_fiber = self.transfer_fiber.clone();
+        let inner = self.primary.executor_shutdown_handle();
+        let close_retired = retired.clone();
+        let close_service = service.clone();
+        let close_agent_id = agent_id.clone();
+        let close_transfer_fiber = transfer_fiber.clone();
+        let close_inner = inner.clone();
+        let closed = self.closed();
+        super::OplogShutdownHandle::new(
+            move || {
+                retired.store(true, Ordering::Release);
+                service.unregister_transfer(&agent_id, &transfer_fiber);
+                service.abort_transfer_in_drop(&transfer_fiber);
+                inner.fence();
+            },
+            move || {
+                let retired = close_retired.clone();
+                let service = close_service.clone();
+                let agent_id = close_agent_id.clone();
+                let transfer_fiber = close_transfer_fiber.clone();
+                let closed = closed.clone();
+                let inner = close_inner.clone();
+                async move {
+                    retired.store(true, Ordering::Release);
+                    service.unregister_transfer(&agent_id, &transfer_fiber);
+                    service.abort_transfer_in_drop(&transfer_fiber);
+                    let local = closed.await;
+                    local.and(inner.close_and_wait().await)
+                }
+                .boxed()
+            },
+        )
+    }
+
     fn retire(&self) {
         self.retired.store(true, Ordering::Release);
         self.multi_layer_oplog_service
@@ -2250,6 +2302,125 @@ mod transfer_lifecycle_tests {
         assert!(service.begin_archive_attempt(&failed, ArchiveSource::Lower(0)));
         service.record_archive_success(&failed, ArchiveSource::Lower(0));
         assert!(service.begin_archive_attempt(&failed, ArchiveSource::Lower(0)));
+    }
+
+    async fn open_idle_multilayer(
+        agent_name: &str,
+    ) -> (Arc<dyn Oplog>, MultiLayerOplogService, AgentId) {
+        let indexed = Arc::new(InMemoryIndexedStorage::new());
+        let primary_service = Arc::new(
+            PrimaryOplogService::new(
+                indexed.clone(),
+                Arc::new(InMemoryBlobStorage::new()),
+                100,
+                100,
+                100,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let archive: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
+            indexed,
+            1,
+            RetryConfig::default(),
+        ));
+        let account_id = AccountId::new();
+        let environment_id = EnvironmentId::new();
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: agent_name.to_string(),
+        };
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let primary = primary_service
+            .open(
+                &mut primary_service.lock_lifecycle(&agent_id).await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(agent_id.clone(), account_id, environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await;
+        let service = MultiLayerOplogService::new(primary_service, nev![archive], 100, 100);
+        let oplog = MultiLayerOplog::new(
+            owned_agent_id,
+            AgentMode::Durable,
+            account_id,
+            primary,
+            service.clone(),
+            Box::new(|| {}),
+            None,
+        )
+        .await;
+        (oplog, service, agent_id)
+    }
+
+    #[test]
+    async fn executor_shutdown_fence_stops_transfer_while_handle_survives() {
+        let (oplog, _, _) = open_idle_multilayer("shutdown-transfer-surviving-handle").await;
+        let transfer_closed = oplog.closed();
+        let shutdown = oplog.executor_shutdown_handle();
+
+        shutdown.fence();
+        shutdown.fence();
+
+        tokio::time::timeout(Duration::from_secs(1), transfer_closed)
+            .await
+            .expect("multi-layer transfer remained live after executor shutdown preparation")
+            .unwrap();
+        assert!(Arc::strong_count(&oplog) > 0);
+    }
+
+    #[test]
+    async fn saved_executor_shutdown_handle_settles_after_outer_handle_drops() {
+        let (oplog, _, _) = open_idle_multilayer("saved-shutdown-completion").await;
+        let shutdown = oplog.executor_shutdown_handle();
+
+        shutdown.fence();
+        drop(oplog);
+
+        tokio::time::timeout(Duration::from_secs(1), shutdown.close_and_wait())
+            .await
+            .expect("saved multi-layer shutdown handle did not settle")
+            .unwrap();
+    }
+
+    #[test]
+    async fn old_shutdown_fence_does_not_unregister_newer_transfer() {
+        let (old, service, agent_id) = open_idle_multilayer("replacement-transfer").await;
+        let shutdown = old.executor_shutdown_handle();
+        let newer = new_transfer_fiber();
+        service.register_transfer(agent_id.clone(), &newer);
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let transfer = tokio::spawn(async move {
+            if start_rx.await.is_ok() {
+                let _ = release_rx.await;
+            }
+        });
+        MultiLayerOplogService::start_transfer(&newer, start_tx, transfer).await;
+
+        shutdown.fence();
+        drop(old);
+
+        assert!(
+            service
+                .transfer_fibers
+                .lock()
+                .unwrap()
+                .get(&agent_id)
+                .is_some_and(|registered| registered.ptr_eq(&Arc::downgrade(&newer)))
+        );
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            MultiLayerOplogService::transfer_closed(&newer),
+        )
+        .await
+        .expect("newer transfer was stopped by old-generation shutdown fence")
+        .unwrap();
     }
 
     #[test]

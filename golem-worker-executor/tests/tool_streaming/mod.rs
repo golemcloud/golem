@@ -35,8 +35,8 @@ use golem_common::model::oplog::payload::types::{
     SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
-    PublicOplogEntryWithIndex,
+    OplogIndex, PublicAgentEntityKind, PublicAgentInvocation, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
 };
 use golem_common::model::tool::{
     CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
@@ -89,9 +89,14 @@ mod middleware_acceptance;
 mod moonbit_exports;
 mod trapped_leaf_observers;
 
+static SINGLE_STORE_PROBE_PERMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+static ATTACHMENT_PRESSURE_TEST_PERMIT: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(1);
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
+
 inherit_test_dep!(
     #[tagged_as("tool_streaming_rust_provider")]
     PrecompiledComponent
@@ -239,6 +244,10 @@ async fn run_single_store_http_atomic_probe(
 ) -> anyhow::Result<()> {
     use golem_common::model::worker::{RevertToOplogIndex, RevertWorkerTarget};
 
+    let _single_store_probe_permit = SINGLE_STORE_PROBE_PERMIT
+        .acquire()
+        .await
+        .expect("single-store probe semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
     let component = executor
@@ -285,19 +294,24 @@ async fn run_single_store_http_atomic_probe(
             data_value!(),
         );
         let release = async {
-            for _ in 0..8 {
+            for ordinal in 1..=8 {
                 let checkpoint =
-                    next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic").await?;
-                checkpoint
-                    .release
-                    .send(())
-                    .map_err(|_| anyhow::anyhow!("checkpoint gate was dropped"))?;
+                    next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic")
+                        .await
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "recording attempt {attempt} checkpoint {ordinal}/8 failed: {error}"
+                            )
+                        })?;
+                checkpoint.release.send(()).map_err(|_| {
+                    anyhow::anyhow!(
+                        "recording attempt {attempt} checkpoint {ordinal}/8 gate was dropped"
+                    )
+                })?;
             }
             anyhow::Ok(())
         };
-        let (result, released) = tokio::join!(invocation, release);
-        result?;
-        released?;
+        let (_result, ()) = tokio::try_join!(invocation, release)?;
         let recorded = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         for entry in &recorded {
             eprintln!(
@@ -419,19 +433,27 @@ async fn run_single_store_http_atomic_probe(
             if retained.is_some() {
                 // The retained prefix cuts the probe invocation, so its remainder re-executes
                 // live and reaches the crash checkpoint gate for every remaining checkpoint.
-                for _ in 0..8 {
+                for ordinal in 1..=8 {
                     next_crash_checkpoint(&mut checkpoints, "single-store-http-atomic")
-                        .await?
+                        .await
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "replay checkpoint {ordinal}/8 failed for retained prefix {prefix:?}: {error}"
+                            )
+                        })?
                         .release
                         .send(())
-                        .map_err(|_| anyhow::anyhow!("checkpoint gate was dropped"))?;
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "replay checkpoint {ordinal}/8 gate was dropped for retained prefix {prefix:?}"
+                            )
+                        })?;
                 }
             }
             anyhow::Ok(())
         };
-        let (result, coordinated) = tokio::join!(invoke, coordinate);
-        coordinated?;
-        result
+        let (result, ()) = tokio::try_join!(invoke, coordinate)?;
+        Ok::<_, anyhow::Error>(result)
     };
     let replay = tokio::time::timeout(std::time::Duration::from_secs(60), replay).await;
     server.abort();
@@ -2243,28 +2265,30 @@ async fn start_web_fetch_http_servers() -> WebFetchHttpServers {
         interrupted_requests,
     }
 }
-async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>) {
+async fn start_trap_attempt_server() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     use tokio::io::AsyncWriteExt;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind trap-attempt server");
     let port = listener.local_addr().expect("trap-attempt address").port();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let recorded_attempts = attempts.clone();
     let task = tokio::spawn(async move {
-        let mut attempt = 0_u64;
         loop {
             let (mut connection, _) = listener
                 .accept()
                 .await
                 .expect("accept trap-attempt connection");
             connection
-                .write_all(&[u8::from(attempt != 0)])
+                .write_all(&[u8::from(
+                    recorded_attempts.fetch_add(1, Ordering::SeqCst) != 0,
+                )])
                 .await
                 .expect("write trap-attempt response");
-            attempt += 1;
         }
     });
-    (port, task)
+    (port, task, attempts)
 }
 
 struct CrashCheckpointArrival {
@@ -2283,7 +2307,7 @@ async fn announce_crash_checkpoint(
 async fn start_crash_checkpoint_server() -> (
     u16,
     u16,
-    tokio::task::JoinHandle<()>,
+    tokio_util::task::AbortOnDropHandle<()>,
     tokio::sync::mpsc::UnboundedReceiver<CrashCheckpointArrival>,
 ) {
     use tokio::io::AsyncWriteExt;
@@ -2307,7 +2331,7 @@ async fn start_crash_checkpoint_server() -> (
     let app = Router::new()
         .route("/{name}", post(announce_crash_checkpoint))
         .with_state(current_name.clone());
-    let task = tokio::spawn(async move {
+    let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
         let announcements = axum::serve(announcement_listener, app);
         let gates = async move {
             let mut connections = tokio::task::JoinSet::new();
@@ -2347,10 +2371,11 @@ async fn start_crash_checkpoint_server() -> (
             result = announcements => result.expect("serve crash checkpoint announcements"),
             () = gates => unreachable!("crash checkpoint gate listener does not stop"),
         }
-    });
+    }));
     (announcement_port, gate_port, task, received)
 }
 
+#[derive(Debug)]
 struct PromiseCheckpointArrival {
     name: String,
     oplog_idx: OplogIndex,
@@ -2407,6 +2432,56 @@ async fn next_promise_checkpoint(
         .ok_or_else(|| anyhow::anyhow!("promise checkpoint server stopped before `{expected}`"))?;
     assert_eq!(arrival.name, expected);
     Ok(arrival)
+}
+
+async fn wait_for_promise_checkpoint_to_await(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    checkpoint: &PromiseCheckpointArrival,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+            let checkpoint_parent = oplog.iter().find_map(|entry| {
+                (entry.oplog_index == checkpoint.oplog_idx).then(|| match &entry.entry {
+                    PublicOplogEntry::Start(parameters)
+                        if parameters.function_name == "golem::api::create_promise" =>
+                    {
+                        Ok(parameters.parent_start_index)
+                    }
+                    other => Err(anyhow::anyhow!(
+                        "promise checkpoint `{}` announced index {} for {}",
+                        checkpoint.name,
+                        checkpoint.oplog_idx,
+                        describe_public_entry(other)
+                    )),
+                })
+            });
+            if let Some(checkpoint_parent) = checkpoint_parent {
+                let checkpoint_parent = checkpoint_parent?;
+                if oplog.iter().any(|entry| {
+                    entry.oplog_index > checkpoint.oplog_idx
+                        && matches!(
+                            &entry.entry,
+                            PublicOplogEntry::Start(parameters)
+                                if parameters.function_name == "golem::api::get_promise_result"
+                                    && parameters.parent_start_index == checkpoint_parent
+                        )
+                }) {
+                    return Ok::<_, anyhow::Error>(());
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "timed out waiting for `{}` promise checkpoint to enter its durable wait",
+            checkpoint.name
+        )
+    })??;
+    Ok(())
 }
 
 async fn wait_for_active_tool_operations(
@@ -4430,11 +4505,13 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
         let caller_promise =
             next_promise_checkpoint(&mut caller_checkpoints, "typed-input-caller-produced-first")
                 .await?;
+        wait_for_promise_checkpoint_to_await(&executor, &worker_id, &caller_promise).await?;
         let provider_promise = next_promise_checkpoint(
             &mut provider_checkpoints,
             "typed-input-provider-consumed-first",
         )
         .await?;
+        wait_for_promise_checkpoint_to_await(&executor, &worker_id, &provider_promise).await?;
         assert!(
             !invocation.is_finished(),
             "input drain completed before the caller producer was released"
@@ -4521,7 +4598,9 @@ async fn typed_tool_input_stream_is_durable_through_universal_and_nonidentity_mi
         assert_eq!(starts.len(), if decorated { 3 } else { 1 });
         assert_eq!(ends, starts.len());
     }
-    assert!(provider_checkpoints.try_recv().is_err());
+    if let Ok(unexpected) = provider_checkpoints.try_recv() {
+        panic!("unexpected provider checkpoint after reconstruction: {unexpected:?}");
+    }
     assert!(caller_checkpoints.try_recv().is_err());
     provider_server.abort();
     caller_server.abort();
@@ -4859,7 +4938,7 @@ async fn rust_generated_client_streams_live_and_handles_edges(
     .await?;
     let (http_port, http_server, mut first_http_uploads, mut complete_http_uploads) =
         start_gated_http_server().await;
-    let (trap_once_port, trap_once_server) = start_trap_attempt_server().await;
+    let (trap_once_port, trap_once_server, _trap_attempts) = start_trap_attempt_server().await;
 
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -6216,6 +6295,10 @@ async fn completed_tool_replay_bypasses_current_attachment_memory_pressure(
     const ATTACHMENT_BYTES: usize = 2 * 1024 * 1024;
     const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 3 * 1024 * 1024;
 
+    let _attachment_pressure_test_permit = ATTACHMENT_PRESSURE_TEST_PERMIT
+        .acquire()
+        .await
+        .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let executor = start_with_overrides(
@@ -6408,6 +6491,10 @@ async fn incomplete_tool_replay_persists_attachment_upgrade_rejection(
     const ATTACHMENT_BYTES: u64 = 8 * 1024 * 1024;
     const DESIRED_REPLAY_HEADROOM_BYTES: u64 = 12 * 1024 * 1024;
 
+    let _attachment_pressure_test_permit = ATTACHMENT_PRESSURE_TEST_PERMIT
+        .acquire()
+        .await
+        .expect("attachment-pressure test semaphore is not closed");
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let executor = start_with_overrides(
@@ -7286,6 +7373,231 @@ async fn capable_admission_publication_and_clean_stdout_trap_preserve_boundaries
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn incomplete_entity_atomic_rollback_recovers_dependent_sibling(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let (provider_port, provider_gate_port, _provider_server, mut provider_arrivals) =
+        start_crash_checkpoint_server().await;
+    let (trap_port, trap_server, trap_attempts) = start_trap_attempt_server().await;
+    let _trap_server = tokio_util::task::AbortOnDropHandle::new(trap_server);
+
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", "entity-ownership-rollback");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([
+                ("TRAP_ONCE_PORT".to_string(), trap_port.to_string()),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_PORT".to_string(),
+                    provider_port.to_string(),
+                ),
+                (
+                    "PROVIDER_CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    provider_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let invocation = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "dependent_sibling_after_unjournaled_stdout",
+            data_value!(),
+        ),
+    );
+    let recover = async {
+        let provider_checkpoint =
+            tokio::time::timeout(std::time::Duration::from_secs(30), provider_arrivals.recv())
+                .await
+                .map_err(|_| anyhow::anyhow!("provider changing-stdout checkpoint timed out"))?
+                .ok_or_else(|| anyhow::anyhow!("provider checkpoint server stopped"))?;
+        assert_eq!(provider_checkpoint.name, "provider-changing-stdout");
+        let before_crash = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                executor.commit_oplog(&worker_id).await?;
+                let entries = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                let sibling = entries
+                    .iter()
+                    .filter_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Start(params)
+                            if params.function_name == "golem::entity::invoke" =>
+                        {
+                            Some(entry.oplog_index)
+                        }
+                        _ => None,
+                    })
+                    .nth(1);
+                if sibling.is_some_and(|start| {
+                    entries.iter().any(|entry| matches!(
+                    &entry.entry, PublicOplogEntry::End(params) if params.start_index == start
+                ))
+                }) {
+                    break anyhow::Ok(entries);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("dependent sibling did not complete"))??;
+        let entity_starts = before_crash
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(entity_starts.len(), 2, "outer and dependent sibling Starts");
+        assert!(before_crash.iter().all(|entry| !matches!(
+            &entry.entry,
+            PublicOplogEntry::End(params) if params.start_index == entity_starts[0]
+        )));
+        before_crash
+            .iter()
+            .find(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == entity_starts[1]
+                )
+            })
+            .expect("dependent sibling End is durable");
+        assert!(
+            before_crash
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::BeginAtomicRegion(_)))
+                .count()
+                > before_crash
+                    .iter()
+                    .filter(|entry| matches!(entry.entry, PublicOplogEntry::EndAtomicRegion(_)))
+                    .count(),
+            "the provider's outer atomic region must still be incomplete"
+        );
+
+        executor.simulated_crash(&worker_id).await?;
+        Ok::<_, anyhow::Error>(entity_starts)
+    };
+    let (result, recovery) = tokio::join!(invocation, recover);
+    let original_starts = recovery?;
+    let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    if result.is_err() {
+        assert!(
+            replayed
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Jump(_))),
+            "incomplete entity recovery must record its rollback Jump"
+        );
+        assert!(replayed.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::End(params) if params.start_index == original_starts[1]
+        )));
+        anyhow::bail!(
+            "recovery did not settle with the original dependent sibling Start/End at {} retained; external attempt reads={}, expected recovery to reread `second` after the original caller completed the sibling from `first`",
+            original_starts[1],
+            trap_attempts.load(Ordering::SeqCst)
+        );
+    }
+    let evidence: Vec<String> = result.expect("timeout handled above")?.into_typed()?;
+    assert_eq!(evidence, ["second", "no-stream:second"]);
+    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
+
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let reconstructed: String = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "replay_probe",
+            data_value!(),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("second reconstruction did not settle"))??
+    .into_typed()?;
+    assert_eq!(reconstructed, "replayed");
+    assert_eq!(trap_attempts.load(Ordering::SeqCst), 2);
+
+    let original_sibling_end = replayed
+        .iter()
+        .find(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::End(params) if params.start_index == original_starts[1]
+            )
+        })
+        .unwrap()
+        .oplog_index;
+    assert!(
+        replayed.iter().any(|entry| matches!(
+            &entry.entry,
+            PublicOplogEntry::Jump(params)
+                if params.jump.contains(original_starts[1])
+                    && params.jump.contains(original_sibling_end)
+        )),
+        "the old sibling's complete history must be logically deleted, not merely left unclaimed"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn active_stream_crash_replays_pinned_activation_with_fresh_attachments(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -7412,10 +7724,319 @@ async fn active_stream_crash_replays_pinned_activation_with_fresh_attachments(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn suspended_restart_replays_completed_tool_without_semantic_retry(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = std::time::Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider_path = deps
+        .component_directory
+        .join(format!("{}.wasm", provider.wasm_name));
+    let metadata = extract_component_metadata(&provider_path, false, true).await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let (promise_port, promise_server, mut promise_checkpoints) =
+        start_promise_checkpoint_server().await;
+    let agent_id = agent_id!("ToolStreamingCaller", "suspended-restart-completed-tool");
+    let worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            agent_id.clone(),
+            HashMap::from([(
+                "CALLER_PROMISE_CHECKPOINT_PORT".to_string(),
+                promise_port.to_string(),
+            )]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let key = IdempotencyKey::fresh();
+    let expected = b"distinctive-suspended-restart".to_vec();
+    let invocation = {
+        let executor = executor.clone();
+        let caller_component = caller_component.clone();
+        let agent_id = agent_id.clone();
+        let key = key.clone();
+        let expected = expected.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &caller_component,
+                    &agent_id,
+                    &key,
+                    "completed_capable_tool_then_promise",
+                    data_value!("/suspended-restart.bin", expected),
+                )
+                .await
+        })
+    };
+
+    let checkpoint =
+        next_promise_checkpoint(&mut promise_checkpoints, "completed-capable-tool").await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Suspended,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("suspended owner did not finish unloading"))?;
+
+    executor.simulated_crash(&worker_id).await?;
+    executor
+        .complete_promise(
+            &PromiseId {
+                agent_id: worker_id.clone(),
+                oplog_idx: checkpoint.oplog_idx,
+            },
+            Vec::new(),
+        )
+        .await?;
+    let result: Vec<u8> = tokio::time::timeout(std::time::Duration::from_secs(30), invocation)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!("original invocation did not finish after suspended restart")
+        })???
+        .into_typed()?;
+    assert_eq!(result, expected);
+    assert_eq!(
+        executor
+            .get_file_contents(&worker_id, "/suspended-restart.bin")
+            .await?,
+        expected
+    );
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "lifecycle restart must not charge a semantic retry"
+    );
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "simulated crash must not manufacture a terminal interruption"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name.replace('-', "_")
+                                == "completed_capable_tool_then_promise"
+                    )
+            ))
+            .count(),
+        1,
+        "restart must retain the original logical invocation"
+    );
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.retry_count,
+        0
+    );
+    let follow_up: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "read_owner_file",
+            data_value!("/suspended-restart.bin"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(follow_up.into_bytes(), expected);
+
+    let (drain_checkpoint_port, drain_gate_port, drain_server, mut drain_checkpoints) =
+        start_crash_checkpoint_server().await;
+    let drain_agent_id = agent_id!("ToolStreamingCaller", "restart-drains-live-entity");
+    let drain_worker_id = executor
+        .start_agent_with(
+            &caller_component.id,
+            drain_agent_id.clone(),
+            HashMap::from([
+                (
+                    "CRASH_CHECKPOINT_PORT".to_string(),
+                    drain_checkpoint_port.to_string(),
+                ),
+                (
+                    "CRASH_CHECKPOINT_GATE_PORT".to_string(),
+                    drain_gate_port.to_string(),
+                ),
+            ]),
+            Vec::new(),
+        )
+        .await?;
+    let owned_drain_agent = OwnedAgentId::new(context.default_environment_id, &drain_worker_id);
+    let drain_key = IdempotencyKey::fresh();
+    let drain_invocation = tokio::spawn({
+        let executor = executor.clone();
+        let caller_component = caller_component.clone();
+        let drain_agent_id = drain_agent_id.clone();
+        let drain_key = drain_key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &caller_component,
+                    &drain_agent_id,
+                    &drain_key,
+                    "collect_capable",
+                    data_value!("hold-body:/restart-drain.bin", b"drain-me".to_vec()),
+                )
+                .await
+        }
+    });
+    let drain_checkpoint = next_crash_checkpoint(&mut drain_checkpoints, "capable-body").await?;
+    let held_operation = executor
+        .active_entity_metadata(&owned_drain_agent)
+        .await
+        .and_then(|metadata| metadata.tool_operations.operations.into_iter().next())
+        .ok_or_else(|| anyhow::anyhow!("live tool operation was not registered"))?;
+    assert_eq!(held_operation.admission, ToolBodyAdmissionMetadata::Running);
+    let drain_worker = executor.active_agent(&owned_drain_agent).await.unwrap();
+    let restart = tokio::spawn(async move {
+        drain_worker
+            .primary()
+            .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(30), restart)
+        .await
+        .map_err(|_| anyhow::anyhow!("restart did not cancel the blocked live entity body"))???;
+    assert!(!drain_invocation.is_finished());
+    let replay_checkpoint = next_crash_checkpoint(&mut drain_checkpoints, "capable-body").await?;
+    drop(drain_checkpoint.release);
+    replay_checkpoint
+        .release
+        .send(())
+        .map_err(|_| anyhow::anyhow!("replayed tool checkpoint dropped before release"))?;
+    let drained: StreamEvidence =
+        tokio::time::timeout(std::time::Duration::from_secs(30), drain_invocation)
+            .await
+            .map_err(|_| anyhow::anyhow!("tool invocation did not recover after restart"))???
+            .into_typed()?;
+    assert_eq!(drained.chunks_read, 1);
+    assert_eq!(drained.bytes_read, 8);
+    assert_eq!(
+        executor
+            .get_file_contents(&drain_worker_id, "/restart-drain.bin")
+            .await?,
+        b"drain-me".as_slice()
+    );
+    let drain_oplog = executor
+        .get_oplog(&drain_worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        drain_oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "live-body restart must not charge a semantic retry"
+    );
+    assert!(
+        drain_oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Interrupted(_))),
+        "live-body restart must not manufacture a terminal interruption"
+    );
+    assert_eq!(
+        drain_oplog
+            .iter()
+            .filter(|entry| matches!(
+                &entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(
+                        &started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.method_name.replace('-', "_") == "collect_capable"
+                                && method.idempotency_key == drain_key
+                    )
+            ))
+            .count(),
+        1,
+        "live-body restart must retain the original keyed logical invocation"
+    );
+    assert_eq!(
+        executor
+            .get_worker_metadata(&drain_worker_id)
+            .await?
+            .retry_count,
+        0
+    );
+    let drain_follow_up: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &drain_agent_id,
+            "read_owner_file",
+            data_value!("/restart-drain.bin"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(drain_follow_up.as_bytes(), b"drain-me");
+    drain_server.abort();
+    promise_server.abort();
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
+    ExecutorShutdownDuringBodyValidation,
 }
 
 async fn run_completed_reconstruction_exclusive_p2_case(
@@ -7469,6 +8090,9 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     let case_name = match case {
         CompletedReconstructionExclusiveCase::Success => "exclusive-p2-success",
         CompletedReconstructionExclusiveCase::Divergence => "exclusive-p2-divergence",
+        CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
+            "exclusive-p2-body-validation-shutdown"
+        }
     };
     let agent_id = agent_id!("ToolStreamingCaller", case_name);
     let worker_id = executor
@@ -7547,7 +8171,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         tokio::time::timeout(std::time::Duration::from_secs(30), replayed_clock.entered())
             .await
             .map_err(|_| anyhow::anyhow!("replayed clock gate was not reached"))?;
-        let mut replayed_success = (case != CompletedReconstructionExclusiveCase::Divergence)
+        let mut replayed_success = (case == CompletedReconstructionExclusiveCase::Success)
             .then(|| executor.gate_next_agent_invocation_success(&worker_id));
 
         match case {
@@ -7627,6 +8251,18 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     "divergent reconstruction permitted ReplayFinished update finalization"
                 );
             }
+            CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    reconstruction_body.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("completed reconstruction did not reach body validation gate")
+                })?;
+                replayed_clock.release();
+                executor.shutdown_and_wait_for_invocation_loops().await?;
+            }
         }
         Ok::<_, anyhow::Error>(())
     };
@@ -7638,7 +8274,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     validation_result?;
     let invocation_result = invocation_result
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
-    if case == CompletedReconstructionExclusiveCase::Divergence {
+    if case != CompletedReconstructionExclusiveCase::Success {
         assert!(
             invocation_result.is_err(),
             "divergent reconstruction must fail the owner invocation"
@@ -7685,6 +8321,26 @@ async fn completed_reconstruction_divergence_fails_exclusive_p2_wait(
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Divergence,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn executor_shutdown_cancels_completed_reconstruction_during_body_validation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation,
     )
     .await
 }
@@ -7951,12 +8607,21 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         tokio::time::timeout(std::time::Duration::from_secs(30), original_body.entered())
             .await
             .map_err(|_| anyhow::anyhow!("original entity body did not complete"))?;
-        let original_custom =
-            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
+        let original_before_custom = next_crash_checkpoint(
+            &mut caller_checkpoints,
+            "before-reconstruction-custom-effect",
+        )
+        .await?;
         original_body.release();
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         executor.commit_oplog(&worker_id).await?;
         let entity_start = wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        original_before_custom
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
+        let original_custom =
+            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
         let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let custom_start = original_oplog
             .iter()
@@ -7969,6 +8634,19 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
                 _ => None,
             })
             .ok_or_else(|| anyhow::anyhow!("recorded custom durability Start was not found"))?;
+        let entity_terminal = original_oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) if params.start_index == entity_start => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recorded entity terminal was not found"))?;
+        assert!(
+            entity_terminal < custom_start,
+            "completed entity terminal must precede the abandoned custom suffix"
+        );
         assert!(!original_oplog.iter().any(|entry| {
             matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == custom_start)
                 || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == custom_start)

@@ -2170,9 +2170,44 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     );
     assert_eq!(active_agent.entity_metadata().slots.len(), 2);
 
-    let _ = release_nested.send(());
-    middleware.await_result(&root_id).await?;
+    let restart = tokio::spawn({
+        let worker = active_agent.primary();
+        async move {
+            worker
+                .set_interrupting(
+                    golem_service_base::error::worker_executor::InterruptKind::Restart,
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while active_agent.entity_metadata().accepting_entities {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owner restart did not fence the nested execution unit");
+    restart.await??;
+    assert!(
+        release_nested.send(()).is_err(),
+        "nested tool was still waiting after owner restart establishment"
+    );
+    assert!(
+        active_agent
+            .entity_metadata()
+            .slots
+            .iter()
+            .all(|slot| slot.invocations.is_empty()),
+        "owner restart did not retire every nested entity body"
+    );
+    assert!(
+        middleware.await_result(&root_id).await.is_err(),
+        "nested middleware execution survived its owner generation"
+    );
     drop(root);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
     assert!(
         active_agent
             .entity_metadata()
@@ -2181,13 +2216,6 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
             .all(|slot| slot.invocations.is_empty()),
         "completed Stores leave only vacant in-memory slots, never durable child status"
     );
-
-    executor
-        .interrupt_with_optional_recovery(&worker_id, true)
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
-        .await?;
     assert!(
         active_agent.entity_metadata().accepting_entities,
         "a new primary generation must reopen entity admission after an in-place restart"
