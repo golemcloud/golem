@@ -14,11 +14,11 @@
 
 use crate::filesystem_pressure::FilesystemWriteRecovery;
 pub use crate::sandbox_filesystem::FilesystemStorageError;
-pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
 use crate::sandbox_filesystem::{
-    FilesystemVolume, HostDirectories, HostDirectory, SandboxFilesystemProvisioning,
-    observe_space_blocking,
+    AgentAccounting, FilesystemVolume, HostDirectories, HostDirectory,
+    SandboxFilesystemProvisioning, observe_space_blocking,
 };
+pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
@@ -223,8 +223,7 @@ impl AgentFilesystems {
                 initial_files,
             },
         ) = SandboxFilesystemProvisioning::provision(
-            settings.deterministic_root_dir.clone(),
-            settings.managed_xfs_root_dir.clone(),
+            &settings.storage,
             settings.cleanup_retry.clone(),
         )
         .await?;
@@ -272,6 +271,11 @@ impl AgentFilesystems {
     /// generation is created. The returned value does not represent an individual agent target.
     pub(crate) fn volume(&self) -> &FilesystemVolume {
         self.provisioning.volume()
+    }
+
+    /// How the storage of the agent filesystems accounts for the files of each agent.
+    pub(crate) fn agent_accounting(&self) -> AgentAccounting {
+        self.provisioning.agent_accounting()
     }
 
     /// Resolves an agent's byte allocation into the limits installed on a new generation.
@@ -357,6 +361,7 @@ pub(crate) mod file_creation_mask_for_test {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::golem_config::FilesystemStorageMode;
     #[cfg(target_os = "linux")]
     use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
     use test_r::test;
@@ -406,7 +411,9 @@ mod tests {
     fn agent_filesystems_binding_leaves_the_file_mode_creation_mask_as_it_is() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            storage: FilesystemStorageMode::Directory {
+                root: root.path().to_path_buf(),
+            },
             ..FilesystemStorageConfig::default()
         };
 
@@ -619,7 +626,9 @@ mod tests {
                 .unwrap();
         });
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            storage: FilesystemStorageMode::Directory {
+                root: root.path().to_path_buf(),
+            },
             ..FilesystemStorageConfig::default()
         };
 
@@ -644,7 +653,9 @@ mod tests {
     async fn agent_filesystems_give_the_initial_files_directory_to_their_one_file_loader() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            storage: FilesystemStorageMode::Directory {
+                root: root.path().to_path_buf(),
+            },
             ..FilesystemStorageConfig::default()
         };
         let initial_files = root.path().join(".initial-files");
@@ -671,7 +682,9 @@ mod tests {
     async fn a_failed_binding_discards_both_host_directories() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            storage: FilesystemStorageMode::Directory {
+                root: root.path().to_path_buf(),
+            },
             ..FilesystemStorageConfig::default()
         };
         let observed_total_bytes = settings.pressure.target_available_bytes() - 1;

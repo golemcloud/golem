@@ -44,6 +44,7 @@ use golem_test_framework::dsl::{
     AgentResult, drain_connection, stdout_event_matching, stdout_events,
 };
 use golem_worker_executor::services::events::Event;
+use golem_worker_executor::services::golem_config::FilesystemStorageMode;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use golem_worker_executor::worker::{
@@ -4308,7 +4309,9 @@ async fn deletion_retry_preserves_actual_filesystem_failure_until_verified_clean
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.suspend.suspend_after = Duration::from_secs(3600);
-                config.filesystem_storage.deterministic_root_dir = Some(root_path.clone());
+                config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+                    root: root_path.clone(),
+                };
                 config.filesystem_storage.cleanup_retry.max_attempts = 1;
             })),
             ..TestExecutorOverrides::default()
