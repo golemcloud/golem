@@ -44,7 +44,9 @@ golem ssh 'MyAgent("one")' -c 'printf ready; exit 7'
 It remembers nothing but the directory: every command is still a fresh shell. Its prompt completes
 command names and paths with Tab by running `compgen -c`, once when a session opens, and a short
 listing loop through this tool, so those calls appear among the agent's invocations. When the git
-tool is bound to the agent as well, it also reads `.git/HEAD` after each command to show the branch.
+tool is bound to the agent as well, a session with colours also reads `.git/HEAD` to show the
+branch, after a command that changed the directory or ran `git`. With piped input it gathers the
+lines of an `if`, a loop or a here-document into one command, as bash would read them.
 The component does not depend on it.
 
 ## Contract

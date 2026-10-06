@@ -787,7 +787,10 @@ pub enum GolemCliSubcommand {
     /// Ctrl+C clears the line; while a command runs it stops waiting for it, and the command
     /// keeps running on the agent unless it was still queued.
     ///
-    /// When stdin is not a terminal, each input line is one command and no prompt is printed.
+    /// When stdin is not a terminal, commands are read from it and no prompt is printed. A
+    /// command is as many lines as bash needs for it, so an `if`, a loop or a here-document runs
+    /// as one command. Each command has its own shell: only a command that is just `exit` or
+    /// `exit N` ends the session.
     #[command(after_help = crate::command_examples::SSH)]
     Ssh {
         /// The existing agent, in the same forms `tool invoke --agent` accepts
