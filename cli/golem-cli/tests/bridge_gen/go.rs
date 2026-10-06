@@ -1123,3 +1123,36 @@ fn go_guest_ephemeral_client_has_no_get(env: &GoEnv) {
     generated.assert_gofmt_clean(env);
     generated.assert_vets_for_wasip1(env);
 }
+
+/// An ephemeral agent's external client constructs a phantom per call and
+/// reports the instance that ran with each awaited result.
+#[test]
+fn go_external_ephemeral_client_reports_the_instance(env: &GoEnv) {
+    let request = agent(
+        "RequestAgent",
+        "rust",
+        vec![field("route", SchemaType::string())],
+        vec![
+            method("run", vec![], Some(SchemaType::string())),
+            method("touch", vec![], None),
+        ],
+        vec![],
+        AgentMode::Ephemeral,
+    );
+    let generated = GeneratedGo::external(env, request);
+    let client = generated.read("client.go");
+    for expected in [
+        "func NewPhantomRequestAgent(",
+        "Run(ctx context.Context) (bridge.InvocationResult[string], error)",
+        "return bridge.CallWithID(ctx, c.agent, \"run\"",
+        "Touch(ctx context.Context) (bridge.Receipt, error)",
+    ] {
+        assert!(
+            client.contains(expected),
+            "missing {expected} in:\n{client}"
+        );
+    }
+    assert!(!client.contains("func GetRequestAgent("), "{client}");
+    generated.assert_gofmt_clean(env);
+    generated.assert_vets_natively(env);
+}

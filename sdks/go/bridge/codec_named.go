@@ -149,3 +149,36 @@ func Call[T any](ctx context.Context, a *Agent, method string, params schema.Sch
 	}
 	return out, nil
 }
+
+// InvocationResult is a method's result together with the invocation that
+// produced it, which for an ephemeral agent is the only record of the instance
+// that ran.
+type InvocationResult[T any] struct {
+	AgentID        AgentID
+	IdempotencyKey string
+	Value          T
+}
+
+// CallWithID invokes a method that returns a value and decodes it with f,
+// keeping the invocation's identity.
+func CallWithID[T any](ctx context.Context, a *Agent, method string, params schema.SchemaValue, f Decoder[T]) (InvocationResult[T], error) {
+	r, err := a.Invoke(ctx, method, params)
+	if err != nil {
+		return InvocationResult[T]{}, err
+	}
+	out := InvocationResult[T]{AgentID: r.AgentID, IdempotencyKey: r.IdempotencyKey}
+	if r.Value == nil {
+		return out, fmt.Errorf("golem: %s returned no value", method)
+	}
+	if out.Value, err = f(r.Value); err != nil {
+		return out, fmt.Errorf("golem: decoding the result of %s: %w", method, err)
+	}
+	return out, nil
+}
+
+// InvokeForReceipt invokes a method that returns nothing, keeping the
+// invocation's identity.
+func InvokeForReceipt(ctx context.Context, a *Agent, method string, params schema.SchemaValue) (Receipt, error) {
+	r, err := a.Invoke(ctx, method, params)
+	return Receipt{AgentID: r.AgentID, IdempotencyKey: r.IdempotencyKey}, err
+}

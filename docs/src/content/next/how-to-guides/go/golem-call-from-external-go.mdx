@@ -99,6 +99,8 @@ Every method has three forms — `M(ctx, …)`, `TriggerM(ctx, …)` and `Schedu
 | `bridge.WithNewPhantomID()` | Address a fresh phantom instance, under a random id |
 | `bridge.WithConfig(bridge.ConfigEntry{Path: []string{"retries"}, Value: 3})` | Override agent configuration; values are plain JSON |
 
+An **ephemeral** agent has no durable instance to get: its client is constructed with `NewPhantom<Agent>(id, opts...)`, every call runs in a fresh instance, and an awaited call returns `bridge.InvocationResult[T]` (`Value`, plus the `AgentID` and `IdempotencyKey` of the instance that ran) — or a `bridge.Receipt` for a method without a result.
+
 ### Generated types
 
 Parameter and return types are generated in the client package, using the same Go spelling a Go agent would: records are structs, enums are `uint32` constants (`StatusInTransit`), flags are structs of `bool`, and variants and unions are sealed interfaces with one struct per case (`EventNote{Value: "hi"}`; a case without a payload is an empty struct). Options, results and tuples are `values.Option[T]`, `values.Result[T, E]` and `values.Tuple2[A, B]`… from `github.com/golemcloud/golem/sdks/go/core/values`; `text`, `char`, `binary`, `path`, `url` and `uuid` are `values.Text`, `values.Char`, `values.Binary`, `values.Path`, `values.URL`, `values.UUID`; datetimes and durations are `time.Time` and `time.Duration`.

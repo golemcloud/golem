@@ -34,6 +34,7 @@ use crate::bridge_gen::go::{GoBridgeGenerator, case_idents};
 use crate::bridge_gen::type_naming::user_supplied_fields;
 use crate::sdk_overrides::{GO_BRIDGE_MODULE, GO_CORE_MODULE, sdk_overrides};
 use crate::versions;
+use golem_common::model::agent::AgentMode;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::{AgentMethodSchema, OutputSchema};
 use std::collections::HashMap;
@@ -633,17 +634,31 @@ impl GoBridgeGenerator {
         w.line(format!("type {} struct{{ agent *bridge.Agent }}", n.client));
         w.blank();
 
-        w.doc(&format!(
-            "{} returns a client for the {agent_name} instance identified by id. The\n\
-             instance is created on first use. Options select the server\n\
-             (bridge.WithConfiguration, otherwise the one set with bridge.Configure),\n\
-             a phantom instance (bridge.WithPhantomID, bridge.WithNewPhantomID) and\n\
-             configuration overrides (bridge.WithConfig).",
-            n.get
-        ));
+        let ephemeral = matches!(self.agent_type.mode, AgentMode::Ephemeral);
+        let constructor = if ephemeral {
+            w.doc(&format!(
+                "{} returns a client for {agent_name}, an ephemeral agent: every call\n\
+                 runs in a fresh instance with these constructor arguments, and reports\n\
+                 that instance's id with its result. Options select the server\n\
+                 (bridge.WithConfiguration, otherwise the one set with bridge.Configure)\n\
+                 and configuration overrides (bridge.WithConfig).",
+                n.new_phantom
+            ));
+            &n.new_phantom
+        } else {
+            w.doc(&format!(
+                "{} returns a client for the {agent_name} instance identified by id. The\n\
+                 instance is created on first use. Options select the server\n\
+                 (bridge.WithConfiguration, otherwise the one set with bridge.Configure),\n\
+                 a phantom instance (bridge.WithPhantomID, bridge.WithNewPhantomID) and\n\
+                 configuration overrides (bridge.WithConfig).",
+                n.get
+            ));
+            &n.get
+        };
         w.line(format!(
             "func {}(id {}, opts ...bridge.AgentOption) ({}, error) {{",
-            n.get, n.id, n.client
+            constructor, n.id, n.client
         ));
         w.indent();
         w.line(format!(
@@ -735,9 +750,37 @@ impl GoBridgeGenerator {
             )
         };
 
-        // Await.
+        // Await. An ephemeral agent's result carries the id of the instance
+        // that ran, since nothing else records it.
         w.doc(&format!("{} {doc_tail}.", names.call[idx]));
+        let ephemeral = matches!(self.agent_type.mode, AgentMode::Ephemeral);
         match &method.output_schema {
+            OutputSchema::Unit if ephemeral => {
+                w.line(format!(
+                    "func (c {}) {}({}) (bridge.Receipt, error) {{",
+                    n.client,
+                    names.call[idx],
+                    signature.join(", ")
+                ));
+                w.indent();
+                w.line(format!(
+                    "return bridge.InvokeForReceipt(ctx, c.agent, {method_name}, {params_value})"
+                ));
+            }
+            OutputSchema::Single(typ) if ephemeral => {
+                let output = self.render(typ, w)?;
+                let decode = codecs.func(Dir::Decode, typ)?;
+                w.line(format!(
+                    "func (c {}) {}({}) (bridge.InvocationResult[{output}], error) {{",
+                    n.client,
+                    names.call[idx],
+                    signature.join(", ")
+                ));
+                w.indent();
+                w.line(format!(
+                    "return bridge.CallWithID(ctx, c.agent, {method_name}, {params_value}, {decode})"
+                ));
+            }
             OutputSchema::Unit => {
                 w.line(format!(
                     "func (c {}) {}({}) error {{",

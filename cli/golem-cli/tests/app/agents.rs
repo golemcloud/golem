@@ -2157,10 +2157,58 @@ async fn test_go_bridge_e2e() {
 
     ctx.cd(app_name);
 
+    // An ephemeral agent beside the template's durable counter: its client
+    // constructs a phantom per call and reports the instance that ran.
+    let lib = walkdir::WalkDir::new(ctx.cwd_path())
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| entry.into_path())
+        .find(|path| path.ends_with("src/lib.rs"))
+        .expect("the Rust component's lib.rs");
+    std::fs::write(
+        lib.with_file_name("echo_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+
+            #[agent_definition(ephemeral)]
+            pub trait EchoAgent {
+                fn new(prefix: String) -> Self;
+                fn echo(&self, text: String) -> String;
+            }
+
+            struct EchoAgentImpl { prefix: String }
+
+            #[agent_implementation]
+            impl EchoAgent for EchoAgentImpl {
+                fn new(prefix: String) -> Self { Self { prefix } }
+                fn echo(&self, text: String) -> String { format!("{}{text}", self.prefix) }
+            }
+        "#},
+    )
+    .unwrap();
+    let lib_source = std::fs::read_to_string(&lib).unwrap();
+    std::fs::write(
+        &lib,
+        format!("{lib_source}\nmod echo_agent;\npub use echo_agent::*;\n"),
+    )
+    .unwrap();
+
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
     let bridge_root = ctx.cwd_path_join("go-bridge");
+    let outputs = ctx
+        .cli([
+            cmd::GENERATE_BRIDGE,
+            flag::LANGUAGE,
+            "go",
+            flag::AGENT_TYPE_NAME,
+            "EchoAgent",
+            flag::OUTPUT_DIR,
+            bridge_root.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
     let outputs = ctx
         .cli([
             cmd::GENERATE_BRIDGE,
@@ -2196,11 +2244,14 @@ async fn test_go_bridge_e2e() {
 
             require (
             	golem.local/bridge/counter-agent-client v0.0.0
+            	golem.local/bridge/echo-agent-client v0.0.0
             	github.com/golemcloud/golem/sdks/go/bridge v0.0.0
             	github.com/golemcloud/golem/sdks/go/core v0.0.0
             )
 
             replace golem.local/bridge/counter-agent-client => {client}
+
+            replace golem.local/bridge/echo-agent-client => {echo}
 
             replace github.com/golemcloud/golem/sdks/go/bridge => {bridge}
 
@@ -2208,6 +2259,7 @@ async fn test_go_bridge_e2e() {
             "#,
             go = versions::build_tool::GO_MIN,
             client = client_dir.display(),
+            echo = bridge_root.join("echo-agent-client").display(),
             bridge = sdks.join("bridge").display(),
             core = sdks.join("core").display(),
         },
@@ -2227,6 +2279,7 @@ async fn test_go_bridge_e2e() {
 
             	"github.com/golemcloud/golem/sdks/go/bridge"
             	client "golem.local/bridge/counter-agent-client"
+            	echo "golem.local/bridge/echo-agent-client"
             )
 
             func main() {{
@@ -2251,7 +2304,20 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d\n", first, second)
+            	echoes, err := echo.NewPhantomEchoAgent(echo.EchoAgentId{{Prefix: "go:"}})
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	one, err := echoes.Echo(ctx, "a")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	two, err := echoes.Echo(ctx, "b")
+            	if err != nil {{
+            		log.Fatal(err)
+            	}}
+            	fmt.Printf("GO_BRIDGE_E2E_OK first=%d second=%d echo=%s,%s fresh=%t\n",
+            		first, second, one.Value, two.Value, one.AgentID != two.AgentID)
             }}
             "#
         },
@@ -2284,7 +2350,7 @@ async fn test_go_bridge_e2e() {
         program_dir.display()
     );
     assert!(
-        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2"),
+        stdout.contains("GO_BRIDGE_E2E_OK first=1 second=2 echo=go:a,go:b fresh=true"),
         "Go bridge e2e program did not produce the expected output.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
     );
 }

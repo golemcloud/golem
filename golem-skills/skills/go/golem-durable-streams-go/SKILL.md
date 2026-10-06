@@ -1,6 +1,6 @@
 ---
 name: golem-durable-streams-go
-description: "Exposes stream-bearing Go agent methods over HTTP through the Durable Streams protocol. Use for golem.DurableStreams, StreamRoute and StreamSlot options, session and slot URLs, external readers or writers appending to and tailing an invocation's streams in a Go Golem project."
+description: "Exposes stream-bearing Go agent methods over HTTP through the Durable Streams protocol. Use for golem.DurableStreams, StreamRoute and StreamSlot options, session and slot URLs, external readers or writers appending to and tailing an invocation's streams, or reading and writing any Durable Stream from inside an agent with the durablestreams package, in a Go Golem project."
 ---
 
 # Durable Streams in Go
