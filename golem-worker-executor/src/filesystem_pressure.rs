@@ -37,13 +37,13 @@ impl FilesystemPressureConfig {
     ) -> Result<(), FilesystemStorageError> {
         if self.target_available_bytes() > total_bytes {
             return Err(FilesystemStorageError::verification(
-                "fit filesystem pressure byte target within managed capacity",
+                "fit filesystem pressure byte target within the volume capacity",
                 std::path::Path::new("<configuration>"),
             ));
         }
         if self.target_available_filesystem_objects() > total_filesystem_objects {
             return Err(FilesystemStorageError::verification(
-                "fit filesystem pressure object target within managed capacity",
+                "fit filesystem pressure object target within the volume capacity",
                 std::path::Path::new("<configuration>"),
             ));
         }

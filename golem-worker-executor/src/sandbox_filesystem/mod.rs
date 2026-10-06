@@ -750,9 +750,9 @@ enum SeedTransfer {
     ReflinkIntoProject(NonZeroU32),
 }
 
-/// Gives how a sandbox that copies files with `mode` and charges what is written into it as
-/// `authority` says gets the contents of a seeded file. A reflink goes into the project of the
-/// sandbox when it has one.
+/// Gives how a seeded file gets its contents. `mode` is how the sandbox copies files, and
+/// `authority` tells whether the sandbox has a project. A copy-on-write sandbox makes a reflink.
+/// The reflink goes into the project of the sandbox when it has one.
 fn seed_transfer(mode: FileCopyMode, authority: QuotaAuthority) -> SeedTransfer {
     match (mode, authority) {
         (FileCopyMode::Buffered, _) => SeedTransfer::Bytes,
@@ -782,7 +782,8 @@ pub(crate) enum AgentAccounting {
 enum HostDirectoryCheck {
     /// The volume has no projects.
     None,
-    /// The volume is XFS. A host directory with a project id or the project-inherit flag is refused.
+    /// The volume is XFS. A host directory with a project id or the project-inherit flag is
+    /// refused.
     NoXfsProject,
 }
 
