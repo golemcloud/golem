@@ -264,9 +264,11 @@ The prompt edits like a shell:
 - **History is kept per agent** across sessions, in `ssh-history/` under the CLI's configuration directory, readable only by you. Up and Down recall, Ctrl+R searches, and a suggestion from history appears as you type. A line that starts with a space is not saved.
 - **Typed text is coloured.** A command name turns red when the agent does not know it.
 
-While a command runs, a line shows a small animation, how long the command has been running and how to stop waiting for it. A narrow window gets a shorter line, and one under 24 columns none. The animation is drawn with runes; set `GOLEM_SSH_RUNES=0` if your terminal's fonts have none and it shows boxes, and a plain shape takes their place. Its output appears when it finishes, with standard error dimmed.
+While a command runs, a line shows a small animation, how long the command has been running and how to stop waiting for it. A narrow window gets a shorter line, and one under 24 columns none. The animation is drawn with runes; set `GOLEM_SSH_RUNES=0` if your terminal's fonts have none and it shows boxes, and a plain shape takes their place. Without colours, for example with `NO_COLOR` set, the line does not move: it says that the command is running and how to stop waiting. The command's output appears when it finishes, with standard error dimmed.
 
 At a terminal, `golem ssh` answers two words itself: `help` explains the session, and `tools` lists the tools bound to the agent. `help NAME` still asks bash, and `builtin help` or `command tools` reach bash's own. With piped input both words go to bash like any other command.
+
+When an AI coding agent runs `golem ssh` at a terminal, the session is plain: a one-line prompt, lines read as the terminal hands them over, no colours, no line while a command runs, and no question to the terminal. Nothing is completed or recalled, so no helper command runs on the agent either. `golem ssh` recognises the agent from its environment, as the rest of the CLI does. Set `GOLEM_CLI_AGENT_HINTS=1` to get the plain session anywhere, or `GOLEM_CLI_AGENT_HINTS=0` to get the full one in an agent's terminal.
 
 <Callout type="info">
 Every command runs in a fresh shell. Only the directory a command ends in carries over to the next one; variables, functions, aliases, shell options and `$?` do not. Write anything that must last to the agent's files, for example a file you `source`.

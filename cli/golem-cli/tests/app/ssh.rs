@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-use super::builtin_bash::{OWNER, context, invoke};
+use super::builtin_bash::{self, OWNER, invoke};
 use super::{InteractiveSession, RawOutput, TestContext};
 use golem_cli::fs;
 use std::collections::HashMap;
@@ -16,6 +16,14 @@ const MARKER: &str = "\u{276f}";
 
 // Runs `golem ssh` with piped input: the commands are read from it and stdout carries only the
 // scripts' output.
+// The sessions here are a person's, whatever runs the tests: in an AI agent's environment every
+// session would otherwise be a plain one.
+async fn context() -> TestContext {
+    let mut ctx = builtin_bash::context().await;
+    ctx.add_env_var("GOLEM_CLI_AGENT_HINTS", "0");
+    ctx
+}
+
 async fn ssh(ctx: &TestContext, args: &[&str], input: &str) -> RawOutput {
     let mut command = vec!["ssh"];
     command.extend(args);
@@ -202,6 +210,35 @@ async fn ssh_runs_commands_in_order_and_idles_without_holding_the_owner() {
         enter(session, "pwd")?;
         session.expect_str("/\r\n")?;
         session.expect_str(&format!("/ {MARKER}"))?;
+        enter(session, "exit")?;
+        session.expect_eof()
+    })
+    .await;
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_is_plain_for_an_ai_agent() {
+    let mut ctx = context().await;
+    // Colours are on, as for a person at this terminal, and an AI agent is driving it.
+    ctx.env_mut().remove("NO_COLOR");
+    ctx.add_env_var("GOLEM_CLI_AGENT_HINTS", "1");
+
+    ctx.cli_interactive(["ssh", OWNER], move |session| {
+        session.set_expect_timeout(Some(Duration::from_secs(60)));
+        // The line before it is the CLI's own, coloured as for any command. From the session's
+        // first line on there is no escape sequence: no colour, and no question to the terminal,
+        // which this one never answers.
+        session.expect_str("Connected to")?;
+        session.expect_regex(&format!("^[^\x1b]*{MARKER} "))?;
+        // Slow enough for the running line, which is not drawn: the command's output and the
+        // next prompt follow what was typed, with at most the terminal's own echo before them.
+        enter(session, "sleep 2; echo plain")?;
+        session.expect_regex(&format!(
+            "^(sleep 2; echo plain\r\n)?plain\r\n[^\x1b\r]*{MARKER} "
+        ))?;
+        enter(session, "cd /nowhere")?;
+        session.expect_regex(&format!("^[^\x1b]*\\[1\\] {MARKER} "))?;
         enter(session, "exit")?;
         session.expect_eof()
     })

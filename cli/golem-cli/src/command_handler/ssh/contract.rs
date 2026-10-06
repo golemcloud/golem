@@ -559,13 +559,21 @@ pub enum InputMode {
 }
 
 /// The editor queries the cursor position on stdout, so it is used only when stdout is the
-/// terminal as well.
-pub fn input_mode(stdin_is_terminal: bool, stdout_is_terminal: bool) -> InputMode {
+/// terminal as well, and only for a person: an AI agent driving the session gets plain lines,
+/// which redraw nothing and ask the terminal nothing.
+pub fn input_mode(stdin_is_terminal: bool, stdout_is_terminal: bool, agent: bool) -> InputMode {
     match (stdin_is_terminal, stdout_is_terminal) {
-        (true, true) => InputMode::Editor,
-        (true, false) => InputMode::PromptedLines,
         (false, _) => InputMode::Lines,
+        (true, true) if !agent => InputMode::Editor,
+        (true, _) => InputMode::PromptedLines,
     }
+}
+
+/// Whether the session draws colours, and with them the loader while a command runs: for a
+/// person at a terminal, when the CLI colours its output. An AI agent reads every byte it is
+/// sent, so it gets neither.
+pub fn decorated(mode: InputMode, should_colorize: bool, agent: bool) -> bool {
+    mode != InputMode::Lines && should_colorize && !agent
 }
 
 pub fn exit_code(outcome: Outcome) -> u8 {
@@ -727,7 +735,7 @@ mod tests {
     use super::{
         BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode,
         LocalCommand, NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract,
-        classify_cancel, classify_invoke_error, decode_result, dimmed, exit_code,
+        classify_cancel, classify_invoke_error, decode_result, decorated, dimmed, exit_code,
         failed_agent_notice, global_args, help_text, input_mode, interrupted_message,
         local_command, lookup_command, prompt, run_argv, runs_nothing, strip_background_reply,
         strip_cursor_reports, time_limit, tools_listing,
@@ -1151,10 +1159,30 @@ mod tests {
 
     #[test]
     fn the_editor_needs_both_stdin_and_stdout_on_a_terminal() {
-        assert_eq!(input_mode(true, true), InputMode::Editor);
-        assert_eq!(input_mode(true, false), InputMode::PromptedLines);
-        assert_eq!(input_mode(false, true), InputMode::Lines);
-        assert_eq!(input_mode(false, false), InputMode::Lines);
+        assert_eq!(input_mode(true, true, false), InputMode::Editor);
+        assert_eq!(input_mode(true, false, false), InputMode::PromptedLines);
+        assert_eq!(input_mode(false, true, false), InputMode::Lines);
+        assert_eq!(input_mode(false, false, false), InputMode::Lines);
+    }
+
+    #[test]
+    fn an_ai_agent_at_a_terminal_gets_plain_lines_after_a_prompt() {
+        // The editor would redraw its line and ask the terminal where the cursor is.
+        assert_eq!(input_mode(true, true, true), InputMode::PromptedLines);
+        assert_eq!(input_mode(true, false, true), InputMode::PromptedLines);
+        assert_eq!(input_mode(false, true, true), InputMode::Lines);
+        assert_eq!(input_mode(false, false, true), InputMode::Lines);
+    }
+
+    #[test]
+    fn colours_are_for_a_person_at_a_terminal_when_the_cli_colours_its_output() {
+        assert!(decorated(InputMode::Editor, true, false));
+        assert!(decorated(InputMode::PromptedLines, true, false));
+        // Piped input, the CLI's colours switched off, and an AI agent driving the session.
+        assert!(!decorated(InputMode::Lines, true, false));
+        assert!(!decorated(InputMode::Editor, false, false));
+        assert!(!decorated(InputMode::PromptedLines, true, true));
+        assert!(!decorated(InputMode::Editor, true, true));
     }
 
     #[test]

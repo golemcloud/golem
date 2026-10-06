@@ -35,14 +35,15 @@ pub(crate) use self::contract::NOT_RUN_EXIT;
 use self::contract::{
     BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LocalCommand,
     Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_invoke_error,
-    decode_result, dimmed, exit_code, failed_agent_notice, global_args, help_text, input_mode,
-    interrupted_message, local_command, lookup_command, prompt, run_argv, runs_nothing,
+    decode_result, decorated, dimmed, exit_code, failed_agent_notice, global_args, help_text,
+    input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv, runs_nothing,
     strip_background_reply, strip_cursor_reports, time_limit, tools_listing,
 };
 use self::editor::{PLAIN_CONTINUATION, SshPrompt};
 use self::history::{SessionHistory, history_file};
 use self::look::{Loader, Palette, Readiness, shown, shown_message};
 use self::progress::Ticker;
+use crate::agent_help_hints::is_agent_help_enabled;
 use crate::command_handler::Handlers;
 use crate::command_handler::tool::ToolOwner;
 use crate::context::Context;
@@ -334,11 +335,14 @@ impl SshCommandHandler {
     /// Reads off the terminal how a session at it reads and draws, and asks it for its
     /// background when the prompts will have a band.
     fn terminal(&self) -> Terminal {
+        // An AI coding agent, as the CLI's help recognises one, gets a plain session.
+        let agent = is_agent_help_enabled();
         let mode = input_mode(
             std::io::stdin().is_terminal(),
             std::io::stdout().is_terminal(),
+            agent,
         );
-        let colorize = mode != InputMode::Lines && self.ctx.should_colorize();
+        let colorize = decorated(mode, self.ctx.should_colorize(), agent);
         let palette = Palette::detect(|name| std::env::var(name).ok());
         let styled = (colorize && std::io::stderr().is_terminal()).then_some(palette);
         let banded = styled.is_some() && mode == InputMode::Editor && palette == Palette::Rich;

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The line shown while a command runs: the elapsed time and how to stop waiting, behind the
-//! rune loader with colours and behind a spinner without. It is as long as the window allows.
+//! The line shown while a command runs. With colours it is the rune loader, the elapsed time
+//! and how to stop waiting; without, nothing in it moves. It is as long as the window allows.
 
 use super::look::{self, Loader, Palette};
 
@@ -21,10 +21,6 @@ use std::io::Write;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-
-const FRAMES: [&str; 8] = [
-    "\u{28fe}", "\u{28fd}", "\u{28fb}", "\u{28bf}", "\u{287f}", "\u{28df}", "\u{28ef}", "\u{28f7}",
-];
 
 /// Commands that finish sooner never show the line.
 const DELAY: Duration = Duration::from_millis(350);
@@ -55,15 +51,9 @@ pub fn frame(
     let line = match look {
         Some((palette, loader)) if full => look::running(tick, elapsed, loader, palette),
         Some((palette, loader)) => look::running_compact(tick, elapsed, loader, palette),
-        None => {
-            let spinner = FRAMES[tick % FRAMES.len()];
-            let seconds = elapsed.as_secs();
-            if full {
-                format!("{spinner} running\u{2026} {seconds}s \u{b7} Ctrl+C to stop waiting")
-            } else {
-                format!("{spinner} {seconds}s \u{b7} Ctrl+C")
-            }
-        }
+        // Without colours nothing is animated, so the line is the same at every tick.
+        None if full => "running\u{2026} Ctrl+C to stop waiting".to_string(),
+        None => "running\u{2026} Ctrl+C".to_string(),
     };
     Some(format!("\r{line}\x1b[K"))
 }
@@ -75,8 +65,9 @@ pub struct Ticker {
 }
 
 impl Ticker {
-    /// Starts drawing on stderr, as the loader when there are colours to draw it in. `columns`
-    /// is asked for the window's width before every redraw, so the line follows a resize.
+    /// Starts drawing on stderr: the loader when there are colours to draw it in, and a line
+    /// that does not move when there are none. `columns` is asked for the window's width at
+    /// every tick, so the line follows a resize.
     pub fn start(
         look: Option<(Palette, Loader)>,
         columns: impl Fn() -> u16 + Send + 'static,
@@ -93,30 +84,26 @@ impl Ticker {
         let thread = std::thread::spawn(move || {
             let started = Instant::now();
             let mut tick = 0;
-            // Whether a line is on the screen that has to be erased.
-            let mut drawn = false;
+            // The line on the screen, which has to be erased at the end.
+            let mut shown: Option<String> = None;
             // Nothing is ever sent: the channel closing is the signal to stop.
             while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(TICK) {
                 let elapsed = started.elapsed();
                 if elapsed < DELAY {
                     continue;
                 }
-                match frame(tick, elapsed, look, columns()) {
-                    Some(line) => {
-                        let _ = output.write_all(line.as_bytes());
-                        drawn = true;
-                    }
-                    // The window became too narrow for any line.
-                    None if drawn => {
-                        let _ = output.write_all(ERASE.as_bytes());
-                        drawn = false;
-                    }
-                    None => {}
-                }
-                let _ = output.flush();
+                let line = frame(tick, elapsed, look, columns());
                 tick += 1;
+                // Written only when it changed, which without colours is once per width.
+                if line == shown {
+                    continue;
+                }
+                // No line: the window became too narrow for any.
+                let _ = output.write_all(line.as_deref().unwrap_or(ERASE).as_bytes());
+                let _ = output.flush();
+                shown = line;
             }
-            if drawn {
+            if shown.is_some() {
                 let _ = output.write_all(ERASE.as_bytes());
                 let _ = output.flush();
             }
@@ -168,12 +155,15 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_shows_the_spinner_the_seconds_and_the_way_out() {
-        assert_eq!(
-            frame(0, Duration::from_millis(12_900), None, 80).unwrap(),
-            "\r\u{28fe} running\u{2026} 12s \u{b7} Ctrl+C to stop waiting\x1b[K"
-        );
-        // With colours it is the loader's line, redrawn in place like the spinner.
+    fn a_frame_shows_the_way_out_and_with_colours_the_loader_and_the_seconds() {
+        // Without colours nothing in the line moves: it is the same at any time.
+        for (tick, elapsed) in [(0, 400), (7, 12_900)] {
+            assert_eq!(
+                frame(tick, Duration::from_millis(elapsed), None, 80).unwrap(),
+                "\rrunning\u{2026} Ctrl+C to stop waiting\x1b[K"
+            );
+        }
+        // With colours it is the loader's line, redrawn in place.
         let look = Some((Palette::Rich, Loader::Runes));
         assert_eq!(
             frame(9, Duration::from_secs(1), look, 80).unwrap(),
@@ -188,7 +178,7 @@ mod tests {
     fn a_narrow_window_gets_a_shorter_line_and_a_very_narrow_one_none() {
         assert_eq!(
             frame(0, Duration::from_millis(12_900), None, 40).unwrap(),
-            "\r\u{28fe} 12s \u{b7} Ctrl+C\x1b[K"
+            "\rrunning\u{2026} Ctrl+C\x1b[K"
         );
         let look = Some((Palette::Rich, Loader::Runes));
         assert_eq!(
@@ -205,10 +195,9 @@ mod tests {
 
     #[test]
     fn every_line_fits_the_width_it_is_drawn_at() {
-        // The longest lines: an hour, the most a command may run.
         for (columns, limit) in [(52, 52), (51, 24), (24, 24)] {
-            let longest = frame(0, Duration::from_secs(3600), None, columns).unwrap();
-            let visible = longest
+            let line = frame(0, Duration::from_secs(3600), None, columns).unwrap();
+            let visible = line
                 .trim_start_matches('\r')
                 .trim_end_matches("\x1b[K")
                 .chars()
@@ -227,15 +216,25 @@ mod tests {
     #[test]
     fn a_slow_command_shows_the_line_and_erases_it_at_the_end() {
         let screen = Screen::default();
-        let ticker = Ticker::start_on(screen.clone(), None, || 80);
+        let ticker = Ticker::start_on(screen.clone(), Some((Palette::Rich, Loader::Runes)), || 80);
         std::thread::sleep(Duration::from_millis(700));
         drop(ticker);
         let text = screen.text();
-        assert!(
-            text.starts_with("\r\u{28fe} running\u{2026} 0s"),
-            "{text:?}"
-        );
+        assert!(text.starts_with('\r'), "{text:?}");
+        assert!(text.contains("ctrl+c stops waiting"), "{text:?}");
         assert!(text.ends_with(ERASE), "{text:?}");
+    }
+
+    #[test]
+    fn without_colours_the_line_is_written_once_and_does_not_move() {
+        let screen = Screen::default();
+        let ticker = Ticker::start_on(screen.clone(), None, || 80);
+        std::thread::sleep(Duration::from_millis(900));
+        drop(ticker);
+        assert_eq!(
+            screen.text(),
+            format!("\rrunning\u{2026} Ctrl+C to stop waiting\x1b[K{ERASE}")
+        );
     }
 
     #[test]
@@ -255,16 +254,12 @@ mod tests {
         drop(ticker);
         let text = screen.text();
 
-        // Wide, then the short line, then nothing but the erasing of what was there.
-        let short = text.find("s \u{b7} Ctrl+C\x1b[K").expect("the short line");
-        assert!(text[..short].contains("Ctrl+C to stop waiting"), "{text:?}");
-        assert!(narrow.ends_with(ERASE), "{narrow:?}");
-        assert_eq!(narrow.matches(ERASE).count(), 1, "{narrow:?}");
+        // Wide, then the short line, then nothing but the erasing of what was there. Each is
+        // written once, when the window changed.
+        let wide = "\rrunning\u{2026} Ctrl+C to stop waiting\x1b[K";
+        let short = "\rrunning\u{2026} Ctrl+C\x1b[K";
+        assert_eq!(narrow, format!("{wide}{short}{ERASE}"));
         // Widened again, the full line is back.
-        assert!(
-            text[narrow.len()..].contains("Ctrl+C to stop waiting"),
-            "{text:?}"
-        );
-        assert!(text.ends_with(ERASE), "{text:?}");
+        assert_eq!(text, format!("{narrow}{wide}{ERASE}"));
     }
 }
