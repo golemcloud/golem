@@ -43,6 +43,11 @@ func init() {
 			strings.Contains(policy.Message, "forbidden by policy"),
 			"the policy middleware let a forbidden commit through: %v", err)
 
+		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "audited"; a.Paths = []string{"x"} })
+		var audit *golem.ToolCallError
+		check(errors.As(err, &audit) && strings.Contains(audit.Message, "blocked by the environment audit"),
+			"the environment audit middleware let a blocked commit through: %v", err)
+
 		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "empty" })
 		_, nothing := vcs.ErrNothingToCommit.Match(err)
 		check(nothing, "an empty commit gave %v", err)

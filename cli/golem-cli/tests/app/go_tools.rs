@@ -82,6 +82,11 @@ async fn test_go_tools_e2e() {
           local:
             server: local
             componentPresets: debug
+            tools:
+              middleware:
+                - name: vcs-audit
+                  parameters:
+                    blockedMessage: audited
         components:
           go-tools:provider:
             dir: provider
@@ -97,6 +102,8 @@ async fn test_go_tools_e2e() {
           middleware:
             vcs-policy:
               component: go-tools:provider
+            vcs-audit:
+              component: go-tools:provider
         agents:
           VcsSelfCaller:
             tools:
@@ -107,7 +114,7 @@ async fn test_go_tools_e2e() {
                 middleware:
                   - name: vcs-policy
                     parameters:
-                      forbid: secret
+                      forbidMessage: secret
         bridge:
           go:
             internal:

@@ -108,18 +108,35 @@ var _ = Push.Handle(func(ctx *golem.ToolOutputContext, a PushArgs) (int32, error
 	return int32(n), err
 })
 
-type PolicyParams struct{ Forbid string }
+type PolicyParams struct{ ForbidMessage string }
 
 // Policy is a transparent middleware: it checks and rewrites commit, and the
 // tool's other commands pass straight through it.
 var Policy = Tool.Middleware[PolicyParams]("vcs-policy", golem.ToolMiddlewareSpec{Version: "1.0.0"})
 
 var _ = Policy.Handle(Commit, func(ctx *golem.ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
-	if a.Message == ctx.Parameters().Forbid {
+	if a.Message == ctx.Parameters().ForbidMessage {
 		return CommitResult{}, golem.ConstraintViolation("message %q is forbidden by policy", a.Message)
 	}
 	a.Message = "checked:" + a.Message
 	return Policy.Underlying(ctx, Commit).Forward(a)
+})
+
+type AuditParams struct{ BlockedMessage string }
+
+// Audit is a universal middleware installed for the whole environment: it reads
+// the arguments of any command as JSON.
+var Audit = golem.DefineUniversalToolMiddleware[AuditParams]("vcs-audit", golem.ToolMiddlewareSpec{Version: "1.0.0"})
+
+var _ = Audit.Handle(func(ctx *golem.UniversalToolMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
+	args, err := ctx.Input().JSON()
+	if err != nil {
+		return golem.None[golem.TypedValue](), err
+	}
+	if fields, ok := args.(map[string]any); ok && fields["message"] == ctx.Parameters().BlockedMessage {
+		return golem.None[golem.TypedValue](), golem.ConstraintViolation("blocked by the environment audit")
+	}
+	return ctx.Next(ctx.Input())
 })
 
 type SelfID struct{ Name string }
