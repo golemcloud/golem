@@ -2435,9 +2435,11 @@ pub struct FilesystemSnapshotUploadConfig {
     /// no successful or pending update of the agent uses. The snapshot of each successful or
     /// pending update stays.
     retained_update_snapshots: NonZeroUsize,
-    /// The largest number of snapshot names of one agent that wait for deletion. When it is
-    /// reached, a new delete request of the agent is refused and counted as a leaked clean-up;
-    /// retention asks again at the next save.
+    /// The largest number of snapshot names of one agent that wait in the clean-up queue for
+    /// deletion. Only the names of a revert wait there; retention deletes directly, and a delete
+    /// of all snapshots carries no names. When the bound is reached, the names of a new request
+    /// that do not fit are refused and counted as a leaked clean-up: these are the oldest names of
+    /// the reverted region, and count retention or the delete of the agent removes them later.
     max_pending_deletes_per_agent: NonZeroUsize,
 }
 

@@ -832,7 +832,13 @@ names, `delete_all_snapshots` and the stale-member deletes. The queue keeps one 
 each incarnation (`Names`, or `All`, which replaces pending names), and a fixed pool of
 `max_concurrent_uploads` workers takes ready agents from a ready queue. Its bounds are 65,536
 pending entries, 786,432 pending names, and `max_pending_deletes_per_agent` names for each agent; a
-request past a bound is counted as a leaked clean-up. Retention and the superseded delete call the
+request past a bound is counted as a leaked clean-up. The bound of one agent applies only to the
+names of a revert: retention deletes directly, and a delete of all snapshots carries no names. A
+revert's names come newest first, so on a large revert the bound keeps the newest names and
+refuses the oldest, which count retention or the delete of the agent removes later. At the bound
+of the agents with pending work, a delete of all snapshots evicts the oldest waiting revert names
+of another agent, counted as a leaked clean-up, and is itself refused only when no names are left
+to evict. Retention and the superseded delete call the
 store directly; they run after their own job's save answered. Two runs of saves of one agent never
 run at the same time: a save call starts a run only while it holds the save mark of the agent. A
 save call whose periodic job an admission replaced while the call only waited for its late writes

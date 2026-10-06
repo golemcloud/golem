@@ -670,9 +670,9 @@ pub(super) fn is_free(state: &State, agent: &AgentSnapshots) -> bool {
 
 /// Requests the delete of the snapshots `names` of `agent`. The request merges into the pending
 /// names of the agent, and is ignored while a delete of all snapshots of the agent is pending or
-/// runs. The pending names keep their place: the names of the request are added in their order
-/// while they fit under the limit of one agent and the limit of all agents, and the names that do
-/// not fit are refused. A request for an agent without pending work is refused when the limit of
+/// runs. Only the names of a revert come here. The pending names keep their place: the names of
+/// the request are added in their order while they fit under the limit of one agent and the limit
+/// of all agents, and the names that do not fit are refused. A request for an agent without pending work is refused when the limit of
 /// the agents with pending work is reached. An empty request changes nothing. The answer tells
 /// whether names were refused, and holds the stop of the job of the agent when `names` holds the
 /// name of the job, also when the bounds refuse the names.
@@ -747,9 +747,11 @@ fn add_names(state: &mut State, agent: &AgentSnapshots, names: &[SnapshotName]) 
     overflow
 }
 
-/// Requests the delete of all snapshots of `agent`. It replaces the pending names of the agent.
-/// When the limit of the agents with pending work is reached, it evicts the oldest pending names
-/// of another agent, and it is dropped only when no pending names are left to evict. The answer
+/// Requests the delete of all snapshots of `agent`. It replaces the pending names of the agent,
+/// and carries no names, so the limit of the names of one agent does not apply to it. When the
+/// limit of the agents with pending work is reached, it evicts the oldest pending names of another
+/// agent, which count as a leaked clean-up, and it is dropped only when no pending names are left
+/// to evict. The answer
 /// holds the stop of the job of the agent, also when the bound drops the request.
 pub(super) fn request_all(mut state: State, agent: &AgentSnapshots) -> Next<Requested> {
     let stop = state.jobs.get(agent).map(|job| job.stop.clone());

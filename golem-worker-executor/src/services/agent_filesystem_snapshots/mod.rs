@@ -770,7 +770,11 @@ impl AgentFilesystemSnapshots {
     /// call of the agent ended. `names` comes newest first. When the name of the job of the agent
     /// is one of them, the call stops that job. The call returns at once and cannot fail. The
     /// request merges into the pending work of the agent, which is bounded; names past the bound
-    /// are refused and counted as leaked. The clean-up retries, and after the retries it logs and
+    /// are refused and counted as leaked. Since `names` comes newest first, the bound keeps the
+    /// newest names of a large revert and refuses the oldest, which count retention or the delete
+    /// of the agent removes later. A later delete of all snapshots of another agent, at the bound
+    /// of the agents with pending work, can evict the oldest names that wait, also counted as
+    /// leaked. The clean-up retries, and after the retries it logs and
     /// counts the names that stay. Production code deletes names through
     /// [`RevertHold::delete_snapshots`].
     #[cfg(test)]
