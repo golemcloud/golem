@@ -3911,6 +3911,11 @@ fn namespace_kind_mismatch_error(
     )
 }
 
+/// Flushes `node` to stable storage, and invalidates the generation on every error.
+///
+/// After a failed flush, the data that earlier writes gave to the storage can be lost, so the
+/// agent cannot safely continue on this generation. So every error of a flush, also a permission
+/// error, invalidates the generation, and the call gives `RuntimeInvalidated`.
 async fn execute_flush<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     node: SandboxNode,
