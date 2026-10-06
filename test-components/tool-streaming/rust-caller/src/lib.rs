@@ -878,6 +878,14 @@ async fn raw_chunk(stdout: &mut InputStream) -> Vec<u8> {
 }
 
 async fn wait_at_crash_checkpoint(name: &str) {
+    wait_at_crash_checkpoint_with_atomic_gate(name, true).await;
+}
+
+async fn wait_at_unscoped_crash_checkpoint(name: &str) {
+    wait_at_crash_checkpoint_with_atomic_gate(name, false).await;
+}
+
+async fn wait_at_crash_checkpoint_with_atomic_gate(name: &str, atomic_gate: bool) {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::sockets::types::{
         IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket,
@@ -964,7 +972,7 @@ async fn wait_at_crash_checkpoint(name: &str) {
         assert_ne!(outside, outer);
     }
 
-    golem_rust::atomically_async(|| async {
+    let wait_for_release = || async {
         let socket =
             TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
         socket
@@ -992,8 +1000,12 @@ async fn wait_at_crash_checkpoint(name: &str) {
         drop(stream);
         received.await.expect("finish checkpoint gate receive");
         assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
-    })
-    .await;
+    };
+    if atomic_gate {
+        golem_rust::atomically_async(wait_for_release).await;
+    } else {
+        wait_for_release().await;
+    }
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {
@@ -3465,6 +3477,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .expect("completed reconstruction result before custom effect");
         };
         let incomplete_custom = async {
+            wait_at_unscoped_crash_checkpoint("before-reconstruction-custom-effect").await;
             Durability::<(), String>::new(
                 "golem-it",
                 "reconstruction-barrier-custom-effect",

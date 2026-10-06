@@ -252,7 +252,12 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
   guest call at all (`tests/tool_streaming.rs::incomplete_tool_replay_persists_attachment_upgrade_rejection`).
 - `ReplayingIncomplete` — a `Start` without terminal switches the body to live and completes it
   under the *original* `Start` index; `enter_incomplete_live_repair_before_body_access` avoids
-  deadlocking the primary's own transition.
+  deadlocking the primary's own transition. For a filesystem-incapable asynchronous invocation,
+  startup with recorded scope descendants does not return its execution handle until the
+  reconstructed body has started or the operation has settled without a body. A completed parent
+  can therefore finish without leaving an admitted child body that has reconstruction work but
+  has not started it. An empty replay-visible scope stays asynchronous: waiting for its replay-tail
+  resolution here could depend on later caller work that admission itself must allow to proceed.
 - `Live` — ordinary recording.
 
 ### Fences and admission

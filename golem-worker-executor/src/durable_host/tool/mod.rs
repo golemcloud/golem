@@ -3313,11 +3313,16 @@ where
 {
     let replaying_completed = accepted.durability.scope().mode()
         == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted;
+    let replaying_reconstruction = matches!(
+        accepted.durability.scope().mode(),
+        golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
+            | golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete
+    );
     let mut reconstruction_hold = replaying_completed
         .then(|| accepted.durability.historical_reconstruction_hold())
         .flatten();
-    let completed_supervisor = replaying_completed.then(oneshot::channel);
-    let (inner_supervisor_started, mut inner_supervisor_ready) = match completed_supervisor {
+    let reconstruction_supervisor = replaying_reconstruction.then(oneshot::channel);
+    let (inner_supervisor_started, mut inner_supervisor_ready) = match reconstruction_supervisor {
         Some((started, ready)) => (Some(started), Some(ready)),
         None => (None, None),
     };
@@ -3468,7 +3473,7 @@ async fn execute_accepted_tool_call_inner<U, Ctx>(
     stderr: Option<Resource<ToolOutputEntry>>,
     execution: Option<&ToolExecution>,
     failed_resources: Arc<Mutex<Option<FailedRetainedEntityResources>>>,
-    completed_supervisor_started: Option<oneshot::Sender<()>>,
+    mut completed_supervisor_started: Option<oneshot::Sender<()>>,
 ) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
@@ -3513,6 +3518,8 @@ where
         )
         .await;
     }
+    let replaying_incomplete = durability.scope().mode()
+        == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
     let pre_body_live_admission_cancelled = match durability
         .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
         .await?
@@ -4156,6 +4163,11 @@ where
             return Err(error.into());
         }
     };
+    if replaying_incomplete {
+        if let Some(started) = completed_supervisor_started.take() {
+            let _ = started.send(());
+        }
+    }
     let outcome = durability
         .drive_access(
             accessor,
@@ -5108,12 +5120,27 @@ where
     register_tool_admission(accessor, &mut accepted)?;
     let inherited_cancellation = accessor.with(|mut access| access.get().entity_cancellation());
     let execution = ToolExecution::new(&accepted, inherited_cancellation);
-    let completed_supervisor = (accepted.durability.scope().mode()
-        == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
-        && accepted.operation.context().activation.filesystem()
-            == golem_common::model::entity::FilesystemCapability::Incapable)
+    let replaying_incomplete = accepted.durability.scope().mode()
+        == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
+    let incomplete_body_started = if replaying_incomplete {
+        let (replay, start) = accessor.with(|mut access| {
+            (
+                access.get().state.replay_state.clone(),
+                accepted.durability.scope().invocation_id().start_index(),
+            )
+        });
+        replay.has_visible_scope_descendant(start).await
+    } else {
+        false
+    };
+    let reconstruction_supervisor = (accepted.operation.context().activation.filesystem()
+        == golem_common::model::entity::FilesystemCapability::Incapable
+        && (accepted.durability.scope().mode()
+            == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
+            || incomplete_body_started))
         .then(oneshot::channel);
-    let (completed_supervisor_started, completed_supervisor_ready) = match completed_supervisor {
+    let (completed_supervisor_started, completed_supervisor_ready) = match reconstruction_supervisor
+    {
         Some((started, ready)) => (Some(started), Some(ready)),
         None => (None, None),
     };
@@ -5130,12 +5157,15 @@ where
     if let Some(ready) = completed_supervisor_ready
         && ready.await.is_err()
     {
-        return match execution.result().await {
-            Err(error) => Err(error),
-            Ok(_) => Err(anyhow!(
-                "completed reconstruction finished without starting its owner supervisor"
-            )),
-        };
+        match execution.result().await {
+            Err(error) => return Err(error),
+            Ok(_) if replaying_incomplete => return Ok(execution),
+            Ok(_) => {
+                return Err(anyhow!(
+                    "completed reconstruction finished without starting its entity body"
+                ));
+            }
+        }
     }
     Ok(execution)
 }

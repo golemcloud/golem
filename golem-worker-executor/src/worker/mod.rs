@@ -3894,14 +3894,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // A delayed wakeup from an already committed proposal must not interrupt the
             // replacement generation.
             let pending = worker.pending_runtime_jump.lock().await;
-            if pending.is_some()
-                && worker
+            let establishment = if pending.is_some() {
+                worker
                     .queue_interrupt(InterruptKind::Jump, false, UnloadReason::Restart, false)
                     .await
-            {
-                worker.notify_queued_interrupt(InterruptKind::Jump).await;
-            }
+            } else {
+                None
+            };
             drop(pending);
+            if let Some(establishment) = establishment {
+                worker
+                    .establish_queued_interrupt(InterruptKind::Jump, establishment)
+                    .await;
+            }
         });
     }
 
@@ -3935,30 +3940,40 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let worker = self.clone();
         let result = tokio::spawn(async move {
-            establishment.wait_for_predecessor().await;
-            let active_agent = worker
-                .active_agents()
-                .try_get_active_agent(&worker.owned_agent_id)
-                .await;
-            let active_agent =
-                active_agent.filter(|active_agent| Arc::ptr_eq(&active_agent.primary(), &worker));
-            if let Some(active_agent) = &active_agent {
-                debug!(agent_id = %worker.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
-                active_agent
-                    .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
-                    .await;
-            }
-            let receiver = worker.notify_queued_interrupt(interrupt_kind).await;
-            if let Some(active_agent) = active_agent {
-                active_agent.drain_fenced_entity_bodies().await;
-            }
-            debug!(agent_id = %worker.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
-            establishment.complete();
-            receiver
+            worker
+                .establish_queued_interrupt(interrupt_kind, establishment)
+                .await
         })
         .await
         .expect("worker interruption establishment task failed");
         Ok(result)
+    }
+
+    async fn establish_queued_interrupt(
+        self: &Arc<Self>,
+        interrupt_kind: InterruptKind,
+        establishment: Arc<InterruptEstablishment>,
+    ) -> Option<Receiver<()>> {
+        establishment.wait_for_predecessor().await;
+        let active_agent = self
+            .active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await;
+        let active_agent =
+            active_agent.filter(|active_agent| Arc::ptr_eq(&active_agent.primary(), self));
+        if let Some(active_agent) = &active_agent {
+            debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
+            active_agent
+                .begin_fence_entity_bodies(OwnerFailureWinner::Lifecycle(interrupt_kind))
+                .await;
+        }
+        let receiver = self.notify_queued_interrupt(interrupt_kind).await;
+        if let Some(active_agent) = active_agent {
+            active_agent.drain_fenced_entity_bodies().await;
+        }
+        debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
+        establishment.complete();
+        receiver
     }
 
     async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {

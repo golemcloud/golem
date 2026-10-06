@@ -8608,12 +8608,21 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
         tokio::time::timeout(std::time::Duration::from_secs(30), original_body.entered())
             .await
             .map_err(|_| anyhow::anyhow!("original entity body did not complete"))?;
-        let original_custom =
-            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
+        let original_before_custom = next_crash_checkpoint(
+            &mut caller_checkpoints,
+            "before-reconstruction-custom-effect",
+        )
+        .await?;
         original_body.release();
         wait_for_active_tool_operations(&executor, &owned_agent_id, 0).await?;
         executor.commit_oplog(&worker_id).await?;
         let entity_start = wait_for_completed_entity_terminal(&executor, &worker_id).await?;
+        original_before_custom
+            .release
+            .send(())
+            .map_err(|_| anyhow::anyhow!("original custom-start gate was dropped"))?;
+        let original_custom =
+            next_crash_checkpoint(&mut caller_checkpoints, "reconstruction-custom-effect").await?;
         let original_oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let custom_start = original_oplog
             .iter()
@@ -8626,6 +8635,19 @@ async fn incomplete_custom_durability_waits_for_completed_reconstruction(
                 _ => None,
             })
             .ok_or_else(|| anyhow::anyhow!("recorded custom durability Start was not found"))?;
+        let entity_terminal = original_oplog
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::End(params) if params.start_index == entity_start => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("recorded entity terminal was not found"))?;
+        assert!(
+            entity_terminal < custom_start,
+            "completed entity terminal must precede the abandoned custom suffix"
+        );
         assert!(!original_oplog.iter().any(|entry| {
             matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == custom_start)
                 || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == custom_start)
