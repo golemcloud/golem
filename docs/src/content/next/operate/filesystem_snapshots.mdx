@@ -65,7 +65,7 @@ At startup, the executor checks the volume and refuses to start when a check fai
 | A new directory gets the project of its parent, and reflink copies work. | `validate managed XFS project assignment and inheritance` |
 | `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within managed capacity` or `fit filesystem pressure object target within managed capacity` |
 | The executor removes any project from the root, and the root then belongs to no project. | `inspect managed XFS root project attributes`, `clear managed XFS root project inheritance`, `verify managed XFS root project attributes` or `verify managed XFS root has neutral project identity` |
-| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open managed XFS host directory`, `inspect managed XFS host directory project attributes` `verify managed XFS host directory has no project identity` or `remove a host directory that has a project identity` |
+| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open managed XFS host directory`, `inspect managed XFS host directory project attributes`, `verify managed XFS host directory has no project identity` or `remove a host directory that has a project identity` |
 | The executor can read the free space of the volume. | `observe managed filesystem space` |
 | `deterministic_root_dir` is not set. The two storage modes exclude each other. | `select exactly one filesystem storage mode` |
 
@@ -336,7 +336,7 @@ Watch these values:
 
 - **Busy captures.** `filesystem_snapshot_capture_seconds_count{outcome="busy"}` counts the snapshots that Golem skipped, or the manual updates that failed, because a guest left a file call open.
 - **Failed uploads.** `filesystem_snapshot_upload_seconds_count{outcome="failed"}` counts uploads that failed after their retries.
-- **Deferred uploads.** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` counts uploads that the instance which made the capture could not confirm, for example because the agent stopped or restarted, or its shard moved. This is normal for agents that stop soon after a snapshot. A later start confirms them.
+- **Deferred uploads.** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` counts uploads that the instance that made the capture could not confirm, for example because the agent stopped or restarted, or its shard moved. This is normal for agents that stop soon after a snapshot. A later start confirms them.
 - **Dropped confirmations.** `filesystem_snapshot_dropped_confirmations_total` counts uploads that an update or a revert made useless.
 - **Leaked clean-ups.** `filesystem_snapshot_leaked_cleanups_total` counts clean-ups that left snapshots in blob storage. A growing `overflow` count means that deletes come faster than the clean-ups run. A `shutdown` count shows clean-ups that a shutdown cut off.
 - **Pending clean-ups.** A `filesystem_snapshot_cleanups_pending` value that grows all the time means that the clean-ups do not keep up.
