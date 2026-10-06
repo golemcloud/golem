@@ -34,9 +34,10 @@ Validation:
 - `cargo check -p golem-cli --features tui-preview`
 - `cargo fmt --package golem-cli -- --check`
 - `git diff --check`
+- `cargo make install-golem-dev-release`
+- `/home/noise64/.cargo/bin/golem tui --help`
 
-Matching dev-release installation and real-terminal acceptance follow this
-checkpoint.
+Real-terminal acceptance remains the final gate for this interaction batch.
 
 ## 2026-10-05: Unified Commands And Nested Terminal Ownership
 
