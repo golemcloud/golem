@@ -348,6 +348,46 @@ mod tests {
     }
 
     #[test]
+    fn a_completed_path_can_be_completed_further() {
+        let (top, inside, odd) = (
+            listing_script(""),
+            listing_script("my dir/"),
+            listing_script("a\u{1b}b/"),
+        );
+        let agent = Agent::answering(&[
+            (top.as_str(), Some("my dir/\na\u{1b}b/\n")),
+            (
+                inside.as_str(),
+                Some("my dir/file one.txt\nmy dir/sub (1)/\n"),
+            ),
+            (odd.as_str(), Some("a\u{1b}b/c\n")),
+        ]);
+        let completions = Completions::new(agent.clone(), "/work");
+        // What Tab wrote for the directory is read back as its name, and all of it is replaced.
+        assert_eq!(
+            values(&completions, "cat my"),
+            vec![("my\\ dir/".to_string(), false)]
+        );
+        assert_eq!(
+            values(&completions, "cat my\\ dir/"),
+            vec![
+                ("my\\ dir/file\\ one.txt".to_string(), true),
+                ("my\\ dir/sub\\ \\(1\\)/".to_string(), false)
+            ]
+        );
+        let replaced = &completions.complete("cat my\\ dir/fi", 14)[0];
+        assert_eq!(
+            (replaced.start, replaced.end, replaced.value.as_str()),
+            (4, 14, "my\\ dir/file\\ one.txt")
+        );
+        // So is a name with a character that is spelled out.
+        assert_eq!(
+            values(&completions, "cat a$'\\e'b/"),
+            vec![("a$'\\e'b/c".to_string(), true)]
+        );
+    }
+
+    #[test]
     fn every_completion_says_what_it_is() {
         let listing = listing_script("");
         let agent = Agent::answering(&[

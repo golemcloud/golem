@@ -33,11 +33,11 @@ mod syntax;
 use self::completion::{Completions, Fetch};
 pub(crate) use self::contract::NOT_RUN_EXIT;
 use self::contract::{
-    BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LocalCommand,
-    Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_invoke_error,
-    decode_result, decorated, dimmed, exit_code, failed_agent_notice, global_args, help_text,
-    input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv, runs_nothing,
-    strip_background_reply, strip_cursor_reports, time_limit, tools_listing,
+    BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LateAnswer,
+    LocalCommand, Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel,
+    classify_invoke_error, decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice,
+    global_args, help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
+    run_argv, runs_nothing, strip_cursor_reports, time_limit, tools_listing,
 };
 use self::editor::{PLAIN_CONTINUATION, SshPrompt};
 use self::history::{SessionHistory, history_file};
@@ -425,12 +425,16 @@ impl SshCommandHandler {
             background,
         } = terminal;
         let at_terminal = mode != InputMode::Lines;
-        // The band behind every prompt, a shade off the terminal's own background, and what was
-        // typed while the session connected.
-        let asked = background.is_some();
-        let (band, typed_ahead) = background.map(backdrop::Query::finish).unwrap_or_default();
-        // The terminal was asked and has not said: its answer may still come, as input.
-        let answer_pending = asked && band.is_none();
+        // The band behind every prompt, a shade off the terminal's own background, what was
+        // typed while the session connected, and whether the terminal may still answer.
+        let backdrop::Answer {
+            band,
+            typed_ahead,
+            late,
+        } = background.map(backdrop::Query::finish).unwrap_or_default();
+        let mut late_answer = LateAnswer::expected(late);
+        // Output of a command that could not be written.
+        let mut lost_output = false;
         if let Some(palette) = styled {
             log_preformatted(look::banner(&session.agent, &session.tool, palette));
         } else if at_terminal {
@@ -545,10 +549,9 @@ impl SshCommandHandler {
                 spaced: colorize,
             };
             let line = match input.read(prompt).await {
-                Ok(ReadLine::Line(line)) if answer_pending => strip_background_reply(&line),
-                Ok(ReadLine::Line(line)) => line,
+                Ok(ReadLine::Line(line)) => late_answer.taken_from(line),
                 Ok(ReadLine::Cancelled) => continue,
-                Ok(ReadLine::End) => return last_status,
+                Ok(ReadLine::End) => return ended(last_status, lost_output),
                 Ok(ReadLine::Interrupted) => {
                     // The read of the next line is still waiting on its own thread and would
                     // keep the process alive until the input ends, so the exit is made here.
@@ -569,7 +572,9 @@ impl SshCommandHandler {
                 continue;
             }
             match local_command(&line) {
-                Some(LocalCommand::Exit(status)) => return status.unwrap_or(last_status),
+                Some(LocalCommand::Exit(status)) => {
+                    return ended(status.unwrap_or(last_status), lost_output);
+                }
                 // Only a person at a terminal asks the session; piped lines all go to the tool.
                 Some(LocalCommand::Help) if at_terminal => {
                     log_preformatted(help_text(&session.tool, session.timeout));
@@ -614,9 +619,12 @@ impl SshCommandHandler {
                 Submission::Completed(result) => {
                     session.busy.store(false, Ordering::Relaxed);
                     if let Err(error) = write_output(&result, styled.is_some()) {
+                        // Standard output is what failed, so this is said on standard error.
+                        set_log_output(Output::Stderr);
                         log_error(format!(
                             "the command's output could not be written: {error}"
                         ));
+                        lost_output = true;
                     }
                     if at_terminal {
                         end_line(&result, colorize);
@@ -1076,7 +1084,7 @@ fn output_lost(status: u8, error: &std::io::Error) -> u8 {
     log_error(format!(
         "the command's output could not be written: {error}"
     ));
-    if status == 0 { 1 } else { status }
+    ended(status, true)
 }
 
 /// Throws away what was typed and not yet read. A session that ends by itself would otherwise

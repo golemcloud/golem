@@ -106,6 +106,43 @@ impl BlockingCli {
         );
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
+
+    // Runs the CLI with `input` on stdin and a stdout that takes nothing more: a socket that is
+    // full and does not wait. Gives the exit status and what was written to stderr.
+    #[cfg(unix)]
+    fn run_with_full_stdout(&self, args: &[&str], input: &str) -> anyhow::Result<(i32, String)> {
+        use std::io::Write;
+        use std::os::fd::OwnedFd;
+        use std::os::unix::net::UnixStream;
+
+        // The other end stays open and unread until the CLI has exited.
+        let (mut full, _unread) = UnixStream::pair()?;
+        full.set_nonblocking(true)?;
+        for size in [4096, 1] {
+            while full.write(&vec![0u8; size]).is_ok() {}
+        }
+        let mut child = std::process::Command::new(&self.path)
+            .arg("--config-dir")
+            .arg(&self.config_dir)
+            .args(args)
+            .env_remove("GOLEM_BUILTIN_LOCAL_URL")
+            .envs(&self.env)
+            .current_dir(&self.working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::from(OwnedFd::from(full)))
+            .stderr(Stdio::piped())
+            .spawn()?;
+        child
+            .stdin
+            .take()
+            .expect("stdin is piped")
+            .write_all(input.as_bytes())?;
+        let output = child.wait_with_output()?;
+        Ok((
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ))
+    }
 }
 
 #[test]
@@ -303,6 +340,28 @@ async fn ssh_piped_input_stops_when_its_directory_is_refused() {
     assert_not_run(&output, "`invalid-cwd`");
     let left = invoke(&ctx, OWNER, "/", "ls ran-elsewhere 2>/dev/null; echo done").await;
     assert_eq!(left.stdout, "done\n", "{left:?}");
+}
+
+#[cfg(unix)]
+#[test]
+#[timeout("20 minutes")]
+async fn ssh_piped_input_does_not_report_success_after_losing_output() {
+    let ctx = context().await;
+    let cli = BlockingCli::new(&ctx);
+
+    // The first command's output cannot be written. The second writes nothing and succeeds,
+    // and the session still does not end with success, and says why on stderr.
+    let (status, stderr) = tokio::task::spawn_blocking(move || {
+        cli.run_with_full_stdout(&["ssh", OWNER], "echo first\ntrue\n")
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(status, 1, "{stderr}");
+    assert!(
+        stderr.contains("the command's output could not be written"),
+        "{stderr}"
+    );
 }
 
 #[test]

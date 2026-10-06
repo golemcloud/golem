@@ -27,6 +27,17 @@ const VARIABLE: &str = "GOLEM_SSH_BACKGROUND";
 /// The least the terminal is given to answer.
 const WAIT: Duration = Duration::from_millis(500);
 
+/// What came from the terminal while the question was open.
+#[derive(Default)]
+pub struct Answer {
+    /// The SGR parameters of the band, when the terminal said what its background is.
+    pub band: Option<String>,
+    /// What was typed meanwhile, which would otherwise be lost.
+    pub typed_ahead: String,
+    /// The terminal had not finished answering, so its answer may still arrive, as input.
+    pub late: bool,
+}
+
 /// The question put to the terminal, open until its answer is collected.
 pub struct Query {
     asked: Instant,
@@ -88,14 +99,15 @@ impl Query {
         None
     }
 
-    /// Collects the answer and puts the terminal's input modes back. It gives the SGR
-    /// parameters of the band, when the terminal said what its background is, and what was
-    /// typed while the question was open, which would otherwise be lost.
-    pub fn finish(mut self) -> (Option<String>, String) {
+    /// Collects the answer and puts the terminal's input modes back.
+    pub fn finish(mut self) -> Answer {
         let bytes = self.close();
-        let band =
-            look::parse_background(&bytes).map(|background| look::band(background, self.truecolor));
-        (band, typed_ahead(&bytes))
+        Answer {
+            band: look::parse_background(&bytes)
+                .map(|background| look::band(background, self.truecolor)),
+            typed_ahead: typed_ahead(&bytes),
+            late: pending(&bytes),
+        }
     }
 
     /// Reads what the terminal sent since the question, waiting for the rest of the answer at
@@ -148,6 +160,13 @@ impl Drop for Query {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// Whether the answer about the background may still come after `bytes`. The device
+/// attributes are answered last, so once they are in, a terminal that gave no colour has none
+/// to give.
+fn pending(bytes: &[u8]) -> bool {
+    look::parse_background(bytes).is_none() && !look::answered(bytes)
 }
 
 fn wanted(var: &impl Fn(&str) -> Option<String>) -> bool {
@@ -206,7 +225,7 @@ fn typed_ahead(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{typed_ahead, wanted};
+    use super::{pending, typed_ahead, wanted};
     use test_r::test;
 
     #[test]
@@ -225,6 +244,21 @@ mod tests {
         for no in ["0", "false", "no", "off", " Off "] {
             assert!(!with(Some(no)), "{no:?}");
         }
+    }
+
+    #[test]
+    fn an_answer_may_still_come_only_from_a_terminal_that_has_not_finished_answering() {
+        // Nothing yet, or an answer cut off by the end of the wait: the rest arrives as input.
+        assert!(pending(b""));
+        assert!(pending(b"ls"));
+        assert!(pending(b"\x1b]11;rgb:14"));
+        // The device attributes are answered last. With them in and no colour before them,
+        // the terminal has no answer about its background.
+        assert!(!pending(b"\x1b[?62;c"));
+        assert!(!pending(b"ls\x1b[?1;2c"));
+        // The colour is in: nothing that is still to come would be read as typed text.
+        assert!(!pending(b"\x1b]11;rgb:1414/1313/1b1b\x07"));
+        assert!(!pending(b"\x1b]11;rgb:1414/1313/1b1b\x07\x1b[?62;c"));
     }
 
     #[test]

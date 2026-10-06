@@ -92,34 +92,78 @@ pub fn is_complete(input: &str) -> bool {
     scan(input).complete
 }
 
-/// The word a completion at `cursor` would extend. `None` inside quotes, expansions, comments
-/// and here-documents, and for words with escapes, globs or a leading `~`.
+/// The word a completion at `cursor` would extend, as the name it stands for. A completion
+/// writes a backslash before a character that means something to bash and `$'...'` around one
+/// that would act on the terminal, and both are read back here, so that a completed path can be
+/// completed further. `None` inside quotes, expansions, comments and here-documents, and for
+/// words with other quoting, an unfinished escape, globs or a leading `~`.
 pub fn cursor_word(input: &str, cursor: usize) -> Option<CursorWord> {
     let prefix = input.get(..cursor)?;
     let scan = scan(prefix);
     if !scan.plain_end {
         return None;
     }
-    if let Some(&Token { kind, start, end }) = scan.tokens.last()
-        && end == cursor
-        && let Some(command) = match kind {
-            TokenKind::Word { command } => Some(command),
-            // A reserved word may be the start of a longer command name: `fi` of `find`.
-            TokenKind::Reserved => Some(true),
-            _ => None,
-        }
+    // The word's parts, back from the cursor: each ends where the one after it starts.
+    let mut start = cursor;
+    let mut parts = Vec::new();
+    let mut command = false;
+    let mut spelled_out = false;
+    // The word runs into something on its left that is not read back.
+    let mut joined = false;
+    for &Token {
+        kind,
+        start: from,
+        end,
+    } in scan.tokens.iter().rev()
     {
-        let text = &prefix[start..end];
-        let special = text.starts_with('~')
-            || text
-                .bytes()
-                .any(|byte| matches!(byte, b'\\' | b'*' | b'?' | b'[' | b'{'));
-        if scan.word_fragment || special {
+        if end != start {
+            break;
+        }
+        let text = &prefix[from..end];
+        let part = match kind {
+            TokenKind::Word { command: whole } => {
+                command = whole;
+                unescaped(text)
+            }
+            // A reserved word may be the start of a longer command name: `fi` of `find`.
+            TokenKind::Reserved => {
+                command = true;
+                unescaped(text)
+            }
+            TokenKind::Quoted => {
+                spelled_out = true;
+                spelled_out_text(text)
+            }
+            // The word starts after an operator or a redirection.
+            TokenKind::Operator | TokenKind::Redirect => break,
+            _ => None,
+        };
+        let Some(part) = part else {
+            joined = !parts.is_empty();
+            break;
+        };
+        parts.push(part);
+        start = from;
+    }
+    if !parts.is_empty() {
+        if prefix[start..].starts_with('~') {
             return None;
         }
-        return Some(CursorWord {
+        // One unquoted part is a word of its own unless the lexer saw it continue another. A
+        // word in several parts has to start where a word can.
+        let whole = if parts.len() == 1 && !spelled_out {
+            !scan.word_fragment
+        } else {
+            command = false;
+            !joined
+                && prefix[..start]
+                    .bytes()
+                    .next_back()
+                    .is_none_or(|byte| byte.is_ascii_whitespace() || is_meta(byte))
+        };
+        return whole.then(|| CursorWord {
             start,
-            text: text.to_string(),
+            text: parts.into_iter().rev().collect(),
             position: if command {
                 Position::Command
             } else {
@@ -200,6 +244,65 @@ enum Expect {
     Target,
     /// Nothing, but an assignment, a redirection or `time` has come before the command name.
     Prefixed,
+}
+
+/// The text an unquoted part of a word stands for: a backslash makes the character after it
+/// plain. `None` for a glob character and for a backslash that ends the part or the line.
+fn unescaped(text: &str) -> Option<String> {
+    let mut plain = String::with_capacity(text.len());
+    let mut characters = text.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => match characters.next()? {
+                '\n' => return None,
+                escaped => plain.push(escaped),
+            },
+            '*' | '?' | '[' | '{' => return None,
+            _ => plain.push(character),
+        }
+    }
+    Some(plain)
+}
+
+/// The text `$'...'` stands for, with the escapes a completion writes in it: `\e`, `\n`, `\t`,
+/// `\xHH`, `\uHHHH` and `\UHHHHHHHH`. `None` for any other escape and any other quoting.
+fn spelled_out_text(text: &str) -> Option<String> {
+    let mut rest = text.strip_prefix("$'")?.strip_suffix('\'')?;
+    let mut plain = String::with_capacity(rest.len());
+    while let Some(character) = rest.chars().next() {
+        rest = &rest[character.len_utf8()..];
+        if character != '\\' {
+            plain.push(character);
+            continue;
+        }
+        let escape = rest.chars().next()?;
+        rest = &rest[escape.len_utf8()..];
+        let digits = match escape {
+            'e' => {
+                plain.push('\x1b');
+                continue;
+            }
+            'n' => {
+                plain.push('\n');
+                continue;
+            }
+            't' => {
+                plain.push('\t');
+                continue;
+            }
+            'x' => 2,
+            'u' => 4,
+            'U' => 8,
+            _ => return None,
+        };
+        let code = rest.get(..digits)?;
+        if !code.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        plain.push(char::from_u32(u32::from_str_radix(code, 16).ok()?)?);
+        rest = &rest[digits..];
+    }
+    Some(plain)
 }
 
 fn is_meta(byte: u8) -> bool {
@@ -1717,7 +1820,6 @@ mod tests {
             "echo ${ab",
             "echo \"x\"ab",
             "echo $HOME/ab",
-            "echo a\\ b",
             "ls *.t",
             "cd ~/a",
             "echo a # co",
@@ -1726,5 +1828,43 @@ mod tests {
             assert_eq!(word(input), None, "{input:?}");
         }
         assert_eq!(cursor_word("abc", 7), None);
+    }
+
+    #[test]
+    fn a_word_is_read_through_the_escapes_a_completion_writes() {
+        use Position::Argument;
+        let read = |input: &str, text: &str| {
+            assert_eq!(
+                word(input),
+                Some((4, text.to_string(), Argument)),
+                "{input:?}"
+            );
+        };
+        // A backslash before a character that would otherwise mean something to bash.
+        read("cat my\\ dir/", "my dir/");
+        read("cat my\\ dir/fi", "my dir/fi");
+        read("cat a\\*b\\(c\\)\\&", "a*b(c)&");
+        read("cat a\\\\b", "a\\b");
+        read("cat \\~x", "~x");
+        // `$'...'` around a character that would act on the terminal.
+        read("cat a$'\\e'b/", "a\u{1b}b/");
+        read("cat $'\\n'$'\\t'x", "\n\tx");
+        read(
+            "cat $'\\x07'$'\\u200e'$'\\U0001f600'/x",
+            "\u{7}\u{200e}\u{1f600}/x",
+        );
+        read("cat $'a b'x", "a bx");
+        // An escape that is not finished, a glob, and quoting that a completion does not write.
+        for input in [
+            "cat my\\",
+            "cat a\\ b*",
+            "cat $'\\q'x",
+            "cat $'\\x7'x",
+            "cat 'a b'/c",
+            "cat \"a b\"/c",
+            "cat a$'\\e'\"b\"c",
+        ] {
+            assert_eq!(word(input), None, "{input:?}");
+        }
     }
 }

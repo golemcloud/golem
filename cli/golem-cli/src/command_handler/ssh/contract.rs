@@ -547,6 +547,40 @@ pub fn classify_invoke_error(status: Option<u16>, message: String) -> CallFailur
     }
 }
 
+/// A terminal's answer about its background that may still arrive, as input, after the session
+/// stopped waiting for it. It is looked for in the first line read and in no other, so that
+/// nothing a person types later is ever changed.
+pub struct LateAnswer {
+    expected: bool,
+}
+
+impl LateAnswer {
+    /// `expected` when the terminal had not finished answering by the end of the wait.
+    pub fn expected(expected: bool) -> Self {
+        Self { expected }
+    }
+
+    /// The first line read, without the answer when one may have come. Every other line is
+    /// given back as it was typed.
+    pub fn taken_from(&mut self, line: String) -> String {
+        if std::mem::take(&mut self.expected) {
+            strip_background_reply(&line)
+        } else {
+            line
+        }
+    }
+}
+
+/// The status a session ends with. Output that could not be written is this process failing,
+/// so then it is never 0.
+pub fn ended(status: u8, lost_output: bool) -> u8 {
+    if lost_output && status == 0 {
+        1
+    } else {
+        status
+    }
+}
+
 /// How the session reads its input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -733,9 +767,9 @@ pub fn dimmed(text: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode,
+        BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LateAnswer,
         LocalCommand, NOT_RUN_EXIT, Outcome, PromptPart, banner, check_run_contract,
-        classify_cancel, classify_invoke_error, decode_result, decorated, dimmed, exit_code,
+        classify_cancel, classify_invoke_error, decode_result, decorated, dimmed, ended, exit_code,
         failed_agent_notice, global_args, help_text, input_mode, interrupted_message,
         local_command, lookup_command, prompt, run_argv, runs_nothing, strip_background_reply,
         strip_cursor_reports, time_limit, tools_listing,
@@ -1116,6 +1150,29 @@ mod tests {
         ] {
             assert_eq!(strip_background_reply(line), line);
         }
+    }
+
+    #[test]
+    fn a_late_answer_is_looked_for_in_the_first_line_only_and_only_when_one_may_come() {
+        let answer = "11;rgb:1414/1313/1b1b";
+        let command = format!("printf '%s\\n' '{answer}'");
+        // The terminal had not finished answering: its answer may be in the first line.
+        let mut late = LateAnswer::expected(true);
+        assert_eq!(late.taken_from(format!("ls{answer}")), "ls");
+        // Every later line is the person's own, whatever it holds.
+        assert_eq!(late.taken_from(command.clone()), command);
+        // A terminal that answered, or that said it has no answer, leaves nothing to take out.
+        let mut none = LateAnswer::expected(false);
+        assert_eq!(none.taken_from(command.clone()), command);
+    }
+
+    #[test]
+    fn a_session_that_lost_output_does_not_end_with_success() {
+        assert_eq!(ended(0, false), 0);
+        assert_eq!(ended(7, false), 7);
+        // The commands ran, but this process failed to deliver what they wrote.
+        assert_eq!(ended(0, true), 1);
+        assert_eq!(ended(7, true), 7);
     }
 
     #[test]
