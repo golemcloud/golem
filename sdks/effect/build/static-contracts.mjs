@@ -57,9 +57,13 @@ function metadataLoader(runtime) {
   return (name) => load(path.join(runtime, name))
 }
 
-export function staticContracts(runtime, publicEntries) {
+export function staticContracts(runtime, packageEntry) {
   const load = metadataLoader(runtime)
-  const sdkModule = (name) => publicEntries.get(name) ?? name.slice(packageName.length + 1) + ".js"
+  const sdkModule = (name) => {
+    const entry = packageEntry(name)
+    if (!entry) throw new Error(`Package import ${name} is not available to component builds`)
+    return entry
+  }
   const sources = new Map()
   const checkers = new Map()
   const transformed = new Map()

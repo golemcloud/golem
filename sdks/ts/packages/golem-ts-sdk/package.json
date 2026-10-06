@@ -28,22 +28,27 @@
   "main": "dist/index.mjs",
   "exports": {
     ".": {
+      "golem-component": "./dist/runtime/index.mjs",
       "import": "./dist/index.mjs",
       "types": "./dist/index.d.mts"
     },
     "./schema": {
+      "golem-component": "./dist/runtime/schema/public.mjs",
       "import": "./dist/schema.mjs",
       "types": "./dist/schema.d.mts"
     },
     "./reflection": {
+      "golem-component": "./dist/runtime/reflection.mjs",
       "import": "./dist/reflection.mjs",
       "types": "./dist/reflection.d.mts"
     },
     "./http-router": {
+      "golem-component": "./dist/runtime/http-router.mjs",
       "import": "./dist/http-router.mjs",
       "types": "./dist/http-router.d.mts"
     },
     "./middleware": {
+      "golem-component": "./dist/runtime/middleware.mjs",
       "import": "./dist/middleware.mjs",
       "types": "./dist/middleware.d.mts"
     },
