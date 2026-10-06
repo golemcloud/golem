@@ -210,7 +210,7 @@ fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
     AgentFilesystemSnapshots::bind(
         &golem_config.filesystem_snapshots,
         source,
-        filesystems.agent_accounting() == crate::sandbox_filesystem::AgentAccounting::ProjectQuotas,
+        filesystems.volume().copies_on_write(),
         shutdown,
     )
     .map_err(|error| anyhow!(error))
@@ -1513,10 +1513,10 @@ mod tests {
         )))
     }
 
-    /// The snapshot service gets the storage mode of the agent filesystems: on unmanaged storage
-    /// it refuses managed snapshots.
+    /// The snapshot service gets the storage mode of the agent filesystems: on storage without
+    /// copy-on-write copies it refuses managed snapshots.
     #[test]
-    async fn the_snapshot_service_refuses_managed_snapshots_on_unmanaged_storage() {
+    async fn the_snapshot_service_refuses_managed_snapshots_on_storage_without_copy_on_write() {
         let root = tempfile::tempdir().unwrap();
         let key: Box<str> = "00".repeat(64).into_boxed_str();
         let mut golem_config = GolemConfig::default();
@@ -1557,9 +1557,11 @@ mod tests {
 
         let error = bound
             .err()
-            .expect("managed snapshots on unmanaged storage must be refused");
+            .expect("managed snapshots on storage without copy-on-write must be refused");
         assert!(
-            format!("{error:#}").contains("filesystem snapshots require managed XFS storage"),
+            format!("{error:#}").contains(
+                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+            ),
             "{error:#}"
         );
         shutdown.token().cancel();

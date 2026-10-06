@@ -179,17 +179,18 @@ pub(super) enum Binding<'a> {
     Managed(&'a FilesystemSnapshotStoreConfig),
 }
 
-/// What `config` binds to. `Managed` needs a sandbox provisioning on managed XFS storage, and
-/// `managed_storage` tells whether the executor has it.
+/// What `config` binds to. `Managed` needs storage whose volume makes copy-on-write copies, and
+/// `copy_on_write` tells whether the executor has it. Project quotas are not needed.
 pub(super) fn binding(
     config: &FilesystemSnapshotsConfig,
-    managed_storage: bool,
+    copy_on_write: bool,
 ) -> Result<Binding<'_>, String> {
     match config {
         FilesystemSnapshotsConfig::Disabled(_) => Ok(Binding::Disabled),
-        FilesystemSnapshotsConfig::Managed(_) if !managed_storage => {
-            Err("filesystem snapshots require managed XFS storage".to_string())
-        }
+        FilesystemSnapshotsConfig::Managed(_) if !copy_on_write => Err(
+            "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                .to_string(),
+        ),
         FilesystemSnapshotsConfig::Managed(config) => Ok(Binding::Managed(config)),
     }
 }
@@ -400,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_snapshots_bind_only_to_managed_storage() {
+    fn managed_snapshots_bind_only_to_copy_on_write_storage() {
         let managed = FilesystemSnapshotsConfig::Managed(Box::new(
             FilesystemSnapshotStoreConfig::new(&"0".repeat(128), Duration::from_secs(30), 4, 3)
                 .unwrap(),
@@ -412,7 +413,10 @@ mod tests {
         assert!(matches!(binding(&managed, true), Ok(Binding::Managed(_))));
         assert_eq!(
             binding(&managed, false).err(),
-            Some("filesystem snapshots require managed XFS storage".to_string())
+            Some(
+                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                    .to_string()
+            )
         );
     }
 
