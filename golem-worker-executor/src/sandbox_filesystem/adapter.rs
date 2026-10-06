@@ -1197,12 +1197,12 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// brings all that is under it, and a symlink becomes a symlink. Directories and symlinks are
     /// made again, and permissions and modification times are copied. `access` sets the write
     /// permission of seeded files, or keeps the permissions of the source. `placement` decides
-    /// what happens to a target path that is already there. On managed XFS each file is one
-    /// reflink into the project of this filesystem, so the quota is charged here, and EDQUOT and
-    /// ENOSPC appear here. On unmanaged storage each file is copied. Nothing is written outside
-    /// the sandbox root. The first entry that fails stops the call. The entries before it stay.
-    /// On managed XFS, what the call wrote is on stable storage when the call returns, also when
-    /// an entry fails.
+    /// what happens to a target path that is already there. On XFS each file is one reflink. With
+    /// project quotas the reflink goes into the project of this filesystem, so the quota is charged
+    /// here, and EDQUOT and ENOSPC appear here. On development storage each file is copied.
+    /// Nothing is written outside the sandbox root. The first entry that fails stops the call. The
+    /// entries before it stay. On XFS, what the call wrote is on stable storage when the call
+    /// returns, also when an entry fails.
     fn seed(
         &self,
         entries: Box<[SeedEntry]>,
@@ -1231,10 +1231,10 @@ pub(crate) trait SandboxFilesystemAdapter: Send + Sync + 'static {
     /// out. The sandbox applies the set and nothing else. The set is shared and already
     /// normalized, so a copy does no work per excluded path before the walk. Directories and
     /// symlinks are made again. Permissions and modification times are copied, and `target` gets
-    /// the permissions and the modification time of `source`. On managed XFS
-    /// each file is one reflink: the cost follows the number of files, not the bytes, and the
-    /// copy adds nothing to any quota, because a HostPath is outside every agent project. On
-    /// unmanaged storage each file is copied.
+    /// the permissions and the modification time of `source`. On XFS, with or without project
+    /// quotas, each file is one reflink: the cost follows the number of files, not the bytes, and
+    /// the copy adds nothing to any quota, because a HostPath is outside every agent project. On
+    /// development storage each file is copied.
     ///
     /// A regular file or a symlink with more than one name under `source` is copied once, at the
     /// first name that the copy meets, and the result gives its names as one [`LinkGroup`].
@@ -3605,7 +3605,7 @@ mod tests {
         .unwrap()
     }
 
-    /// Makes the host directories under `root` on unmanaged storage, and gives `.scratch`.
+    /// Makes the host directories under `root` on development storage, and gives `.scratch`.
     async fn host_directory_at(root: &Path) -> HostDirectory {
         SandboxFilesystemProvisioning::provision(
             &FilesystemStorageMode::Directory {

@@ -882,19 +882,14 @@ fn has_project_identity(attributes: &linux_raw_sys::general::fsxattr) -> bool {
 pub(super) fn verify_host_directory_has_no_project(
     path: &Path,
 ) -> Result<(), FilesystemStorageError> {
-    let directory = File::open(path).map_err(|error| {
-        FilesystemStorageError::io("open managed XFS host directory", path, error)
-    })?;
+    let directory = File::open(path)
+        .map_err(|error| FilesystemStorageError::io("open XFS host directory", path, error))?;
     let attributes = get_fsxattr(&directory).map_err(|error| {
-        FilesystemStorageError::io(
-            "inspect managed XFS host directory project attributes",
-            path,
-            error,
-        )
+        FilesystemStorageError::io("inspect XFS host directory project attributes", path, error)
     })?;
     if has_project_identity(&attributes) {
         return Err(FilesystemStorageError::verification(
-            "verify managed XFS host directory has no project identity",
+            "verify XFS host directory has no project identity",
             path,
         ));
     }
