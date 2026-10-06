@@ -328,6 +328,19 @@ async fn bound_reconstructing_with_recovery(
     ScriptedSandboxFilesystemControl,
     Arc<AtomicResourceEntry>,
 ) {
+    bound_reconstructing_with_accounting(limits, pressure_recovery, AgentAccounting::Development)
+        .await
+}
+
+async fn bound_reconstructing_with_accounting(
+    limits: ResolvedStorageLimits,
+    pressure_recovery: Option<FilesystemWriteRecovery>,
+    accounting: AgentAccounting,
+) -> (
+    TestAgentFilesystem<Reconstructing>,
+    ScriptedSandboxFilesystemControl,
+    Arc<AtomicResourceEntry>,
+) {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
@@ -335,6 +348,7 @@ async fn bound_reconstructing_with_recovery(
         agent_id(),
         limits,
         pressure_recovery,
+        accounting,
     )
     .await
     .unwrap();
@@ -367,6 +381,7 @@ async fn unmetered_reconstructing_with_recovery(
         agent_id(),
         limits,
         pressure_recovery,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -389,6 +404,7 @@ async fn created_product_supports_observed_verified_cleanup() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -461,6 +477,7 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -6249,6 +6266,7 @@ async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -8970,17 +8988,30 @@ fn a_change_of_a_read_only_file_is_refused_and_a_change_of_another_object_is_not
     assert!(refuse_read_only_change(false).is_ok());
 }
 
-/// Gives a resident filesystem on storage that reports no usage, with `pressure_recovery`, and
-/// the window of its resource usage.
-async fn unaccounted_resident_with_recovery(
+/// Gives a resident filesystem on storage with `accounting` that reports no usage, with
+/// `pressure_recovery`, and the window of its resource usage.
+async fn resident_with_accounting(
+    accounting: AgentAccounting,
     pressure_recovery: Option<FilesystemWriteRecovery>,
 ) -> (
     TestAgentFilesystem<Resident>,
     ScriptedSandboxFilesystemControl,
     ResourceUsageMeteringWindow,
 ) {
-    let (filesystem, control, entry) =
-        reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, pressure_recovery).await;
+    let (filesystem, control, entry) = bound_reconstructing_with_accounting(
+        ResolvedStorageLimits::Unlimited,
+        pressure_recovery,
+        accounting,
+    )
+    .await;
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
+    let filesystem = finish_replay(filesystem).await.unwrap();
     control.push_observe_allocation(Err(unsupported_allocation()));
     let filesystem = finish_reconstruction(filesystem).await.unwrap();
     control.push_observe_allocation(Err(unsupported_allocation()));
@@ -8994,7 +9025,7 @@ async fn unaccounted_resident_with_recovery(
 async fn a_full_volume_without_quotas_runs_pressure_recovery_and_retries_the_write() {
     let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::Recovered]);
     let (filesystem, control, window) =
-        unaccounted_resident_with_recovery(Some(recovery.handle())).await;
+        resident_with_accounting(AgentAccounting::Unaccounted, Some(recovery.handle())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 48).await;
     control.push_write(Ok(SandboxWriteAttempt::failed(
@@ -9032,7 +9063,7 @@ async fn a_full_volume_without_quotas_runs_pressure_recovery_and_retries_the_wri
 async fn a_full_volume_without_quotas_and_without_pressure_keeps_the_write_failure() {
     let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::NotUnderPressure]);
     let (filesystem, control, window) =
-        unaccounted_resident_with_recovery(Some(recovery.handle())).await;
+        resident_with_accounting(AgentAccounting::Unaccounted, Some(recovery.handle())).await;
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 49).await;
     control.push_write(Ok(SandboxWriteAttempt::failed(
@@ -9060,6 +9091,60 @@ async fn a_full_volume_without_quotas_and_without_pressure_keeps_the_write_failu
         .unwrap();
     control.push_close(Ok(()));
     close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_full_development_volume_with_an_unknown_effect_keeps_an_unclassified_failure() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::Recovered]);
+    let (filesystem, control, window) =
+        resident_with_accounting(AgentAccounting::Development, Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_get_attributes(Err(sandbox_error(
+        "rename source after",
+        std::io::ErrorKind::Other,
+    )));
+    control.push_get_attributes(Err(sandbox_error(
+        "rename destination after",
+        std::io::ErrorKind::NotFound,
+    )));
+    control.push_rename(Err(sandbox_error(
+        "rename",
+        std::io::ErrorKind::StorageFull,
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+
+    assert!(matches!(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Move {
+                source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                destination: PathTarget::at_root(&generation_handle, "destination").unwrap(),
+            },
+        )
+        .unwrap()
+        .await,
+        Err(Error::Sandbox(_))
+    ));
+    assert_eq!(recovery.calls(), 0);
+    assert_eq!(call_count(&control, "rename("), 1);
+    let admitted = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "still-valid").unwrap(),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Read,
+            follow: Follow::Yes,
+        },
+    )
+    .expect("a full development volume invalidated the generation");
+    drop(admitted);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
     control.push_delete_and_verify(Ok(()));
     delete(seal(filesystem)).await.unwrap();
 }
