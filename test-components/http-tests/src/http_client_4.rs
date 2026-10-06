@@ -6,6 +6,8 @@ use std::time::Duration;
 pub trait HttpClient4 {
     fn new() -> Self;
 
+    async fn transition_clock_probe(&self, post: bool) -> u16;
+
     /// Sends a POST request with assume_idempotence=false.
     async fn post_non_idempotent(&self) -> String;
 
@@ -184,6 +186,41 @@ impl HttpClient4 for HttpClient4Impl {
             last_send_error: None,
             last_full_response: None,
         }
+    }
+
+    async fn transition_clock_probe(&self, post: bool) -> u16 {
+        use futures_concurrency::prelude::*;
+        use golem_rust::wasip3::http::{client, types};
+        use golem_rust::wasip3::wit_future;
+        let port = std::env::var("PORT").unwrap();
+        let headers = types::Fields::from_list(&[]).unwrap();
+        let (tx, rx) = wit_future::new(|| Ok(None));
+        let (request, transmit) = types::Request::new(headers, None, rx, None);
+        request
+            .set_method(&if post {
+                types::Method::Post
+            } else {
+                types::Method::Get
+            })
+            .unwrap();
+        request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+        request
+            .set_authority(Some(&format!("127.0.0.1:{port}")))
+            .unwrap();
+        request.set_path_with_query(Some("/transition")).unwrap();
+        let send = async {
+            let response = client::send(request).await.unwrap();
+            let status = response.get_status_code();
+            drop(response);
+            status
+        };
+        let finish = async {
+            tx.write(Ok(None)).await.unwrap();
+            transmit.await.unwrap();
+        };
+        let clock = golem_rust::wasip3::clocks::monotonic_clock::wait_for(1_000_000);
+        let (status, (), ()) = (send, finish, clock).join().await;
+        status
     }
 
     async fn post_non_idempotent(&self) -> String {

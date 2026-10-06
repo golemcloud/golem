@@ -6154,7 +6154,161 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
 }
 
 #[test]
-async fn entity_atomic_rollback_projects_only_owned_interleaved_regions() {
+async fn atomic_suffix_rollback_closes_crossing_regions() {
+    let oplog = InMemoryOplog::new();
+    let end = |begin| OplogEntry::EndAtomicRegion {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        begin_index: OplogIndex::from_u64(begin),
+    };
+    for entry in [
+        noop(),
+        begin_atomic_region(), // 2: crosses region 3, but not region 5
+        begin_atomic_region(), // 3: crosses the unfinished region 5
+        end(2),
+        begin_atomic_region(), // 5: unfinished
+        end(3),
+        start_now(), // 7: foreign work must be removed too
+        end_for(7, 42),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let horizon = OplogIndex::from_u64(8);
+    let region =
+        super::rollback::atomic_rollback_region(&oplog, &DeletedRegions::default(), horizon).await;
+    assert_eq!(region, Some(OplogRegion::from_range(3..=8)));
+
+    oplog
+        .add(OplogEntry::jump(None, region.clone().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        super::rollback::atomic_rollback_region(
+            &oplog,
+            &DeletedRegions::from_regions([region.unwrap()]),
+            OplogIndex::from_u64(9),
+        )
+        .await,
+        None,
+        "a crash after the Jump must not append another Jump"
+    );
+}
+
+#[test]
+async fn runtime_suffix_rollback_closes_completed_crossing_regions() {
+    let oplog = InMemoryOplog::new();
+    for entry in [
+        noop(),
+        begin_atomic_region(),
+        begin_atomic_region(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(2),
+        },
+        start_now(),
+        noop(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(3),
+        },
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    assert_eq!(
+        super::rollback::folded_suffix_rollback_region(
+            &oplog,
+            &DeletedRegions::default(),
+            OplogIndex::from_u64(7),
+            Some(OplogIndex::from_u64(6)),
+        )
+        .await,
+        Some(OplogRegion::from_range(3..=7)),
+    );
+}
+
+#[test]
+async fn attempt_suffix_counts_foreign_work_but_not_abandoned_history() {
+    let rs = replay_state_over(vec![noop(), start_now(), noop()]).await;
+    assert!(rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    rs.register_replay_jump(vec![OplogRegion::from_range(3..=3)])
+        .await
+        .unwrap();
+    assert!(!rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 41)]).await;
+    assert!(rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        OplogEntry::jump(None, OplogRegion::from_range(3..=3)),
+    ])
+    .await;
+    assert!(!rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+}
+
+#[test]
+async fn atomic_suffix_rollback_distinguishes_delivery_from_lifecycle_hints() {
+    let oplog = InMemoryOplog::new();
+    for entry in [start_now(), begin_atomic_region(), delivered_for(1)] {
+        oplog.add(entry).await.unwrap();
+    }
+    let region = super::rollback::atomic_rollback_region(
+        &oplog,
+        &DeletedRegions::default(),
+        OplogIndex::from_u64(3),
+    )
+    .await
+    .unwrap();
+    assert_eq!(region, OplogRegion::from_range(3..=3));
+    oplog
+        .add(OplogEntry::jump(None, region.clone()))
+        .await
+        .unwrap();
+    oplog.add(OplogEntry::suspend()).await.unwrap();
+    let skipped = DeletedRegions::from_regions([region]);
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(5)).await,
+        None
+    );
+    oplog.add(delivered_for(1)).await.unwrap();
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(6)).await,
+        Some(OplogRegion::from_range(3..=6))
+    );
+}
+
+#[test]
+async fn atomic_suffix_rollback_respects_horizon_and_skipped_prefix() {
+    let oplog = InMemoryOplog::new();
+    for entry in [
+        noop(),
+        begin_atomic_region(), // 2: hidden by the snapshot/revert prefix
+        noop(),
+        begin_atomic_region(), // 4
+        noop(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(4),
+        },
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]);
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(5)).await,
+        Some(OplogRegion::from_range(5..=5)),
+        "a terminal beyond the fixed horizon cannot complete the retained region"
+    );
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(6)).await,
+        None
+    );
+}
+
+#[test]
+async fn atomic_suffix_rollback_includes_foreign_calls_and_entity_terminal() {
     let mut begin = begin_atomic_region();
     let OplogEntry::BeginAtomicRegion {
         entity_parent_start_index,
@@ -6179,29 +6333,20 @@ async fn entity_atomic_rollback_projects_only_owned_interleaved_regions() {
         delivered_for(8),     // 11: sibling observation boundary
         end_for(7, 70),       // 12: atomic entity child terminal
         delivered_for(7),     // 13: atomic entity observation boundary
-        end_for(2, 20),       // 14: entity invocation terminal, retained
+        end_for(2, 20),       // 14: entity invocation terminal
     ])
     .await;
 
-    let regions = replay_state
-        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-        .await;
-
+    let region = atomic_rollback_region(
+        replay_state.cursor.oplog.as_ref(),
+        &DeletedRegions::default(),
+        replay_state.replay_target(),
+    )
+    .await;
     assert_eq!(
-        regions,
-        vec![
-            OplogRegion::from_range(7..=7),
-            OplogRegion::from_range(10..=10),
-            OplogRegion::from_range(12..=13),
-        ]
-    );
-    assert!(
-        regions
-            .iter()
-            .all(|region| !region.contains(OplogIndex::from_u64(9))
-                && !region.contains(OplogIndex::from_u64(11))
-                && !region.contains(OplogIndex::from_u64(14))),
-        "sibling completion gates and the entity invocation terminal must survive"
+        region,
+        Some(OplogRegion::from_range(7..=14)),
+        "the cut includes every completion and positional record in the suffix"
     );
 }
 
@@ -6227,7 +6372,7 @@ async fn entity_atomic_rollback_skips_newly_deleted_cursor_head() {
 }
 
 #[test]
-async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit() {
+async fn atomic_suffix_rollback_includes_surviving_work_after_prior_jump() {
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [
         noop(),      // 1
@@ -6257,30 +6402,22 @@ async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit()
     )
     .await
     .unwrap();
-    let regions = rs
-        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-        .await;
-    assert!(
-        regions
-            .iter()
-            .any(|region| region.contains(OplogIndex::from_u64(6)))
-    );
-    assert!(
-        regions
-            .iter()
-            .any(|region| region.contains(OplogIndex::from_u64(8)))
-    );
-    assert!(
-        regions
-            .iter()
-            .all(|region| !region.contains(OplogIndex::from_u64(9)))
-    );
-    assert_eq!(regions, vec![OplogRegion::from_range(6..=8)]);
-    rs.register_replay_jump(regions).await.unwrap();
-    assert!(
-        rs.entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-            .await
-            .is_empty(),
+    let region = atomic_rollback_region(
+        rs.cursor.oplog.as_ref(),
+        &DeletedRegions::from_regions([OplogRegion::from_range(4..=4)]),
+        rs.replay_target(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(region, OplogRegion::from_range(4..=10));
+    assert_eq!(
+        atomic_rollback_region(
+            rs.cursor.oplog.as_ref(),
+            &DeletedRegions::from_regions([region]),
+            rs.replay_target(),
+        )
+        .await,
+        None,
         "a subsequent restart must not roll back the prior Jump"
     );
 }
@@ -6301,15 +6438,20 @@ async fn entity_atomic_rollback_masks_pre_begin_completions_before_claiming() {
         }
         entries.extend([delivered_for(3), noop()]);
         let rs = replay_state_over(entries).await;
-        let regions = rs
-            .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-            .await;
+        let regions = atomic_rollback_region(
+            rs.cursor.oplog.as_ref(),
+            &DeletedRegions::default(),
+            rs.replay_target(),
+        )
+        .await
+        .into_iter()
+        .collect::<Vec<_>>();
         assert_eq!(
             regions,
             vec![OplogRegion::from_range(if end_before_begin {
-                6..=6
+                6..=7
             } else {
-                5..=6
+                5..=7
             })]
         );
         rs.register_replay_jump(regions).await.unwrap();
@@ -6353,7 +6495,6 @@ async fn entity_atomic_rollback_masks_pre_begin_completions_before_claiming() {
                     .1,
                 OplogEntry::BeginAtomicRegion { .. }
             ));
-            rs.get_oplog_entry(None).await.unwrap(); // surviving foreign tail
             assert!(matches!(
                 resolution.await.unwrap(),
                 ResolutionOutcome::Incomplete
@@ -6376,10 +6517,15 @@ async fn entity_atomic_rollback_deleted_claim_waits_for_retained_begin() {
         noop(),
     ])
     .await;
-    let regions = rs
-        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-        .await;
-    rs.register_replay_jump(regions).await.unwrap();
+    let region = atomic_rollback_region(
+        rs.cursor.oplog.as_ref(),
+        &DeletedRegions::default(),
+        rs.replay_target(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(region, OplogRegion::from_range(4..=5));
+    rs.register_replay_jump(vec![region]).await.unwrap();
     let _entity = rs
         .claim_start_or_replay_end(StartClaim::unowned(
             &HostFunctionName::MonotonicClockNow,
@@ -6407,12 +6553,8 @@ async fn entity_atomic_rollback_deleted_claim_waits_for_retained_begin() {
     ));
     assert!(matches!(
         claim.await.unwrap(),
-        ReplayStartClaimOutcome::DeletedRegion
+        ReplayStartClaimOutcome::ReplayEnded
     ));
-    assert_eq!(
-        rs.get_oplog_entry(None).await.unwrap().0,
-        OplogIndex::from_u64(5)
-    );
 }
 
 #[test]

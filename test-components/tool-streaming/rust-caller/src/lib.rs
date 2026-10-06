@@ -464,6 +464,7 @@ pub trait ToolStreamingCaller {
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
     async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
     async fn clean_stdout_then_trap(&self);
+    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String>;
     async fn trap_with_blocked_sibling(&self);
     async fn drop_trapping_result(&self);
     async fn fire_and_forget_trap(&self);
@@ -652,6 +653,12 @@ fn decode_middleware_probe_result(result: tool_host::InvocationResult) -> String
         decode_typed_schema_value_owned(result.result.expect("middleware probe returns a result"))
             .expect("decode middleware probe result");
     String::from_value(value.value()).expect("middleware probe result is a string")
+}
+
+fn decode_no_stream_result(result: tool_host::InvocationResult) -> String {
+    let value = decode_typed_schema_value_owned(result.result.expect("no-stream returns a result"))
+        .expect("decode no-stream result");
+    String::from_value(value.value()).expect("no-stream result is a string")
 }
 
 fn decode_dynamic_mcp_result(result: tool_host::InvocationResult) -> String {
@@ -871,6 +878,14 @@ async fn raw_chunk(stdout: &mut InputStream) -> Vec<u8> {
 }
 
 async fn wait_at_crash_checkpoint(name: &str) {
+    wait_at_crash_checkpoint_with_atomic_gate(name, true).await;
+}
+
+async fn wait_at_unscoped_crash_checkpoint(name: &str) {
+    wait_at_crash_checkpoint_with_atomic_gate(name, false).await;
+}
+
+async fn wait_at_crash_checkpoint_with_atomic_gate(name: &str, atomic_gate: bool) {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::sockets::types::{
         IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket,
@@ -957,7 +972,7 @@ async fn wait_at_crash_checkpoint(name: &str) {
         assert_ne!(outside, outer);
     }
 
-    golem_rust::atomically_async(|| async {
+    let wait_for_release = || async {
         let socket =
             TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
         socket
@@ -985,8 +1000,12 @@ async fn wait_at_crash_checkpoint(name: &str) {
         drop(stream);
         received.await.expect("finish checkpoint gate receive");
         assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
-    })
-    .await;
+    };
+    if atomic_gate {
+        golem_rust::atomically_async(wait_for_release).await;
+    } else {
+        wait_for_release().await;
+    }
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {
@@ -2975,6 +2994,35 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .expect("owner trap must abort this result observation");
     }
 
+    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let changing = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("changing-stdout-in-atomic-region"),
+            Some(raw_stdin(Vec::new())),
+            Some(stdout_target),
+            None,
+        );
+        let observed = String::from_utf8(read_all(stdout).await).expect("stdout is UTF-8");
+        let sibling = rpc.async_invoke_and_await(
+            &["no-stream".to_string()],
+            raw_no_stream_input(&observed),
+            None,
+            None,
+            None,
+        );
+        let sibling = decode_no_stream_result(
+            raw_result(&sibling)
+                .await
+                .expect("dependent sibling invocation succeeds"),
+        );
+        raw_result(&changing)
+            .await
+            .expect("changing invocation completes after recovery");
+        vec![observed, sibling]
+    }
+
     async fn trap_with_blocked_sibling(&self) {
         let (blocked_source, blocked_stdin) =
             golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
@@ -3429,6 +3477,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .expect("completed reconstruction result before custom effect");
         };
         let incomplete_custom = async {
+            wait_at_unscoped_crash_checkpoint("before-reconstruction-custom-effect").await;
             Durability::<(), String>::new(
                 "golem-it",
                 "reconstruction-barrier-custom-effect",

@@ -618,11 +618,12 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   retained map: claimed, adopted into a custom subtree, folded into the abandoned tolerance, or
   released at the live invocation end (`release_retained_starts_at_live_invocation_end`).
 - A recovery Jump abandons the attempt it deletes, including any `Start`s retained from it.
-  Every recovery-time Jump (incomplete batched-write and remote-transaction retries on the
-  direct and accessor paths, atomic-region rollbacks on the primary and entity Stores) goes
-  through `commit_replay_jumps` (`durable_host/mod.rs`), which appends the Jump entries,
+  Incomplete batched-write and remote-transaction retries on the direct and accessor paths use
+  `commit_replay_jumps` (`durable_host/mod.rs`), which appends the Jump entries,
   registers the deleted regions with the cursor (`register_replay_jump`) and prunes the retained
   `Start`s inside them, so the re-executed attempt cannot claim the abandoned attempt's history.
+  Ordinary atomic recovery instead commits a full suffix Jump before Store construction and
+  reloads startup metadata; no replay claims exist when that cut is applied.
 - Positional reads through the shared cursor are attributed per Store (`get_oplog_entry(scope)`,
   `OplogEntry::entity_attribution()`): the primary agent consumes only entries with no entity
   parent, an entity body only entries recorded under its own invocation `Start`. A read that
@@ -1069,8 +1070,33 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   resumed caller.
   Store or executor loss stops resident drains without recording EOF; reconstruction resumes
   from durable input offsets. Normal settlement finalizes the session and cancels unread inputs.
-- Incomplete entity recovery installs rollback for that entity's abandoned atomic regions before
-  body or descendant claims, without removing unrelated ownership entries.
+- Startup normalizes incomplete primary/entity atomic regions before constructing any Store.
+  The complete suffix is abandoned, including sibling work influenced by raw output and any
+  transaction commits within it. Crossing atomic regions move the cut backward; the surviving
+  Begin resumes without another destructive Jump. Entity admission does not modify history.
+- Rollback planning reads `AgentStatusRecord.atomic_rollback`, never scans the oplog. The fold
+  retains atomic Begin/End intervals, open batched/transaction scope Starts, and the last visible
+  work index. Only an invocation finish with no open atomic regions or recovery scopes retires
+  completed intervals; an End alone cannot retire history an accepted cut may still cross.
+  A cut into retired history errors instead of scanning. Snapshot selection masks a prefix
+  without mutating the summary. Jump/Revert and removed snapshot overrides use ordinary status
+  baseline validation; losing all usable baselines requires rebuilding status, not a separate
+  rollback scan. Summary size follows the unfinished recovery window, not total worker history.
+- Incomplete batched-write and remote-transaction recovery also requests a Worker-owned suffix
+  cut and returns a typed Jump instead of editing history inside the resident Store. Cut acceptance
+  is serialized with final invocation-success publication and survives cancellation of the
+  requester. Startup combines the earliest request with atomic normalization at a fixed committed
+  horizon; retained HTTP scope Starts resume, while an empty retained transaction scope records a
+  fresh Begin before running its replacement transaction.
+- Startup seals deferred append admission for the old runtime and waits for accepted HTTP frame
+  recordings and custom-call initiation coordinators. A transport-held old body cannot append
+  after sealing. Destructive cuts also fence and drain the durable-stream producer, then reload
+  it from repaired history. Tool failure election keeps driving Store tasks across secondary
+  task errors until cancellation selections and lane drainage finish.
+- The status actor retains the committed prefix preceding the current invocation in memory.
+  Detached repair tries it through ordinary baseline validation before the persisted checkpoint;
+  Jump/Revert invalidation or a missed receipt falls back without changing correctness. Retention
+  adds no storage write or foreground wait; existing snapshot checkpoints remain unchanged.
 
 Detailed mechanics, including scheduling and memory admission: `reference/tools.md`.
 

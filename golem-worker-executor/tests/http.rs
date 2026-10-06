@@ -36,6 +36,8 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
+mod transition_probe;
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
@@ -1857,6 +1859,30 @@ async fn outgoing_http_reissues_incomplete_consume_body_scope_after_restart(
          by a Jump's deleted region so it is skipped on any later replay: {jump_regions:?}"
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
+
+    // A fresh invocation forces Store reconstruction; looking up the completed key alone could
+    // return its persisted result without replaying the repaired history.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let next_key = IdempotencyKey::fresh();
+    let replayed = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &next_key,
+            "get_idempotent",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(replayed, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        3,
+        "only the new invocation may issue another HTTP request after reconstruction"
+    );
 
     drop(executor);
     http_server.abort();

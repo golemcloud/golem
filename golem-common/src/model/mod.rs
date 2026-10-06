@@ -1334,6 +1334,65 @@ impl Default for InvocationResultMembership {
     }
 }
 
+/// Visible rollback boundaries since the last invocation finish with no open recovery scopes.
+/// Completed atomic intervals remain necessary when a later cut crosses their ends.
+#[derive(Clone, Debug, Default, PartialEq, BinaryCodec)]
+pub struct AtomicRollbackState {
+    pub regions: OrdMap<OplogIndex, Option<OplogIndex>>,
+    pub open_cut_scopes: OrdMap<OplogIndex, ()>,
+    pub last_work: OplogIndex,
+    pub retired_through: OplogIndex,
+}
+
+impl AtomicRollbackState {
+    /// Fold one visible entry in oplog order. Jump/revert visibility is resolved by the caller.
+    pub fn observe(&mut self, index: OplogIndex, entry: &OplogEntry) {
+        use crate::model::oplog::DurableFunctionType;
+
+        if !matches!(
+            entry,
+            OplogEntry::Jump { .. }
+                | OplogEntry::Suspend { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::Restart { .. }
+                | OplogEntry::Error { .. }
+                | OplogEntry::RecoverySucceeded { .. }
+        ) {
+            self.last_work = index;
+        }
+        match entry {
+            OplogEntry::BeginAtomicRegion { .. } => {
+                self.regions.insert(index, None);
+            }
+            OplogEntry::EndAtomicRegion { begin_index, .. } => {
+                if let Some(end) = self.regions.get_mut(begin_index) {
+                    *end = Some(index);
+                }
+            }
+            OplogEntry::Start {
+                request: None,
+                durable_function_type:
+                    DurableFunctionType::WriteRemoteBatched(None)
+                    | DurableFunctionType::WriteRemoteTransaction(None),
+                ..
+            } => {
+                self.open_cut_scopes.insert(index, ());
+            }
+            OplogEntry::End { start_index, .. } => {
+                self.open_cut_scopes.remove(start_index);
+            }
+            OplogEntry::AgentInvocationFinished { .. }
+                if self.open_cut_scopes.is_empty()
+                    && self.regions.values().all(Option::is_some) =>
+            {
+                self.regions.clear();
+                self.retired_through = index;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Contains status information about a worker according to a given oplog index.
 ///
 /// This status is just cached information, all fields must be computable by the oplog alone.
@@ -1345,6 +1404,7 @@ pub struct AgentStatusRecord {
     pub status: AgentStatus,
     pub last_error_kind: Option<crate::base_model::oplog::OplogErrorKind>,
     pub skipped_regions: DeletedRegions,
+    pub atomic_rollback: AtomicRollbackState,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
     pub pending_card_events: Vec<PendingCardEventRef>,
@@ -1405,6 +1465,7 @@ impl Default for AgentStatusRecord {
             status: AgentStatus::Idle,
             last_error_kind: None,
             skipped_regions: DeletedRegions::new(),
+            atomic_rollback: AtomicRollbackState::default(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
             pending_card_events: Vec::new(),
