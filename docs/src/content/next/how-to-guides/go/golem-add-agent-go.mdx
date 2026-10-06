@@ -50,6 +50,8 @@ var (
 
 `golem.Unit` is the empty parameter/result placeholder (a method with no input or no output).
 
+`Spec.Dependencies` lists other agents of the same component this one calls (`Dependencies: []golem.AgentDependency{billing.Agent}`); they are published with the agent's metadata.
+
 ## Implementation (`agents/counter/impl/impl.go`)
 
 ```go

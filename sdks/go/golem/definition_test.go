@@ -17,6 +17,8 @@ package golem
 import (
 	"strings"
 	"testing"
+
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 )
 
 func TestDefinitionErrorMessageIsAttributed(t *testing.T) {
@@ -151,4 +153,47 @@ func TestSeparateDefinitionsDoNotLeak(t *testing.T) {
 	if e := register(); len(e) != 0 {
 		t.Fatalf("second registration: %v", e)
 	}
+}
+
+type DepID struct{ Name string }
+type BossID struct{ Boss string }
+type LonelyID struct{ Lonely string }
+type depState struct{}
+
+// TestAgentDependenciesArePublished — an agent publishes the agents of its
+// component it depends on, and one the component does not define is a
+// definition error.
+func TestAgentDependenciesArePublished(t *testing.T) {
+	d := newDefinitions()
+	worker := defineAgentInto[DepID, NoConfig](d, Spec{Name: "Worker", Description: "Does the work"})
+	impl := implementInto[DepID, depState, NoConfig](d, worker, simpleNewState[DepID, depState](func(DepID) *depState { return &depState{} }), false)
+	impl.Handle(worker.Method[Unit, string]("work"), func(*Context[depState], Unit) string { return "" })
+
+	boss := defineAgentInto[BossID, NoConfig](d, Spec{Name: "Boss", Dependencies: []AgentDependency{worker}})
+	bossImpl := implementInto[BossID, depState, NoConfig](d, boss, simpleNewState[BossID, depState](func(BossID) *depState { return &depState{} }), false)
+	bossImpl.Handle(boss.Method[Unit, Unit]("run"), func(*Context[depState], Unit) Unit { return Unit{} })
+
+	found, errs := d.discover()
+	if len(errs) > 0 {
+		t.Fatalf("definition errors: %s", allDefErrors(errs))
+	}
+	var deps []common.AgentDependency
+	for _, at := range found {
+		if at.TypeName == "Boss" {
+			deps = at.Dependencies
+		}
+	}
+	if len(deps) != 1 || deps[0].TypeName != "Worker" {
+		t.Fatalf("dependencies %+v", deps)
+	}
+	if deps[0].Description.Some() != "Does the work" || len(deps[0].Methods) != 1 || deps[0].Methods[0].Name != "work" {
+		t.Errorf("dependency records %+v", deps)
+	}
+
+	other := newDefinitions()
+	stranger := defineAgentInto[DepID, NoConfig](other, Spec{Name: "Stranger"})
+	lonely := defineAgentInto[LonelyID, NoConfig](d, Spec{Name: "Lonely", Dependencies: []AgentDependency{stranger}})
+	lonelyImpl := implementInto[LonelyID, depState, NoConfig](d, lonely, simpleNewState[LonelyID, depState](func(LonelyID) *depState { return &depState{} }), false)
+	lonelyImpl.Handle(lonely.Method[Unit, Unit]("run"), func(*Context[depState], Unit) Unit { return Unit{} })
+	mustDefErr(t, d, "depends on Stranger, which this component does not define")
 }

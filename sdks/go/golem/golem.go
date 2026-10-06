@@ -173,7 +173,14 @@ type Spec struct {
 	// Snapshot sets the agent's snapshot policy; the zero value is
 	// [SnapshotDisabled]. See [SnapshotPolicy] and [Snapshotter].
 	Snapshot SnapshotPolicy
+	// Dependencies are agents of this component that this one depends on,
+	// published with its metadata.
+	Dependencies []AgentDependency
 }
+
+// AgentDependency is an agent another agent depends on: an [AgentDefinition]
+// of the same component.
+type AgentDependency interface{ dependencyName() string }
 
 // Context is passed to every method handler. State is the agent instance's
 // private state, as returned by the agent's init function.
@@ -222,6 +229,8 @@ type AgentDefinition[Id any, Cfg any] struct{ name string }
 
 // Name returns the agent's wire-level type name.
 func (a *AgentDefinition[Id, Cfg]) Name() string { return a.name }
+
+func (a *AgentDefinition[Id, Cfg]) dependencyName() string { return a.name }
 
 // AgentImpl is the state-bound implementation handle returned by [Implement] /
 // [ImplementConfigured]. Register the agent's methods on it with [Handle]. Its S

@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"slices"
 	"reflect"
 	"strings"
 
@@ -173,7 +174,39 @@ func (d *definitions) discover() ([]common.AgentType, []definitionError) {
 		}
 		types = append(types, at)
 	}
+	for i := range types {
+		deps, depErrs := d.agentDependencies(types[i].TypeName, types)
+		types[i].Dependencies = deps
+		errs = append(errs, depErrs...)
+	}
 	return types, errs
+}
+
+// agentDependencies builds the dependency records of an agent from the
+// published types of the agents it names.
+func (d *definitions) agentDependencies(name string, published []common.AgentType) ([]common.AgentDependency, []definitionError) {
+	e := d.agents[name]
+	if e == nil {
+		return nil, nil
+	}
+	var errs []definitionError
+	out := make([]common.AgentDependency, 0, len(e.deps))
+	for _, dep := range e.deps {
+		i := slices.IndexFunc(published, func(t common.AgentType) bool { return t.TypeName == dep })
+		if i < 0 {
+			errs = append(errs, definitionError{agent: name, detail: fmt.Sprintf("depends on %s, which this component does not define", dep)})
+			continue
+		}
+		at := published[i]
+		out = append(out, common.AgentDependency{
+			TypeName:    at.TypeName,
+			Description: someIfSet(at.Description),
+			Schema:      at.Schema,
+			Constructor: at.Constructor,
+			Methods:     at.Methods,
+		})
+	}
+	return out, errs
 }
 
 // safeBuildAgentType builds an agent's type metadata, converting any panic that

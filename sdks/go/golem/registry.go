@@ -67,6 +67,8 @@ type agentEntry struct {
 	// router is set when the entry is an HTTP router rather than an ordinary
 	// agent; see [DefineHTTPRouter].
 	router *routerEntry
+	// deps names the agents this one depends on, in declaration order.
+	deps []string
 }
 
 // instance is the single agent instance this worker runs. A component may define
@@ -195,6 +197,7 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 	}
 	e := &agentEntry{
 		name:     spec.Name,
+		deps:     dependencyNames(spec.Dependencies),
 		desc:     spec.Description,
 		mode:     spec.Mode.toWit(),
 		mount:    spec.HTTP,
@@ -470,4 +473,14 @@ func BindUnit[S, In any](m func(*S, In)) func(*Context[S], In) Unit {
 // Bind0Unit adapts func(*S) — neither input nor output.
 func Bind0Unit[S any](m func(*S)) func(*Context[S], Unit) Unit {
 	return func(ctx *Context[S], _ Unit) Unit { m(ctx.State); return Unit{} }
+}
+
+func dependencyNames(deps []AgentDependency) []string {
+	names := make([]string, 0, len(deps))
+	for _, dep := range deps {
+		if dep != nil {
+			names = append(names, dep.dependencyName())
+		}
+	}
+	return names
 }
