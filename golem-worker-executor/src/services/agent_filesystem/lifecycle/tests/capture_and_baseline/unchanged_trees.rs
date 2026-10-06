@@ -1206,19 +1206,53 @@ fn each_counted_change_grows_its_counters_and_keeps_the_restored_times() {
 }
 
 #[test]
-fn a_restore_counts_a_chosen_time_and_sets_whether_the_tree_keeps_its_saved_times() {
+fn a_restore_of_saved_times_counts_a_chosen_time_and_sets_whether_the_tree_keeps_them() {
     let start = TreeCounters {
         restored_times: true,
         ..counters(1, 1, 0)
     };
     assert_eq!(
-        [true, false].map(|saved_times| start.after_restore(saved_times)),
+        [true, false].map(|kept| start.after_restore(RestoredTimes::Saved { kept })),
         [
             TreeCounters {
                 restored_times: true,
                 ..counters(2, 2, 1)
             },
             counters(2, 2, 1),
+        ]
+    );
+}
+
+#[test]
+fn a_restore_of_initial_files_counts_an_install_and_keeps_the_restored_times() {
+    assert_eq!(
+        [false, true].map(|restored_times| {
+            TreeCounters {
+                restored_times,
+                ..counters(1, 1, 0)
+            }
+            .after_restore(RestoredTimes::Installed)
+        }),
+        [
+            counters(2, 2, 0),
+            TreeCounters {
+                restored_times: true,
+                ..counters(2, 2, 0)
+            },
+        ]
+    );
+}
+
+#[test]
+fn only_a_restore_with_the_times_of_a_save_has_saved_times() {
+    assert_eq!(
+        [(true, true), (true, false), (false, true), (false, false)]
+            .map(|(saved_times, unchanged)| RestoredTimes::of(saved_times, unchanged)),
+        [
+            RestoredTimes::Saved { kept: true },
+            RestoredTimes::Saved { kept: false },
+            RestoredTimes::Installed,
+            RestoredTimes::Installed,
         ]
     );
 }

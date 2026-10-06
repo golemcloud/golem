@@ -362,6 +362,60 @@ async fn a_check_decides_as_a_capture_and_makes_no_host_directory_and_no_copy() 
     delete_scripted_resident(&control, filesystem).await;
 }
 
+/// A restore that gives the tree of another restore, and says that the tree holds the times of a
+/// save.
+struct WithSavedTimes<Restore>(Restore);
+
+impl<Restore: RestoreTree> RestoreTree for WithSavedTimes<Restore> {
+    fn restore(self, into: &Path) -> impl Future<Output = Result<(), RestoreError>> + Send {
+        self.0.restore(into)
+    }
+}
+
+#[test]
+async fn a_start_from_the_initial_files_of_a_manual_update_holds_only_initial_files() {
+    let agents = UnmanagedAgents::new().await;
+    let files = vec![
+        agents
+            .store
+            .declare("/nested/ro.txt", AgentFilePermissions::ReadOnly, b"ro")
+            .await,
+    ];
+    let restore = || InitialFilesRestore::of_read_only(files.clone().into_boxed_slice()).unwrap();
+    let installed_agent = agents.agent("installed-times");
+    let installed = agents
+        .start(&installed_agent, &files, Some(restore()))
+        .await
+        .unwrap();
+    let saved_agent = agents.agent("saved-times");
+    let saved = agents
+        .start(&saved_agent, &files, Some(WithSavedTimes(restore())))
+        .await
+        .unwrap();
+
+    let installed_check = check_initial_files(&installed, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let saved_check = check_initial_files(&saved, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let installed_capture = capture(&installed, Duration::from_secs(5), None)
+        .await
+        .unwrap();
+
+    assert!(!restore().gives_saved_times());
+    assert_eq!(
+        (installed_check, saved_check),
+        (InitialFilesCheck::InitialFiles, InitialFilesCheck::Changed)
+    );
+    assert!(matches!(
+        installed_capture,
+        CaptureOutcome::InitialFiles { .. }
+    ));
+    delete(seal(installed)).await.unwrap();
+    delete(seal(saved)).await.unwrap();
+}
+
 #[test]
 #[timeout("10s")]
 async fn capture_waits_for_a_dropped_call_that_still_runs() {

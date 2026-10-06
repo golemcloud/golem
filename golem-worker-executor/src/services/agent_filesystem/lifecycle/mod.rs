@@ -1332,6 +1332,28 @@ enum Counted {
     Chosen,
 }
 
+/// The modification times that a restored baseline holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestoredTimes {
+    /// The times of a save. `kept` tells whether the tree keeps them, which is false when the
+    /// initial-file rule changes the tree.
+    Saved { kept: bool },
+    /// The times of an install of initial files.
+    Installed,
+}
+
+impl RestoredTimes {
+    /// The times of a restored tree that holds the times of a save when `saved_times` is true,
+    /// and whose declarations did not change at the restore when `unchanged` is true.
+    fn of(saved_times: bool, unchanged: bool) -> Self {
+        if saved_times {
+            Self::Saved { kept: unchanged }
+        } else {
+            Self::Installed
+        }
+    }
+}
+
 /// The counters of the tree of one generation. They only grow.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct TreeCounters {
@@ -1363,14 +1385,17 @@ impl TreeCounters {
         }
     }
 
-    /// The counters after a restore of the baseline. A restored tree holds the modification times
-    /// of its save, which a start without the restore does not give, so the restore counts as a
-    /// chosen time. `saved_times` tells whether the tree keeps the times of its save, which is
-    /// false when the initial-file rule changes it.
-    fn after_restore(self, saved_times: bool) -> Self {
-        Self {
-            restored_times: saved_times,
-            ..self.after(Counted::Chosen)
+    /// The counters after a restore of the baseline that holds `times`. A tree with the
+    /// modification times of a save holds times that a start without the restore does not give,
+    /// so its restore counts as a chosen time. A tree with the times of an install of initial
+    /// files holds what a start without the restore gives, so its restore counts as an install.
+    fn after_restore(self, times: RestoredTimes) -> Self {
+        match times {
+            RestoredTimes::Saved { kept } => Self {
+                restored_times: kept,
+                ..self.after(Counted::Chosen)
+            },
+            RestoredTimes::Installed => self.after(Counted::Installed),
         }
     }
 
@@ -1511,10 +1536,11 @@ impl GenerationRegistry {
         state.counters = state.counters.after(counted);
     }
 
-    /// Records that the baseline is a restored tree, as [`TreeCounters::after_restore`] tells.
-    fn record_restore(&self, saved_times: bool) {
+    /// Records that the baseline is a restored tree with `times`, as
+    /// [`TreeCounters::after_restore`] tells.
+    fn record_restore(&self, times: RestoredTimes) {
         let mut state = self.state.lock().unwrap();
-        state.counters = state.counters.after_restore(saved_times);
+        state.counters = state.counters.after_restore(times);
     }
 
     /// The number of the generation and its counters now.

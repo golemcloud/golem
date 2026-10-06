@@ -33,6 +33,12 @@ const RECORD_FILE: &str = "record.json";
 pub(crate) trait RestoreTree: Send {
     /// Fills the empty directory `into`. A failure can leave a part of the contents in `into`.
     fn restore(self, into: &Path) -> impl Future<Output = Result<(), RestoreError>> + Send;
+
+    /// Whether the restored tree holds the modification times of a save. A tree that holds only
+    /// the times of an install of initial files gives `false`.
+    fn gives_saved_times(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +128,12 @@ impl RestoreTree for InitialFilesRestore {
                 retryable: true,
                 source: anyhow::Error::new(error).context("write the initial files of a restore"),
             })
+    }
+
+    /// The restore makes each directory now and leaves out every file, which the baseline then
+    /// installs from the initial-file cache, so the tree holds no time of a save.
+    fn gives_saved_times(&self) -> bool {
+        false
     }
 }
 
@@ -952,6 +964,7 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     restore: Restore,
     directory: &HostPath,
 ) -> Result<InitialFileState, Error> {
+    let saved_times = restore.gives_saved_times();
     restore
         .restore(directory.as_path())
         .await
@@ -1014,7 +1027,9 @@ async fn restore_from<Adapter: SandboxFilesystemAdapter, Restore: RestoreTree>(
     )
     .await?;
     let new = declaration_view([&initial, &provisioned]);
-    generation.registry.record_restore(old == new);
+    generation
+        .registry
+        .record_restore(RestoredTimes::of(saved_times, old == new));
     let states = observe(sandbox, &old, &new, &seeded)
         .await
         .map_err(|source| classify_query_error(generation, source))?;

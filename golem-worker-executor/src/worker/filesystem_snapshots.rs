@@ -939,6 +939,13 @@ impl RestoreTree for StartRestore {
             Self::InitialFiles(restore) => restore.restore(into).await,
         }
     }
+
+    fn gives_saved_times(&self) -> bool {
+        match self {
+            Self::Store(restore) => restore.gives_saved_times(),
+            Self::InitialFiles(restore) => restore.gives_saved_times(),
+        }
+    }
 }
 
 /// The confirmation of one upload. It holds a weak handle to the worker, so an upload never keeps
