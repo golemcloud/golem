@@ -37,6 +37,7 @@ import golem.schema.AgentStreamOwnership
 import golem.tool.{ToolInputStream, ToolOutputStream}
 import golem.tool.wire.WitToolError
 import golem.FutureInterop
+import golem.runtime.{MultipartSnapshot, SnapshotData, SnapshotError, SnapshotPayload}
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.Future
@@ -392,25 +393,33 @@ object Guest {
         r.defn.snapshotHandlers match {
           case Some(handlers) =>
             FutureInterop.toPromise(
-              handlers.save(r.instance).map { payload =>
+              handlers.save(r.instance).map { data =>
                 val principal      = initializationPrincipal.getOrElse(golem.Principal.Anonymous)
                 val principalBytes = PrincipalConverter.toJson(principal)
-                if (payload.mimeType == "application/json") {
-                  val stateJson        = new String(payload.bytes, "UTF-8")
-                  val principalJsonStr = new String(principalBytes, "UTF-8")
-                  val envelope         = s"""{"version":1,"principal":$principalJsonStr,"state":$stateJson}"""
-                  JsSnapshot(toUint8Array(envelope.getBytes("UTF-8")), "application/json")
-                } else {
-                  val totalLength  = 1 + 4 + principalBytes.length + payload.bytes.length
-                  val fullSnapshot = new Array[Byte](totalLength)
-                  fullSnapshot(0) = 2.toByte
-                  fullSnapshot(1) = ((principalBytes.length >>> 24) & 0xff).toByte
-                  fullSnapshot(2) = ((principalBytes.length >>> 16) & 0xff).toByte
-                  fullSnapshot(3) = ((principalBytes.length >>> 8) & 0xff).toByte
-                  fullSnapshot(4) = (principalBytes.length & 0xff).toByte
-                  System.arraycopy(principalBytes, 0, fullSnapshot, 5, principalBytes.length)
-                  System.arraycopy(payload.bytes, 0, fullSnapshot, 5 + principalBytes.length, payload.bytes.length)
-                  JsSnapshot(toUint8Array(fullSnapshot), "application/octet-stream")
+                data match {
+                  case parts: MultipartSnapshot =>
+                    val encoded = MultipartSnapshotCodec
+                      .encode(parts, principal)
+                      .fold(error => throw SnapshotError(error), identity)
+                    JsSnapshot(toUint8Array(encoded.bytes), encoded.mimeType)
+                  case payload: SnapshotPayload =>
+                    if (payload.mimeType == "application/json") {
+                      val stateJson        = new String(payload.bytes, "UTF-8")
+                      val principalJsonStr = new String(principalBytes, "UTF-8")
+                      val envelope         = s"""{"version":1,"principal":$principalJsonStr,"state":$stateJson}"""
+                      JsSnapshot(toUint8Array(envelope.getBytes("UTF-8")), "application/json")
+                    } else {
+                      val totalLength  = 1 + 4 + principalBytes.length + payload.bytes.length
+                      val fullSnapshot = new Array[Byte](totalLength)
+                      fullSnapshot(0) = 2.toByte
+                      fullSnapshot(1) = ((principalBytes.length >>> 24) & 0xff).toByte
+                      fullSnapshot(2) = ((principalBytes.length >>> 16) & 0xff).toByte
+                      fullSnapshot(3) = ((principalBytes.length >>> 8) & 0xff).toByte
+                      fullSnapshot(4) = (principalBytes.length & 0xff).toByte
+                      System.arraycopy(principalBytes, 0, fullSnapshot, 5, principalBytes.length)
+                      System.arraycopy(payload.bytes, 0, fullSnapshot, 5 + principalBytes.length, payload.bytes.length)
+                      JsSnapshot(toUint8Array(fullSnapshot), "application/octet-stream")
+                    }
                 }
               }
             )
@@ -423,8 +432,10 @@ object Guest {
   private[runtime] def decodeSnapshotPayload(
     bytes: Array[Byte],
     mimeType: String
-  ): Either[String, (golem.Principal, Array[Byte])] =
-    if (mimeType == "application/json") {
+  ): Either[String, (golem.Principal, SnapshotData)] =
+    if (mimeType.takeWhile(_ != ';').trim.equalsIgnoreCase("multipart/mixed"))
+      MultipartSnapshotCodec.decode(bytes, mimeType)
+    else if (mimeType == "application/json") {
       Json.parse(bytes) match {
         case Left(error)     => Left(s"Failed to parse JSON snapshot envelope: $error")
         case Right(envelope) =>
@@ -441,7 +452,7 @@ object Guest {
                     case Right(principal) =>
                       envelope.get("state").one.toOption match {
                         case None        => Left("JSON snapshot envelope is missing 'state'")
-                        case Some(state) => Right((principal, state.printBytes))
+                        case Some(state) => Right((principal, SnapshotPayload(state.printBytes, "application/json")))
                       }
                   }
               }
@@ -452,7 +463,7 @@ object Guest {
     } else {
       val version = bytes(0) & 0xff
       version match {
-        case 1 => Right((golem.Principal.Anonymous, bytes.drop(1)))
+        case 1 => Right((golem.Principal.Anonymous, SnapshotPayload(bytes.drop(1), "application/octet-stream")))
         case 2 =>
           if (bytes.length < 5) Left("Version 2 snapshot too short for principal length")
           else {
@@ -466,7 +477,8 @@ object Guest {
               val principalBytes = java.util.Arrays.copyOfRange(bytes, 5, principalEnd)
               PrincipalConverter.fromJson(principalBytes) match {
                 case Left(error)      => Left(s"Failed to deserialize snapshot principal: $error")
-                case Right(principal) => Right((principal, bytes.drop(principalEnd)))
+                case Right(principal) =>
+                  Right((principal, SnapshotPayload(bytes.drop(principalEnd), "application/octet-stream")))
               }
             }
           }

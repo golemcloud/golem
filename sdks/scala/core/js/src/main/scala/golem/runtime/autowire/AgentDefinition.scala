@@ -22,6 +22,7 @@ import golem.host.js.schema.{JsAgentError, JsAgentType, JsSchemaValueTree}
 import golem.runtime.{AgentMetadata, WireAgentMetadata}
 import golem.runtime.SnapshotRestoreContext
 import golem.runtime.SnapshotHandlers
+import golem.runtime.SnapshotData
 import golem.Uuid
 
 import scala.scalajs.js
@@ -65,7 +66,7 @@ final class AgentDefinition[Instance](
   val mode: AgentMode = AgentMode.Durable,
   val snapshotHandlers: Option[SnapshotHandlers[Instance]] = None,
   private[autowire] val restoreInstance: Option[
-    (Array[Byte], String, JsSchemaValueTree, Option[Uuid], Principal) => js.Promise[RestoredInstance[Instance]]
+    (SnapshotData, String, JsSchemaValueTree, Option[Uuid], Principal) => js.Promise[RestoredInstance[Instance]]
   ] = None
 ) {
 
@@ -96,7 +97,7 @@ final class AgentDefinition[Instance](
 
   /** Restores a fresh instance in a type-erased runtime dispatch context. */
   def restoreAny(
-    bytes: Array[Byte],
+    bytes: SnapshotData,
     agentId: String,
     identity: JsSchemaValueTree,
     phantomId: Option[Uuid],
