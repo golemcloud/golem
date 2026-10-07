@@ -227,19 +227,36 @@ property this relies on (bare Wasmtime, no oplog); the marker mechanics are cove
 ## 9. Automatic update with snapshot
 
 ```
-#70 PendingUpdate { target revision r2, Automatic } (h)
+#40 Snapshot { filesystem_snapshot: p-… } (h)          record S of revision r1
+#41 SnapshotConfirmed { p-… } (h)
+#70 PendingUpdate { target revision r2, Automatic } (h)   admission P
     worker unloaded and reconstructed by the outer loop
+#71 PendingUpdate { SnapshotAssistedAutomatic { r2, source r1, S = #40, p-… },
+                    update_attempt_index: Some(#70) } (h)   strategy, frozen
+    … tail #41..#70 and later source work replayed …
+#90 SuccessfulUpdate { r2 } (h)
 ```
 
-Instance creation (`worker/mod.rs`, `component_version_for_replay`): because an update is
-pending, automatic snapshots are ignored and the baseline is the last manual-update snapshot (or
-`INITIAL`); the new instance is created for revision `r2`. `prepare_instance` then, for
-`Automatic`: `try_load_snapshot` loads that baseline (the load hook runs in snapshotting mode:
-no oplog append or consume), and `resume_replay` replays the remaining old history against the
-`r2` component; success appends `SuccessfulUpdate` during that replay. If replay fails while the
-update is still pending, `on_worker_update_failed` appends `FailedUpdate` and returns
-`RetryDecision::Immediate`, so the outer loop rebuilds on the old revision with its automatic
-snapshot eligible again. Old-revision automatic snapshots are never used for `r2`
+Instance creation (`worker/mod.rs::create_instance`): `snapshot_selection::decide_start` sees the
+unselected admission `#70` at the queue head, selects `S` (the last usable record of r1 that
+passes; it can be newer than `#70`) and gives `PersistStrategy`. The start appends `#71` and
+decides again. Now the head is a selected snapshot-assisted update, so the baseline is
+`AssistedPending { S }`, the replay revision is r1, and the new instance is created for r2.
+`plan_start` gives one `StartPlan`: restore the filesystem snapshot `p-…`, then load the
+application snapshot of `#40` and skip `1..=#40`. `materialize` restores the tree; `prepare_instance`
+then runs `try_load_snapshot` (the load hook runs in snapshotting mode: no oplog append or
+consume) and `resume_replay` replays the tail against the r2 component with r1's metadata. At
+`ReplayFinished`, `update_state_to_new_component_revision(r2)` applies the initial-file rule from
+r1 to r2, and `SuccessfulUpdate` is appended. The fold promotes `S` to `authoritative_snapshot`
+with its name and keeps `component_revision_for_replay = r1`, so a later start from `S` restores
+`p-…`, replays the tail with r1's metadata and applies the rule at the replayed `#90`.
+
+Without a usable record, `#71` is a plain `Automatic` strategy: the baseline is the
+authoritative baseline (or `INITIAL`), and `resume_replay` replays all the remaining old history
+against r2. A failure of an attempt goes through `start_outcome::decide`, which builds the
+`FailedUpdate` (with `UPDATE_SNAPSHOT_INCOMPATIBLE`, `UPDATE_SNAPSHOT_UNAVAILABLE` or
+`UPDATE_REPLAY_FAILED` among others) and returns `RetryDecision::Immediate`, so the outer loop
+rebuilds on r1. Periodic records of r1 are never used as periodic baselines for r2
 (`tests/hot_update.rs::auto_update_invalidates_snapshot_from_previous_revision`).
 
 `SnapshotBased` differs: the save hook ran and the payload was recorded *before* unload;

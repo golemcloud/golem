@@ -401,8 +401,9 @@ they remain `Retrying` without a limit and retry on the next demand (invoke, res
 activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
 Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
 An authoritative manual-update or promoted snapshot-assisted baseline that cannot be loaded is
-terminal even when the immediate cause is a payload download failure, because recovery has no
-compatible replay fallback. The
+terminal, because recovery has no compatible replay fallback. A payload download failure is
+terminal for the manual-update baseline too; for the promoted snapshot-assisted baseline it passes
+to the recovery path, which retries. The
 ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
 kind with the failed/retrying status, so metadata and invocation admission agree after unload or
 reassignment. A later startup appends `RecoverySucceeded` only when it fully completes
@@ -818,57 +819,122 @@ oplog entries (`DurableCallSession` created with `persisted: false`; `durability
 is exactly `snapshotting_mode`).
 
 Which history the new instance replays is decided in `Worker` construction (`worker/mod.rs`,
-`create_instance`, through `Worker::select_start`, which loads the persisted rejections and
-selects with `worker/snapshot_selection.rs::StartSelection::of`). The status keeps two
-automatic snapshot records: the last one, `last_automatic_snapshot` (an `AutomaticSnapshot` with
-its index, time, revision, filesystem snapshot name and confirmation), and
-`previous_usable_automatic_snapshot`, the newest usable one before it. A record is usable when it
-has no filesystem snapshot name, or when a `SnapshotConfirmed` entry confirms its name. A start takes the first of the two that is usable, has
-the current revision, is not in the rejected set, is not unavailable for this start, and has no
-name when filesystem snapshots are disabled. It skips `INITIAL+1..=snapshot_idx`. An ephemeral
+`create_instance`, through `Worker::decide_start`, which loads the persisted rejections and calls
+the pure `worker/snapshot_selection.rs::decide_start`). The status keeps two automatic snapshot
+records: the last one, `last_automatic_snapshot` (an `AutomaticSnapshot` with its index, time,
+revision, filesystem snapshot name and confirmation), and `previous_usable_automatic_snapshot`,
+the newest usable one before it. A record is usable when it has no filesystem snapshot name, or
+when a `SnapshotConfirmed` entry confirms its name. `select_automatic_snapshot` takes the first of
+the two that `passes`: it is usable, has the current revision, is not in the rejected set, is not
+unavailable for this start, is not the selected record of a live `FailedUpdate` with
+`SnapshotFault::Unavailable`, and has no name when filesystem snapshots are disabled. An ephemeral
 agent never has an automatic record: `resolve_agent_properties` gives it
 `SnapshotPolicy::Disabled`, because a start from a snapshot record skips the initialization that
-the replay of an ephemeral agent needs, and that replay then fails. No automatic
-record is used while an update is pending. Without a selected record, the last manual-update
-snapshot is the baseline, else `OplogIndex::INITIAL`. The status also keeps
-`authoritative_snapshot`, the snapshot that a successful update established (a manual-update
-payload, or the periodic snapshot that a successful snapshot-assisted automatic update selected),
-and the start passes its index as the last snapshot of the replay. `prepare_instance` (`durable_host/mod.rs`)
-then branches on `PendingUpdate`:
+the replay of an ephemeral agent needs, and that replay then fails.
+
+`decide_start` reads the head of the update queue and gives one `StartDecision`:
+
+- `PersistStrategy` for a public `Automatic` admission `P` at the head that has no strategy yet.
+  The queue filter (`QueueFilter::UnselectedAutomatic`) lets a record pass only when the target is
+  newer than the current revision and the record is before every `SnapshotBased` element of the
+  queue; `incompatible_before` closes the filter when a live `FailedUpdate` of the same target
+  from the same source has `SnapshotFault::Incompatible`. A record that passes gives
+  `SnapshotAssistedAutomatic { target, source revision, source start index, snapshot index,
+  snapshot revision, filesystem_snapshot }`; no record gives plain `Automatic`, a full replay.
+  `create_instance` appends that description as a second `PendingUpdate` with
+  `update_attempt_index: Some(P)`, and decides again. The status fold
+  (`worker/status/update_queue.rs`) refines the head with that entry instead of adding an update,
+  so reconstruction never recomputes the choice.
+- `FailHead` for a selected snapshot-assisted head whose source does not hold any more
+  (`stale_assisted_head`: the revision or its start index changed, or the target is not newer).
+  The start writes the failed update and decides again.
+- `Start(StartSelection)` otherwise. `StartSelection.baseline` is one `SelectedBaseline`: the
+  record of a snapshot-assisted head (`AssistedPending`), the record of a `SnapshotBased` head
+  (`ManualPending`), a periodic record when no update is pending (`Periodic`), the authoritative
+  baseline (`AssistedPromoted` or `ManualPromoted`, from `authoritative_snapshot`), or
+  `InitialFiles`. A pending plain `Automatic` head uses the authoritative baseline or the initial
+  files.
+
+The replay revision of `Periodic` and `AssistedPending` is the revision of the record; for a
+snapshot-assisted update that is the source revision. `filesystem_snapshots::plan_start` maps the
+baseline to one `StartPlan`: the tree source (`Store(name)`, `InitialFiles`, or `SourceFiles` for
+a manual-update record without a name) and the `ReplayBaseline` (the record whose application
+snapshot `prepare_instance` loads, the skipped override, the role). The restore and the load come
+from that one value, so an application snapshot never loads without the files of the same
+record. A record with a name on an executor without filesystem snapshots gives `SnapshotsDisabled`.
+`prepare_instance` (`durable_host/mod.rs`) then branches on the pending update:
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
   already be live, and `finalize_pending_snapshot_update` loads it into the new revision.
-- `Automatic` — `try_load_snapshot` loads the baseline, then `resume_replay` replays the remaining
-  old history against the new component; success is recorded during that replay. If replay fails
-  while the update is still pending, `on_worker_update_failed` appends `FailedUpdate` and returns
-  `RetryDecision::Immediate` so the worker rebuilds on the old revision. An install of the initial
-  files of the new revision that fails at the end of the replay puts the update back as pending,
-  so it takes the same path.
-- Public `Automatic` admission `P` records only the requested target and its exact attempt
-  identity. When that request reaches the queue head, `create_instance` appends a second correlated
-  `PendingUpdate` (`Worker::persist_automatic_update_strategy`) that freezes the strategy, so
-  reconstruction never recomputes the choice. `select_automatic_update_strategy` always gives a
-  plain `Automatic` strategy, which replays the whole history on the target. The status fold
-  refines the queue head with the second entry instead of adding an update. The oplog and the
-  durable host also know the `SnapshotAssistedAutomatic` strategy (a selected periodic snapshot
-  `S` loaded before the tail replays), but the executor never selects it.
-- No pending update — `try_load_snapshot`; an automatic snapshot load failure or divergent replay
-  suffix rejects the exact index of that record (`Worker::reject_periodic`, which applies
-  `SnapshotExclusions::rejecting`) and returns
-  `RetryDecision::Immediate`. The outer loop recreates the entire Store, component metadata,
-  revision, and plugin context, and selects again: the other usable record, the manual-update
-  baseline, or a full replay. It never replays pre-migration history. Only after preparation
-  succeeds, and before readiness is published, is the rejected set merged into the persisted set
-  under the worker's `AgentFingerprint` (`Worker::settle_exclusions_after_prepare`, through
-  `WorkerService::reject_periodic_snapshots`). The set holds
-  exact indexes, so a newer record stays selectable.
+- `SnapshotAssistedAutomatic` — `try_load_snapshot` loads the application snapshot of the selected
+  record `S` into the target, after `materialize` restored its filesystem snapshot. `resume_replay`
+  replays the stopped-source tail with the source revision's metadata: the executable metadata,
+  `GOLEM_COMPONENT_REVISION`, the config and the initial files. At `ReplayFinished`,
+  `prepare_revision_update` (`durable_host/revision_update.rs`) fetches the target metadata and
+  applies the initial-file rule from the source to the target, at the update point, as a full
+  replay does. Then `SuccessfulUpdate` is written. A later start from the promoted `S` restores
+  the same filesystem snapshot and applies the rule at the replayed `SuccessfulUpdate`, in the
+  same order.
+- `Automatic` — `try_load_snapshot` loads the authoritative baseline, if any, then `resume_replay`
+  replays the remaining old history against the new component; success is recorded during that
+  replay.
+- No pending update — `try_load_snapshot` loads the selected periodic record.
+
+Every start failure goes through `worker/start_outcome.rs::decide(role, head, RawStartError,
+lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `ManualPromoted`,
+`InitialFiles`, `AutomaticPending`, `AssistedPending`, `AssistedPromoted`). It gives a
+`StartAction`: `FailUpdate { entry, reject }` with the entry already built from the paired queue
+element (attempt index, the snapshot-assisted details of the head, `snapshot_fault`, and the
+details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry`, `Succeed`
+or `ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
+entry. After `FailUpdate` the start returns `RetryDecision::Immediate` and the outer loop rebuilds
+on the source revision. The codes are `pub(crate) const` items of `start_outcome`:
+
+- `UPDATE_SNAPSHOT_UNAVAILABLE`: the store lost the filesystem snapshot (`RestoreClass::Lost`) or
+  the application snapshot payload of the selected record of an assisted update
+  (`SnapshotFault::Unavailable`, and the record is rejected); with a manual-update text, the store
+  lost the filesystem snapshot of a pending manual update.
+- `UPDATE_SNAPSHOT_INCOMPATIBLE`: the assisted target could not load `S`, or the tail diverged
+  (`SnapshotFault::Incompatible`; `S` is not rejected, and the next request for the same target
+  from the same source is a full replay).
+- `UPDATE_REPLAY_FAILED`: a plain automatic update (full replay) failed in the load or the replay.
+- `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS`, `UPDATE_SNAPSHOT_RESTORE_FAILED` (also for a full
+  local disk, `RestoreClass::DiskFull`): the filesystem snapshot of a pending manual or assisted
+  update cannot come back on this executor.
+- `UPDATE_TARGET_NOT_FOUND`, `UPDATE_TARGET_REFUSED`: the component service has no target
+  revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
+  writes no failed update: the recovery path retries the start.
+
+`worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
+that cannot take its snapshot on an executor without filesystem snapshots.
+
+Transient causes of a pending update (`RestoreClass::Transient`, a reconstruction error, a full
+quota, `RecoveryRequired`, `Interrupted`, an interrupted instantiation, the load's `Retry`) write
+no failed update; a frozen assisted head retries with the same `S`. No retry counter exists. Once
+`S` is selected, an attempt never tries another record or a full replay. On success the fold sets
+`authoritative_snapshot` to `{ S, SnapshotAssistedAutomatic { filesystem_snapshot } }` and
+`component_revision_for_replay` to the source revision. A later start may use a newer periodic
+record of the target; when that record is rejected, it falls back to `S`, never to the history
+before it. A promoted baseline whose filesystem snapshot is lost, does not restore here or needs
+filesystem snapshots on an executor without them, or whose application snapshot does not load,
+fails the start with a visible cause; a transient cause retries.
+
+With no pending update, an automatic snapshot load failure or divergent replay suffix rejects the
+exact index of that record (`Worker::reject_periodic`, which applies
+`SnapshotExclusions::rejecting`) and returns `RetryDecision::Immediate`. The outer loop recreates
+the entire Store, component metadata, revision, and plugin context, and selects again: the other
+usable record, the authoritative baseline, or a full replay. It never replays pre-migration
+history. Only after preparation succeeds, and before readiness is published, is the rejected set
+merged into the persisted set under the worker's `AgentFingerprint`
+(`Worker::settle_exclusions_after_prepare`, through `WorkerService::reject_periodic_snapshots`).
+The set holds exact indexes, so a newer record stays selectable.
 
 An automatic snapshot payload-download failure, or a failed restore of its filesystem snapshot,
 instead adds the index to the unavailable set of that startup attempt
 (`Worker::mark_periodic_unavailable`), so the retry skips the record without rejecting it; a
-successful preparation clears the set (`Worker::settle_exclusions_after_prepare`). A manual-update snapshot
-cannot be skipped: its load failure is terminal, wrapped as failure to resume while retaining the
-underlying cause.
+successful preparation clears the set (`Worker::settle_exclusions_after_prepare`). A manual-update
+snapshot cannot be skipped: its load failure is terminal, wrapped as failure to resume while
+retaining the underlying cause.
 
 ### Filesystem snapshots
 
@@ -894,9 +960,12 @@ again; another refusal fails the update. The admission and the slot takes of its
 `confirmation_wait` after `admit_update` started, with `SaveRunning` or `NoSlot`; a run of the
 upload that started before then runs to its end. A terminal interrupt ends that wait, or the upload
 of the update, and fails the update. `SavedUpdate::delete_older_snapshots` runs after
-`PendingUpdate` commits, and keeps every update name that the status holds
-(`snapshot_selection::update_names_in_use`: the successful and the pending updates);
-`retained_update_snapshots` limits only the other update snapshots.
+`PendingUpdate` commits, and keeps every name that the status uses
+(`snapshot_selection::names_in_use`: the two start candidates, the successful and the pending
+updates, manual and snapshot-assisted, and the authoritative snapshot-assisted baseline);
+`retained_update_snapshots` limits only the other update snapshots. Periodic retention keeps the
+same names, so the filesystem snapshot of every successful snapshot-assisted update stays while
+its `SuccessfulUpdate` is live, whatever its age.
 
 An admission replaces a periodic job that has not decided and whose store call still holds the
 save mark of the agent, when the call waits for its next run after a failed run, or waits for or
@@ -963,10 +1032,11 @@ left of `confirmation_wait`, or for at most `store_check_limit` when it did not 
 holds it, the start appends `SnapshotConfirmed` as the owner of the agent. A terminal interrupt ends
 the wait. A start that finds no whole snapshot falls back to the previous usable record.
 
-`create_instance` restores the tree of the selected baseline. `RunningWorker::start_baseline`
-plans the baseline and makes its restore, and `StartFilesystem::materialize` applies it to the new
-filesystem through `materialize_baseline`: the filesystem snapshot of a named record, or the
-initial files for a record without a name. A
+`create_instance` restores the tree of the selected baseline. `StartFilesystem::load_and_plan`
+plans the baseline with `plan_start` and makes its restore, and `StartFilesystem::materialize`
+applies it to the new filesystem through `materialize_baseline`: the filesystem snapshot of a
+named record, or the initial files of the replay revision for a record without a name. The
+suffix-rollback check reads `StartFilesystem::replay()` before the filesystem is built. A
 manual-update record without a name restores the initial files of the source revision when they
 are all read-only, and then applies the initial files of the target revision.
 
