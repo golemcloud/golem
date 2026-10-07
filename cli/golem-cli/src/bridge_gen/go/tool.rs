@@ -733,6 +733,13 @@ fn go_kebab(name: &str) -> String {
     out
 }
 
+/// The SDK's unit type, which a command without arguments or a result, and an
+/// error without a payload, is declared with.
+fn unit(writer: &mut GoWriter) -> String {
+    writer.import(GOLEM_PKG);
+    "golem.Unit".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::go_kebab;
@@ -752,11 +759,4 @@ mod tests {
             assert_eq!(go_kebab(input), expected, "{input}");
         }
     }
-}
-
-/// The SDK's unit type, which a command without arguments or a result, and an
-/// error without a payload, is declared with.
-fn unit(writer: &mut GoWriter) -> String {
-    writer.import(GOLEM_PKG);
-    "golem.Unit".to_string()
 }
