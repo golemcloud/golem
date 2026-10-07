@@ -36,7 +36,8 @@ use golem_service_base::error::worker_executor::{
     ComponentServiceRefusal, InterruptKind, WorkerExecutorError,
 };
 
-/// The selected record of a snapshot-assisted update is no longer in the store.
+/// The selected record of a snapshot-assisted update, or the record of a pending snapshot-based
+/// manual update, is no longer in the store.
 pub(crate) const UPDATE_SNAPSHOT_UNAVAILABLE: &str = "UPDATE_SNAPSHOT_UNAVAILABLE";
 /// The target of a snapshot-assisted update could not load its selected record, or the history
 /// after the record diverged.
@@ -604,8 +605,9 @@ fn cell(column: Column, problem: StartProblem) -> Cell {
             Problem::LoadFailed | Problem::Divergence => Cell::Reject,
             _ => Cell::Pass,
         },
-        // A pending manual update loads its record through its own load, which reports every
-        // failure as `ManualLoadFailed`, so the other load rows of this column are not reached.
+        // A pending manual update loads its record through its own load, which reports a failed
+        // load as `ManualLoadFailed` and an interrupted load or an exited guest as
+        // `ManualLoadInterrupted`, so the other load rows of this column are not reached.
         Column::ManualPending => match problem {
             Problem::Target(fetch) | Problem::UpdateState(fetch) => target(fetch),
             Problem::ModeChange

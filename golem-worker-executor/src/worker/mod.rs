@@ -301,7 +301,8 @@ fn startup_component_charge_revision(status: &AgentStatusRecord) -> ComponentRev
 enum TargetChargeAction {
     /// The target resolved: charge it with the resolved module size.
     ChargeTarget(ResolvedComponentCharge),
-    /// The target does not exist: `create_instance` will fail the update and load
+    /// The target does not exist, or the component service refused it:
+    /// `create_instance` will fail the update and load
     /// the current revision, so charge the current revision instead.
     FallBackToCurrent,
     /// Resolution failed transiently: `create_instance` may still load the
@@ -5439,8 +5440,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     };
                 }
                 TargetChargeAction::FallBackToCurrent => {
-                    // The target revision does not exist; create_instance will fail
-                    // the update and load the current revision, so charge that.
+                    // The target revision does not exist, or the component service
+                    // refused it; create_instance will fail the update and load the
+                    // current revision, so charge that.
                     debug!(
                         "Pending-update target revision {component_revision} does not exist; charging against current revision and letting create_instance fail the update and recover"
                     );

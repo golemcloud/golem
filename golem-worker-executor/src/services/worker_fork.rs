@@ -663,7 +663,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // worker's metadata is consistent with its initial oplog entry (which
         // preserves the source's `created_by`), and that resource consumption
         // is attributed to the component owner, not the caller.
-        // See https://github.com/golemcloud/golem/issues/3099
         let target_worker_metadata = AgentMetadata {
             agent_id: target_agent_id.clone(),
             owner_kind: initial_source_worker_metadata.owner_kind,

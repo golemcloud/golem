@@ -17,11 +17,16 @@
 //!
 //! The status keeps two automatic snapshot records: the last one, and the newest usable one
 //! before it. A record is usable when a `SnapshotConfirmed` entry confirms its filesystem
-//! snapshot, or when it has no filesystem snapshot name. A start without a pending update takes
-//! the first of the two that is usable, of the current component revision, not rejected, and not
-//! unavailable for this start. An automatic update at the head of the queue that has no strategy
-//! yet takes a record by the same rules, and its strategy entry freezes that choice. When no
-//! record is taken, the start uses the authoritative baseline or a full replay.
+//! snapshot, or when it has no filesystem snapshot name. An executor without filesystem snapshots
+//! uses only a record without a name. A start without a pending update, or with a plain automatic
+//! update that has its strategy entry, takes the first of the two that is usable, of the current
+//! component revision, not rejected, not lost in a failed update, and not unavailable for this
+//! start. An automatic update at the head of the queue that has no strategy yet takes a record by
+//! the same rules, only when its target is newer than the current revision and only from before
+//! the first snapshot-based manual update in the queue. It takes no record when an earlier
+//! snapshot-assisted attempt with the same target from the same source could not load its record
+//! or diverged after it. Its strategy entry freezes that choice. When no record is taken, the
+//! start uses the authoritative baseline, else the initial files with a full replay.
 
 use crate::worker::start_outcome::BaselineRole;
 use crate::worker::status::update_queue::is_unselected_automatic;
@@ -405,7 +410,8 @@ enum QueueFilter {
         before: Option<OplogIndex>,
     },
     /// Any other head, or an automatic update whose earlier snapshot-assisted attempt with the
-    /// same target from the same source could not use its record: no record.
+    /// same target from the same source could not load its record or diverged after it: no
+    /// record.
     Closed,
 }
 
@@ -458,7 +464,7 @@ fn incompatible_before(status: &AgentStatusRecord, target: ComponentRevision) ->
 struct AutomaticSnapshotFilter<'a> {
     /// What the update queue allows.
     queue: QueueFilter,
-    /// The entries whose application snapshot did not load or whose replay diverged.
+    /// The entries that [`SnapshotExclusions`] rejects.
     rejected: &'a HashSet<OplogIndex>,
     /// The entries whose payload or filesystem snapshot this start could not get, when the filter
     /// excludes them.

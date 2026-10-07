@@ -4643,7 +4643,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
     }
 
-    /// Recreates the instance from the authoritative baseline, excluding this periodic snapshot.
+    /// Rejects this periodic snapshot for the starts of this incarnation and gives an immediate
+    /// retry. The next start selects its baseline again without this record: the previous usable
+    /// periodic record, or else the authoritative baseline.
     fn abandon_diverged_automatic_snapshot(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         error: &impl std::fmt::Display,
@@ -6325,7 +6327,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     // diverged from the recorded execution because the guest state
                                     // restored from the snapshot differs from the original one. The
                                     // recorded oplog is authoritative, so instead of committing the
-                                    // failure the snapshot is abandoned and the worker replays from
+                                    // failure the snapshot is rejected and the worker starts again
+                                    // without it, from an earlier usable periodic record or from
                                     // its authoritative baseline.
                                     Some(TrapType::Error { error, .. })
                                         if snapshot_divergence
@@ -11143,9 +11146,11 @@ struct PrivateDurableWorkerState {
     last_snapshot_index: Option<OplogIndex>,
     /// The baseline of the start: the column of the start outcome table.
     baseline_role: BaselineRole,
-    /// Identifies whether replay after a snapshot is optional periodic recovery or a required
-    /// assisted-update attempt. Optional recovery may abandon a divergent snapshot; assisted replay
-    /// must instead fail the update without recording an application failure.
+    /// The purpose of the speculative replay of this start: the replay after a periodic record,
+    /// the replay after the record of a snapshot-assisted update, or the full replay of a pending
+    /// automatic update, or `None` when the replay is not speculative. A periodic recovery can reject a divergent record; an update replay
+    /// fails the update or retries it, as the outcome table decides, and records no application
+    /// failure.
     snapshot_replay_purpose: SnapshotReplayPurpose,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).

@@ -41,10 +41,10 @@ pub(crate) struct RegionFold {
 /// `baseline`.
 ///
 /// `Jump` and `Revert` entries add skipped regions. A successful snapshot-based update commits
-/// the history before its `PendingUpdate` entry, and a successful snapshot-assisted automatic
-/// update commits the history up to its selected record, both read from the paired queue
-/// element. The override is the history before the `PendingUpdate` entry of a snapshot-based
-/// queue head. Entries in a deleted region change only the manual admissions of the queue.
+/// the history up to and including its `PendingUpdate` entry, and a successful snapshot-assisted
+/// automatic update commits the history up to and including its selected record, both read from
+/// the paired queue element. The override is the history up to and including the `PendingUpdate`
+/// entry of a snapshot-based queue head. Entries in a deleted region change only the manual admissions of the queue.
 pub(crate) fn fold_regions(
     baseline: &AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
@@ -154,9 +154,9 @@ fn fold(
     }
 }
 
-/// The history that a successful update of `applied` makes skipped: the history before the
-/// `PendingUpdate` entry of a snapshot-based update, or the history up to the record that a
-/// snapshot-assisted automatic update selected.
+/// The history that a successful update of `applied` makes skipped: the history up to and
+/// including the `PendingUpdate` entry of a snapshot-based update, or the history up to and
+/// including the record that a snapshot-assisted automatic update selected.
 fn committed_update_region(applied: &PendingUpdateRef) -> Option<OplogRegion> {
     match &applied.kind {
         PendingUpdateKind::Automatic => None,
