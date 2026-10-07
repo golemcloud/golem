@@ -846,6 +846,11 @@ run_unprivileged_test \
 run_unprivileged_test \
   lib \
   "${lib_test_binary}" \
+  sandbox_filesystem::host_directory::tests::reflink_xfs_a_provision_dropped_while_its_setup_is_queued_keeps_its_root_until_the_setup_ends
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
   sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_volume_with_project_quota_accounting
 
 run_unprivileged_test \
