@@ -38,8 +38,8 @@ func newUnderlyingLayer(tool *underlying.UnderlyingTool) underlyingLayer {
 	return underlyingLayer{start: func(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
 		res, out, errOut := tool.Invoke(slices.Clone(path), input, underlyingStdin(stdin))
 		return toolCall{
-			stdout: optionalReader(out),
-			stderr: optionalReader(errOut),
+			stdout: optionalReader("stdout", out),
+			stderr: optionalReader("stderr", errOut),
 			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 				r := res.Get()
 				res.Drop()
@@ -54,12 +54,12 @@ func newUnderlyingLayer(tool *underlying.UnderlyingTool) underlyingLayer {
 	}}
 }
 
-func optionalReader(stream witTypes.Option[*byteStream]) *byteReader {
+func optionalReader(name string, stream witTypes.Option[*byteStream]) *byteReader {
 	if stream.IsNone() {
 		return nil
 	}
 	s := stream.Some()
-	return &byteReader{src: s, release: s.Drop}
+	return &byteReader{src: s, name: name, release: s.Drop}
 }
 
 // underlyingStdin hands an unread standard input on whole, and otherwise
@@ -71,6 +71,7 @@ func underlyingStdin(stdin io.Reader) witTypes.Option[*byteStream] {
 	if br, ok := stdin.(*byteReader); ok && !br.consumed {
 		if raw, ok := br.src.(*byteStream); ok {
 			br.consumed = true
+			br.release = nil
 			return witTypes.Some(raw)
 		}
 	}

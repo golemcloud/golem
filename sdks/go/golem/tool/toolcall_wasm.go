@@ -45,8 +45,8 @@ func startToolCallHost(
 		stdinArg = witTypes.Some(handle)
 		go pumpToolStdin(writer, closed, stdin)
 	}
-	stdoutArg, stdout := requestOutput(streams.Stdout)
-	stderrArg, stderr := requestOutput(streams.Stderr)
+	stdoutArg, stdout := requestOutput("stdout", streams.Stdout)
+	stderrArg, stderr := requestOutput("stderr", streams.Stderr)
 
 	future := rpc.AsyncInvokeAndAwait(slices.Clone(path), input, stdinArg, stdoutArg, stderrArg)
 	return toolCall{
@@ -67,12 +67,12 @@ func startToolCallHost(
 }
 
 // requestOutput creates the target and reader of an output the call requests.
-func requestOutput(requested bool) (witTypes.Option[*toolHost.ToolOutput], *byteReader) {
+func requestOutput(name string, requested bool) (witTypes.Option[*toolHost.ToolOutput], *byteReader) {
 	if !requested {
 		return witTypes.None[*toolHost.ToolOutput](), nil
 	}
 	handle, reader := toolHost.CreateOutput()
-	return witTypes.Some(handle), &byteReader{src: reader, release: reader.Drop}
+	return witTypes.Some(handle), &byteReader{src: reader, name: name, release: reader.Drop}
 }
 
 // pumpToolStdin copies the caller's reader into the call's standard input and

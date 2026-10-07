@@ -26,7 +26,8 @@ func newToolStdin(stdin toolExports.Stdin) *byteReader {
 	if stdin.IsNone() {
 		return &byteReader{absent: absentStdin}
 	}
-	return &byteReader{src: stdin.Some()}
+	s := stdin.Some()
+	return &byteReader{src: s, name: "stdin", release: s.Drop}
 }
 
 // hostOutput is the writer the host supplied for an output, nil when the

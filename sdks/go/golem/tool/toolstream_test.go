@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golemcloud/golem/sdks/go/golem"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
@@ -56,10 +57,11 @@ func (f *fakeSource) WriterDropped() bool { return f.at >= len(f.items) }
 
 // fakeSink records what a handler wrote and which terminal it selected.
 type fakeSink struct {
-	written  []byte
-	finished bool
-	failed   *OutputFailure
-	writeErr *streams.StreamWriteError
+	written   []byte
+	finished  bool
+	failed    *OutputFailure
+	writeErr  *streams.StreamWriteError
+	finishErr *streams.StreamWriteError
 }
 
 func (f *fakeSink) Write(b []uint8) witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
@@ -71,6 +73,9 @@ func (f *fakeSink) Write(b []uint8) witTypes.Result[witTypes.Unit, streams.Strea
 }
 
 func (f *fakeSink) Finish() witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
+	if f.finishErr != nil {
+		return witTypes.Err[witTypes.Unit](*f.finishErr)
+	}
 	f.finished = true
 	return witTypes.Ok[witTypes.Unit, streams.StreamWriteError](witTypes.Unit{})
 }
@@ -345,5 +350,132 @@ func TestCommandStreamsFailOnPanic(t *testing.T) {
 	}
 	if got := sink.failed.String(); got != "failed: command <root> panicked: handler gave up" {
 		t.Errorf("failure is %q, want the panic message", got)
+	}
+}
+
+type Gate struct{}
+
+type GateArgs struct{ Mode string }
+
+// declareGate registers a command with both outputs and a declared error, to
+// observe which terminal each output gets for each outcome.
+func declareGate(r *toolRegistry, d *definitions) {
+	def := defineToolInto[Gate](r, d, "gate", Spec{Version: "0.1.0"}, false)
+	rejected := DefineToolError[golem.Unit](def, "rejected", ErrorSpec{Kind: UsageError})
+	cmd := def.OutputBody[GateArgs, string](func(a *GateArgs, s *CommandSpec) {
+		s.Positional(&a.Mode)
+		s.Stdout()
+		s.Stderr()
+		s.Raises(rejected)
+	})
+	_ = cmd.Handle(func(ctx *OutputContext, in GateArgs) (string, error) {
+		_, _ = io.WriteString(ctx.Stdout(), "partial")
+		if in.Mode == "reject" {
+			return "", rejected.New(golem.Unit{})
+		}
+		return "passed", nil
+	})
+}
+
+func invokeGate(t *testing.T, mode string, stdout, stderr *fakeSink) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	t.Helper()
+	_, r, d := buildToolFor(t, declareGate)
+	e, _ := r.get("gate")
+	input := encodeArgs(t, e.root.body, func(a *GateArgs) { a.Mode = mode })
+	return d.invokeCommand(e, nil, input, &byteReader{absent: absentStdin}, hostOutputs{stdout: stdout, stderr: stderr}, nil)
+}
+
+// TestDeclaredErrorEndsOutputsNormally — a declared error is an ordinary
+// outcome of the command, so what it wrote ends cleanly beside it.
+func TestDeclaredErrorEndsOutputsNormally(t *testing.T) {
+	stdout, stderr := &fakeSink{}, &fakeSink{}
+	res := invokeGate(t, "reject", stdout, stderr)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError || res.Err().CustomError().Name != "rejected" {
+		t.Fatalf("result %+v, want the declared error", res)
+	}
+	if string(stdout.written) != "partial" || !stdout.finished || stdout.failed != nil {
+		t.Errorf("stdout %q finished=%v failed=%v", stdout.written, stdout.finished, stdout.failed)
+	}
+	if !stderr.finished || stderr.failed != nil {
+		t.Errorf("stderr finished=%v failed=%v", stderr.finished, stderr.failed)
+	}
+}
+
+// TestEveryOutputGetsATerminal — one output failing to finish neither leaves
+// the other without a terminal nor hides a declared error.
+func TestEveryOutputGetsATerminal(t *testing.T) {
+	closed := streams.MakeStreamWriteErrorClosed(streams.MakeByteStreamCloseCauseConsumerCancelled())
+
+	stdout, stderr := &fakeSink{finishErr: &closed}, &fakeSink{}
+	res := invokeGate(t, "pass", stdout, stderr)
+	if res.IsOk() {
+		t.Error("a successful result survived its stdout failing to finish")
+	}
+	if !stderr.finished {
+		t.Error("stderr was left without a terminal")
+	}
+
+	stdout, stderr = &fakeSink{finishErr: &closed}, &fakeSink{}
+	res = invokeGate(t, "reject", stdout, stderr)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError {
+		t.Errorf("result %+v, want the declared error kept", res)
+	}
+	if !stderr.finished {
+		t.Error("stderr was left without a terminal")
+	}
+}
+
+// TestEmptyStdinChunkIsInvalidInput — an empty chunk breaks the stream
+// protocol, so the invocation is rejected however the handler reacted.
+func TestEmptyStdinChunkIsInvalidInput(t *testing.T) {
+	_, r, d := buildToolFor(t, declarePipe)
+	e, input := pipeInput(t, r, "echo")
+	sink := &fakeSink{}
+	res := invokeWithStreams(t, d, e, input, []streamItem{chunk("ab"), chunk(""), chunk("c")}, sink)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput || res.Err().InvalidInput() != "stdin yielded an empty chunk" {
+		t.Fatalf("result %+v, want invalid-input", res)
+	}
+	if sink.finished || sink.failed == nil {
+		t.Errorf("stdout finished=%v failed=%v, want failed", sink.finished, sink.failed)
+	}
+}
+
+func TestEmptyChunkOfACalledToolsOutputIsAnError(t *testing.T) {
+	r := &byteReader{name: "stdout", src: &fakeSource{items: []streamItem{chunk("a"), chunk("")}}}
+	got, err := io.ReadAll(r)
+	if string(got) != "a" || err == nil || err.Error() != "stdout yielded an empty chunk" {
+		t.Errorf("read %q, %v", got, err)
+	}
+}
+
+// TestStdinIsReleasedExactlyOnce — the provider owns the stdin the host
+// supplied, read to the end, read partly, or not declared at all.
+func TestStdinIsReleasedExactlyOnce(t *testing.T) {
+	counting := func(items ...streamItem) (*byteReader, *int) {
+		n := 0
+		return &byteReader{src: &fakeSource{items: items}, release: func() { n++ }}, &n
+	}
+
+	_, r, d := buildToolFor(t, declarePipe)
+	e, input := pipeInput(t, r, "echo")
+	in, released := counting(chunk("abc"))
+	d.invokeCommand(e, nil, input, in, hostOutputs{stdout: &fakeSink{}}, nil)
+	if *released != 1 {
+		t.Errorf("a stdin read to the end was released %d times", *released)
+	}
+
+	e, input = pipeInput(t, r, "resource-exhausted")
+	in, released = counting(chunk("abc"))
+	d.invokeCommand(e, nil, input, in, hostOutputs{stdout: &fakeSink{}}, nil)
+	if *released != 1 {
+		t.Errorf("an unread stdin was released %d times", *released)
+	}
+
+	_, r, d = buildToolFor(t, declareGate)
+	e, _ = r.get("gate")
+	in, released = counting(chunk("abc"))
+	d.invokeCommand(e, nil, encodeArgs(t, e.root.body, func(a *GateArgs) { a.Mode = "pass" }), in, hostOutputs{}, nil)
+	if *released != 1 {
+		t.Errorf("a stdin the command does not declare was released %d times", *released)
 	}
 }

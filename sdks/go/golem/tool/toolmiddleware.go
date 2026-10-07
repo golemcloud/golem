@@ -558,6 +558,7 @@ func (e *toolEntry) commands() []*commandEntry {
 // invokeMiddleware runs one middleware layer.
 func (d *definitions) invokeMiddleware(name string, inv *middlewareInvocation) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
+	defer inv.stdin.close()
 	e, known := toolDefs.getMiddleware(name)
 	if !known {
 		return fail(types.MakeToolErrorInvalidToolName(name))

@@ -107,6 +107,8 @@ type byteStreamSink interface {
 // standard input, or the standard output of a tool it called.
 type byteReader struct {
 	src byteStreamSource
+	// name says which stream this is in a failure message.
+	name string
 	// absent explains why there is no stream, so a Read says so rather than
 	// dereferencing nil.
 	absent string
@@ -117,17 +119,39 @@ type byteReader struct {
 	// consumed records that reading began, after which the stream can no
 	// longer be handed on whole.
 	consumed bool
-	// release drops the underlying stream, when it is a host resource.
+	// release drops the underlying stream, when it is a host resource. It is
+	// cleared once called, or when the stream is handed on whole, so the
+	// stream is dropped exactly once.
 	release func()
+	// reading is set while a read waits on the host; a close meanwhile is
+	// deferred to its end, since a stream cannot be dropped mid-read.
+	reading, closing bool
+	// emptyChunk records that the producer broke the protocol with an empty
+	// chunk.
+	emptyChunk bool
 }
 
-// close releases the stream unread.
+// close releases the stream, read or not. Releasing twice is a no-op.
 func (r *byteReader) close() {
-	if r.release != nil {
-		r.release()
+	if r == nil {
+		return
 	}
 	r.done = true
+	if r.reading {
+		r.closing = true
+		return
+	}
+	if release := r.release; release != nil {
+		r.release = nil
+		release()
+	}
 }
+
+// emptyChunkError reports a producer that sent an empty chunk, which the
+// stream protocol forbids since it would be indistinguishable from no data.
+type emptyChunkError struct{ stream string }
+
+func (e *emptyChunkError) Error() string { return e.stream + " yielded an empty chunk" }
 
 // present reports whether the host supplied the stream.
 func (r *byteReader) present() bool { return r != nil && r.absent == "" }
@@ -154,24 +178,30 @@ func (r *byteReader) Read(p []byte) (int, error) {
 	// failure must be reported before anything after it is consumed.
 	items := make([]witTypes.Result[[]uint8, streams.ByteStreamFailure], 1)
 	for {
+		r.reading = true
 		count := r.src.Read(items)
+		r.reading = false
+		if r.closing {
+			r.close()
+			return 0, io.EOF
+		}
 		if count == 0 {
 			if r.src.WriterDropped() {
-				r.done = true
+				r.close()
 				return 0, io.EOF
 			}
 			continue
 		}
 		item := items[0]
 		if item.Tag() == witTypes.ResultErr {
-			r.done = true
+			r.close()
 			return 0, &OutputError{Failure: OutputFailure{item.Err()}}
 		}
 		chunk := item.Ok()
 		if len(chunk) == 0 {
-			// Every successful item carries a non-empty chunk, but an empty one
-			// is harmless: skip it rather than reporting a spurious EOF.
-			continue
+			r.emptyChunk = true
+			r.close()
+			return 0, &emptyChunkError{stream: r.streamName()}
 		}
 		n := copy(p, chunk)
 		r.pending = append(r.pending[:0], chunk[n:]...)
@@ -179,11 +209,19 @@ func (r *byteReader) Read(p []byte) (int, error) {
 	}
 }
 
+func (r *byteReader) streamName() string {
+	if r.name == "" {
+		return "stream"
+	}
+	return r.name
+}
+
 // Output is a command's standard output or standard error, written as an
 // ordinary io.Writer.
 //
-// The stream is finished when the handler returns and failed when it fails or
-// panics, so nothing has to be closed by hand. [Output.Fail] ends it with a
+// The stream is finished when the handler returns a result or one of its
+// declared errors, and failed when it fails otherwise or panics, so nothing has
+// to be closed by hand. [Output.Fail] ends it with a
 // specific cause instead; the first terminal wins and later ones are ignored.
 //
 // An optional output the caller did not ask for discards what is written to it;

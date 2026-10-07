@@ -173,8 +173,8 @@ func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
 		t.Errorf("stdout %q finished=%v", sink.written, sink.finished)
 	}
 
-	// The tool fails with a declared error, which also fails its stdout; the
-	// declared error is what the caller sees, not the stream failure.
+	// The tool fails with a declared error, an ordinary outcome: its stdout
+	// ends normally, through the middleware as well.
 	forbidden := encodeArgs(t, v.push.ce, func(a *PushArgs) { a.Name = "forbidden" })
 	res, sink = runMiddlewareFor(t, r, d, "policy", middlewareRun{
 		path: []string{"remote", "push"}, input: forbidden, params: mustTypedValue(t, PolicyParams{}), under: localUnderlying(d, e),
@@ -182,8 +182,8 @@ func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError || res.Err().CustomError().Name != "rejected" {
 		t.Errorf("a declared error beneath gave %+v", res)
 	}
-	if sink.failed == nil {
-		t.Error("the middleware's stdout was not failed")
+	if sink.failed != nil || !sink.finished {
+		t.Errorf("the middleware's stdout failed=%v finished=%v", sink.failed, sink.finished)
 	}
 }
 

@@ -171,8 +171,8 @@ var _ = Upper.Handle(func(ctx *tool.OutputContext, a UpperArgs) (golem.Unit, err
 ```
 
 - `s.Stdout()` and `s.Stderr()` return the stream's spec: `.Doc`, `.Mime`, and `.Required()`. An output is optional unless required: a caller may leave it out, and then what the handler writes to it is discarded (`ctx.Stderr().Attached()` tells). A call without a required one is refused before the handler runs.
-- Each output is finished when the handler succeeds and failed when it returns an error or panics; `ctx.Stdout().Fail(tool.OutputFailed("reason"))` ends one with a specific cause. Writing to an output the command does not declare is an error.
-- A producer failure on stdin surfaces as a `*tool.OutputError`, never as `io.EOF`.
+- Each output is finished when the handler returns a result or a declared error, and failed when it returns any other error or panics; `ctx.Stdout().Fail(tool.OutputFailed("reason"))` ends one with a specific cause. Writing to an output the command does not declare is an error.
+- A producer failure on stdin surfaces as a `*tool.OutputError`, never as `io.EOF`. An empty stdin chunk breaks the stream protocol and rejects the invocation as invalid input.
 
 ## Deploy
 

@@ -60,7 +60,7 @@ var _ = Policy.HandleOutput(inventory.Import, func(ctx *tool.MiddlewareOutputCon
 
 - `UnderlyingOutput(...).Forward(a)` passes both outputs through unchanged and returns the result; `Start` returns the running invocation for rewriting them.
 - An output of the running call that the handler does not take — stderr above — passes through to the middleware's own when the handler waits; take it to replace it, or read it into `io.Discard` to drop it.
-- `ctx.Stdout()` and `ctx.Stderr()` are finished when the handler succeeds and failed when it returns an error or panics. A failure of an output beneath reaches the caller as the same failure.
+- `ctx.Stdout()` and `ctx.Stderr()` are finished when the handler returns a result or a declared error (its own or one passed on from beneath), and failed when it returns any other error or panics. A failure of an output beneath reaches the caller as the same failure.
 
 ## Adapters
 

@@ -1082,6 +1082,7 @@ func (d *definitions) invokeCommand(
 	stdin *byteReader, outs hostOutputs, principal golem.Principal,
 ) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
 	fail := witTypes.Err[toolCommon.InvocationResult, types.ToolError]
+	defer stdin.close()
 	n := e.root.find(commandPath)
 	if n == nil || n.body == nil {
 		return fail(types.MakeToolErrorInvalidCommandPath(slices.Clone(commandPath)))
@@ -1106,7 +1107,13 @@ func (d *definitions) invokeCommand(
 		Context: Context{tool: e.name, path: slices.Clone(commandPath)}, stdout: stdout, stderr: stderr,
 	}
 	out, err := runWithOutputs(ce.label(), []*Output{stdout, stderr},
-		func() (reflect.Value, error) { return ce.invoke(ctx, args) })
+		func() (reflect.Value, error) {
+			out, err := ce.invoke(ctx, args)
+			if stdin != nil && stdin.emptyChunk {
+				return out, &emptyChunkError{stream: "stdin"}
+			}
+			return out, err
+		})
 	if err != nil {
 		return fail(d.handlerError(ce, err))
 	}
@@ -1194,6 +1201,10 @@ func (d *definitions) handlerError(ce *commandEntry, err error) types.ToolError 
 	if errors.As(err, &raised) {
 		return d.declaredToolError(ce, raised)
 	}
+	var empty *emptyChunkError
+	if errors.As(err, &empty) && empty.stream == "stdin" {
+		return types.MakeToolErrorInvalidInput(empty.Error())
+	}
 	return passThroughToolError(err)
 }
 
@@ -1232,10 +1243,12 @@ func passThroughToolError(err error) types.ToolError {
 
 // runWithOutputs calls a handler, recovering a panic rather than letting it
 // kill the component, and selects each output stream's terminal: finished when
-// the handler succeeds, failed when it returns an error or panics. The wire
-// accepts exactly one terminal and treats a dropped writer as abandoned, so
-// choosing one here keeps a failing handler from looking like an abandoned
-// transfer.
+// the handler succeeds or fails with one of its declared errors, failed when it
+// returns any other error or panics. The wire accepts exactly one terminal and
+// treats a dropped writer as abandoned, so choosing one here keeps a failing
+// handler from looking like an abandoned transfer. Every output gets its
+// terminal even when finishing an earlier one failed; the first such failure
+// fails a successful result, and a declared error is kept.
 func runWithOutputs(label string, outputs []*Output, run func() (reflect.Value, error)) (out reflect.Value, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1245,13 +1258,14 @@ func runWithOutputs(label string, outputs []*Output, run func() (reflect.Value, 
 				err = fmt.Errorf("command %s panicked: %s", label, panicMessage(r))
 			}
 		}
+		failed := err != nil && !isDeclaredError(err)
 		for _, o := range outputs {
 			if o == nil {
 				continue
 			}
-			if err != nil {
+			if failed {
 				o.fail(OutputFailed(err.Error()))
-			} else if ferr := o.finish(); ferr != nil {
+			} else if ferr := o.finish(); ferr != nil && err == nil {
 				err = ferr
 			}
 		}
@@ -1265,6 +1279,15 @@ func runWithOutputs(label string, outputs []*Output, run func() (reflect.Value, 
 		}
 	}
 	return out, err
+}
+
+// isDeclaredError reports whether err is one of the command's declared error
+// cases, raised here or passed on from the tool beneath a middleware. Such an
+// error is an ordinary outcome, so the outputs end normally.
+func isDeclaredError(err error) bool {
+	var raised *RaisedError
+	var call *CallError
+	return errors.As(err, &raised) || errors.As(err, &call) && call.Kind == CallDeclaredError
 }
 
 // declaredToolError turns a declared error case into the wire error. Returning
