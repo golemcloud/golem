@@ -199,6 +199,32 @@ async fn test_go_agent_ops() {
     let reflected = invoke("reflected", &[]).await;
     assert!(reflected.contains("hej r|hej r|true"), "{reflected}");
 
+    // A Go agent's ids and values read as Go: struct and list literals with
+    // the schema's names, an enum case by its name, a bare present option.
+    let shelf = r#"ShelfAgent({zone: "a", level: 2}, closed, {"x", "y"})"#;
+    let described = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            shelf,
+            "describe",
+            r#""fragile""#,
+            r#"{ "k" => 2, "l" => 3 }"#,
+        ])
+        .await;
+    assert!(described.success_or_dump());
+    // The result is printed as a literal; unescape its quotes.
+    let described = described.stdout_text().replace('\\', "");
+    assert!(
+        described.contains(r#"{spot: {zone: "a", level: 2}, note: "fragile", total: 5}"#),
+        "{described}"
+    );
+    let listed = ctx.cli([cmd::AGENT, cmd::LIST, flag::FORMAT, "json"]).await;
+    assert!(listed.success_or_dump());
+    let listed = listed.stdout_text().replace("\\\"", "\"");
+    assert!(listed.contains(shelf), "{listed}");
+
     // A Go producer that fails mid-stream fails its invocation: the reader
     // must never see the items it got as a complete stream.
     let failing = ctx

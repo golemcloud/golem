@@ -79,7 +79,7 @@ golem agent invoke -i my-unique-key 'CounterAgent("my-counter")' increment
 
 ## Output
 
-Text output renders return values in a WIT value syntax. Methods returning `golem.Unit` or no value print `void` in text mode.
+Text output renders return values in Go syntax, as in the value syntax below. Methods returning `golem.Unit` or no value print `void` in text mode.
 
 For machine-readable output, use `--format json` or `--format yaml`. A single return value includes `result` plus `resultJson`; multiple return values include `result` plus `resultsJson`; methods returning no value omit result fields.
 
@@ -94,12 +94,16 @@ For machine-readable output, use `--format json` or `--format yaml`. A single re
 
 ## Value Syntax
 
-Agent ID parameters and method arguments use the CLI's WIT value syntax:
+Agent ID parameters and method arguments use Go syntax, read against the agent's schema:
 
-- Strings are quoted: `"my-counter"`; integers are bare: `5`; booleans are `true` / `false`.
-- Each exported field of a Go input struct is one positional WIT parameter, named by lower-camel-casing the Go field name (`AmountCents` → `amountCents`).
-- Options: `some(value)` / `none`. Results: `ok(value)` / `err(value)`.
-- Records: `{ field-one: 1, field-two: "hello" }`. Tuples: `(1, "hello")`.
+- Strings `"my-counter"`, runes `'x'`, integers `5`, floats `2.5`, booleans `true` / `false`.
+- Each exported field of a Go input struct is one positional parameter, named by lower-casing the first letter of the Go field name (`AmountCents` → `amountCents`).
+- Structs, lists and tuples are composite literals without their type, with field names as published: `{zone: "a", level: 2}`, `{"x", "y"}`.
+- Maps: `{ "k" => 1 }`. Options (pointer fields): the value itself, or `nil`. Results: `Ok(v)` / `Err(e)`.
+- Enum constants and variant cases by their published name: `closed`, `card{number: "1"}`, `amount(42)`.
+- Rich values as constructors: `Uuid("…")`, `Datetime("2026-01-01T00:00:00Z")`, `Duration("PT30S")` (or `30 * time.Second`).
+
+For example: `golem agent invoke 'ShelfAgent({zone: "a", level: 2}, closed, {"x"})' describe '"fragile"' '{ "k" => 2 }'`.
 
 ## Key Constraints
 

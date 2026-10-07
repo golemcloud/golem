@@ -339,7 +339,12 @@ fn parse_union<D: Dialect>(
     graph: &SchemaGraph,
     spec: &golem_common::schema::schema_type::UnionSpec,
 ) -> Result<SchemaValue, ParseError> {
-    let (tag, pos, _) = lexer.expect_ident()?;
+    // A tag is an identifier; a dialect that quotes names it cannot write bare
+    // (Go) writes it as a string.
+    let (tag, pos) = match lexer.next_token()? {
+        (Token::Ident(tag) | Token::StringLit(tag), pos, _) => (tag, pos),
+        (other, pos, _) => return Err(perr(pos, &format!("expected a union tag, got {other:?}"))),
+    };
     let branch: &UnionBranch = spec
         .branches
         .iter()

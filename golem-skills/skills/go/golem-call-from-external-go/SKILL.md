@@ -192,7 +192,7 @@ golem agent invoke --format json 'CounterAgent("my-counter")' value
 | `--schedule-at <DATETIME>` | Schedule the invocation (requires `--trigger`; ISO 8601) |
 | `--format json` / `--format yaml` | Machine-readable output |
 
-Method arguments use the CLI's WIT value syntax: strings quoted (`"my-counter"`), integers bare (`5`), booleans `true`/`false`, options `some(v)`/`none`, results `ok(v)`/`err(v)`, records `{ field-one: 1 }`. Each exported field of a Go input struct is one positional parameter, named by lower-camel-casing the Go field name (`AmountCents` → `amountCents`).
+Method arguments use Go syntax, read against the agent's schema: strings quoted (`"my-counter"`), integers bare (`5`), booleans `true`/`false`, structs and lists as composite literals without their type (`{zone: "a", level: 2}`, `{"x", "y"}`), maps `{ "k" => 1 }`, options as the value or `nil`, results `Ok(v)`/`Err(e)`, enum and variant cases by name. Each exported field of a Go input struct is one positional parameter, named by lower-casing the first letter of the Go field name (`AmountCents` → `amountCents`); see `golem-invoke-agent-go` for the full syntax.
 
 ## Approach 3: HTTP endpoints
 

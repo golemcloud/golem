@@ -611,6 +611,8 @@ fn render_agent_constructor_with_lang(
 fn render_param_name(name: &str, lang: &SourceLanguage) -> String {
     match lang {
         SourceLanguage::Rust => name.to_snake_case(),
+        // Go keeps the parameter names as the schema has them.
+        SourceLanguage::Go => name.to_string(),
         SourceLanguage::TypeScript
         | SourceLanguage::Scala
         | SourceLanguage::MoonBit

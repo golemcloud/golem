@@ -107,6 +107,47 @@ var (
 	Content     = Ops.Method[golem.Unit, string]("content")
 )
 
+// Status is an enum in a constructor, rendered by its schema name.
+type Status int32
+
+const (
+	StatusOpen Status = iota
+	StatusClosed
+)
+
+var _ = golem.DefineEnum[Status]("open", "closed")
+
+type Spot struct {
+	Zone  string
+	Level uint8
+}
+
+// ShelfID is a constructor with a struct, an enum and a list, so its agent id
+// shows the Go syntax for each.
+type ShelfID struct {
+	Spot   Spot
+	Status Status
+	Tags   []string
+}
+
+var Shelf = golem.DefineAgent[ShelfID](golem.Spec{Name: "ShelfAgent"})
+
+type DescribeIn struct {
+	Note   *string
+	Counts map[string]int32
+}
+
+type ShelfInfo struct {
+	Spot  Spot
+	Note  *string
+	Total int32
+}
+
+// Describe returns a record holding a struct and an option.
+var Describe = Shelf.Method[DescribeIn, ShelfInfo]("describe")
+
+type shelfState struct{ id ShelfID }
+
 type counterState struct{ N int64 }
 
 type opsState struct{}
@@ -114,6 +155,15 @@ type opsState struct{}
 func counterClient(name string) golem.Client[CounterID] { return Counter.Get(CounterID{Name: name}) }
 
 func init() {
+	shelf := Shelf.Implement(func(id ShelfID) *shelfState { return &shelfState{id: id} })
+	shelf.Handle(Describe, func(ctx *golem.Context[shelfState], in DescribeIn) ShelfInfo {
+		var total int32
+		for _, n := range in.Counts {
+			total += n
+		}
+		return ShelfInfo{Spot: ctx.State.id.Spot, Note: in.Note, Total: total}
+	})
+
 	counter := Counter.Implement(func(CounterID) *counterState { return &counterState{} })
 	counter.Handle(Increment, func(ctx *golem.Context[counterState], _ golem.Unit) int64 {
 		ctx.State.N++

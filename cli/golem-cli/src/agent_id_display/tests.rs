@@ -49,7 +49,8 @@ fn round_trip_all(value: SchemaValue, ty: SchemaType) {
     round_trip(value.clone(), ty.clone(), SourceLanguage::Rust);
     round_trip(value.clone(), ty.clone(), SourceLanguage::TypeScript);
     round_trip(value.clone(), ty.clone(), SourceLanguage::Scala);
-    round_trip(value, ty, SourceLanguage::MoonBit);
+    round_trip(value.clone(), ty.clone(), SourceLanguage::MoonBit);
+    round_trip(value, ty, SourceLanguage::Go);
 }
 
 #[test]
@@ -81,6 +82,11 @@ fn round_trip_primitives() {
         SchemaValue::Char('a'),
         SchemaType::char(),
         SourceLanguage::MoonBit,
+    );
+    round_trip(
+        SchemaValue::Char('a'),
+        SchemaType::char(),
+        SourceLanguage::Go,
     );
 }
 
@@ -341,9 +347,11 @@ fn ts_record_camel_case_fields() {
 fn source_language_from_str() {
     assert_eq!(SourceLanguage::from("rust"), SourceLanguage::Rust);
     assert_eq!(SourceLanguage::from("ts"), SourceLanguage::TypeScript);
+    assert_eq!(SourceLanguage::from("go"), SourceLanguage::Go);
+    assert_eq!(SourceLanguage::from("golang"), SourceLanguage::Go);
     assert_eq!(
-        SourceLanguage::from("go"),
-        SourceLanguage::Other("go".to_string())
+        SourceLanguage::from("zig"),
+        SourceLanguage::Other("zig".to_string())
     );
 }
 
@@ -785,6 +793,7 @@ fn capability_values_render_as_redacted_in_every_language() {
         SourceLanguage::TypeScript,
         SourceLanguage::Scala,
         SourceLanguage::MoonBit,
+        SourceLanguage::Go,
     ];
 
     let secret_ty = SchemaType::secret(SecretSpec::default());
@@ -841,4 +850,415 @@ fn agent_id_params_skip_the_auto_injected_principal() {
             fields: vec![SchemaValue::String("a".to_string())]
         }
     );
+}
+
+// ── Go ───────────────────────────────────────────────────────────────────────
+
+fn field(name: &str, body: SchemaType) -> NamedFieldType {
+    NamedFieldType {
+        name: name.into(),
+        body,
+        metadata: Default::default(),
+    }
+}
+
+fn case(name: &str, payload: Option<SchemaType>) -> VariantCaseType {
+    VariantCaseType {
+        name: name.into(),
+        payload,
+        metadata: Default::default(),
+    }
+}
+
+/// Renders `value` in Go, checks the exact text, and checks it parses back.
+fn go_exact(value: SchemaValue, ty: SchemaType, expected: &str) {
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let rendered = render_schema_value(&graph, &ty, &value, &SourceLanguage::Go);
+    assert_eq!(rendered, expected);
+    let parsed = parse_value_for_language(&rendered, &graph, &ty, &SourceLanguage::Go)
+        .unwrap_or_else(|e| panic!("parse failed for '{rendered}': {e}"));
+    assert_eq!(parsed, value, "round trip of '{rendered}'");
+}
+
+fn some(v: SchemaValue) -> SchemaValue {
+    SchemaValue::Option {
+        inner: Some(Box::new(v)),
+    }
+}
+
+fn none() -> SchemaValue {
+    SchemaValue::Option { inner: None }
+}
+
+#[test]
+fn go_values_read_as_go_literals_with_schema_names() {
+    let order = SchemaType::record(vec![
+        field("orderId", SchemaType::string()),
+        field("lines", SchemaType::list(SchemaType::u32())),
+    ]);
+    go_exact(
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("o1".into()),
+                SchemaValue::List {
+                    elements: vec![SchemaValue::U32(1), SchemaValue::U32(2)],
+                },
+            ],
+        },
+        order,
+        r#"{orderId: "o1", lines: {1, 2}}"#,
+    );
+
+    let dashed = SchemaType::record(vec![field("field-one", SchemaType::u32())]);
+    go_exact(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7)],
+        },
+        dashed,
+        r#"{"field-one": 7}"#,
+    );
+
+    go_exact(
+        SchemaValue::Tuple {
+            elements: vec![SchemaValue::String("x".into()), SchemaValue::U32(1)],
+        },
+        SchemaType::tuple(vec![SchemaType::string(), SchemaType::u32()]),
+        r#"{"x", 1}"#,
+    );
+
+    let perms = SchemaType::flags(vec!["read".into(), "write".into(), "execute".into()]);
+    go_exact(
+        SchemaValue::Flags {
+            bits: vec![true, false, true],
+        },
+        perms.clone(),
+        "{read: true, execute: true}",
+    );
+    go_exact(
+        SchemaValue::Flags {
+            bits: vec![false, false, false],
+        },
+        perms,
+        "{}",
+    );
+
+    let status = SchemaType::r#enum(vec!["inTransit".into(), "in-review".into(), "nil".into()]);
+    go_exact(SchemaValue::Enum { case: 0 }, status.clone(), "inTransit");
+    go_exact(
+        SchemaValue::Enum { case: 1 },
+        status.clone(),
+        r#""in-review""#,
+    );
+    go_exact(SchemaValue::Enum { case: 2 }, status, r#""nil""#);
+
+    go_exact(
+        SchemaValue::Map {
+            entries: vec![(SchemaValue::String("a".into()), SchemaValue::U32(1))],
+        },
+        SchemaType::map(SchemaType::string(), SchemaType::u32()),
+        r#"{ "a" => 1 }"#,
+    );
+    go_exact(
+        SchemaValue::Map { entries: vec![] },
+        SchemaType::map(SchemaType::string(), SchemaType::u32()),
+        "{}",
+    );
+
+    go_exact(SchemaValue::F64(5.0), SchemaType::f64(), "5.0");
+    go_exact(SchemaValue::Char('\u{1}'), SchemaType::char(), r"'\u0001'");
+    go_exact(SchemaValue::Char('λ'), SchemaType::char(), "'λ'");
+}
+
+#[test]
+fn go_variants_write_a_record_payload_as_a_struct_literal() {
+    let payment = SchemaType::variant(vec![
+        case(
+            "card",
+            Some(SchemaType::record(vec![field(
+                "number",
+                SchemaType::string(),
+            )])),
+        ),
+        case("amount", Some(SchemaType::u32())),
+        case("cash", None),
+    ]);
+    go_exact(
+        SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: Some(Box::new(SchemaValue::Record {
+                fields: vec![SchemaValue::String("1".into())],
+            })),
+        }),
+        payment.clone(),
+        r#"card{number: "1"}"#,
+    );
+    go_exact(
+        SchemaValue::Variant(VariantValuePayload {
+            case: 1,
+            payload: Some(Box::new(SchemaValue::U32(42))),
+        }),
+        payment.clone(),
+        "amount(42)",
+    );
+    go_exact(
+        SchemaValue::Variant(VariantValuePayload {
+            case: 2,
+            payload: None,
+        }),
+        payment,
+        "cash",
+    );
+}
+
+#[test]
+fn go_options_are_bare_or_nil_and_nested_options_use_some() {
+    let opt = SchemaType::option(SchemaType::u32());
+    go_exact(some(SchemaValue::U32(42)), opt.clone(), "42");
+    go_exact(none(), opt, "nil");
+
+    let nested = SchemaType::option(SchemaType::option(SchemaType::u32()));
+    go_exact(some(some(SchemaValue::U32(5))), nested.clone(), "Some(5)");
+    go_exact(some(none()), nested.clone(), "Some(nil)");
+    go_exact(none(), nested.clone(), "nil");
+
+    let graph = SchemaGraph::anonymous(nested.clone());
+    assert!(
+        parse_value_for_language("5", &graph, &nested, &SourceLanguage::Go).is_err(),
+        "a bare value is ambiguous for a nested option"
+    );
+}
+
+/// The inner option reached through a named definition is recognised on both
+/// sides, so the value round-trips (the TypeScript dialect does not: GOL-774).
+#[test]
+fn go_nested_option_behind_a_named_type_round_trips() {
+    let inner_id = TypeId::new("maybe-count");
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: inner_id.clone(),
+            name: Some("maybe-count".into()),
+            body: SchemaType::option(SchemaType::u32()),
+        }],
+        root: SchemaType::option(SchemaType::ref_to(inner_id)),
+    };
+    for (value, expected) in [
+        (some(some(SchemaValue::U32(5))), "Some(5)"),
+        (some(none()), "Some(nil)"),
+        (none(), "nil"),
+    ] {
+        let rendered = render_schema_value(&graph, &graph.root, &value, &SourceLanguage::Go);
+        assert_eq!(rendered, expected);
+        let parsed =
+            parse_value_for_language(&rendered, &graph, &graph.root, &SourceLanguage::Go).unwrap();
+        assert_eq!(parsed, value);
+    }
+}
+
+#[test]
+fn go_results_use_ok_and_err() {
+    let ty = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::u32())),
+        err: Some(Box::new(SchemaType::string())),
+    });
+    go_exact(
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::U32(42))),
+        }),
+        ty.clone(),
+        "Ok(42)",
+    );
+    go_exact(
+        SchemaValue::Result(ResultValuePayload::Err {
+            value: Some(Box::new(SchemaValue::String("boom".into()))),
+        }),
+        ty,
+        r#"Err("boom")"#,
+    );
+    go_exact(
+        SchemaValue::Result(ResultValuePayload::Ok { value: None }),
+        SchemaType::result(ResultSpec {
+            ok: None,
+            err: Some(Box::new(SchemaType::string())),
+        }),
+        "Ok()",
+    );
+}
+
+/// Names that collapse to one another under case conversion stay distinct,
+/// because the Go dialect never converts them.
+#[test]
+fn go_names_are_never_converted() {
+    let ty = SchemaType::record(vec![
+        field("userID", SchemaType::u32()),
+        field("userId", SchemaType::u32()),
+        field("user_id", SchemaType::u32()),
+    ]);
+    go_exact(
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(1),
+                SchemaValue::U32(2),
+                SchemaValue::U32(3),
+            ],
+        },
+        ty,
+        "{userID: 1, userId: 2, user_id: 3}",
+    );
+}
+
+#[test]
+fn go_accepts_source_spellings() {
+    let list = SchemaType::list(SchemaType::s32());
+    assert_eq!(
+        parse_native("[]int32{1, 2}", list, SourceLanguage::Go),
+        SchemaValue::List {
+            elements: vec![SchemaValue::S32(1), SchemaValue::S32(2)]
+        }
+    );
+    let record = SchemaType::record(vec![field("orderId", SchemaType::string())]);
+    assert_eq!(
+        parse_native(r#"shop.Order{orderId: "x"}"#, record, SourceLanguage::Go),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("x".into())]
+        }
+    );
+    let opt = SchemaType::option(SchemaType::s32());
+    assert_eq!(
+        parse_native("golem.Some(5)", opt.clone(), SourceLanguage::Go),
+        some(SchemaValue::S32(5))
+    );
+    assert_eq!(
+        parse_native("golem.None[int32]()", opt, SourceLanguage::Go),
+        none()
+    );
+    let result = SchemaType::result(ResultSpec {
+        ok: Some(Box::new(SchemaType::s32())),
+        err: Some(Box::new(SchemaType::string())),
+    });
+    assert_eq!(
+        parse_native(
+            "golem.Ok[int32, string](1)",
+            result.clone(),
+            SourceLanguage::Go
+        ),
+        SchemaValue::Result(ResultValuePayload::Ok {
+            value: Some(Box::new(SchemaValue::S32(1)))
+        })
+    );
+    assert_eq!(
+        parse_native(
+            r#"golem.Err[int32, string]("x")"#,
+            result,
+            SourceLanguage::Go
+        ),
+        SchemaValue::Result(ResultValuePayload::Err {
+            value: Some(Box::new(SchemaValue::String("x".into())))
+        })
+    );
+    let unit_ok = SchemaType::result(ResultSpec {
+        ok: None,
+        err: Some(Box::new(SchemaType::string())),
+    });
+    assert_eq!(
+        parse_native("Ok(golem.Unit{})", unit_ok, SourceLanguage::Go),
+        SchemaValue::Result(ResultValuePayload::Ok { value: None })
+    );
+    let duration = SchemaType::duration();
+    for (input, nanos) in [
+        ("30 * time.Second", 30_000_000_000i64),
+        ("1500 * time.Millisecond", 1_500_000_000),
+        ("time.Hour", 3_600_000_000_000),
+        (r#"Duration("PT30S")"#, 30_000_000_000),
+    ] {
+        assert_eq!(
+            parse_native(input, duration.clone(), SourceLanguage::Go),
+            SchemaValue::Duration(golem_common::schema::schema_value::DurationValuePayload {
+                nanoseconds: nanos
+            }),
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn go_types_render_in_go_syntax() {
+    let render = |ty: SchemaType| {
+        let graph = SchemaGraph::anonymous(ty.clone());
+        render_type_for_language(&SourceLanguage::Go, &graph, &ty, true)
+    };
+    assert_eq!(render(SchemaType::list(SchemaType::string())), "[]string");
+    assert_eq!(
+        render(SchemaType::fixed_list(SchemaType::u8(), 4)),
+        "[4]uint8"
+    );
+    assert_eq!(
+        render(SchemaType::map(SchemaType::string(), SchemaType::s64())),
+        "map[string]int64"
+    );
+    assert_eq!(render(SchemaType::option(SchemaType::char())), "*rune");
+    assert_eq!(
+        render(SchemaType::result(ResultSpec {
+            ok: None,
+            err: Some(Box::new(SchemaType::string())),
+        })),
+        "Result[Unit, string]"
+    );
+    assert_eq!(
+        render(SchemaType::tuple(vec![
+            SchemaType::string(),
+            SchemaType::f64()
+        ])),
+        "Tuple2[string, float64]"
+    );
+    assert_eq!(
+        render(SchemaType::record(vec![
+            field("orderId", SchemaType::string()),
+            field("lines", SchemaType::list(SchemaType::s32())),
+        ])),
+        "struct{orderId string; lines []int32}"
+    );
+    assert_eq!(
+        render(SchemaType::list(SchemaType::variant(vec![
+            case("amount", Some(SchemaType::u32())),
+            case("cash", None),
+        ]))),
+        "[](amount(uint32) | cash)"
+    );
+    assert_eq!(
+        render(SchemaType::r#enum(vec![
+            "inTransit".into(),
+            "delivered".into()
+        ])),
+        "enum{inTransit, delivered}"
+    );
+    assert_eq!(render(SchemaType::uuid()), "UUID");
+    assert_eq!(render(SchemaType::datetime()), "time.Time");
+    assert_eq!(render(SchemaType::duration()), "time.Duration");
+}
+
+#[test]
+fn go_types_parse_back() {
+    for (input, expected) in [
+        ("[]string", SchemaType::list(SchemaType::string())),
+        ("*int32", SchemaType::option(SchemaType::s32())),
+        ("golem.Option[int32]", SchemaType::option(SchemaType::s32())),
+        ("[4]uint8", SchemaType::fixed_list(SchemaType::u8(), 4)),
+        (
+            "map[string][]int64",
+            SchemaType::map(SchemaType::string(), SchemaType::list(SchemaType::s64())),
+        ),
+        (
+            "Result[int32, string]",
+            SchemaType::result(ResultSpec {
+                ok: Some(Box::new(SchemaType::s32())),
+                err: Some(Box::new(SchemaType::string())),
+            }),
+        ),
+        ("rune", SchemaType::char()),
+        ("float64", SchemaType::f64()),
+    ] {
+        let (_, ty) = parse_type_for_language(input, &SourceLanguage::Go)
+            .unwrap_or_else(|e| panic!("parse failed for '{input}': {e}"));
+        assert_eq!(ty, expected, "{input}");
+    }
 }

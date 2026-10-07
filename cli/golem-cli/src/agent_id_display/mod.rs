@@ -15,14 +15,17 @@
 mod highlight;
 mod lexer;
 mod parse_common;
+mod parse_go;
 mod parse_moonbit;
 mod parse_rust;
 mod parse_scala;
 mod parse_ts;
+mod parse_type_go;
 mod parse_type_moonbit;
 mod parse_type_rust;
 mod parse_type_scala;
 mod parse_type_ts;
+mod render_go;
 mod render_moonbit;
 mod render_rust;
 mod render_scala;
@@ -48,6 +51,7 @@ pub enum SourceLanguage {
     TypeScript,
     Scala,
     MoonBit,
+    Go,
     Other(String),
 }
 
@@ -66,6 +70,7 @@ impl SourceLanguage {
                 | SourceLanguage::TypeScript
                 | SourceLanguage::Scala
                 | SourceLanguage::MoonBit
+                | SourceLanguage::Go
         )
     }
 }
@@ -81,6 +86,8 @@ impl From<&str> for SourceLanguage {
             SourceLanguage::Scala
         } else if trimmed.eq_ignore_ascii_case("moonbit") {
             SourceLanguage::MoonBit
+        } else if trimmed.eq_ignore_ascii_case("go") || trimmed.eq_ignore_ascii_case("golang") {
+            SourceLanguage::Go
         } else {
             SourceLanguage::Other(trimmed.to_string())
         }
@@ -100,6 +107,7 @@ impl std::fmt::Display for SourceLanguage {
             SourceLanguage::TypeScript => write!(f, "typescript"),
             SourceLanguage::Scala => write!(f, "scala"),
             SourceLanguage::MoonBit => write!(f, "moonbit"),
+            SourceLanguage::Go => write!(f, "go"),
             SourceLanguage::Other(s) => write!(f, "{s}"),
         }
     }
@@ -131,6 +139,7 @@ pub fn render_schema_value(
         SourceLanguage::Rust => render_rust::render_value_rust(graph, ty, value),
         SourceLanguage::Scala => render_scala::render_value_scala(graph, ty, value),
         SourceLanguage::MoonBit => render_moonbit::render_value_moonbit(graph, ty, value),
+        SourceLanguage::Go => render_go::render_value_go(graph, ty, value),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
             render_ts::render_value_ts(graph, ty, value)
         }
@@ -195,6 +204,7 @@ pub fn render_type_for_language(
         SourceLanguage::Rust => render_rust::render_type_rust(graph, ty, prefer_name),
         SourceLanguage::Scala => render_scala::render_type_scala(graph, ty, prefer_name),
         SourceLanguage::MoonBit => render_moonbit::render_type_moonbit(graph, ty, prefer_name),
+        SourceLanguage::Go => render_go::render_type_go(graph, ty, prefer_name),
         SourceLanguage::TypeScript | SourceLanguage::Other(_) => {
             render_ts::render_type_ts(graph, ty, prefer_name)
         }
@@ -215,6 +225,7 @@ pub fn parse_type_for_language(
         SourceLanguage::TypeScript => parse_type_ts::parse_type_ts(input),
         SourceLanguage::Scala => parse_type_scala::parse_type_scala(input),
         SourceLanguage::MoonBit => parse_type_moonbit::parse_type_moonbit(input),
+        SourceLanguage::Go => parse_type_go::parse_type_go(input),
         SourceLanguage::Other(_) => parse_type_ts::parse_type_ts(input)
             .or_else(|_| parse_type_rust::parse_type_rust(input))
             .or_else(|_| parse_type_scala::parse_type_scala(input))
@@ -256,6 +267,7 @@ pub fn parse_value_for_language(
         SourceLanguage::TypeScript => try_parse::<parse_ts::TsDialect>(input, graph, ty),
         SourceLanguage::Scala => try_parse::<parse_scala::ScalaDialect>(input, graph, ty),
         SourceLanguage::MoonBit => try_parse::<parse_moonbit::MoonBitDialect>(input, graph, ty),
+        SourceLanguage::Go => try_parse::<parse_go::GoDialect>(input, graph, ty),
         SourceLanguage::Other(_) => try_parse::<parse_ts::TsDialect>(input, graph, ty)
             .or_else(|_| try_parse::<parse_rust::RustDialect>(input, graph, ty))
             .or_else(|_| try_parse::<parse_scala::ScalaDialect>(input, graph, ty))
@@ -291,6 +303,9 @@ pub fn parse_agent_id_params(
         SourceLanguage::MoonBit => parse_common::parse_input_schema_params::<
             parse_moonbit::MoonBitDialect,
         >(input, graph, fields),
+        SourceLanguage::Go => {
+            parse_common::parse_input_schema_params::<parse_go::GoDialect>(input, graph, fields)
+        }
         SourceLanguage::Other(_) => {
             parse_common::parse_input_schema_params::<parse_ts::TsDialect>(input, graph, fields)
                 .or_else(|_| {
