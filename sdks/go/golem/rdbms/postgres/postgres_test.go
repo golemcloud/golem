@@ -21,7 +21,7 @@ import (
 
 	"github.com/golemcloud/golem/sdks/go/golem"
 	pg "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_postgres"
-	"github.com/golemcloud/golem/sdks/go/golem/rdbms/types"
+	"github.com/golemcloud/golem/sdks/go/golem/rdbms"
 )
 
 // TestEncodeParamTags — each Go value coerces to the expected db-value family.
@@ -272,11 +272,11 @@ func TestExoticGetters(t *testing.T) {
 
 // TestTemporalTypes — time/timetz/interval decode into the types structs.
 func TestTemporalTypes(t *testing.T) {
-	tm := mustFlat(t, pg.MakeDbValueTime(pg.Time{Hour: 1, Minute: 2, Second: 3, Nanosecond: 4})).(types.Time)
+	tm := mustFlat(t, pg.MakeDbValueTime(pg.Time{Hour: 1, Minute: 2, Second: 3, Nanosecond: 4})).(rdbms.Time)
 	if tm.Hour != 1 || tm.Minute != 2 || tm.Second != 3 || tm.Nanosecond != 4 {
 		t.Fatalf("time = %+v", tm)
 	}
-	iv := mustFlat(t, pg.MakeDbValueInterval(pg.Interval{Months: 1, Days: 2, Microseconds: 3})).(types.Interval)
+	iv := mustFlat(t, pg.MakeDbValueInterval(pg.Interval{Months: 1, Days: 2, Microseconds: 3})).(rdbms.Interval)
 	if iv.Months != 1 || iv.Days != 2 || iv.Microseconds != 3 {
 		t.Fatalf("interval = %+v", iv)
 	}
@@ -302,7 +302,7 @@ func TestNetRoundTrip(t *testing.T) {
 			t.Fatalf("ip round-trip %q = %v", s, got)
 		}
 	}
-	m := types.MacAddr{0xde, 0xad, 0xbe, 0xef, 0x00, 0x01}
+	m := rdbms.MacAddr{0xde, 0xad, 0xbe, 0xef, 0x00, 0x01}
 	if got := macFromWit(macToWit(m)); got != m {
 		t.Fatalf("mac round-trip = %v", got)
 	}

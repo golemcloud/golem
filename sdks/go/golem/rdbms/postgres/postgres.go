@@ -55,23 +55,23 @@ import (
 	"github.com/golemcloud/golem/sdks/go/core/values"
 	pg "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_postgres"
 	rtypes "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_types"
-	"github.com/golemcloud/golem/sdks/go/golem/rdbms/types"
+	"github.com/golemcloud/golem/sdks/go/golem/rdbms"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 // ErrorKind classifies an [Error]. It is shared with the mysql driver via
-// [types.ErrorKind].
-type ErrorKind = types.ErrorKind
+// [rdbms.ErrorKind].
+type ErrorKind = rdbms.ErrorKind
 
 // The error kinds (see [types] for docs).
 const (
-	ConnectionFailure     = types.ConnectionFailure
-	QueryParameterFailure = types.QueryParameterFailure
-	QueryExecutionFailure = types.QueryExecutionFailure
-	QueryResponseFailure  = types.QueryResponseFailure
-	Other                 = types.Other
+	ConnectionFailure     = rdbms.ConnectionFailure
+	QueryParameterFailure = rdbms.QueryParameterFailure
+	QueryExecutionFailure = rdbms.QueryExecutionFailure
+	QueryResponseFailure  = rdbms.QueryResponseFailure
+	Other                 = rdbms.Other
 )
 
 // Error is a Postgres host error.
@@ -278,35 +278,35 @@ func Inet(a netip.Addr) DbValue { return flat(pg.MakeDbValueInet(ipToWit(a))) }
 func Cidr(a netip.Addr) DbValue { return flat(pg.MakeDbValueCidr(ipToWit(a))) }
 
 // Macaddr builds a macaddr parameter.
-func Macaddr(m types.MacAddr) DbValue { return flat(pg.MakeDbValueMacaddr(macToWit(m))) }
+func Macaddr(m rdbms.MacAddr) DbValue { return flat(pg.MakeDbValueMacaddr(macToWit(m))) }
 
 // Interval builds an interval parameter.
-func Interval(iv types.Interval) DbValue {
+func Interval(iv rdbms.Interval) DbValue {
 	return flat(pg.MakeDbValueInterval(pg.Interval{
 		Months: int32(iv.Months), Days: int32(iv.Days), Microseconds: iv.Microseconds,
 	}))
 }
 
 // Date builds a date parameter.
-func Date(d types.Date) DbValue {
+func Date(d rdbms.Date) DbValue {
 	return flat(pg.MakeDbValueDate(pg.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)}))
 }
 
 // Time builds a time-of-day parameter.
-func Time(t types.Time) DbValue { return flat(pg.MakeDbValueTime(typesTimeToWit(t))) }
+func Time(t rdbms.Time) DbValue { return flat(pg.MakeDbValueTime(typesTimeToWit(t))) }
 
 // Timetz builds a time-of-day-with-offset parameter.
-func Timetz(t types.Timetz) DbValue {
+func Timetz(t rdbms.Timetz) DbValue {
 	return flat(pg.MakeDbValueTimetz(pg.Timetz{Time: typesTimeToWit(t.Time), Offset: int32(t.OffsetSeconds)}))
 }
 
 // Timestamp builds a timestamp (no time zone) parameter.
-func Timestamp(ts types.Timestamp) DbValue {
+func Timestamp(ts rdbms.Timestamp) DbValue {
 	return flat(pg.MakeDbValueTimestamp(typesTimestampToWit(ts)))
 }
 
 // Timestamptz builds a timestamp-with-time-zone parameter.
-func Timestamptz(ts types.Timestamptz) DbValue {
+func Timestamptz(ts rdbms.Timestamptz) DbValue {
 	return flat(pg.MakeDbValueTimestamptz(pg.Timestamptz{
 		Timestamp: typesTimestampToWit(ts.Timestamp), Offset: int32(ts.OffsetSeconds),
 	}))
@@ -646,10 +646,10 @@ func decodeFlat(v pg.DbValue) (any, bool) {
 	case pg.DbValueTime:
 		return witTimeToTypes(v.Time()), true
 	case pg.DbValueTimetz:
-		return types.Timetz{Time: witTimeToTypes(v.Timetz().Time), OffsetSeconds: int(v.Timetz().Offset)}, true
+		return rdbms.Timetz{Time: witTimeToTypes(v.Timetz().Time), OffsetSeconds: int(v.Timetz().Offset)}, true
 	case pg.DbValueInterval:
 		iv := v.Interval()
-		return types.Interval{Months: int(iv.Months), Days: int(iv.Days), Microseconds: iv.Microseconds}, true
+		return rdbms.Interval{Months: int(iv.Months), Days: int(iv.Days), Microseconds: iv.Microseconds}, true
 	case pg.DbValueBytea:
 		return v.Bytea(), true
 	case pg.DbValueJson:
@@ -745,15 +745,15 @@ func dateToGoTime(d pg.Date) time.Time {
 	return time.Date(int(d.Year), time.Month(d.Month), int(d.Day), 0, 0, 0, 0, time.UTC)
 }
 
-func witTimeToTypes(t pg.Time) types.Time {
-	return types.Time{Hour: int(t.Hour), Minute: int(t.Minute), Second: int(t.Second), Nanosecond: int(t.Nanosecond)}
+func witTimeToTypes(t pg.Time) rdbms.Time {
+	return rdbms.Time{Hour: int(t.Hour), Minute: int(t.Minute), Second: int(t.Second), Nanosecond: int(t.Nanosecond)}
 }
 
-func typesTimeToWit(t types.Time) pg.Time {
+func typesTimeToWit(t rdbms.Time) pg.Time {
 	return pg.Time{Hour: uint8(t.Hour), Minute: uint8(t.Minute), Second: uint8(t.Second), Nanosecond: uint32(t.Nanosecond)}
 }
 
-func typesTimestampToWit(ts types.Timestamp) pg.Timestamp {
+func typesTimestampToWit(ts rdbms.Timestamp) pg.Timestamp {
 	return pg.Timestamp{
 		Date: pg.Date{Year: int32(ts.Date.Year), Month: uint8(ts.Date.Month), Day: uint8(ts.Date.Day)},
 		Time: typesTimeToWit(ts.Time),
@@ -791,15 +791,15 @@ func ipFromWit(a rtypes.IpAddress) netip.Addr {
 	return netip.AddrFrom16(b)
 }
 
-func macToWit(m types.MacAddr) rtypes.MacAddress {
+func macToWit(m rdbms.MacAddr) rtypes.MacAddress {
 	return rtypes.MacAddress{Octets: witTypes.Tuple6[uint8, uint8, uint8, uint8, uint8, uint8]{
 		F0: m[0], F1: m[1], F2: m[2], F3: m[3], F4: m[4], F5: m[5],
 	}}
 }
 
-func macFromWit(m rtypes.MacAddress) types.MacAddr {
+func macFromWit(m rtypes.MacAddress) rdbms.MacAddr {
 	o := m.Octets
-	return types.MacAddr{o.F0, o.F1, o.F2, o.F3, o.F4, o.F5}
+	return rdbms.MacAddr{o.F0, o.F1, o.F2, o.F3, o.F4, o.F5}
 }
 
 func goTimeToDate(t time.Time) pg.Date {

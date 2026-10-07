@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package types holds the temporal and network value types shared by the Golem
+// Package rdbms holds the temporal and network value types shared by the Golem
 // postgres and mysql drivers. The everyday cases — timestamp,
 // timestamptz and date — round-trip through the standard library's time.Time
 // (see the driver's Row.Time getter); these structs exist for the cases time.Time
 // cannot hold on its own (a bare time of day, a time with an offset, an interval)
 // and for building typed parameters via the driver's constructors.
-package types
+package rdbms
 
 import (
 	"fmt"

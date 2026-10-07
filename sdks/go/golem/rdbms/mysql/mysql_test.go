@@ -19,7 +19,7 @@ import (
 	"time"
 
 	my "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_mysql"
-	"github.com/golemcloud/golem/sdks/go/golem/rdbms/types"
+	"github.com/golemcloud/golem/sdks/go/golem/rdbms"
 )
 
 // TestEncodeParamTags — each Go value coerces to the expected db-value family,
@@ -183,7 +183,7 @@ func TestTimeRoundTrip(t *testing.T) {
 	if !got.Equal(orig) {
 		t.Fatalf("datetime round-trip = %v, want %v", got, orig)
 	}
-	tm := decodeValue(my.MakeDbValueTime(my.Time{Hour: 1, Minute: 2, Second: 3, Nanosecond: 4})).(types.Time)
+	tm := decodeValue(my.MakeDbValueTime(my.Time{Hour: 1, Minute: 2, Second: 3, Nanosecond: 4})).(rdbms.Time)
 	if tm.Hour != 1 || tm.Minute != 2 || tm.Second != 3 || tm.Nanosecond != 4 {
 		t.Fatalf("time = %+v", tm)
 	}

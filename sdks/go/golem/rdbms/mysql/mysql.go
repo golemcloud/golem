@@ -47,22 +47,22 @@ import (
 	"time"
 
 	my "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_mysql"
-	"github.com/golemcloud/golem/sdks/go/golem/rdbms/types"
+	"github.com/golemcloud/golem/sdks/go/golem/rdbms"
 )
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
 // ErrorKind classifies an [Error]. It is shared with the postgres driver via
-// [types.ErrorKind].
-type ErrorKind = types.ErrorKind
+// [rdbms.ErrorKind].
+type ErrorKind = rdbms.ErrorKind
 
 // The error kinds (see [types] for docs).
 const (
-	ConnectionFailure     = types.ConnectionFailure
-	QueryParameterFailure = types.QueryParameterFailure
-	QueryExecutionFailure = types.QueryExecutionFailure
-	QueryResponseFailure  = types.QueryResponseFailure
-	Other                 = types.Other
+	ConnectionFailure     = rdbms.ConnectionFailure
+	QueryParameterFailure = rdbms.QueryParameterFailure
+	QueryExecutionFailure = rdbms.QueryExecutionFailure
+	QueryResponseFailure  = rdbms.QueryResponseFailure
+	Other                 = rdbms.Other
 )
 
 // Error is a MySQL host error.
@@ -289,22 +289,22 @@ func Bit(v []bool) DbValue { return DbValue{my.MakeDbValueBit(v)} }
 func JSON(v string) DbValue { return DbValue{my.MakeDbValueJson(v)} }
 
 // Date builds a date parameter.
-func Date(d types.Date) DbValue {
+func Date(d rdbms.Date) DbValue {
 	return DbValue{my.MakeDbValueDate(my.Date{Year: int32(d.Year), Month: uint8(d.Month), Day: uint8(d.Day)})}
 }
 
 // Datetime builds a datetime parameter.
-func Datetime(ts types.Timestamp) DbValue {
+func Datetime(ts rdbms.Timestamp) DbValue {
 	return DbValue{my.MakeDbValueDatetime(typesTimestampToWit(ts))}
 }
 
 // Timestamp builds a timestamp parameter.
-func Timestamp(ts types.Timestamp) DbValue {
+func Timestamp(ts rdbms.Timestamp) DbValue {
 	return DbValue{my.MakeDbValueTimestamp(typesTimestampToWit(ts))}
 }
 
 // Time builds a time-of-day parameter.
-func Time(t types.Time) DbValue { return DbValue{my.MakeDbValueTime(typesTimeToWit(t))} }
+func Time(t rdbms.Time) DbValue { return DbValue{my.MakeDbValueTime(typesTimeToWit(t))} }
 
 // ── Parameter encoding ───────────────────────────────────────────────────────
 
@@ -465,15 +465,15 @@ func dateToGoTime(d my.Date) time.Time {
 	return time.Date(int(d.Year), time.Month(d.Month), int(d.Day), 0, 0, 0, 0, time.UTC)
 }
 
-func witTimeToTypes(t my.Time) types.Time {
-	return types.Time{Hour: int(t.Hour), Minute: int(t.Minute), Second: int(t.Second), Nanosecond: int(t.Nanosecond)}
+func witTimeToTypes(t my.Time) rdbms.Time {
+	return rdbms.Time{Hour: int(t.Hour), Minute: int(t.Minute), Second: int(t.Second), Nanosecond: int(t.Nanosecond)}
 }
 
-func typesTimeToWit(t types.Time) my.Time {
+func typesTimeToWit(t rdbms.Time) my.Time {
 	return my.Time{Hour: uint8(t.Hour), Minute: uint8(t.Minute), Second: uint8(t.Second), Nanosecond: uint32(t.Nanosecond)}
 }
 
-func typesTimestampToWit(ts types.Timestamp) my.Timestamp {
+func typesTimestampToWit(ts rdbms.Timestamp) my.Timestamp {
 	return my.Timestamp{
 		Date: my.Date{Year: int32(ts.Date.Year), Month: uint8(ts.Date.Month), Day: uint8(ts.Date.Day)},
 		Time: typesTimeToWit(ts.Time),
