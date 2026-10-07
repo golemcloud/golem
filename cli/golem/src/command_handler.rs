@@ -73,9 +73,13 @@ impl CommandHandlerHooks for ServerCommandHandler {
 
                 Ok(())
             }
-            ServerSubcommand::Clean => {
+            ServerSubcommand::Clean { args } => {
                 let data_dir = data_dir_from_local_server(ctx.manifest_local_server())?;
-                clean_data_dir(&ctx, &data_dir).await
+                if args.observability_only {
+                    clean_observability_data(&ctx, &data_dir).await
+                } else {
+                    clean_data_dir(&ctx, &data_dir).await
+                }
             }
         }
     }
@@ -92,6 +96,7 @@ impl CommandHandlerHooks for ServerCommandHandler {
             mcp_port: args.mcp_port(),
             ports_file: args.ports_file.clone(),
             data_dir: data_dir.clone(),
+            observability: true,
             agent_filesystem_root: args.agent_filesystem_root.clone(),
             resource_usage_metering: resource_usage_metering_from_env()?,
         })
@@ -204,6 +209,10 @@ fn launch_args_from_run_args_and_local_server(
             Some(data_dir) => data_dir.clone(),
             None => data_dir_from_local_server(local_server)?,
         },
+        observability: args
+            .observability
+            .or_else(|| local_server.map(|manifest| manifest.observability))
+            .unwrap_or(true),
         agent_filesystem_root: args
             .agent_filesystem_root
             .clone()
@@ -333,6 +342,42 @@ async fn clean_data_dir(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<(
         .map_err(|err| anyhow!("Failed cleaning data dir ({}): {}", data_dir.display(), err))
 }
 
+async fn clean_observability_data(ctx: &Arc<Context>, data_dir: &Path) -> anyhow::Result<()> {
+    let data_dir = resolve_clean_data_dir(data_dir)?;
+    let db_path = data_dir.join("observability.db");
+    if tokio::fs::metadata(&db_path).await.is_err() {
+        log_warn_action(
+            "Nothing to clean",
+            format!(
+                "local metrics database {} does not exist",
+                db_path.display().to_string().log_color_highlight()
+            ),
+        );
+        return Ok(());
+    }
+    if !ctx
+        .interactive_handler()
+        .confirm_clean_local_server_observability(&db_path)?
+    {
+        bail!(NonSuccessfulExit);
+    }
+    log_warn_action(
+        "Cleaning",
+        format!(
+            "local metrics data in {} (components, agents, and oplogs are preserved)",
+            db_path.display().to_string().log_color_highlight()
+        ),
+    );
+    #[cfg(feature = "local-observability")]
+    {
+        crate::observability::clear_store(&db_path).await
+    }
+    #[cfg(not(feature = "local-observability"))]
+    {
+        bail!("This golem binary was built without local observability support")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +405,7 @@ mod tests {
             mcp_port: Some(9009),
             ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
             data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
+            observability: false,
             agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
         });
 
@@ -380,6 +426,7 @@ mod tests {
             Some(PathBuf::from("/tmp/test-app/.golem/ports.json"))
         );
         assert_eq!(args.data_dir, PathBuf::from("/tmp/test-app/.golem/data"));
+        assert!(!args.observability);
         assert_eq!(
             args.agent_filesystem_root,
             Some(PathBuf::from("/tmp/test-app/.golem/agents"))
@@ -477,6 +524,7 @@ mod tests {
             mcp_port: Some(9009),
             ports_file: Some(PathBuf::from("/tmp/test-app/.golem/ports.json")),
             data_dir: Some(PathBuf::from("/tmp/test-app/.golem/data")),
+            observability: false,
             agent_filesystem_root: Some(PathBuf::from("/tmp/test-app/.golem/agents")),
         });
         let run_args = RunArgs {
@@ -487,6 +535,7 @@ mod tests {
             mcp_port: Some(10002),
             ports_file: Some(PathBuf::from("cli-ports.json")),
             data_dir: Some(PathBuf::from("cli-data")),
+            observability: Some(true),
             clean: false,
             agent_filesystem_root: Some(PathBuf::from("cli-agents")),
         };
@@ -505,6 +554,7 @@ mod tests {
         assert_eq!(args.mcp_port, 10002);
         assert_eq!(args.ports_file, Some(PathBuf::from("cli-ports.json")));
         assert_eq!(args.data_dir, PathBuf::from("cli-data"));
+        assert!(args.observability);
         assert_eq!(
             args.agent_filesystem_root,
             Some(PathBuf::from("cli-agents"))

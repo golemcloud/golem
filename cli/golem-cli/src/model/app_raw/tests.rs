@@ -815,6 +815,7 @@ fn arb_local_server_model() -> BoxedStrategy<LocalServer> {
         arb_opt((1..=u16::MAX).boxed()),
         arb_opt(arb_path_buf_model()),
         arb_opt(arb_path_buf_model()),
+        any::<bool>(),
         arb_opt(arb_path_buf_model()),
     )
         .prop_map(
@@ -826,6 +827,7 @@ fn arb_local_server_model() -> BoxedStrategy<LocalServer> {
                 mcp_port,
                 ports_file,
                 data_dir,
+                observability,
                 agent_filesystem_root,
             )| LocalServer {
                 system_memory_override,
@@ -835,6 +837,7 @@ fn arb_local_server_model() -> BoxedStrategy<LocalServer> {
                 mcp_port,
                 ports_file,
                 data_dir,
+                observability,
                 agent_filesystem_root,
             },
         )
@@ -1959,6 +1962,7 @@ fn local_server_accepts_server_run_defaults() {
               mcpPort: 9009
               portsFile: .golem/ports.json
               dataDir: .golem/server-data
+              observability: false
               agentFilesystemRoot: .golem/agents
         "# };
 
@@ -1981,10 +1985,18 @@ fn local_server_accepts_server_run_defaults() {
         local_server.data_dir,
         Some(PathBuf::from(".golem/server-data"))
     );
+    assert!(!local_server.observability);
     assert_eq!(
         local_server.agent_filesystem_root,
         Some(PathBuf::from(".golem/agents"))
     );
+}
+
+#[test]
+fn local_server_observability_defaults_to_enabled() {
+    let app = Application::from_yaml_str("app: test-app\nlocalServer: {}\n").unwrap();
+
+    assert!(app.local_server.unwrap().observability);
 }
 
 #[test]

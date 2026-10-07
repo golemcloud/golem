@@ -2843,6 +2843,11 @@ pub mod server {
         #[clap(long)]
         pub data_dir: Option<PathBuf>,
 
+        /// Enable or disable local metrics collection. Overrides
+        /// localServer.observability from the application manifest.
+        #[clap(long)]
+        pub observability: Option<bool>,
+
         /// Clean the data directory immediately before starting the server,
         /// then start it. This is equivalent to running `golem-cli server clean`
         /// followed by `golem-cli server run`, but in a single step. Unlike
@@ -2858,6 +2863,14 @@ pub mod server {
         ///   <root>/<environment_id>/<component_id>/<agent_id>/
         #[clap(long)]
         pub agent_filesystem_root: Option<PathBuf>,
+    }
+
+    #[derive(Debug, Args, Default)]
+    pub struct CleanArgs {
+        /// Delete only the local observability database, preserving components,
+        /// agents, oplogs, and every other local-server data file.
+        #[clap(long)]
+        pub observability_only: bool,
     }
 
     impl RunArgs {
@@ -2913,7 +2926,10 @@ pub mod server {
         },
         /// DESTRUCTIVE: Permanently deletes the local server data directory, including all components, agents and oplogs created via the local server. Uses localServer.dataDir from the discovered manifest, or the platform default when no manifest is loaded. The resolved directory is shown for confirmation; use -Y/--yes to skip the prompt. Pass -X to ignore manifest configuration. Filesystem roots are always rejected. This action is irreversible.
         #[command(after_help = crate::command_examples::SERVER_CLEAN)]
-        Clean,
+        Clean {
+            #[clap(flatten)]
+            args: CleanArgs,
+        },
     }
 }
 

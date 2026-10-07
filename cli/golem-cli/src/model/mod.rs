@@ -32,6 +32,7 @@ pub mod http_api;
 pub mod input;
 pub mod invoke_result_view;
 pub mod language;
+pub mod local_observability;
 pub mod masking;
 pub mod mcp;
 pub mod plugin;

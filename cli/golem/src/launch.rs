@@ -59,7 +59,7 @@ use tokio::task::JoinSet;
 use tracing::{Instrument, info};
 use uuid::uuid;
 
-const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
+pub(crate) const ADMIN_TOKEN: &str = golem_client::LOCAL_WELL_KNOWN_TOKEN;
 
 pub struct LaunchArgs {
     pub system_memory_override: Option<std::num::NonZeroU64>,
@@ -69,6 +69,7 @@ pub struct LaunchArgs {
     pub mcp_port: u16,
     pub ports_file: Option<PathBuf>,
     pub data_dir: PathBuf,
+    pub observability: bool,
     pub agent_filesystem_root: Option<PathBuf>,
     pub resource_usage_metering: ResourceUsageMeteringConfig,
 }
@@ -194,12 +195,23 @@ async fn start_components(
         run_worker_executor(config, join_set).await?
     };
 
+    #[cfg(feature = "local-observability")]
+    let observability = crate::observability::LocalObservability::start(
+        args.observability,
+        &args.data_dir,
+        prometheus::default_registry().clone(),
+        join_set,
+    )
+    .await;
+
     Ok(StartedComponents {
         registry_service,
         shard_manager,
         worker_executor,
         worker_service,
         prometheus_registry: prometheus::default_registry().clone(),
+        #[cfg(feature = "local-observability")]
+        observability,
     })
 }
 
@@ -587,6 +599,7 @@ mod tests {
                 mcp_port: 0,
                 ports_file: None,
                 data_dir: PathBuf::from("unused"),
+                observability: true,
                 agent_filesystem_root: None,
                 resource_usage_metering: ResourceUsageMeteringConfig::default(),
             };

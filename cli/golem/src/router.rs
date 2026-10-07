@@ -41,6 +41,8 @@ pub async fn start_router(
         worker_executor,
         worker_service,
         prometheus_registry,
+        #[cfg(feature = "local-observability")]
+        observability,
         ..
     } = started_components;
 
@@ -64,7 +66,13 @@ pub async fn start_router(
     let worker_service_api = Arc::new(worker_service.api_endpoint);
     let registry_service_api = Arc::new(registry_service.endpoint);
 
-    let app = Route::new()
+    let app = Route::new();
+    #[cfg(feature = "local-observability")]
+    let app = app.nest(
+        "/",
+        crate::observability::routes(observability, crate::launch::ADMIN_TOKEN),
+    );
+    let app = app
         // Worker endpoints
         .at("/v1/agents/create-agent", worker_service_api.clone())
         .at("/v1/agents/invoke-agent", worker_service_api.clone())

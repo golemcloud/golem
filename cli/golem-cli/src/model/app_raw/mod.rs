@@ -1198,7 +1198,7 @@ impl DeploymentSubdomain {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocalServer {
     #[serde(
@@ -1219,8 +1219,30 @@ pub struct LocalServer {
     pub ports_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub data_dir: Option<PathBuf>,
+    #[serde(default = "local_server_observability_default")]
+    pub observability: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub agent_filesystem_root: Option<PathBuf>,
+}
+
+fn local_server_observability_default() -> bool {
+    true
+}
+
+impl Default for LocalServer {
+    fn default() -> Self {
+        Self {
+            system_memory_override: None,
+            router_addr: None,
+            router_port: None,
+            custom_request_port: None,
+            mcp_port: None,
+            ports_file: None,
+            data_dir: None,
+            observability: true,
+            agent_filesystem_root: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

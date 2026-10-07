@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 pub mod command_handler;
 pub mod compat;
 pub mod launch;
+#[cfg(feature = "local-observability")]
+pub mod observability;
 mod router;
 
 #[cfg(test)]
@@ -31,6 +33,8 @@ pub struct StartedComponents {
     pub worker_executor: golem_worker_executor::RunDetails,
     pub worker_service: golem_worker_service::TrafficReadyEndpoints,
     pub prometheus_registry: Registry,
+    #[cfg(feature = "local-observability")]
+    pub observability: std::sync::Arc<observability::LocalObservability>,
 }
 
 pub const REGISTRY_DB_FILE_NAME: &str = "registry.db";

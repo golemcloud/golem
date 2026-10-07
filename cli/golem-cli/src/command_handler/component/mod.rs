@@ -23,6 +23,7 @@ use crate::command_handler::component::staging::ComponentStager;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::error::service::MapServiceError;
+use crate::local_observability::LocalObservabilityClient;
 use crate::log::{LogColorize, LogIndent, log_action, log_error, log_warn_action, logln};
 use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
@@ -49,6 +50,7 @@ use crate::model::environment::{
 };
 use crate::model::help::ComponentNameHelp;
 use crate::model::language::GuestLanguage;
+use crate::model::local_observability::{LocalObservabilityCapability, LocalObservabilityStatus};
 use crate::model::plugin::PluginGrantKey;
 use crate::model::text_format::log_text_view;
 use crate::model::tool_deployment::{
@@ -909,11 +911,60 @@ impl ComponentCommandHandler {
             )
             .await?;
 
+        self.apply_local_observability_overlay(environment, &mut components)
+            .await;
+
         Ok(ResolvedManifestComponentsAndTools {
             components,
             remote_tools,
             tools_to_publish,
         })
+    }
+
+    async fn apply_local_observability_overlay(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        components: &mut BTreeMap<ComponentName, ComponentDeployProperties>,
+    ) {
+        if !self.ctx.uses_local_server() {
+            return;
+        }
+
+        let client = LocalObservabilityClient::new(
+            self.ctx.file_download_client().clone(),
+            self.ctx.worker_service_url().clone(),
+        );
+        match client.capability().await {
+            Ok(Some(capability)) if capability.status == LocalObservabilityStatus::Ready => {
+                let endpoint = self
+                    .ctx
+                    .worker_service_url()
+                    .as_str()
+                    .trim_end_matches('/')
+                    .to_string();
+                for properties in components.values_mut() {
+                    inject_local_metrics_plugin(
+                        &mut properties.agent_type_configs,
+                        &capability,
+                        &endpoint,
+                        environment.environment_id.0,
+                    );
+                }
+            }
+            Ok(Some(capability)) if capability.status == LocalObservabilityStatus::Failed => {
+                log_warn_action(
+                    "Local metrics unavailable",
+                    capability
+                        .message
+                        .unwrap_or_else(|| "the local collector failed to start".to_string()),
+                );
+            }
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => log_warn_action(
+                "Local metrics unavailable",
+                format!("could not discover the local collector: {error}"),
+            ),
+        }
     }
 
     async fn resolve_manifest_tool_middlewares(
@@ -2867,6 +2918,39 @@ fn resolve_env_vars(
     )
 }
 
+fn inject_local_metrics_plugin(
+    configs: &mut BTreeMap<AgentTypeName, AgentTypeManifestProvisionConfig>,
+    capability: &LocalObservabilityCapability,
+    endpoint: &str,
+    environment_id: uuid::Uuid,
+) {
+    for config in configs.values_mut() {
+        if config
+            .plugins
+            .iter()
+            .any(|plugin| plugin.name == capability.exporter_name)
+        {
+            continue;
+        }
+        config.plugins.push(app_raw::PluginInstallation {
+            account: None,
+            name: capability.exporter_name.clone(),
+            version: capability.exporter_version.clone(),
+            parameters: HashMap::from([
+                ("endpoint".to_string(), endpoint.to_string()),
+                ("signals".to_string(), "metrics".to_string()),
+                (
+                    "headers".to_string(),
+                    format!(
+                        "Authorization=Bearer {},x-golem-environment-id={environment_id}",
+                        golem_client::LOCAL_WELL_KNOWN_TOKEN
+                    ),
+                ),
+            ]),
+        });
+    }
+}
+
 fn resolve_plugin_parameters(
     subject_kind: &'static str,
     subject_name: &str,
@@ -3070,6 +3154,92 @@ fn collect_unused_agent_config_paths(
     .collect::<Vec<_>>();
     unused.sort();
     unused
+}
+
+#[cfg(test)]
+mod local_observability_tests {
+    use super::inject_local_metrics_plugin;
+    use crate::model::app_raw::PluginInstallation;
+    use crate::model::component::AgentTypeManifestProvisionConfig;
+    use crate::model::local_observability::{
+        LocalObservabilityCapability, LocalObservabilityStatus,
+    };
+    use golem_common::model::agent::AgentTypeName;
+    use std::collections::{BTreeMap, HashMap};
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn capability() -> LocalObservabilityCapability {
+        LocalObservabilityCapability {
+            status: LocalObservabilityStatus::Ready,
+            message: None,
+            exporter_name: "golem-otlp-exporter".to_string(),
+            exporter_version: "1.5.1".to_string(),
+            sample_interval_seconds: 5,
+            retention_days: 7,
+            retention_bytes: 1024,
+            discarded_points: 0,
+            last_service_sample_unix_nanos: None,
+            last_agent_ingest_unix_nanos: None,
+        }
+    }
+
+    #[test]
+    fn injects_metrics_exporter_without_changing_manifest() {
+        let agent_type = AgentTypeName("Counter".to_string());
+        let mut configs = BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeManifestProvisionConfig::default(),
+        )]);
+        let environment_id = Uuid::parse_str("b33bf3dc-95a3-4fc6-adff-86be32969a8f").unwrap();
+
+        inject_local_metrics_plugin(
+            &mut configs,
+            &capability(),
+            "http://127.0.0.1:19881",
+            environment_id,
+        );
+
+        let plugin = &configs[&agent_type].plugins[0];
+        assert_eq!(plugin.name, "golem-otlp-exporter");
+        assert_eq!(plugin.parameters["signals"], "metrics");
+        assert_eq!(plugin.parameters["endpoint"], "http://127.0.0.1:19881");
+        assert!(
+            plugin.parameters["headers"]
+                .contains("x-golem-environment-id=b33bf3dc-95a3-4fc6-adff-86be32969a8f")
+        );
+    }
+
+    #[test]
+    fn manifest_exporter_configuration_wins_over_local_overlay() {
+        let agent_type = AgentTypeName("Counter".to_string());
+        let custom = PluginInstallation {
+            account: Some("owner@example.com".to_string()),
+            name: "golem-otlp-exporter".to_string(),
+            version: "custom".to_string(),
+            parameters: HashMap::from([(
+                "endpoint".to_string(),
+                "https://example.test".to_string(),
+            )]),
+        };
+        let mut configs = BTreeMap::from([(
+            agent_type.clone(),
+            AgentTypeManifestProvisionConfig {
+                plugins: vec![custom],
+                ..Default::default()
+            },
+        )]);
+
+        inject_local_metrics_plugin(
+            &mut configs,
+            &capability(),
+            "http://127.0.0.1:19881",
+            Uuid::nil(),
+        );
+
+        assert_eq!(configs[&agent_type].plugins.len(), 1);
+        assert_eq!(configs[&agent_type].plugins[0].version, "custom");
+    }
 }
 
 #[cfg(test)]

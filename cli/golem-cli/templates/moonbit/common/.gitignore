@@ -4,3 +4,4 @@ target/
 .moonagent/
 _build/
 golem-temp/
+/.golem

@@ -617,7 +617,10 @@ pub const SERVER_RUN: &str = "Examples:
   golem-cli server run --data-dir ./my-data --agent-filesystem-root ./agent-fs
 
   # Write actual port assignments to a JSON file (handy for scripts)
-  golem-cli server run --ports-file ./ports.json";
+  golem-cli server run --ports-file ./ports.json
+
+  # Override the manifest and disable local metrics collection
+  golem-cli server run --observability false";
 
 pub const SERVER_CLEAN: &str = "Examples:
   # Wipe the data directory of the discovered application manifest
@@ -628,7 +631,10 @@ pub const SERVER_CLEAN: &str = "Examples:
   golem-cli server clean --yes
 
   # Ignore any discovered manifest and wipe the platform default data directory
-  golem-cli server clean -X";
+  golem-cli server clean -X
+
+  # Delete only collected local metrics
+  golem-cli server clean --observability-only";
 
 // Account commands ---------------------------------------------------------------------------------
 

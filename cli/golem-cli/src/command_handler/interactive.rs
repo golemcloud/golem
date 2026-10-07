@@ -262,6 +262,20 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_clean_local_server_observability(
+        &self,
+        database: &Path,
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            false,
+            format!(
+                "Permanently delete collected local metrics from {}? Components, agents, and oplogs are preserved.",
+                database.display().to_string().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_interrupt_ephemeral_agent(&self) -> anyhow::Result<bool> {
         self.confirm(
             false,

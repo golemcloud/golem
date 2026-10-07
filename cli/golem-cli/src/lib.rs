@@ -40,6 +40,7 @@ pub mod context;
 pub mod error;
 pub mod fs;
 pub mod fuzzy;
+pub mod local_observability;
 pub mod log;
 pub mod model;
 pub mod process;

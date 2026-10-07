@@ -533,6 +533,7 @@ pub struct ResolvedLocalServer {
     pub mcp_port: Option<u16>,
     pub ports_file: Option<PathBuf>,
     pub data_dir: Option<PathBuf>,
+    pub observability: bool,
     pub agent_filesystem_root: Option<PathBuf>,
 }
 
@@ -560,6 +561,7 @@ impl ResolvedLocalServer {
                 .data_dir
                 .as_ref()
                 .map(|path| fs::absolute_lexical_path_from_base_dir(path, base_dir)),
+            observability: local_server.observability,
             agent_filesystem_root: local_server
                 .agent_filesystem_root
                 .as_ref()

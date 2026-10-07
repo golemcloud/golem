@@ -1185,6 +1185,11 @@
           "type": "string",
           "description": "Directory used by `golem server run` for local server data and removed by `golem server clean`."
         },
+        "observability": {
+          "type": "boolean",
+          "default": true,
+          "description": "Collect bounded local Golem service and Agent metrics for the TUI. Set to false to opt out; existing observability data is retained until explicitly cleaned."
+        },
         "systemMemoryOverride": {
           "type": "string",
           "minLength": 1,

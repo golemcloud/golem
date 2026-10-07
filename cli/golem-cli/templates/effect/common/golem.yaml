@@ -10,6 +10,11 @@ version:
     hashFallback: true
     staticFallback: "v0.0.0"
 
+localServer:
+  dataDir: .golem/local-server-data
+  # Set to false to opt out of bounded local metrics collection.
+  observability: true
+
 environments:
   local:
     server: local

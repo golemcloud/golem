@@ -8,6 +8,10 @@ repository = "https://github.com/golemcloud/golem"
 readme = "README.md"
 description = "Single Golem executable for testing"
 
+[features]
+default = ["local-observability"]
+local-observability = []
+
 [lib]
 harness = false
 
