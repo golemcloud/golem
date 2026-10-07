@@ -27,6 +27,77 @@ extern "wasm" fn tool_client_resource_drop_count(kind : Int) -> Int = "golem:tes
 extern "wasm" fn set_tool_client_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
+priv suberror UnknownCollectedFailure derive(Debug)
+
+///|
+test "collection maps unknown channel errors without hiding sibling outcomes" {
+  run_tool_client_stream_async(async fn() {
+    let failed = @async-core.Stream::from_source(
+      _ => raise UnknownCollectedFailure,
+      () => (),
+      () => (),
+    )
+    let mut emitted = false
+    let stderr : @async-core.Stream[Byte] = @async-core.Stream::from_source(
+      _ => {
+        if emitted {
+          None
+        } else {
+          emitted = true
+          Some([b'\x05', b'\x06'])
+        }
+      },
+      () => (),
+      () => (),
+    )
+    let collected : CollectedToolInvocation[String, NoToolError] = collect_tool_channels(
+      Some(failed),
+      Some(stderr),
+      async fn() { raise UnknownCollectedFailure },
+    )
+    guard collected.stdout is Err(ToolStreamError::Failed(stdout_message)) else {
+      fail("unknown stdout error was not collected")
+    }
+    guard collected.result
+      is Err(ToolError::Rpc(RpcError::Protocol(result_message))) else {
+      fail("unknown result error was not collected")
+    }
+    assert_true(stdout_message.contains("UnknownCollectedFailure"))
+    assert_true(result_message.contains("UnknownCollectedFailure"))
+    assert_eq(collected.stderr, Ok(Some(b"\x05\x06")))
+  })
+}
+
+///|
+test "collection preserves task cancellation" {
+  run_tool_client_stream_async(async fn() {
+    let stream = @async-core.Stream::from_source(
+      _ => raise @async-core.Cancelled::Cancelled,
+      () => (),
+      () => (),
+    )
+    let result : async () -> Result[String, ToolError[NoToolError]] = async fn() {
+      Ok("unreachable")
+    }
+    try collect_tool_channels(Some(stream), None, result) catch {
+      @async-core.Cancelled::Cancelled => ()
+      error => fail("stream collection changed cancellation: \{repr(error)}")
+    } noraise {
+      _ => fail("stream cancellation became a collected outcome")
+    }
+    let cancelled_result : async () -> Result[String, ToolError[NoToolError]] = async fn() {
+      raise @async-core.Cancelled::Cancelled
+    }
+    try collect_tool_channels(None, None, cancelled_result) catch {
+      @async-core.Cancelled::Cancelled => ()
+      error => fail("result collection changed cancellation: \{repr(error)}")
+    } noraise {
+      _ => fail("result cancellation became a collected outcome")
+    }
+  })
+}
+
+///|
 test "client input encoding preserves cancellation and drops input and stdin" {
   reset_tool_client_resource_drop_counts()
   let input_producer_started = [false]

@@ -211,45 +211,70 @@ pub async fn[E] ToolInvocation::get(
 }
 
 ///|
-pub async fn[E] ToolInvocation::collect(
-  self : ToolInvocation[E],
-) -> CollectedToolInvocation[@toolCommon.InvocationResult, E] {
-  @async-core.with_task_group(async fn(group) {
-    let collect = async fn(
-      stream : @async-core.Stream[Byte]?,
-    ) -> Result[Bytes?, ToolStreamError] {
-      try {
-        let collected = match stream {
-          None => None
-          Some(stream) => {
-            let bytes : Array[Byte] = []
-            for ;; {
-              match stream.read(65536) {
-                None => break
-                Some(chunk) => bytes.append(chunk)
-              }
-            }
-            Some(Bytes::from_array(bytes))
+async fn collect_tool_output(
+  stream : @async-core.Stream[Byte]?,
+) -> Result[Bytes?, ToolStreamError] {
+  try {
+    let collected = match stream {
+      None => None
+      Some(stream) => {
+        let bytes : Array[Byte] = []
+        for ;; {
+          match stream.read(65536) {
+            None => break
+            Some(chunk) => bytes.append(chunk)
           }
         }
-        Ok(collected)
-      } catch {
-        ToolStreamError::Cancelled => Err(ToolStreamError::Cancelled)
-        ToolStreamError::Abandoned => Err(ToolStreamError::Abandoned)
-        ToolStreamError::ResourceExhausted =>
-          Err(ToolStreamError::ResourceExhausted)
-        ToolStreamError::Failed(message) =>
-          Err(ToolStreamError::Failed(message))
-        error => raise error
+        Some(Bytes::from_array(bytes))
       }
     }
-    let stdout = group.spawn(() => collect(self.stdout))
-    let stderr = group.spawn(() => collect(self.stderr))
-    let result = self.get()
+    Ok(collected)
+  } catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    ToolStreamError::Cancelled => Err(ToolStreamError::Cancelled)
+    ToolStreamError::Abandoned => Err(ToolStreamError::Abandoned)
+    ToolStreamError::ResourceExhausted =>
+      Err(ToolStreamError::ResourceExhausted)
+    ToolStreamError::Failed(message) => Err(ToolStreamError::Failed(message))
+    error => Err(ToolStreamError::Failed(repr(error)))
+  }
+}
+
+///|
+async fn[T, E] collect_tool_result(
+  get : async () -> Result[T, ToolError[E]],
+) -> Result[T, ToolError[E]] {
+  get() catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    error =>
+      Err(tool_protocol_error("failed to observe tool result: \{repr(error)}"))
+  }
+}
+
+///|
+async fn[T, E] collect_tool_channels(
+  stdout_stream : @async-core.Stream[Byte]?,
+  stderr_stream : @async-core.Stream[Byte]?,
+  get : async () -> Result[T, ToolError[E]],
+) -> CollectedToolInvocation[T, E] {
+  @async-core.with_task_group(async fn(group) {
+    let stdout = group.spawn(() => collect_tool_output(stdout_stream))
+    let stderr = group.spawn(() => collect_tool_output(stderr_stream))
+    let result = collect_tool_result(get)
     let stdout = stdout.wait()
     let stderr = stderr.wait()
     select_collected_terminals(result, stdout, stderr)
   })
+}
+
+///|
+/// Drains both outputs concurrently with the structured result. Ordinary
+/// checked errors are retained in their corresponding outcome. Task
+/// cancellation and runtime aborts remain outside the collected envelope.
+pub async fn[E] ToolInvocation::collect(
+  self : ToolInvocation[E],
+) -> CollectedToolInvocation[@toolCommon.InvocationResult, E] {
+  collect_tool_channels(self.stdout, self.stderr, () => self.get())
 }
 
 ///|
